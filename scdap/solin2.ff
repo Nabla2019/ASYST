@@ -1,0 +1,201 @@
+*mlist
+*if def,selap
+       subroutine solin2 (kb,naz,tsur,tsol,tliqav,wbotab,
+     # wbotss,haddbt, dz,wfroabin,wfrossi,hadd,rftemp,ifrag,
+     # hremov,wremgt,sflow,npath)
+c  
+c 
+c  Descriptive sentence for solin2 goes here.
+c  Relocation of control rod material at the inside of guide tube
+c#
+c#     calling subroutine: liqcon2
+c#     subroutines called: matpro
+c#
+c#     argument list :
+c#     kb        = elevation at which liquid neutron ab-
+c#                  sorber material begins to flow. (m)
+c#                  (input)
+c#     naz       = number of axial zones      (input)
+c#     tsur(k)   = average temperature of control rod in
+c#                 axial zone k at end of time step. (k).
+c#     tsol      = solidification temperature (k)   (input)
+c#     tliqav    = average temperature of liquified mater-
+c#                  at start of flow. (k)   (input)
+c#     wbotab    = mass of liquified absorber material
+c#                which flowed below bottom
+c#                of core. (kg)    (input/output)
+c#     wbotss    = mass of liquified stainless steel
+c#                which flowed below bottom
+c#                of core. (kg)    (input/output)
+c#     wflo(ss)      = mass of liquified material at start of
+c#                 flow. (kg)    (input)
+c#     haddbt    = heat added to region below core due to
+c#                 flow of liquified control rod material.
+c#                 (j)     (input/output)
+c#     dz(k)     = height of each axial zone  (m)  (input)
+c#     wfroabin(k) = mass of solidified absorber material in
+c#                axial zone k. (kg)    (input/output)
+c#     wfrossi(k) = mass of solidified stainless steel in
+c#                axial zone k. (kg)    (input/output)
+c#     hadd(k)   = heat added to axial zone k during time
+c#                 step due to flow of liquified control
+c#                 rod material. (j)    (output)
+c#     rftemp    = reference temperature for enthalpy cal-
+c#                 culations. normally, rftemp is set equal
+c#                 to room temperature. (k)    (input)
+c#     ifrag(k)  = variable indicating whether or not in-
+c#                 tact control rod, debris bed or void
+c#                 region exists in axial zone k.
+c#                 0 = intact control rod
+c#                 1 or 2 = debris bed
+c#   hremov(k) = removed heat from axial node k (J)
+c#   wremgt(k) = removed mass of guide tube from axial node k (kg)
+c#   sflow(k)     = cross-section at the inside of guide tube(m2)
+
+
+
+       implicit none
+          include 'scddat.h'       
+          include 'contrl.h'
+          include 'ufiles.h'
+          include 'conele.h'
+c
+       integer kb,naz
+       real tsol,tliqav,wbotss,haddbt,rftemp
+       integer ifrag,i,npath
+       real tsur,dz,avoidl,hadd,sflow,
+     +   hremov,wremgt,wbotab,wfrossi,wfroabin
+       dimension tsur(ndax),dz(*),avoidl(ndax),ifrag(*),
+     +    hadd(*),hremov(*),sflow(*),
+     +    wremgt(*),wfrossi(*),wfroabin(*)
+c
+c  Local variables.
+       integer k,ksol,kbrech,nsw,l,ictype
+       real rho,vol,voltot,wfbc,wfbo,wfss,wfso,
+     &     wssi,wssoi,wabi,waboi,volloc,volava,
+     &     wfbcl,wfbol,wfssl,wfsol ,rhoss,rhoso,
+     &     rhobc,enthab,enthss
+       real sden,senthl,aden,aenthl,soden
+       external sden,senthl,aden,aenthl,soden
+c
+        ictype =2
+        nsw=0
+        ksol=0
+        kbrech=0
+        wfso=0.0
+        wfss=0.0
+        wfbc=0.0
+        wfbo=0.0
+       enthab=aenthl(ictype,tliqav,rftemp)     
+       enthss=senthl(tliqav,rftemp)       
+c   Relocation on the surface of Guide tube
+  100  do l=1,3
+           wfss = wfss + wrbszi(kb,icomp,l)
+        enddo
+        wfss = wfss + wrbszi(kb,icomp,8)
+        do l=4,7
+           wfso = wfso + wrbszi(kb,icomp,l)
+        enddo
+        wfbc=wrbszi(kb,icomp,11)
+        wfbo=wrbszi(kb,icomp,12)
+        
+        do150k=kb,1,-1
+        if(k.eq.kb)goto 150
+        if(nsw.eq.1)goto 150
+        if(wremgt(k).ge.1.e-10) then
+          kbrech=1
+          goto 150
+        endif
+        reazs(k,icomp)=1        
+        if(tsur(k).lt.tsol)then
+        nsw=1
+        ksol=k
+        end if
+        if(nsw.eq.1)go to 150
+        if(ifrag(k).eq.1.or.ifrag(k).eq.2)then
+        nsw=1
+        ksol=k
+        end if
+  150   continue
+        if(ksol.ge.1)go to 200
+c  calculate mass and heat added to region below bottom of core.
+        wbotab=wfbc+wfbo+wbotab
+        wbotss=wfss+wfso+wbotss
+c  there is no enthalphy subroutine for oxydant                
+        haddbt=haddbt+(wfss+wfso)*enthss+(wfbc+wfbo)*enthab
+        hremov(kb)=hremov(kb)+(wfss+wfso)*enthss
+     &                   +(wfbc+wfbo)*enthab    
+        go to 400
+  200   continue
+       rhobc=aden(ictype,tliqav) 
+       rhoss=sden(tliqav)
+       rhoso=soden(tliqav)             
+       vol=wfss/rhoss+wfso/rhoso+(wfbc+wfbc*55.26/69.62)/rhobc
+       voltot=vol
+       do 300 k=ksol,kb,1
+          if(kbrech.eq.1.or.(k.eq.kb.and.npath.eq.1)) then
+           do l=1,12
+              wrbszo(kb,icomp,l)=wrbszo(kb,icomp,l)+wrbszi(kb,icomp,l)
+              wrbszi(kb,icomp,l)=0.0
+            enddo
+            goto 400
+          endif       
+          wfsol=0.0
+          wfssl=0.0
+          wfbcl=0.0
+          wfbol=0.0
+          rhobc=aden(ictype,tsur(k))
+          rhoss=sden(tsur(k))
+          rhoso=soden(tsur(k))                  
+          do l=1,3
+             wfssl = wfssl + wrbszi(k,icomp,l)
+          enddo
+          wfssl = wfssl + wrbszi(k,icomp,8)
+          do l=4,7
+             wfsol = wfsol + wrbszi(k,icomp,l)
+          enddo
+          wfbcl=wrbszi(k,icomp,11)
+          wfbol=wrbszi(k,icomp,12)
+          volloc=wfssl/rhoss+
+     &              wfsol/rhoso+(wfbcl+wfbcl*55.26/69.62)/rhobc
+          volava=sflow(k)*dz(k)
+          if(volava-volloc.ge.vol)then
+            wfrossi(k)=0.0          
+            do l=1,12
+              wrbszi(k,icomp,l)=wrbszi(k,icomp,l)+wrbszi(kb,icomp,l)
+              wrbszi(kb,icomp,l)=0.0
+            enddo
+            do l=1,8
+              wfrossi(k)= wfrossi(k)+wrbszi(k,icomp,l)
+            enddo
+            wfroabin(k)=wrbszi(k,icomp,11)+wrbszi(k,icomp,12)                                        
+            hadd(k)=hadd(k)+((wfss+wfso)*enthss
+     &       +(wfbc+wfbo)*enthab)*vol/voltot
+            hremov(kb)=hremov(kb)+((wfss+wfso)*enthss
+     &       +(wfbc+wfbo)*enthab)*vol/voltot
+            goto 400  
+          else
+             wfrossi(k)=0.0
+             do l=1,12
+               wrbszi(k,icomp,l)=wrbszi(k,icomp,l)+wrbszi(kb,icomp,l)
+     &                                       *(volava-volloc)/vol
+               wrbszi(kb,icomp,l)=wrbszi(kb,icomp,l)
+     &                                       *(1.-(volava-volloc)/vol)
+             enddo
+             do l=1,8
+               wfrossi(k)= wfrossi(k)+wrbszi(k,icomp,l)
+             enddo
+             wfroabin(k)=wrbszi(k,icomp,11)+wrbszi(k,icomp,12)                       
+             hadd(k)=hadd(k)+((wfss+wfso)*enthss
+     &      +(wfbc+wfbo)*enthab)*(volava-volloc)/voltot
+             hremov(kb)=hremov(kb)+((wfss+wfso)*enthss
+     &      +(wfbc+wfbo)*enthab)*(volava-volloc)/voltot
+            vol=vol-(volava-volloc)
+            oxinblo(k,icomp)=1
+         endif
+  300  continue       
+  400  continue
+       return     
+
+      end
+*endif

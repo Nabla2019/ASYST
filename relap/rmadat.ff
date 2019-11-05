@@ -1,0 +1,645 @@
+*mlist
+       subroutine rmadat
+c
+c  Processes thermal property composition data.
+c
+c  Cognizant engineer: rjw.
+c
+*in32 iscr
+*in32 jscr
+*in32end
+c
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'machls.h'
+       include 'mtbls.h'
+       include 'rmadac.h'
+       include 'ufiles.h'
+c
+c  Local variables.
+       integer i,inp10,inp9,inx1,inx2,inx3,it,itr,itype,ix,
+     & j,k,l,l1,l2,lcontg,lcntgs,lk,lp,lpo,locs,lq,m,n,n3,n4,nt,ntbls
+       real degf1,degf2,ftbnid,sum,thc,thchr,thci,vhc,xx
+       integer l3c(9),jscr(200)
+       integer l3a(9),l3b(9),iscr(3)
+       real scr(200),xcr(3)
+       logical lhed,unsw,tfail,xorv,ins,insx,xfail
+       equivalence (jscr(1),scr(1)),(xcr(1),iscr(1))
+       character tbltyp(6)*8,gasnam(7)*8,chwrd*8
+       character lun1(2)*6,lun2(2)*17,lun3(2)*14
+c  Data statements.
+       data l3a/2*0,1,3,0,1,-1,0,0/
+       data l3b/2*0,1,200,0,1,2,1,1/
+       data l3c/2*0,2,14,0,1,2,-1,1/
+       data degf1/1.8/, degf2/255.3722222222/, thchr/1.730734666371/,
+     & thc/6.230644798937e3/, vhc/6.706610244e4/
+       data gasnam/'helium','argon','krypton','xenon','nitrogen',
+     & 'hydrogen','oxygen'/
+       data tbltyp/'tbl/fctn','gap','c-steel','s-steel','uo2','zr'/
+       data lun1/'(K)','(degF)'/
+       data lun2/'(Watts/m-K)','(Btu/sec-ft-degF)'/
+       data lun3/'(J/m3-K)','(Btu/ft3-degF)'/
+       include 'machlf.h'
+c
+       if (filid(9) .eq. 0.0) then
+         filid(9) = ftbnid(1)
+         k = lcontg(1)
+         call ftbrsv (filid(9),k,1,filndx(9))
+         ins = .false.
+         ntbls = 0
+         it = 0
+       else
+         k = lcntgs(filid(9),1)
+         call ftbsft (filid(9),k,2,filndx(9))
+         ins = .true.
+         ntbls = nmtbls(filndx(9))
+         j = ntbls + 1
+         it = filsiz(9) - j
+         m = filndx(9) + 1
+         n = filndx(9) + ntbls
+         do i = m,n
+           mtbptr(i) = mtbptr(i) - j
+         enddo
+       endif
+       locs = locf(m1af(1)) - 1
+c  Set for beginning of scan for sets of material data.
+       lhed = .false.
+       nt = 1
+c  See if composition nt is entered.
+   10  l3a(1) = nt*100 + 20100000
+       call inplnk (l3a(1),ix,n3,n4,fa(filndx(1)))
+       if (n4 .ne. 0) go to 17
+c  See if first card is missing, but other cards are entered.
+       if (ix .eq. -1) go to 32
+       ix = (ix - 20100000)/100
+       if (ix .ne. nt) go to 14
+       if (lhed) go to 15
+       lhed = .true.
+       if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     & write (output,2000)
+ 2000  format ('0',30x,'Edit of heat structure material (composition) da
+     &ta')
+   15  write (output,2001) l3a(1)
+ 2001  format ('0******** Card',i8,' is missing.')
+       go to 13
+   14  nt = ix
+       go to 18
+c  Get 201ccc00 card.
+   17  if (.not.lhed) then
+         lhed = .true.
+         if (iand(ihlppr(2),ishft(1,22)).ne.0) write (output,2000)
+       endif
+       if (iand(ihlppr(2),ishft(1,22)).ne.0) write (output,2002) nt
+ 2002  format ('0',29x,'Data for composition',i4)
+       insx = .false.
+       xfail = .false.
+       unsw = uniti
+       thci = thc
+       l3a(6) = 1
+       call inp2 (fa(filndx(1)),iscr,l3a)
+       if (l3a(6) .le. 0) go to 13
+       write (chwrd,'(a8)') xcr(1)
+c  Check composition type.
+       do itype = 1,6
+         if (chwrd .eq. tbltyp(itype)) go to 22
+       enddo
+       insx = .true.
+       if (chwrd .eq. 'delete') go to 25
+       write (output,2003)
+ 2003  format ('0******** Composition type is unrecognizable, rest of da
+     &ta for this composition cannot be processed.')
+       go to 13
+   22  go to (101,102,103,104,105,106), itype
+       call fabend
+  101  if (l3a(6) .eq. 3) go to 23
+       write (output,2004) l3a(1)
+ 2004  format ('0******** Incorrect number of words on card',i8,', rest
+     &of composition data cannot be processed.')
+       go to 13
+   23  if (iscr(2).lt.1 .or. iscr(2).gt.3) go to 24
+       if (abs(iscr(3)).ne.1 .and. iscr(3).ne.2) go to 24
+       if (iscr(3).ne.-1 .or. iscr(2).ne.2) go to 25
+   24  write (output,2005)
+ 2005  format ('0******** Improper composition format flag, rest of comp
+     &ostion data cannot be processed.')
+       go to 13
+  102  unsw = .false.
+       thci = thchr
+       inx1 = locf(m1af(1)) - locs
+       inx2 = locf(m1b(1)) - locs
+       inx3 = locf(m1c(1)) - locs
+       go to 26
+  103  unsw = .true.
+       inx1 = locf(m2af(1)) - locs
+       inx2 = locf(m2b(1)) - locs
+       inx3 = locf(m2c(1)) - locs
+       go to 26
+  104  unsw = .false.
+       thci = thchr
+       inx1 = locf(m3af(1)) - locs
+       inx2 = locf(m3b(1)) - locs
+       inx3 = locf(m3c(1)) - locs
+       go to 26
+  105  unsw = .false.
+       thci = thchr
+       inx1 = locf(m4af(1)) - locs
+       inx2 = locf(m4b(1)) - locs
+       inx3 = locf(m4c(1)) - locs
+       go to 26
+  106  unsw = .false.
+       thci = thchr
+       inx1 = locf(m5af(1)) - locs
+       inx2 = locf(m5b(1)) - locs
+       inx3 = locf(m5c(1)) - locs
+   26  iscr(2) = m1a(inx1)
+       iscr(3) = m1a(inx1+1)
+       if (iand(ihlppr(2),ishft(1,22)).ne.0) write (output,2014) xcr(1)
+ 2014  format (' Internally stored thermal property, ',a8,', requested.'
+     & )
+       go to 23
+   25  xorv = (.not.unsw.and.unito) .or. (unsw.and..not.unito)
+       k = lcntgs(filid(9),1)
+       call ftbsft (filid(9),k,3,filndx(9))
+       if (.not.ins) go to 40
+       n3 = filndx(9) + 1
+       j = n3 + ntbls
+       do i = 1,ntbls
+         m = mtbptr(n3) + j
+         if (mtbnum(m) - nt) 37,38,39
+   37    n3 = n3 + 1
+       enddo
+       ins = .false.
+       go to 40
+   38  l1 = mtblen(m)
+       n = m + l1
+       l = it - n + j
+       if (l .eq. 0) go to 42
+       call ftbmov (fa(n),fa(m),l)
+       j = filndx(9) + 1
+       do l = 1,ntbls
+         if (mtbptr(j) .gt. mtbptr(n3)) mtbptr(j) = mtbptr(j) - l1
+         j = j + 1
+       enddo
+   42  it = it - l1
+       if (.not.insx) go to 43
+       l = it + ntbls - i
+       ntbls = ntbls - 1
+       call ftbmov (fa(n3+1),fa(n3),l)
+       if (iand(ihlppr(2),ishft(1,22)).ne.0) write (output,2007)
+ 2007  format (' Composition has been deleted.')
+       go to 53
+   40  i = ntbls + 1
+       n3 = filndx(9) + i
+   39  if (.not.insx) go to 44
+       write (output,2006)
+ 2006  format ('0******** Illegal delete attempt, either new problem or
+     &material is not present.')
+       go to 13
+   44  l = i - it - ntbls - 1
+       if (l .ne. 0) call ftbmov (fa(n3),fa(n3+1),l)
+       ntbls = ntbls + 1
+   43  l = filndx(9) + ntbls + 1
+       if (k - ntbls - it .ge. 406) go to 59
+       xfail = .true.
+       go to 56
+   56  write (output,2012) nt
+ 2012  format ('0******** Insufficient space to process composition',i4,
+     & '.')
+   13  fail = .true.
+       j = l3a(1) + 99
+       filsiz(1) = inp10(fa(filndx(1)),l3a(1),j)
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+       go to 53
+   59  itr = it
+       mtbptr(n3) = it
+c  Process thermal conductivity data.
+       lp = l + it
+       mtbnum(lp) = nt
+       lpo = lp
+       it = it + 2
+       if (itype .gt. 1) go to 110
+c  Process mole fractions for gap conductance model.
+       if(iscr(2).ne.3) go to 60
+       l3c(1) = l3a(1) + 1
+       l3c(2) = -l3c(1) - 48
+       l3c(6) = 1
+       call inp2 (fa(filndx(1)),jscr,l3c)
+       if (l3c(6) .le. 0) go to 58
+       mtbl(lp) = iscr(2) - 1
+       mtbl(lp+1) = abs(iscr(3)) - 1
+       it = it + l3c(6) + 3
+       j = l3c(6)
+       if (mod(l3c(6),2) .eq. 0) go to 500
+       write (output,2013)
+       go to 58
+  500  mtbl(lp+2) = l3c(6)/2
+       l1 = lp
+       l2 = lp + mtbl(lp+2)
+       sum=0.0
+       do 512 i = 1,j,2
+       write (chwrd,'(a8)') scr(i)
+       do lk=1,7
+         if (chwrd .eq. gasnam(lk)) go to 508
+       enddo
+       fail=.true.
+       write(output,2044)
+ 2044  format('0******** Names of gas components are unrecognizable, res
+     &t of data for this composition cannot be processed')
+       go to 117
+  508  mtbl(l1+3)=lk
+       mtblr(l2+3)=scr(i+1)
+       sum=sum+scr(i+1)
+       l1=l1+1
+       l2=l2+1
+  512  continue
+       if(sum.le.0.0) go to 528
+       l1=lp+mtbl(lp+2)+3
+       l2=l1+mtbl(lp+2)-1
+       if(sum.eq.1.0) go to 520
+       sum=1.0/sum
+       do i=l1,l2
+         mtblr(i)=mtblr(i)*sum
+       enddo
+  520  if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     & write(output,2045) (scr(i),i=1,j)
+ 2045  format('0 Gas mole fraction table'/4(1x,a10,2x,e14.7))
+       do i=l1,l2
+         if(mtblr(i).lt.0.0) go to 528
+       enddo
+       go to 117
+  528  write(output,2046)
+       fail=.true.
+ 2046  format('0******** Incorrect gas mole fraction entries.')
+       go to 117
+c
+   60  l3b(1) = l3a(1) + 1
+       l3b(2) = -l3b(1) - 48
+       l3b(6) = 1
+       call inp2 (fa(filndx(1)),scr,l3b)
+       if (l3b(6) .gt. 0) go to 55
+   58  xfail = .true.
+       fail = .true.
+       go to 117
+  110  l3b(6) = m1a(inx1+2)
+       call ftbmov (m1af(inx2),scr,l3b(6))
+   55  mtbl(lp) = iscr(2) - 1
+       mtbl(lp+1) = abs(iscr(3)) - 1
+       it = it + l3b(6) + 3
+       j = l3b(6)
+       if (iscr(2) .ne. 1) go to 111
+c  Thermal conductivity is in tabular form.
+       if (l3b(6) .ne. 2) go to 113
+       write (output,2015)
+ 2015  format ('0******** Two quantities entered in table.  if constant
+     &value is desired, only one property should be entered.')
+       fail = .true.
+       go to 57
+  113  if (l3b(6) .ne. 1) go to 115
+       mtbl(lp+2) = 1
+       mtblr(lp+3) = scr(1)
+       if (.not.unsw) mtblr(lp+3) = mtblr(lp+3)*thci
+       if (.not.unito) go to 201
+       scr(1) = mtblr(lp+3)
+       go to 116
+  201  scr(1) = mtblr(lp+3)/thc
+       go to 116
+  115  if (mod(l3b(6),2) .eq. 0) go to 57
+       write (output,2013)
+ 2013  format ('0******** Number of entries in thermal conductivity tabl
+     &e is not a multiple of 2.')
+       go to 58
+   57  mtbl(lp+2) = l3b(6)/2
+       l1 = lp
+       l2 = lp + mtbl(lp+2)
+       do i = 1,j,2
+         mtblr(l1+3) = scr(i)
+         mtblr(l2+3) = scr(i+1)
+         if (.not.unsw) then
+           mtblr(l1+3) = mtblr(l1+3)/degf1 + degf2
+           mtblr(l2+3) = mtblr(l2+3)*thci
+         endif
+         if (unito) then
+           scr(i) = mtblr(l1+3)
+           scr(i+1) = mtblr(l2+3)
+         else
+           scr(i) = (mtblr(l1+3)-degf2)*degf1
+           scr(i+1) = mtblr(l2+3)/thc
+         endif
+         l1 = l1 + 1
+         l2 = l2 + 1
+       enddo
+  116  l1 = 1
+       if (.not.unito) l1 = 2
+       if (l3b(6) .ne. 1) go to 114
+       if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     & write (output,2021) scr(1),lun2(l1)
+ 2021  format ('0Thermal conductivity is constant at',1p,e17.6,1x,a)
+       go to 117
+  114  if (iand(ihlppr(2),ishft(1,22)).ne.0) then
+         write (output,2022) (lun1(l1),lun2(l1),i=1,2)
+ 2022  format ('0Thermal conductivity table'/'     temperature',6x
+     &  ,'thermal conduct.',7x,'temperature',6x,'thermal conduct.'/
+     & 5x,a6,11x,a17,6x,a6,11x,a17)
+         write (output,2030) (scr(i),i=1,j)
+ 2030  format (1p,2e17.6,6x,2e17.6)
+       endif
+       tfail = .false.
+       j = lp + mtbl(lp+2) - 2
+       do i = lp,j
+         if (mtblr(i+4) .le. mtblr(i+3)) tfail = .true.
+       enddo
+       if (.not.tfail) go to 117
+       write (output,2023)
+ 2023  format ('0******** Temperature in thermal conductivity table is n
+     &ot in increasing order.')
+       fail = .true.
+       go to 117
+c  Thermal conductivity is in functional form.
+  111  if (mod(l3b(6),9) .eq. 0) go to 301
+       write (output,2031)
+ 2031  format ('0******** Number of entries in thermal conductivity func
+     &tion is not a multiple of 9.')
+       go to 58
+  301  mtbl(lp+2) = l3b(6)/9
+       call ftbmov (scr,mtblr(lp+3),j)
+       l1 = lp
+       do i = 1,j,9
+         if (.not.unsw) then
+           mtblr(l1+3) = mtblr(l1+3)/degf1 + degf2
+           mtblr(l1+4) = mtblr(l1+4)/degf1 + degf2
+           mtblr(l1+11) = mtblr(l1+11)/degf1 + degf2
+           mtblr(l1+5) = mtblr(l1+5)*thc
+           xx = thc*degf1
+           mtblr(l1+6) = mtblr(l1+6)*xx
+           xx = xx*degf1
+           mtblr(l1+7) = mtblr(l1+7)*xx
+           xx = xx*degf1
+           mtblr(l1+8) = mtblr(l1+8)*xx
+           xx = xx*degf1
+           mtblr(l1+9) = mtblr(l1+9)*xx
+           mtblr(l1+10) = mtblr(l1+10)*thc/degf1
+         endif
+         if (xorv .and. unsw) then
+           scr(i) = (scr(i)-degf2)*degf1
+           scr(i+1) = (scr(i+1)-degf2)*degf1
+           scr(i+8) = (scr(i+8)-degf2)*degf1
+           scr(i+2) = scr(i+2)/thc
+           xx = thc*degf1
+           scr(i+3) = scr(i+3)/xx
+           xx = thc*degf1
+           scr(i+4) = scr(i+4)/xx
+           xx = thc*degf1
+           scr(i+5) = scr(i+5)/xx
+           xx = thc*degf1
+           scr(i+6) = scr(i+6)/xx
+           scr(i+7) = scr(i+7)/thc*degf1
+         endif
+         l1 = l1 + 9
+       enddo
+       if (xorv .and. .not.unsw) call ftbmov (mtblr(lp+3),scr,j)
+       if (iand(ihlppr(2),ishft(1,22)).ne.0) then
+         if (.not.unito) then
+           write (output,2032)
+ 2032  format ('0Thermal conductivity function'/
+     &2x,'temp-low',6x,'temp-high',5x,'a0 (btu/sec-  a1 (btu/sec-  a2 (b
+     &tu/sec-  a3 (btu/sec-  a4 (btu/sec-  a-1 (btu/sec- c'/
+     &  2x,'(degf)',8x,'(degf)',11x,'ft-degf)',6x,'ft-degf2)',5x,'ft-deg
+     &f3)',5x,'ft-degf4)',5x,'ft-degf5)',6x,'ft)',7x,'(degf)')
+         else
+           write (output,2033)
+ 2033  format ('0Thermal conductivity function'/
+     & 2x,'temp-low',6x,'temp-high',5x,'a0',12x,'a1',12x,'a2',12x,'a3',1
+     &2x,'a4',12x    ,'a-1',11x,'c'/
+     &                  2x,'(k)',11x,'(k)',11x,'(watts/m-k)',3x,'(watts/
+     &m-k2)  (watts/m-k3)  (watts/m-k4)  (watts/m-k5)  (watts/m)',5x,'(k
+     &)')
+         endif
+         write (output,2034) (scr(i),i=1,j)
+ 2034  format (1p,9e14.6)
+       endif
+       if (mtbl(lp+2) .eq. 1) go to 117
+       tfail = .false.
+       j = lp + j - 10
+       do i = lp,j,9
+         if (mtblr(i+12) .ne. mtblr(i+4)) tfail = .true.
+       enddo
+       if (.not.tfail) go to 117
+       write (output,2035)
+ 2035  format ('0******** Temp-high value not equal to previous temp-low
+     & value.')
+       fail = .true.
+c  Process volumetric heat capacity data.
+  117  lq = l + it - 2
+       if (itype .gt. 1) go to 120
+       l3b(1) = l3a(1) + 51
+       l3b(2) = -l3b(1) - 48
+       l3b(6) = 1
+       call inp2 (fa(filndx(1)),scr,l3b)
+       if (l3b(6) .gt. 0) go to 121
+  122  xfail = .true.
+       go to 90
+  120  l3b(6) = m1a(inx1+3)
+       call ftbmov (m1af(inx3),scr,l3b(6))
+  121  it = it + l3b(6) + 1
+       j = l3b(6)
+       if (abs(iscr(3)) .ne. 1) go to 130
+c  Volumetric heat capacity is in tabular form.
+       if (iscr(3) .eq. -1) go to 129
+       if (l3b(6) .ne. 2) go to 123
+       write (output,2015)
+       fail = .true.
+       go to 127
+  123  if (l3b(6) .ne. 1) go to 125
+       mtbl(lq) = 1
+       mtblr(lq+1) = scr(1)
+       if (.not.unsw) mtblr(lq+1) = mtblr(lq+1)*vhc
+       if (.not.xorv) go to 126
+       if (unsw) go to 211
+       scr(1) = mtblr(lq+1)
+       go to 126
+  211  scr(1) = scr(1)/vhc
+       go to 126
+  125  if (mod(l3b(6),2) .eq. 0) go to 127
+       write (output,2024)
+ 2024  format ('0******** Number of entries in volumetric heat capacity
+     &table is not a multiple of 2.')
+       go to 122
+  127  mtbl(lq) = l3b(6)/2
+       l1 = lq
+       l2 = lq + mtbl(lq)
+       do i = 1,j,2
+         mtblr(l1+1) = scr(i)
+         mtblr(l2+1) = scr(i+1)
+         if (.not.unsw) then
+           mtblr(l1+1) = mtblr(l1+1)/degf1 + degf2
+           mtblr(l2+1) = mtblr(l2+1)*vhc
+         endif
+         if (xorv) then
+           if (.not.unsw) then
+             scr(i) = mtblr(l1+1)
+             scr(i+1) = mtblr(l2+1)
+           else
+             scr(i) = (scr(i)-degf2)*degf1
+             scr(i+1) = scr(i+1)/vhc
+           endif
+         endif
+         l1 = l1 + 1
+         l2 = l2 + 1
+       enddo
+       go to 126
+  129  if (mtbl(lp+2) .eq. l3b(6)) go to 124
+       write (output,2011)
+ 2011  format ('0******** Number of heat capacity words not equal to num
+     &ber of temperatures in thermal conductivity table.')
+       go to 122
+  124  mtbl(lq) = -l3b(6)
+       l1 = lq
+       do i = 1,j
+         mtblr(l1+1) = scr(i)
+         if (.not.unsw) mtblr(l1+1) = mtblr(l1+1)*vhc
+         if (xorv) then
+           if (.not.unsw) then
+             scr(i) = mtblr(l1+1)
+           else
+             scr(i) = scr(i)/thc
+           endif
+         endif
+         l1 = l1 + 1
+       enddo
+       l1 = lp
+       l2 = j
+       do i = 1,j
+         scr(l2+1) = mtblr(l1+3)
+         if (.not.unito) scr(l2+1) = (scr(l2+1)-degf2)*degf1
+         l1 = l1 + 1
+         l2 = l2 + 1
+       enddo
+  126  l1 = 1
+       if (.not.unito) l1 = 2
+       if (l3b(6) .ne. 1) go to 128
+       if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     & write (output,2025) scr(1),lun3(l1)
+ 2025  format ('0Volumetric heat capacity is constant at',1p,e17.6,1x,a)
+       go to 90
+  128  if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     & write (output,2026) (lun1(l1),lun3(l1),i=1,2)
+ 2026  format ('0volumetric heat capacity table'/'     temperature',6x
+     &  ,'heat capacity',10x,'temperature',6x,'heat capacity'/
+     & 5x,a6,11x,a14,9x,a6,11x,a14)
+       if (iscr(3) .ne. 1) go to 131
+       if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     & write (output,2030) (scr(i),i=1,j)
+       tfail = .false.
+       j = lq + mtbl(lq) - 2
+       do i = lq,j
+         if (mtblr(i+2) .le. mtblr(i+1)) tfail = .true.
+       enddo
+       if (.not.tfail) go to 90
+       write (output,2027)
+ 2027  format ('0******** Temperatures in heat capacity table are not in
+     & increasing order.')
+       xfail = .true.
+       fail = .true.
+       go to 90
+  131  if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     & write (output,2030) (scr(i+j),scr(i),i=1,j)
+       go to 90
+c  Volumetric heat capacity is in functional form.
+  130  if (mod(l3b(6),9) .eq. 0) go to 401
+       write (output,2041)
+ 2041  format ('0******** Number of entries in thermal conductivity func
+     &tion data is not a multiple of 9.')
+       go to 122
+  401  mtbl(lq) = l3b(6)/9
+       call ftbmov (scr,mtblr(lq+1),j)
+       l1 = lq
+       do 402 i = 1,j,9
+         if (unsw) go to 403
+         mtblr(l1+1) = mtblr(l1+1)/degf1 + degf2
+         mtblr(l1+2) = mtblr(l1+2)/degf1 + degf2
+         mtblr(l1+9) = mtblr(l1+9)/degf1 + degf2
+         mtblr(l1+3) = mtblr(l1+3)*vhc
+         xx = vhc*degf1
+         mtblr(l1+4) = mtblr(l1+4)*xx
+         xx = vhc*degf1
+         mtblr(l1+5) = mtblr(l1+5)*xx
+         xx = vhc*degf1
+         mtblr(l1+6) = mtblr(l1+6)*xx
+         xx = vhc*degf1
+         mtblr(l1+7) = mtblr(l1+7)*xx
+         mtblr(l1+8) = mtblr(l1+8)*vhc/degf1
+  403    if (.not.xorv .or. .not.unsw) go to 404
+         scr(i) = (scr(i)-degf2)*degf1
+         scr(i+1) = (scr(i+1)-degf2)*degf1
+         scr(i+8) = (scr(i+8)-degf2)*degf1
+         scr(i+2) = scr(i+2)/vhc
+         xx = vhc*degf1
+         scr(i+3) = scr(i+3)/xx
+         xx = vhc*degf1
+         scr(i+4) = scr(i+4)/xx
+         xx = vhc*degf1
+         scr(i+5) = scr(i+5)/xx
+         xx = vhc*degf1
+         scr(i+6) = scr(i+6)/xx
+         scr(i+7) = scr(i+7)/vhc*degf1
+  404    l1 = l1 + 9
+  402  continue
+       if (xorv .and. .not.unsw) call ftbmov (mtblr(lq+1),scr,j)
+       if (iand(ihlppr(2),ishft(1,22)).ne.0) then
+         if (.not.unito) then
+           write (output,2042)
+ 2042  format ('0Volumetric heat capacity function'/
+     &2x,'temp-low',6x,'temp-high',5x,'a0 (btu/ft3-  a1 (btu/ft3-  a2 (b
+     &tu/ft3-  a3 (btu/ft3-  a4 (btu/ft3-  a-1 (btu/ft3) c'/
+     &  2x,'(degf)',8x,'(degf)',11x,'degf)',9x,'degf2)',8x,'degf3)',8x,'
+     &degf4)'         ,8x,'degf5)',19x,'(degf)')
+         else
+           write (output,2043)
+ 2043  format ('0Volumetric heat capacity function'/
+     & 2x,'temp-low',6x,'temp-high',5x,'a0',12x,'a1',12x,'a2',12x,'a3',1
+     &2x,'a4',12x    ,'a-1',11x,'c'/
+     &                  2x,'(k)',11x,'(k)',11x,'(j/m3-k)',6x,'(j/m3-k2)
+     &    (j/m3-k3)     (j/m3-k4)     (j/m3-k5)     (j/m3)',8x,'(k)')
+         endif
+         write (output,2034) (scr(i),i=1,j)
+       endif
+       tfail = .false.
+       if (mtbl(lq) .eq. 1) go to 90
+       j = lq + j - 10
+       do i = lq,j,9
+         if (mtblr(i+10) .ne. mtblr(i+2)) tfail = .true.
+       enddo
+       if (.not.tfail) go to 90
+       xfail = .true.
+       fail = .true.
+   90  mtblen(lpo) = it - itr
+       if (xfail) mtblen(lpo) = -mtblen(lpo)
+c  See if there can be more material data.
+   53  nt = nt + 1
+   18  if (nt .lt. 1000) go to 10
+c  Delete input cards.
+   32  filsiz(1) = inp9(fa(filndx(1)))
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+c  If any data entered, set number of tables, modify pointers, and write
+c  pointers.
+       if (ntbls .ne. 0) then
+         nmtbls(filndx(9)) = ntbls
+         j = ntbls + 1
+         m = filndx(9) + 1
+         n = filndx(9) + ntbls
+         do k = m,n
+           mtbptr(k) = mtbptr(k) + j
+         enddo
+         filsiz(9) = j + it
+         call ftbsft (filid(9),filsiz(9),2,filndx(9))
+       else
+         call ftbdel (filid(9))
+         filid(9) = 0.0
+         filndx(9) = 1
+         filsiz(9) = 0
+       endif
+       call fmvlwr
+       return
+       end

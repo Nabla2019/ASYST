@@ -1,0 +1,1173 @@
+*mlist
+       subroutine hzflow (ichoke)
+c
+c  Vapor pull-through and liquid entrainment model for stratified
+c  horizontal flow.
+c  Also adjust donor void fractions for inverted u-tube geometry
+c  and u-tube geometry.
+c
+c  Cognizant engineer: wmb,hxc.
+c
+c  These local variables had their names changed (4/12/95 gam)
+c  fluxm => fluxmm
+c  --------------------------------------------------------------------
+c  Modified for the Ardron/Bryce horizontal stratification entrainment
+c  (hse) correlation set.
+c
+c  Refs.
+c  Ardron, K H and Bryce, W M. Assessment Of Horizontal Stratification
+c  Entrainment Model In RELAP5/MOD2.  AEEW-R 2345.  April 1988.
+c
+c  Bryce, W M.  Numerics And Implementation Of The UK Horizontal
+c  Stratification Entrainment Off-take Model Into RELAP5/MOD3.
+c
+c  This Implementation by W.M.Bryce, AEE Winfrith, UKAEA. April 1989.
+c  --------------------------------------------------------------------
+c
+       use lpdatc
+       implicit none
+       integer ichoke
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'ufiles.h'
+       include 'jundat.h'
+       include 'scrtch.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer i,ik,j,k,kk,kx,ky,l,ll,lx,ly,m,nmap
+       logical countc
+       real aj,ajth,alf,alg,alphef,alpham,arfg,argf
+       real ctheta,dafdwf,dafdx3,dagdwg,dagdx3,dlvdag,dwfdaf,dwff2
+       real djal,dvgdag,dwgdag,dx3dr,dx3dwg,dx3dwf,dwgg2
+       real dprest,delz,delzk,delzl
+       real flow,fluxmm,fstrat,hcll,hbfdw,hbf,hbmin
+       real rat,slipr,squal,squal2,scrach,stheta,theta
+       real vc,vdf,vdg,vdfact,voidx
+       real wff,wff2,wfamp,wgg,wgg2,wgamp
+       real x,x00,x00p,x00r,xg03,xg03a,xg03b
+       real htheta
+       external htheta
+c  Hse mass flux transition values.
+       real gstrt1,gstrt2,gstr1w,gstr2w,gstr1d,gstr2d,gstr1h,gstr2h
+c  Water.
+       parameter (gstr1w=2500.0,gstr2w=3000.0)
+c  Heavy water - correct value not known.
+       parameter (gstr1d=2500.0,gstr2d=3000.0)
+c  Hydrogen? - correct value not known.
+       parameter (gstr1h=2500.0,gstr2h=3000.0)
+c  Warning flags for mass flux parameters.
+       integer ighsed,ighseh,ighsex
+c  Powers of gravity acceleration (-0.2 and 0.5).
+       real grvmp2,grvp5
+       parameter (grvmp2=0.634,grvp5=3.13)
+       real psinq,pcosq
+c
+c  Data statements.
+       data ighsed,ighseh,ighsex/0,0,0/
+c
+c  Define statement functions.
+       psinq(x) = x*(x*(x*(x*(-0.239e-7*x + 0.27526e-5) - 0.1984090e-3)
+     & + 0.0083333315) - 0.1666666664)
+       pcosq(x) = x*(x*(x*(x*(-0.2605e-6*x + 0.247609e-4) -
+     & 0.0013888397) + 0.0416666418) - 0.4999999963)
+c
+c  Check if a junction is stratified and then determine the donor void
+c  fraction.
+       i = lpdat(issys)%lij
+       do 3001 m = 1,lpdat(issys)%lijn
+c  If (hse_model_not_allowed (pos 17)) exit.
+         if (iand(jc(i),65536) .eq. 0) then
+           if (ichoke.eq.0 .or. velgj(i)*velgjo(i).le.0.0 .or.
+     &     velfj(i)*velfjo(i).le.0.0) then
+             jc(i) = iand(jc(i),not(2048))
+             k = ij1nx(i)
+             kx = k + iand(ishft(jcex(i),-13),3)
+             l = ij2nx(i)
+             lx = l + iand(ishft(jcex(i),-10),3)
+             j = iand(ishft(jc(i),-17),3)
+             countc = velgj(i)*velfj(i) .lt. 0.0
+             ajth = ajun(i)*athrot(i)
+             wff = velfj(i)*(rhofj(i)*vodfjo(i))*ajun(i)
+             wgg = velgj(i)*(rhogj(i)*vodgjo(i))*ajun(i)
+             flow = wgg + wff
+c  Consider liquid entrainment.
+c  This is the beginning of the liquid entrainment section which
+c   covers     1. Upward-oriented,
+c              2. Downward-oriented counter-current
+c              3. Side-off take with voidg.gt.0.5
+c              4. Side-off take with voidg.lt.0.5 with counter-current
+c  If (not_zero_gas_velocity) then.
+             if (velgj(i) .ne. 0.0) then
+c  Calculate the main (doner) volume (kk) and side off take volume(ll)
+c   based on velgj for liquid entrainment
+               if (velgj(i) .ge. 0.0) then
+                 kk=k
+                 ky = kx
+                 ll=l
+                 ik=i
+               else
+                 kk=l
+                 ky = lx
+                 ll=k
+                 ik=i+1
+               endif
+c  If (counter_current or not_downward_off-take) then.
+c  In case for the downward_off-take and counter current the
+c   logic falls to j.eq.2 section in this liquid entrainment
+c   section at the limit of velfj=0  (see Section 7.4.3.2.1 of
+c   Relap5 manual volume 4)
+               if (j.ne.2 .or. countc) then
+c  Let off-take_volume ll = gas_downstream volume.
+c  Let upstream_volume kk = gas_upstream volume.
+c  Check flow direction.
+c  If(upstream_volume_two-phase) then
+                 if (voidg(kk).gt.0.0 .and. voidf(kk).gt.0.0) then
+                   nmap=iand(imap(kk),63)
+c  if(upstream_volume_horizontal or vertical_level) then
+                   if ( nmap.eq.2 .or. dlev(kk).gt.0. ) then
+c  if(off-take_area_smaller or not_side_off-take) then.
+c  For side off-take the junction area restriction does not apply.
+                     if (avol(kk).ge.ajth*1.001 .or. j.ne.3) then
+c  If (counter_current or upward_off-take or
+c  (side_off-take and upstream_volume>half_empty)) then.
+c  The countercurrent check is for j.eq.2 case (see Section 7.4.3.2.1
+c   of Relap5 manual volume 4)
+                       if (countc .or. j.eq.1 .or.
+     &                 (j.eq.3 .and. voidg(kk).gt.0.5)) then
+c  Calculation of stratification angle.
+                         alpham = min(voidf(kk),voidg(kk))
+                         theta = htheta(alpham)
+                         scrach = theta**2
+                         stheta = max(1.0e-7,theta*(1.0 +
+     &                   psinq(scrach)))
+                         ctheta = 1.0 + min(0.0,pcosq(scrach))
+                         if(voidg(kk) .gt. 0.5) ctheta = -ctheta
+                         alphef = max(2.e-7,min(2.e-3*rhog(kk)/rhof(kk),
+     &                   2.e-4))
+c  fstrt is calculated in phantv routine as an indicator of two phase
+c   existence.
+                         fstrat = fstrt(kk)
+c  If (allowed_upstream_volume_void_range) then.
+                         if (fstrat .gt. 0.0) then
+                           fluxmm=max(abs(voidg(kk)*rhog(kk)*velgo(kk))+
+     &                     abs(voidf(kk)*rhof(kk)*velfo(kk)),
+     &                     abs(flow/avol(kk)))
+                           if (volmat(kk) .eq. 1) then
+                             gstrt1 = gstr1w
+                             gstrt2 = gstr2w
+                           elseif (volmat(kk) .eq. 2) then
+                             gstrt1 = gstr1d
+                             gstrt2 = gstr2d
+                             if (ighsed .eq. 0) then
+                               write (output,*) ' $$$$$$$$ hse model is
+     &being used for heavy water; the correlations may be invalid.'
+                               ighsed = 1
+                             endif
+                           elseif (volmat(kk) .eq. 3) then
+                             gstrt1 = gstr1h
+                             gstrt2 = gstr2h
+                             if (ighseh .eq. 0) then
+                               write (output,*) ' $$$$$$$$ hse model is
+     &being used for hydrogen; the correlations may be invalid.'
+                               ighseh = 1
+                             endif
+                           else
+                             gstrt1 = gstr1w
+                             gstrt2 = gstr2w
+                             if (ighsex .eq. 0) then
+                               write (output,*) ' $$$$$$$$ hse model is
+     &being used for an unknown material; the correlations may be invali
+     &d.'
+                               ighsex = 1
+                             endif
+                           endif
+c  If (allowed_upstream_volume_mass_flux) then.
+                           if (fluxmm .lt. gstrt2) then
+c  Liquid entrainment section.
+c  calculate voidgj using new model.
+                             aj = ajth/avol(kk)
+                             djal = sqrt(aj)
+c  Set stratified off-take conditions flag (pos 12)
+                             jc(i) = ior(jc(i),2048)
+c  Calculate liquid level relative to main volume centre
+c  dlev check is to cover the main volume has vertical level specified
+c   vertically oriented volume.  This dlev check is temporary coding
+c   to allow level tracking vertical volume to use hse model.
+                             if ( dlev(kk).gt.0. ) then
+                               hcll = dlev(kk) - dl(kk)*0.5
+                             else
+c  For normal horizontal main (doner) volume the liquid level is
+c   calculated by using the stratification angle.
+                               hcll = diamv(kk)*0.5*ctheta
+                             endif
+c  Calculate common correlation parameter for j .eq. 1 2 3
+                             x00 = 1.15/(1.0 + sqrt(rhof(kk)/rhog(kk)))
+c  Set a flag.
+                             hbfdw = 0.0
+c  Approximate slip to convert (co-current) quality correlation to void
+c  fraction expression for all flow directions.
+                             slipr = sqrt(max(rhof(kk)/rhog(kk),1.e-7))
+                             if (abs(velfj(i))*slipr .gt.
+     &                       abs(velgj(i))) slipr = max(1.0,
+     &                       abs(velgj(i))/abs(velfj(i)))
+                             vdg = vodgjo(i)
+c  This sub-section covers the liquid entrainment for co-current and
+c   counter-current with gas velocity moving out of the main (doner)
+c   volume.  For j.eq.1 with the counter-current with gas velocity
+c   moving into the main (doner) volume case is covered in gas-pull
+c   through logic in the second half section of this subroutine.
+                             if (j .eq. 1) then
+c  Upward-oriented junction  -- liquid entrainment.
+c  Calculate critical depth, limiting to a diameter.
+                               hbf = (wgg*wgg/(rhog(kk)*max(rhof(kk) -
+     &                         rhog(kk),1.e-7)))**0.2*(1.67*grvmp2)
+                               if (hbf .gt. diamv(kk)) then
+                                 hbf = diamv(kk)
+                               else
+                                 hbfdw = 1.0
+                               endif
+                               if ((diamv(kk)*0.5-hcll).ge.hbf .and.
+     &                         vdg.lt.1.0) then
+c  No entrainment possible with old gas flow, see if using pure gas
+c  outflow makes a difference.
+                                 vdg = 1.0
+                                 wgg = velgj(i)*rhogj(i)*ajun(i)
+                                 hbf = min((wgg*wgg/(rhog(kk)*
+     &                           max(rhof(kk) - rhog(kk),1.e-7)))**0.2*
+     &                           (1.67*grvmp2),diamv(kk))
+                               endif
+                               if (hbf .lt. 1.e-6) then
+c  Critical depth less than allowed minimum value set wgg to value
+c  giving hbf=1.e-6.
+                                 hbf = 1.e-6
+                                 wgg = sqrt(rhog(kk)*max(rhof(kk) -
+     &                           rhog(kk),1.e-7))*(2.77e-16*grvp5)
+                               endif
+c  Calculate dimensionless distance between liquid and off-take.
+                               rat = max(0.0,(diamv(kk)*0.5 - hcll)/hbf)
+c  Calculate off-take flow quality and derivative.
+                               if (rat .le. 0.0) then
+c  Liquid at off-take.
+                                 xg03 = 0.0
+                                 dx3dr = 0.0
+                               elseif (rat .ge. 1.0) then
+c  Liquid level allows no entrainment.
+                                 xg03 = 1.0
+                                 dx3dr = 0.0
+                               else
+c  Liquid level allows entrainment.
+                                 xg03a = 3.25*(rat - 1.0)**2
+                                 xg03b = rat**(xg03a - 1.0)
+                                 xg03 = xg03b*rat
+                                 dx3dr = xg03a*xg03b + xg03*6.5*(rat -
+     &                           1.0)*log(rat)
+                               endif
+c  Calculate liquid area fraction corresponding to off-take gas quality
+c  xg03.
+                               alf = (1.0 - xg03)*(rhog(kk)*slipr)
+                               alf = alf/(alf + xg03*rhof(kk))
+c  Finite off-take area mod.
+c  If the edges of the liquid flow are visible when looking in through
+c  offtake and the volume is more than half full then increase
+c  proportion of liquid according to the fraction of the field of view
+c  occupied by liquid.
+                               voidx = 1.0
+                               if (voidg(kk).lt.0.5 .and. djal.gt.0.0)
+     &                         then
+                                 theta = stheta/min(djal,1.0)
+                                 if (theta .lt. 1.0) voidx =
+     &                           0.636619772*(asin(theta) + theta*
+     &                           sqrt(1.0 - theta*theta))
+                                 alf = voidf(kk) + voidx*(alf -
+     &                           voidf(kk))
+                               endif
+c  Calculate gas area fraction.
+                               alg = 1.0 - alf
+c  This sub-section covers the liquid entrainment for countercurrent
+c   flow in downward off take with gas velocity moving into of the
+c   liquid full (doner) volume.  For j.eq.2 with the co-current with
+c   gas velocity moving into the liquid full (doner) volume case is
+c   covered in gas-pull through logic in the second half section of
+c   this subroutine.
+                             elseif (j .eq. 2) then
+c
+c  Downward-oriented junction  -- liquid inflow.
+c  Use velfj=0 limit of vapour pullthrough.
+c  Wff = 0.0. (See section 7.4.3.2.1 of Relap5/Mod3.2 manual volume 4)
+c  Set critical depth to the minimum value.
+                               hbf = 1.e-6
+c  Calculate dimensionless height of liquid above off-take.
+                               rat = max(0.0,(hcll + 0.5*diamv(kk))/hbf)
+c  Calculate off-take flow quality.
+                               if (rat. le. 0.0) then
+c  Gas at off-take.
+                                 xg03 = 1.0
+                               elseif (rat .lt. 0.9) then
+c  Liquid level allows pullthrough.
+                                 xg03a = sqrt(max(1.0 - 0.5*rat*(1.0 +
+     &                           rat)*x00**(1.0 - rat),0.0))
+                                 xg03b = x00**(2.5*rat)
+                                 xg03 = xg03a*xg03b
+                               elseif (rat .ge. 1.0) then
+c  Liquid level allows no pullthrough.
+                                 xg03 = 0.0
+                               else
+c  Liquid level allows pullthrough.
+c  For rat gt 0.9 decrease xg03 linearly to 0.0.
+c  To avoid ill-conditioned square root dependence.
+                                 dx3dr = x00**(2.5*rat)*sqrt(max(1.0 -
+     &                           0.855*x00**0.1,0.0))*(-10.0)
+                                 xg03 = dx3dr*(rat-1.0)
+                               endif
+                               dx3dr = 0.0
+c  Calculate gas area fraction corresponding to off-take gas quality
+c  xg03.
+                               alg = xg03*rhof(kk)
+                               alg = alg/(alg+(1.0 - xg03)*(rhog(kk)*
+     &                         slipr))
+c  Finite off-take area mod.
+c  If the edges of the liquid flow are visible when looking in through
+c   offtake and the volume is more than half empty, then increase
+c   proportion of gas according to the fraction of the field of view not
+c   occupied by liquid.
+                               voidx = 1.0
+                               if (voidf(kk).lt.0.5 .and. djal.gt.0.0)
+     &                         then
+                                 theta = stheta/min(djal,1.0)
+                                 if (theta .lt. 1.0) voidx =
+     &                           0.636619772*(asin(theta) + theta*
+     &                           sqrt(1.0 - theta*theta))
+                                 alg = voidg(kk)+voidx*(alg - voidg(kk))
+                               endif
+                             else
+c  Side or central junction.
+c  Calculate minimum critical depth.
+c  dlev check is to cover the main volume has vertical level specified
+c   vertically oriented volume.  This dlev check is temporary coding
+c   to allow level tracking vertical volume to use hse model.
+                               if ( dlev(kk).gt.0. ) then
+                                 hbmin = max(djal*dl(kk)*0.5,1.e-6)
+                               else
+                                 hbmin = max(djal*diamv(kk)*0.5,1.e-6)
+                               endif
+c  Calculate gas fraction when liquid just covers the off-take.
+                               theta = sqrt(1.0 - djal)*(djal*
+     &                         (-0.2145988016 + djal*(0.0889789874 +
+     &                         djal*(-0.0501743046 + djal*
+     &                         (0.0308918810 + djal*(-0.0170881256 +
+     &                         djal*(0.0066700901 - djal*
+     &                         0.0012624911))))))+1.5707963050)
+                               voidx = 0.318309886*(theta - djal*
+     &                         sqrt(1.0 - aj))
+c  Reduce it as in old model.
+c  voidx=min(voidx,0.49)*0.85
+                               voidx=min(voidx,0.49)
+c  Test for entrainment or pullthrough.
+c  This sub-section covers the liquid entrainment for side off-take when
+c   the voidg.gt.0.5.  Cocurrent and countercurrent with main phase (gas
+c   phase) moving out of main (doner) volume are considered in this sub-
+c   section. For countercurrent with main phase moving into the main
+c   (doner)volume is considered in the second half section of
+c   this subroutine.
+                               if (voidg(kk) .gt. 0.5) then
+c  Voidg gt 0.5 -- liquid entrainment.
+c  Calculate critical depth, limiting to a radius.
+                                 hbf = (wgg*wgg/(rhog(kk)*max(rhof(kk) -
+     &                           rhog(kk),1.e-7)))**0.2*(0.69*grvmp2)
+                                 if ( dlev(kk).gt.0. ) then
+                                   if (hbf .gt. dl(kk)*0.5) then
+                                     hbf = dl(kk)*0.5
+                                   else
+                                     hbfdw = 1.0
+                                   endif
+                                 else
+                                   if (hbf .gt. diamv(kk)*0.5) then
+                                     hbf = diamv(kk)*0.5
+                                   else
+                                     hbfdw = 1.0
+                                   endif
+                                 endif
+                                 if (hcll.le.-hbf .and. vdg.lt.1.0) then
+c  No entrainment with old gas flow, see if using pure gas outflow makes
+c  a difference.
+                                   vdg = 1.0
+                                   wgg = velgj(i)*rhogj(i)*ajun(i)
+                                   hbf = (wgg*wgg/(rhog(kk)*
+     &                             max(rhof(kk) - rhog(kk),1.e-7)))**
+     &                             0.2*(0.69*grvmp2)
+                                 endif
+                                 if (hbf .lt. hbmin) then
+c  Critical depth less than allowed value.
+c  Set wgg to value giving hbfmin.
+                                   hbf = hbmin*hbmin
+                                   hbf = hbmin*hbf*hbf
+                                   wgg = sqrt(rhog(kk)*max(rhof(kk) -
+     &                             rhog(kk),1.e-7)*hbf)*(2.53*grvp5)
+                                   hbf = hbmin
+                                 endif
+c  Calculate dimensionless height of liquid above off-take.
+                                 rat = min(0.0,max(-1.0,hcll/hbf))
+c  Calculate off-take flow quality, and derivative.
+                                 if (rat .ge. 0.0) then
+c  Liquid level allows liquid outflow.
+                                   xg03 = x00
+                                   dx3dr = 0.0
+                                 elseif (rat .le. -1.0) then
+c  Liquid level allows no entrainment.
+                                   xg03 = 1.0
+                                   if (vodgjo(i) .lt. 1.0) then
+c  There was some liquid so use non-zero derivative.
+                                     dx3dr = log(x00) + 0.25*x00*x00
+                                   else
+                                     dx3dr = 0.0
+                                   endif
+                                 else
+c  Liquid level allows entrainment.
+                                   x00p = x00**rat
+                                   xg03a = sqrt(max(1.0 - 0.5*rat*(1.0 +
+     &                             rat)*x00/x00p,0.0))
+                                   xg03b = x00*x00p
+                                   xg03 = xg03a*xg03b
+                                   x00p = log(x00)
+                                   dx3dr = 0.5*x00*x00*(0.5*rat*(1.0 +
+     &                             rat)*x00p - (0.5 + rat))/xg03a +
+     &                             xg03*x00p
+                                 endif
+c  Calculate liquid area fraction corresponding to off-take gas quality
+c  xg03.
+                                 alf = (1.0 - xg03)*(rhog(kk)*slipr)
+                                 alf = alf/(alf + xg03*rhof(kk))
+c  Finite off-take area mod.
+c  If the liquid level is near the off-take (eg within the off-take
+c  diameter, interpolate the liquid fraction with that of the main
+c  volume.
+                                 alf = alf*min(voidx/voidf(kk),1.0) +
+     &                           max(0.0,voidf(kk) - voidx)
+c  Calculate gas area fraction.
+                                 alg = 1.0 - alf
+c  This sub-section covers the liquid entrainment for countercurrent
+c   flow in side off-take with gas velocity moving into of the liquid
+c   full (doner) volume for j.eq.3 and voidg.lt.0.5. The other two
+c   cases of j.eq.3 with voidg.lt.0.5 are covered in the second half
+c   of this subroutine.
+                               else
+c  Voidg lt 0.5  -- use velfj=0 limit of vapour pullthrough.
+c  Wff = 0.0.
+c  Set critical depth to the minimum value.
+                                 hbf = hbmin
+c  Calculate dimensionless height of liquid above off-take.
+                                 rat = min(1.0,max(0.0,hcll/hbf))
+c  Calculate off-take flow quality.
+                                 if (rat .le. 0.0) then
+c  Liquid level allows gas outflow.
+                                   xg03 = x00
+                                 elseif (rat .ge. 1.0) then
+c  Liquid level allows no pullthrough.
+                                   xg03 = 0.0
+                                 elseif (rat .lt. 0.9) then
+c  Liquid level allows pullthrough.
+                                   xg03 = x00**(1.0 + 1.09*rat)*
+     &                             sqrt(max(1.0-0.5*rat*(1.0 + rat)*
+     &                             x00**(1.0 - rat),0.0))
+                                 else
+c  Liquid level allows pullthrough.
+c  For rat gt 0.9 decrease xg03 linearly to 0.0 to avoid ill-
+c  conditioned square root dependence.
+                                   xg03 = x00**(1.0 + 1.09*rat)*
+     &                             sqrt(max(1.0-0.855*x00**0.1,0.0))*
+     &                             (1.0 - rat)*10.0
+                                 endif
+                                 dx3dr = 0.0
+c  Calculate gas area fraction corresponding to off-take gas quality
+c   xg03.
+                                 alg = xg03*rhof(kk)
+                                 alg = alg/(alg + (1.0 - xg03)*
+     &                           (rhog(kk)*slipr))
+c  Finite off-take area mod.
+c  If the liquid level is near the off-take (eg within the off-take
+c   diameter, interpolate the gas fraction with that of the main volume.
+                                 alg = alg*min(voidx/voidg(kk),1.0) +
+     &                           max(0.0,voidg(kk)-voidx)
+                               endif
+                             endif
+                             if (hbfdw .le. 0.0) dx3dr = 0.0
+c  Interpolate to standard donoring.
+                             if (fstrat .lt. 1.0) alg = alg*fstrat +
+     &                       (1.0 - fstrat)*voidg(kk)
+c  Do a first order correction to reduce chance of numerical instability
+c   due to dependence on off-take flow.
+c  Dx3dr is estimate of partial derivative of xg03 wrt rat.
+                             if (dx3dr .ne. 0.0) then
+c  Dx3dwg is estimate of partial derivative of xg03 wrt wgg.
+                               dx3dwg = -0.4*dx3dr*rat/wgg
+c  Dagdx3 is estimate of partial derivative of alg wrt xg03.
+                               dagdx3 = fstrat*rhof(kk)*(rhog(kk)*
+     &                         slipr)/(xg03*rhof(kk) + (1.0 - xg03)*
+     &                         (rhog(kk)*slipr))**2
+c  Reduce dagdx3 for finite off-take area mods.
+                               if (j .eq. 3) then
+                                 dagdx3 = dagdx3*min(voidx/voidf(kk),
+     &                           1.0)
+                               elseif(voidx.lt.1.0) then
+                                 dagdx3 = dagdx3*voidx
+                               endif
+                               if (iand(jc(i),1).eq.1 .and. velgj(i)*
+     &                         velfj(i).gt.0.0) then
+c  Choked flow, may have a different numerical instability.
+                                 argf = vdg*rhofj(i)
+                                 arfg = vodfjo(i)*rhogj(i)
+c  Calculate old-conditions value of critical velocity vc.
+                                 vc = (argf*velgj(i) + arfg*velfj(i))/
+     &                           (argf + arfg)
+c  Approximate (d(vc)/d(alg))/vc at old-conditions by assuming vc =
+c   g(const)/rho.
+                                 dlvdag = (rhofj(i) - rhogj(i))/
+     &                           (rhogj(i)*vodgjo(i) + rhofj(i)*
+     &                           vodfjo(i))
+                                 slipr = velgj(i)/velfj(i)
+c  Approximate d(velgj)/d(alg) at old-conditions.
+                                 dvgdag = slipr*vc*(1.0 - slipr)*
+     &                           (rhogj(i)*rhofj(i))/(argf*slipr +
+     &                           arfg)**2 + velgj(i)*dlvdag
+c  Approximate d(wgg2)/d(alg) at old-conditions.
+                                 dwgdag = (dvgdag*vodgjo(i) + velgj(i))*
+     &                           rhogj(i)*ajun(i)
+c  Calculate new-conditions value of gas flow.
+                                 wgg2 = velgj(i)*vodgjo(i)*(rhogj(i)*
+     &                           ajun(i)) + dwgdag*(alg - vodgjo(i))
+                               else
+c  Unchoked flow, assume velgj not directly altered by alg.
+c  Approximate d(wgg2)/d(alg) at new-conditions.
+                                 dwgdag = velgj(i)*rhogj(i)*ajun(i)
+c  Calculate new-conditions value of gas flow.
+                                 wgg2 = dwgdag*alg
+                               endif
+c  Do first order correction.
+                               dagdwg = dagdx3*dx3dwg
+                               wgamp = dwgdag*dagdwg
+                               if (wgamp .lt. 0.0) then
+                                 dwgg2 = (wgg2 - wgg)/(1.0 - wgamp)
+                                 alg = alg + dagdwg*dwgg2
+                               endif
+                             endif
+                             voidgj(i) = min(1.0,max(0.0,alg))
+                             vodgjr(i) = voidgj(i)/voidg(kk)
+                             if (.not.countc) then
+                               voidfj(i) = max(0.0,1.0 - voidgj(i))
+                               vodfjr(i) = voidfj(i)/voidf(kk)
+                               go to 3000
+                             endif
+                           endif
+                         endif
+                       endif
+                     endif
+                   endif
+                 endif
+               endif
+c  If (co_current and (upward_off-take or (side_off-take and
+c   upstream_volume>half_empty))) exit.
+c  For cocurrent flow cases, the voidgj = 1. - voidfj where voidfj
+c   is calculated from the correlation.  For countercurrent flow cases
+c   voidfj of the side off take volume is used.  The coding for
+c   voidgj=1.-voidfj is near the bottom of do 3000 loop.
+               if (.not.countc .and. (j.eq.1 .or. (j.eq.3 .and.
+     &         voidg(kk).gt.0.5))) go to 3000
+             endif
+c  Consider gas pull-through.
+c  This is the beginning of the liquid entrainment section which
+c   covers     1. Downward-oriented,
+c              2. Upward-oriented counter-current
+c              3. Side-off take with voidg.lt.0.5
+c              4. Side-off take with voidg.gt.0.5 with counter-current
+c  If (not_zero_liquid_velocity) then.
+             if (velfj(i) .ne. 0.0) then
+c  Let off-take_volume ll = liquid_downstream volume.
+c  Let upstream_volume kk = liquid_upstream volume.
+c  Calculate the main (doner) volume (kk) and side off take volume(ll)
+c   based on velfj for gas pull-through.
+               if (velfj(i) .le. 0.0) then
+                 kk = l
+                 ky = lx
+                 ll=k
+                 ik = i+1
+               else
+                 kk = k
+                 ky = kx
+                 ll=l
+                 ik = i
+               endif
+c  If (upstream_volume_two-phase) then.
+               if (voidg(kk).gt.0.0 .and. voidf(kk).gt.0.0) then
+                 nmap=iand(imap(kk),63)
+c  If (upstream_volume_horizontal or vertical_level)) then.
+                 if ( nmap.eq.2 .or. dlev(kk).gt.0. ) then
+c  If (off-take_area_smaller or not_side_off-take) then.
+                   if (avol(kk).ge.ajth*1.001 .or. j.ne.3) then
+c  Calculation of stratification angle.
+                     alpham = min(voidf(kk),voidg(kk))
+                     theta = htheta(alpham)
+                     scrach = theta**2
+                     stheta = max(1.0e-7,theta*(1.0 + psinq(scrach)))
+                     ctheta = 1.0 + min(0.0,pcosq(scrach))
+                     if (voidg(kk) .gt. 0.5) ctheta = -ctheta
+                     alphef = max(2.e-7,min(2.e-3*rhog(kk)/rhof(kk),
+     &               2.e-4))
+                     fstrat = fstrt(kk)
+c  If (allowed_upsteam_volume_void_range) then.
+                     if (fstrat .gt. 0.0) then
+                       fluxmm = max(abs(voidg(kk)*rhog(kk)*velgo(kk))+
+     &                 abs(voidf(kk)*rhof(kk)*velfo(kk)),
+     &                 abs(flow/avol(kk)))
+                       if (volmat(kk) .eq. 1) then
+                         gstrt1 = gstr1w
+                         gstrt2 = gstr2w
+                       elseif (volmat(kk) .eq. 2) then
+                         gstrt1 = gstr1d
+                         gstrt2 = gstr2d
+                         if (ighsed .eq. 0) then
+                           write (output,*) ' $$$$$$$$ hse model is bein
+     &g used for heavy water; the correlations may be invalid.'
+                           ighsed = 1
+                         endif
+                       elseif (volmat(kk) .eq. 3) then
+                         gstrt1 = gstr1h
+                         gstrt2 = gstr2h
+                         if (ighseh .eq. 0) then
+                           write (output,*) ' $$$$$$$$ hse model is bein
+     &gused for hydrogen; the correlations may be invalid.'
+                           ighseh = 1
+                         endif
+                       else
+                         gstrt1 = gstr1w
+                         gstrt2 = gstr2w
+                         if (ighsex .eq. 0) then
+                           write (output,*) ' $$$$$$$$ hse model is bein
+     &gused for an unknown material; the correlations may be invalid.'
+                           ighsex = 1
+                         endif
+                       endif
+c  If (allowed_upsteam_volume_mass_flux) then.
+                       if (fluxmm .lt. gstrt2) then
+c  gas pull-through section.
+c  Calculate voidfj using new model.
+                         aj = ajth/avol(kk)
+                         djal = sqrt(aj)
+c  Set stratified off-take conditions flag (pos 12)
+                         jc(i) = ior(jc(i),2048)
+c  Calculate liquid level relative to main volume centre
+                         if ( dlev(kk).gt.0. ) then
+                           hcll = dlev(kk) - dl(kk)*0.5
+                         else
+                           hcll = diamv(kk)*0.5*ctheta
+                         endif
+c  Calculate correlation parameter
+                         x00 = 1.15/(1.0 + sqrt(rhof(kk)/rhog(kk)))
+c  Set a flag
+                         hbfdw = 0.0
+c  Approximate slip to convert (co-current) quality correlation to void
+c  fraction expression for all flow directions.
+                         slipr = sqrt(max(rhof(kk)/rhog(kk),1.e-7))
+                         if(abs(velfj(i))*slipr .gt. abs(velgj(i)))
+     &                   slipr = max(1.0,abs(velgj(i))/abs(velfj(i)))
+                         vdf = vodfjo(i)
+c  This subsection covers the downward oriented off take for cocurrent
+c   and counter current flow cases with the main phase (liquid) flowing
+c   out of the main (doner) volume.  The other case of countercurrent
+c   (i.e., the main phase flowing into the main volume) is covered in
+c   the first half of this subroutine.
+                         if (j .eq. 2) then
+c  Downward-oriented junction  -- gas pullthrough
+c  Calculate critical depth, limiting to a diameter
+                           hbf = (wff*wff/(rhof(kk)*max(rhof(kk) -
+     &                     rhog(kk),1.e-7)))**0.2*(1.5*grvmp2)
+                           if (hbf .gt. diamv(kk)) then
+                             hbf = diamv(kk)
+                           else
+                             hbfdw = 1.0
+                           endif
+                           if ((diamv(kk)*0.5 + hcll).ge.hbf .and.
+     &                     vdf.lt.1.0) then
+c  No pullthrough possible with old liquid flow; see if using pure
+c   liquid outflow makes a difference.
+                             vdf = 1.0
+                             wff = velfj(i)*rhofj(i)*ajun(i)
+                             hbf = min((wff*wff/(rhof(kk)*max(rhof(kk) -
+     &                       rhog(kk),1.e-7)))**0.2*(1.5*grvmp2),
+     &                       diamv(kk) )
+                           endif
+                           if (hbf.lt.1.e-6) then
+c  Critical depth less than allowed minimum value
+c  Set wff to value giving hbf = 1.e-6
+                             hbf = 1.e-6
+                             wff = sqrt(rhof(kk)*max(rhof(kk) -
+     &                       rhog(kk),1.e-7))*(3.63e-16*grvmp2)
+                           endif
+c  Calculate dimensionless distance between liquid and off-take
+                           rat = max(0.0,(diamv(kk)*0.5+hcll)/hbf)
+c  Calculate off-take flow quality and derivative
+                           if (rat .le. 0.0) then
+c  Gas at off-take
+                             xg03 = 1.0
+                             if (vodgjo(i) .lt. 1.0) then
+c  There was some liquid so use a non-zero derivative
+                               dx3dr = 2.5*log(x00) - 0.25*x00
+                             else
+                               dx3dr = 0.0
+                             endif
+                           elseif (rat.ge.1.0 .and. vodfjo(i).ge.1.0)
+     &                     then
+c  Liquid level allows no pullthrough
+                             dx3dr = 0.0
+                             xg03 = 0.0
+                           elseif (rat .lt. 0.9) then
+c  Liquid level allows pullthrough
+                             x00r = x00**(1.0 - rat)
+                             xg03a = sqrt(max(1.0 - 0.5*rat*(1.0 + rat)*
+     &                       x00r,0.0))
+                             xg03b = x00**(2.5*rat)
+                             xg03 = xg03a*xg03b
+                             x00p = log(x00)
+                             dx3dr = 0.5*x00r*xg03b*(0.5*rat*(1.0 +
+     &                       rat)*x00p - (0.5 + rat))/xg03a + 2.5*xg03*
+     &                       x00p
+                           else
+c  Liquid level allows pullthrough.
+c  For rat gt 0.9 decrease xg03 linearly to 0.0 to avoid ill-conditioned
+c   square root dependence.
+                             rat = min(rat,1.0)
+                             dx3dr = x00**(2.5*rat)*sqrt(max(1.0 -
+     &                       0.855*x00**0.1,0.0))*(-10.0)
+                             xg03 = dx3dr*(rat - 1.0)
+                           endif
+c  Calculate gas area fraction corresponding to off-take gas quality
+c   xg03.
+                           alg = xg03*rhof(kk)
+                           alg = alg/(alg + (1.0 - xg03)*(rhog(kk)*
+     &                     slipr))
+c  Finite off-take area mod.
+c  If the edges of the liquid flow are visible when looking in through
+c   offtake and the volume is less than half full, then increase
+c   proportion of gas according to the fraction of the field of view not
+c   occupied by liquid.
+                           voidx = 1.0
+                           if (voidf(kk).lt.0.5 .and. djal.gt.0.0) then
+                             theta = stheta/min(djal,1.0)
+                             if (theta .lt. 1.0) voidx = 0.636619772*
+     &                       (asin(theta) + theta*sqrt(1.0 - theta*
+     &                       theta))
+                             alg = voidg(kk) + voidx*(alg - voidg(kk))
+                           endif
+c  Calculate liquid area fraction
+                           alf = 1.0 - alg
+c  This subsection covers the upward off-take geometry in case of
+c   countercurrent flow with main phase (liquid) flowing into the main
+c   (doner) volume.  This countercurrent flow is somewhat rare and not
+c   likely situation but is needed to be taken care of because of
+c   possible discontinuity.  The cocurrent and other case of
+c   countercurrent flow cases are covered in the first half of this
+c   subroutine.
+                         elseif (j .eq. 1) then
+c  Upward-oriented junction  -- gas inflow
+c  Use velgj = 0 limit of liquid entrainment
+c  Wgg = 0.0
+c  Set critical depth to the minimun value
+                           hbf = 1.e-6
+c  Calculate dimensionless depth of liquid below off-take
+                           rat = max(0.0,(0.5*diamv(kk) - hcll)/hbf)
+c  Calculate off-take flow quality
+                           if (rat .le. 0.0) then
+c  Liquid at off-take
+                             xg03 = 0.0
+                           elseif (rat .ge. 1.0) then
+c  Liquid level allows no entrainment
+                             xg03 = 1.0
+                           else
+c  Gas level allows entrainment
+                             xg03a = 3.25*(rat - 1.0)**2
+                             xg03 = rat**xg03a
+                           endif
+                           dx3dr = 0.0
+c  Calculate liquid area fraction corresponding to off-take liquid
+c   quality xg03.
+                           alf = (1.0 - xg03)*(rhog(kk)*slipr)
+                           alf = alf/(alf + xg03*rhof(kk))
+c  Finite off-take area mod.
+c  If the edges of the liquid flow are visible when looking in through
+c   offtake and the volume is more than half full, then increase
+c   proportion of liquid according to the fraction of the field of view
+c   occupied by liquid.
+                           voidx = 1.0
+                           if (voidg(kk).lt.0.5 .and. djal.gt.0.0) then
+                             theta = stheta/min(djal,1.0)
+                             if (theta .lt. 1.0) voidx = 0.636619772*
+     &                       (asin(theta) + theta*sqrt(1.0 -
+     &                       theta*theta))
+                             alf = voidf(kk) + voidx*(alf - voidf(kk))
+                           endif
+                         else
+c  Side or central junction
+c  Calculate minimum critical depth
+                           if ( dlev(kk).gt.0. ) then
+                             hbmin = max(djal*dl(kk)*0.5,1.e-6)
+                           else
+                             hbmin = max(djal*diamv(kk)*0.5,1.e-6)
+                           endif
+c  Calculate liquid fraction when gas just covers the off-take
+                           theta = sqrt(1.0 - djal)*(djal*
+     &                     (-0.2145988016+djal*(0.0889789874 + djal*
+     &                     (-0.0501743046 + djal*(0.0308918810+djal*
+     &                     (-0.0170881256 + djal*(0.0066700901 - djal*
+     &                     0.0012624911)))))) + 1.5707963050)
+                           voidx = 0.318309886*(theta - djal*sqrt(1.0 -
+     &                     aj))
+c  Reduce it as in old model.
+c  voidx=min(voidx,0.49)*0.85.
+                           voidx = min(voidx,0.49)
+c  Test for pullthrough or entrainment
+c  This sub-section covers the gas pull through for side off-take when
+c   the voidg.lt.0.5.  Cocurrent and countercurrent with main phase (gas
+c   phase) moving out of main (doner) volume are considered in this sub-
+c   section. For countercurrent with main phase moving into the main
+c   (doner) volume is considered in the first half section of this
+c   subroutine.
+                           if (voidg(kk) .lt. 0.5) then
+c  Voidg lt 0.5  -- gas pullthrough
+c  Calculate critical height, limiting to a radius
+                             hbf = (wff*wff/(rhof(kk)*max(rhof(kk) -
+     &                       rhog(kk),1.e-7)))**0.2*(0.75*grvmp2)
+                             if ( dlev(kk).gt.0. ) then
+                               if (hbf .gt. dl(kk)*0.5) then
+                                 hbf = dl(kk)*0.5
+                               else
+                                 hbfdw = 1.0
+                               endif
+                             else
+                               if (hbf .gt. diamv(kk)*0.5) then
+                                 hbf = diamv(kk)*0.5
+                               else
+                                 hbfdw = 1.0
+                               endif
+                             endif
+                             if (hcll.ge.hbf .and. vdf.lt.1.0) then
+c  No pullthrough with old liquid flow, see if
+c  using pure liquid outflow makes a difference
+                               vdf = 1.0
+                               wff = velfj(i)*rhofj(i)*ajun(i)
+                               hbf = (wff*wff/(rhof(kk)*max(rhof(kk) -
+     &                         rhog(kk),1.e-7)))**0.2*(0.75*grvmp2)
+                             endif
+                             if (hbf .lt. hbmin) then
+c  Critical Height less than allowed value.
+c  Set wff to value givien hbfmin.
+                               hbf = hbmin*hbmin
+                               hbf = hbmin*hbf*hbf
+                               wff = sqrt(rhof(kk)*max(rhof(kk) -
+     &                         rhog(kk),1.e-7)*hbf)*(2.05*grvp5)
+                               hbf = hbmin
+                             endif
+c  Calculate dimensionless height of liquid above off-take
+                             rat = min(1.0,max(0.0,hcll/hbf))
+c  Calculate off-take flow quality, and derivative.
+                             if (rat .le. 0.0) then
+c  Liquid level allows gas outflow.
+                               xg03 = x00
+                               dx3dr = 0.0
+                             elseif (rat.ge.1.0 .and. vodfjo(i).ge.1.0)
+     &                       then
+c  Liquid level allows no pullthrough
+                               xg03 = 0.0
+                               dx3dr = 0.0
+                             elseif (rat .lt. 0.9) then
+c  Liquid level allows pullthrough
+                               x00r = x00**(1.0 - rat)
+                               xg03a = sqrt(max(1.0 - 0.5*rat*(1.0 +
+     &                         rat)*x00r,0.0))
+                               xg03b = x00**(1.0 + 1.09*rat)
+                               xg03 = xg03a*xg03b
+                               x00p = log(x00)
+                               dx3dr = 0.5*x00r*xg03b*(0.5*rat*(1.0 +
+     &                         rat)*x00p-(0.5 + rat))/xg03a + 1.09*xg03*
+     &                         x00p
+                             else
+c  Liquid level allows pullthrough
+c  for rat gt 0.9 decrease xg03 linearly to 0.0
+c  to avoid ill-conditioned square root dependence
+                               rat = min(rat,1.0)
+                               dx3dr = x00**(1.0 + 1.09*rat)*
+     &                         sqrt(max(1.0 - 0.855*x00**0.1,0.0))*
+     &                         (-10.0)
+                               xg03 = dx3dr*(rat - 1.0)
+                             endif
+c  Calculate gas area fraction corresponding to off-take gas quality
+c  xg03.
+                             alg = xg03*rhof(kk)
+                             alg = alg/(alg + (1.0 - xg03)*(rhog(kk)*
+     &                       slipr))
+c  Finite off-take area mod.
+c  If the liquid level is near the off-take (eg within the off-take
+c  diameter, interpolate the gas fraction with that of the main volume.
+                             alg = alg*min(voidx/voidg(kk),1.0) +
+     &                       max(0.0,voidg(kk) - voidx)
+c  Calculate liquid area fraction.
+                             alf = 1.0 - alg
+c  This sub-section covers the gas pull through for countercurrent flow
+c   in side off-take with gas velocity moving into of the gas full
+c   (doner) volume for j.eq.3 and voidg.gt.0.5. The other two cases of
+c   j.eq.3 with voidg.gt.0.5 are covered in the first half of this sub-
+c   routine.
+                           else
+c  Voidg gt 0.5 -- use velgj = 0 limit of liquid entrainment
+c  Wgg = 0.0
+c  Set critical depth to the minimum value
+                             hbf = hbmin
+c  Calculate dimensionless height of liquid below off-take
+                             rat = min(0.0,max(-1.0,hcll/hbf))
+c  Calculate off-take flow quality
+                             if (rat .le. 0.0) then
+c  Liquid level allows liquid outflow
+                               xg03 = x00
+                             elseif (rat .le. -1.0) then
+c  Liquid level allows no entrainment
+                               xg03 = 1.0
+                             else
+c  Liquid level allows entrainment
+                               x00p = x00**rat
+                               xg03 = x00*x00p*sqrt(max(1.0 - 0.5*rat*
+     &                         (1.0+rat)*x00/x00p,0.0))
+                             endif
+                             dx3dr = 0.0
+c  Calculate liquid area fraction corresponding to
+c  off-take gas quality xg03
+                             alf = xg03*(rhog(kk)*slipr)
+                             alf = alf/(alf + xg03*rhof(kk))
+c  Finite off-take area mod
+c  If the liquid level is near the off-take (e.g., within
+c  the off-take diameter, interpolate the liquid fraction
+c  with that of the main volume
+                             alf = alf*min(voidx/voidf(kk),1.0) +
+     &                       max(0.0,voidf(kk) - voidx)
+                           endif
+                         endif
+                         if (hbfdw .le. 0.0) dx3dr = 0.0
+c  Interpolate to standard donoring
+                         if (fstrat .lt. 1.0) alf = alf*fstrat+(1.0 -
+     &                   fstrat)*voidf(kk)
+c  Do a first order correction to reduce chance of numerical
+c  instability due to dependence on off-take flow.
+c  Dx3dr is estimate of partial derivative of xg03 wrt rat
+                         if (dx3dr .ne. 0.0) then
+c  Dx3dwf is estimate of partial derivative of xg03 wrt wff
+                           dx3dwf = -0.4*dx3dr*rat/wff
+c  Dafdx3 is estimate of partial derivative of alf wrt xg03
+                           dafdx3 = -fstrat*rhof(kk)*(rhog(kk)*slipr)/
+     &                     (xg03*rhof(kk)+(1.0 - xg03)*(rhog(kk)*
+     &                     slipr))**2
+c  Reduce dafdx3 for finite off-take area mods.
+                           if (j .eq. 3) then
+                             dafdx3 = dafdx3*min(voidx/voidg(kk),1.0)
+                           elseif(voidx.lt.1.0) then
+                             dafdx3 = dafdx3*voidx
+                           endif
+                           if (iand(jc(i),1).eq.1 .and. velgj(i)*
+     &                     velfj(i).gt.0.0) then
+c  Choked flow, may have a different numerical instability
+                             squal  = vodgjo(i)*rhogj(i)
+                             squal  = squal/(squal+vodfjo(i)*rhofj(i))
+                             squal  = max(0.0,min(2.5e-3,squal))
+                             alg    = max(0.0,1.0 - alf)
+                             squal2 = alg*rhogj(i)
+                             squal2 = squal2/(squal2+max(alf,0.0)*
+     &                       rhofj(i))
+                             squal2 = max(0.0,squal2)
+                             if (squal.lt.2.5e-3 .or. squal2.lt.2.5e-3)
+     &                       then
+c  Force a large dwfdag to stop rapid changes by
+c  assuming wff proportional to ((5.e-3) - squality)
+                               squal = min(squal,2.5e-3)
+c  Calculate liquid flow at squality = squal
+                               wff2 = (1.0 - squal)*rhogj(i)
+                               wff2 = (velfj(i)*rhofj(i)*ajun(i))*wff2/
+     &                         (squal*rhofj(i) + wff2)
+c  Calculate 'constant' in wff, squality relation
+c  wff = "constant"((5.e-3) - sqality)
+                               wff2 = wff2/(5.e-3 - squal)
+c  Calculate derivative based on relation, at squal2
+                               dwfdaf = wff2*(rhogj(i)*(1.0 - squal2) +
+     &                         rhofj(i)*squal2)**2/(rhofj(i)*rhogj(i))
+c  Calculate liquid flow based on relation slope
+c  at squal2 but passing through old liquid fraction
+                               wff2 = (velfj(i)*rhofj(i)*ajun(i))*
+     &                         vodfjo(i) + dwfdaf*(alf - vodfjo(i))
+                             else
+c  Treat like unchoked flow, see below
+c  Approximate d(wff2)/d(afl) at new-conditions
+                               dwfdaf = velfj(i)*rhofj(i)*ajun(i)
+c  Calculate new-conditions value of liquid flow
+                               wff2 = dwfdaf*alf
+                             endif
+                           else
+c  Unchoked flow, assume velfj not directly altered by alf
+c  Aprroximate d(wff2)/d(alf) at new-conditions
+                             dwfdaf = velfj(i)*rhofj(i)*ajun(i)
+c  Calculate new-conditions value of liquid flow
+                             wff2 = dwfdaf*alf
+                           endif
+c  Do first order correction
+                           dafdwf = dafdx3*dx3dwf
+                           wfamp = dwfdaf*dafdwf
+                           if (wfamp .lt. 0.0) then
+                             dwff2 = (wff2 - wff)/(1.0 - wfamp)
+                             alf = alf + dafdwf*dwff2
+                           endif
+                         endif
+                         voidfj(i) = min(1.0,max(0.0,alf))
+                         vodfjr(i) = voidfj(i)/voidf(kk)
+c  If (co_current) then.
+c  For cocurrent flow cases, the voidgj = 1. - voidfj where voidfj
+c   is calculated from the correlation.  For countercurrent flow cases
+c   voidfj of the side off take volume is used.
+                         if (.not.countc) then
+                           voidgj(i) = max(0.0,1.0 - voidfj(i))
+                           vodgjr(i) = voidgj(i)/voidg(kk)
+                         endif
+                       endif
+                     endif
+                   endif
+                 endif
+               endif
+             endif
+           endif
+         endif
+ 3000    i = i + ijskp
+ 3001  continue
+c  Check if need to adjust donor void fractions.
+       i = lpdat(issys)%lij
+       do 4001 m = 1,lpdat(issys)%lijn
+         if (ichoke.eq.0 .or. velfj(i)*velfjo(i).le.0.0 .or.
+     &   velgj(i)*velgjo(i).le.0.0) then
+c  Check geometry.
+           k = ij1nx(i)
+           kx = iand(ishft(jcex(i),-12),7)
+           ky = k + kx
+           kx = k + ishft(kx,-1)
+           l = ij2nx(i)
+           lx = iand(ishft(jcex(i),-9),7)
+           ly = l + lx
+           lx = l + ishft(lx,-1)
+           if (hydzc(ky).ne.0.0 .and. hydzc(ly).ne.0.0) then
+             delzk = gravcn*hydzc(ky)
+             if (iand(jc(i),4) .ne. 0) delzk = -delzk
+             delzl = gravcn*hydzc(ly)
+             if (iand(jc(i),8) .ne. 0) delzl = -delzl
+             if (delzk*delzl .lt. 0.0) then
+               if (delzk .ge. 0.0) then
+c  Inverted u-tube geometry.
+c  Take action if gravity is dominating and velfj.gt.velgj in the
+c  upwards direction and liquid donor volume does not have a high liquid
+c  content.
+c  Check liquid donoring.
+                 if (velfj(i) .ne. 0.0) then
+                   if (velfj(i) .lt. 0.0) then
+                     if (velfj(i) .ge. velgj(i)) go to 4000
+                     kk = l
+                     ky = lx
+                     delz = -delzl
+                   else
+                     if (velfj(i) .le. velgj(i)) go to 4000
+                     kk = k
+                     ky = kx
+                     delz = delzk
+                   endif
+                   delzk = delzk*rho(k)
+                   delzl = delzl*rho(l)
+                   vdfact = abs(delzk) + abs(delzl)
+                   dprest = p(k) - p(l) - delzk - delzl
+                   vdfact = min(1.0,0.5*vdfact/max(1.0e-10,
+     &             abs(dprest)) - 1.0)
+                   if (vdfact .gt. 0.0) then
+                     scrach = delz*delz
+                     if ( dlev(kk).gt.0. ) then
+                       delz = dl(kk)*sqrt(max((4.903325*dl(kk))**2 -
+     &                 scrach,scrach*0.25))/(delz*dl(kk))
+                     else
+                       delz = diamv(kk)*sqrt(max((4.903325*dl(kk))**2
+     &                 - scrach,scrach*0.25))/(delz*dl(kk))
+                     endif
+                     delz = max(delz,4.0e-2)
+                     if (delz .le. 1.0) then
+                       delz = 2.0/delz
+                     else
+                       delz = delz/(delz-0.5)
+                     endif
+                     vdfact = vdfact*min(1.0,voidg(kk)*delz*2.0 - 1.0)
+                     if (vdfact .gt. 0.0) then
+                       scrach = velgj(i)/velfj(i)
+                       vdfact = vdfact*min(1.0,1.0 - scrach)
+                       delz = voidfj(i) + voidgj(i)
+                       voidfj(i) = (1.0 - vdfact)*voidfj(i)
+                       if (scrach .gt. 0.0) voidgj(i) = max(delz -
+     &                 voidfj(i),0.0)
+                     endif
+                   endif
+                 endif
+               else
+c  U-tube geometry.
+c  Take action if gravity is dominating and velgj.gt.velfj in the
+c  downwards direction and vapor donor volume does not have a high
+c  vapor content.
+c  Check vapor donoring.
+                 if (velgj(i) .ne. 0.0) then
+                   if (velgj(i) .lt. 0.0) then
+                     if (velgj(i) .ge. velfj(i)) go to 4000
+                     kk = l
+                     ky = lx
+                     delz = delzl
+                   else
+                     if (velgj(i) .le. velfj(i)) go to 4000
+                     kk = k
+                     ky = kx
+                     delz = -delzk
+                   endif
+                   delzk = delzk*rho(k)
+                   delzl = delzl*rho(l)
+                   vdfact = abs(delzk) + abs(delzl)
+                   dprest = p(k) - p(l) - delzk - delzl
+                   vdfact = min(1.0,0.5*vdfact/max(1.0e-10,
+     &             abs(dprest)) - 1.0)
+                   if (vdfact .gt. 0.0) then
+                     scrach = delz*delz
+                     if ( dlev(kk).gt.0. ) then
+                       delz = dl(kk)*sqrt(max((4.903325*dl(kk))**2 -
+     &                 scrach,scrach*0.25))/(delz*dl(kk))
+                     else
+                       delz = diamv(kk)*sqrt(max((4.903325*dl(kk))**2
+     &                 - scrach,scrach*0.25))/(delz*dl(kk))
+                     endif
+                     delz = max(delz,4.0e-2)
+                     if (delz .le. 1.0) then
+                       delz = 2.0/delz
+                     else
+                       delz = delz/(delz-0.5)
+                     endif
+                     vdfact = vdfact*min(1.0,voidf(kk)*delz*2.0-1.0)
+                     if (vdfact .gt. 0.0) then
+                       scrach = velfj(i)/velgj(i)
+                       vdfact = vdfact*min(1.0,1.0 - scrach)
+                       delz = voidfj(i) + voidgj(i)
+                       voidgj(i) = (1.0 - vdfact)*voidgj(i)
+                       if (scrach .gt. 0.0) voidfj(i) = max(delz -
+     &                 voidgj(i),0.0)
+                     endif
+                   endif
+                 endif
+               endif
+             endif
+           endif
+         endif
+ 4000    i = i + ijskp
+ 4001  continue
+       return
+       end

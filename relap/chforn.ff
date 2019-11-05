@@ -1,0 +1,209 @@
+*mlist
+       subroutine chforn
+c
+c
+c  Installed by Rex Shumway, November 1996.
+c
+c  Cognizant engineer: ras
+c
+       implicit none
+       include 'cons.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'flood.h'
+       include 'htrcom.h'
+       include 'stcblk.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+       real chfcon,chfgam,
+     & chfpol,coeff,delrho,dtsub,f,frac,fric,fprim,
+     & hconvg,part1,
+     & part2,prb,qbden,qbnum,
+     & reb,twgb,viscfs,xden,
+     & xnum,chfwea
+        real s(36),tavg,csubpfs,rhofs,rhogs
+       integer iq
+       integer iones(2),kk
+       logical err
+c
+c
+       data iones/1,1/
+c
+       if (help .ne. 0) then
+         if( iand(ihlppr(1),ishft(1,3)).ne.0 ) then
+           if( iand(vctrlx(iv),1).ne.0 ) then
+             write (output,403)
+           endif
+         endif
+  403 format(1x,'In chfcal')
+         if( iand(ihlppr(1),ishft(1,4)).ne.0 ) then
+           if( iand(vctrlx(iv),1).ne.0 ) then
+             write (output,405) ncount,volno(iv),timehy
+  405        format ('  CHF debug printout, ncount, volno',
+     &       ', time ',2i11,1pe12.5)
+           endif
+         endif
+       endif
+c
+c  ORNL ANS  model
+c  Implement gambill correlation and smoothing to groneveld
+c  (iteration required for tw-weatherhead and chf-gambill).
+c
+       if (gabs .le. 10000.0) call chftab
+       if (gabs.gt.7500.0 ) then
+c
+c  Smooth the groneveld chf into gambill over range of mass flux
+c  (7500.0 to 10000.0 kg/m2-s) if subcooled boiling.
+c
+c  Bulk reynolds, prnadtl number, friction, heated length.
+         reb    = gabs*htdiam/viscf(iv)
+         prb    = csubpf(iv)*viscf(iv)/thconf(iv)
+         if ( span(iv) .gt. 0.0 ) then
+           fric   =  (1.0875 - 0.1125*ptans(iv)/span(iv))
+         else
+           fric = 1.0
+         endif
+         fric= fric  /(1.82*log10(reb)-1.64)**2.0
+c  Evaluate subcooled boiling contribution.
+         dtsub = satt(iv) - tempf(iv)
+         s(9) = 0.0
+         s(1) = satt(iv)
+         if (dtsub .gt. 0.) then
+           if (volmat(iv) .eq. 1) then
+             call sth2x1(fa(ndxstd),s,err)
+           elseif (volmat(iv) .eq. 2) then
+             call std2x1(fa(ndxstd),s,err)
+           else
+             call fabend
+           endif
+           rhofs = 1.0/s(11)
+           rhogs = 1.0/s(12)
+           tavg = 0.5*(satt(iv) + tempf(iv))
+           s(1) = tavg
+           s(2) = p(iv)
+           if (volmat(iv) .eq. 1) then
+             call sth2x3 (fa(ndxstd),s,iq,err)
+           elseif (volmat(iv) .eq. 2) then
+             call std2x3(fa(ndxstd),s,iq,err)
+           endif
+           csubpfs = s(21)
+           delrho = rhofs  - rhogs
+           part1 = ((rhofs/rhogs)**0.75)*csubpfs*dtsub/
+     &     (gravcn*hfgp)
+           part2 = (gravcn*sigma(iv)*delrho/(rhogs*rhogs))**0.25
+           chfpol = 0.18*hfgp*rhogs*part2*(1.0 + part1)
+         else
+           chfpol = 0.0
+         endif
+c  Note new call to viscos used.
+         call viscos (volmat(iv),iones,iones,1,1,satt(iv),p(iv),
+     &   rhof(iv),satt(iv),'liquid',viscfs,err)
+         xnum = (viscf(iv)/viscfs)**0.11
+         xnum = (thconf(iv)/htdiam)*0.125*fric*reb*prb*xnum
+         xden = (11.7+1.8/(prb**0.33333))*((0.125*fric)**0.5)
+         xden = xden*(prb**0.66667-1.0) + (1.0+3.4*fric)
+         hconvg = xnum/xden
+c  next two lines are for the Weatherhead equation.
+        qbden = (47.7- 0.127*(satt(iv) - 273.16))**4.0
+c  for deriv. d(qwea)/d(tw); 4*3.1546E6=12.6184E6
+        coeff = 12.6184e6/qbden
+c
+c  Start of calculation of chf-convection and iteration for twgb
+         kk = 0
+         twgb = tw + 50.0
+  950    continue
+c
+c   add pool and convection for Gambill subcooled chf
+         chfcon = hconvg*(twgb - tempf(iv))
+c
+c  Gambill subcooled chf.
+         chfgam = chfpol + chfcon
+c
+         if (help .ne. 0) then
+           if( iand(ihlppr(1),ishft(1,3)).ne.0 ) then
+             if( iand(vctrlx(iv),1).ne.0 ) then
+               write (output,600) gabs, htdiam, viscf(iv), csubpf(iv),
+     &         thconf(iv), hfgp, satt(iv), tempf(iv), rhof(iv)
+     &         , rhog(iv),
+     &         csubpf(iv), sigma(iv), reb, prb, fric, dtsub,
+     &         delrho, chfpol
+  600  format ('ORNL',/
+     &  10x,'  gabs, htdiam,  viscf, csubpf, thconf    = ',5e12.5/
+     &  10x,'   hfgp,   satt,  tempf,   rhof,   rhog    = ',5e12.5/
+     &  10x,'csubpf,  sigma,    reb,    prb,   fric    = ',5e12.5/
+     &  10x,'   dtsub, delrho, chfpol                  = ',3e12.5)
+c
+               write (output,610) viscfs, p(iv), hconvg,
+     &         tw, chfcon, chfgam
+  610  format (
+     &  10x,'viscfs,      p,  hconvg,  tw       = ',4e12.5/
+     &  10x,'chfcon, chfgam                            = ',2e12.5)
+             endif
+           endif
+         endif
+c
+c   evaluate q-chfweatherhead based on twgb and iterate if necessary
+c   twgb = (47.7-0.127(tsatt-273.16))*(qc/3154.6)**0.25 + tsatt
+c   3154.6 (B/ft2-hr)/(kW/m2)
+c    solve for qc(chfwea) and multiply by 1000 Watts/kW
+c
+         qbnum = 3.1546e+6*(twgb - satt(iv))**4.0
+         chfwea = qbnum/qbden
+c     test convergence of Gambill and Weatherhead
+         frac = abs((chfgam-chfwea)/chfgam )
+         if (frac .gt. 0.01) then
+           kk    = kk + 1
+           f     = chfwea - chfgam
+           fprim = coeff*(twgb - satt(iv))**3.0- hconvg
+           twgb  = twgb - f/fprim
+           if(twgb .lt. satt(iv)) twgb = satt(iv)+ 200.
+c                           start higher and come back down
+             if (kk .gt. 20) then
+               write (output,620) chfwea, chfgam, twgb
+  620  format (10x,' in newton-raphson iteration for wall temperature an
+     &d gambill chf'/
+     & 10x,' iteration count exceeded 20, execution terminated.'/
+     &  10x,' qchf1, qchf2, twgb = ',3e15.6)
+             stop 'chforn-1'
+             endif
+           go to 950
+         endif
+c
+c  Interpolate between groneveld and gambill correlations
+c  for 7500 < g < 10000 (kg/m2-s).
+c   modification by Rex Shumway Jan 1992.
+c
+         if (gabs .gt. 10000.0) then
+           chf = chfgam
+           chfmul = 1.0
+         else
+c      1/2500. = 0.0004
+           frac   = (gabs - 7500.0)*4.0e-04
+           chf = frac*chfgam + (1.0 - frac)*chf
+         endif
+c
+c
+c print a message if there are fluid condition range problems
+         if (qualep .gt. 0.0) write (output,550) gabs, qualep
+         if (dtsub .lt. 8.0) write (output,560) gabs, dtsub
+c
+  550  format (' Red Flag from CHFCAL Subroutine: ',
+     & ' No Correlation Available at these conditions'/
+     & ' Mass Flux = ',f12.2,'  and Quality = ',f7.4,' > 0.0')
+  560  format (' Blue Flag from CHFCAL Subroutine: ',
+     & ' Subcooling below 8 K, Correlation Suspect at these conditions'/
+     & ' Mass Flux = ',f12.2,'  and dtsub = ',f7.2,' < 8.0')
+c
+       endif
+c
+       if (help .ne. 0) then
+         if( iand(ihlppr(1),ishft(1,3)).ne.0 ) then
+           if( iand(vctrlx(iv),1).ne.0 ) then
+             write (output,545) kk,chf,chfgam,frac,gabs
+  545        format (10x,'ORNL,kk,chf,chfgam,frac,gabs=',i5,4g13.6)
+           endif
+         endif
+       endif
+       return
+       end

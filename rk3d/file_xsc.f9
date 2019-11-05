@@ -1,0 +1,799 @@
+      SUBROUTINE FILE_XSC(IOERROR,
+     &  ADFS,ADFSRD,UPUDEN,ZETA,ALPHAI,ALPHAN,XFPNRO,XFPNRI,GPN,
+     &  GIN,GXN,GINMI,GXNMI,GPNMI,SEXT,ALAMDA,ALAMDAMI,
+     &  BETAMI,BETAN,XHIDMI,WTFRRO,WTFRRI,BUBOS,XHIPMI,XHIPN,
+     &  XSECRO,XSECRI,VELOCN,UCHAINRO,XSECSCRO,XSECSCRI,
+     &  RT,NMAX,RNUU5,RNUU8,RNUP9,RNUP1,RNUP0,RNUP2,
+     &  AXSCIN,FUFR,NCOLOR,XSECRRO,XSECRRI,B2COL,
+     &  RHOWREF,TCOLREF,TFREF,UCHAINRI,RNUU6,RNUU4,TMODREF,RHOWMREF,
+     $  REFB,RNUA1,BFACTN,INITND,IFUEL)
+C     
+C     THIS SUBROUTINE READS THE CROSS-SECTION & T-H INPUT PARAMETERS.
+C     
+      include 'param.fcb'
+      include 'adf.fcb'
+      include 'crod.fcb'
+      include 'fpxs.fcb'
+      include 'extsor.fcb'
+      include 'start.fcb'
+      include 'perttr.fcb'
+      include 'thermk.fcb'
+      include 'thermo.fcb'
+      include 'veloc.fcb'
+      include 'xsec1.fcb'
+      include 'xeopt.fcb'
+      include 'nonfue.fcb'
+      include 'geom.fcb'
+      include 'dataf.fcb'
+      include 'cntl.fcb'
+      include 'xsec2.fcb'
+      include 'thcoef.fcb'
+      include 'convfact.fcb'
+      include 'nterm.fcb'
+      include 'thmargin.fcb'
+      include 'burn.fcb'
+      include 'th_cof.fcb'
+      include 'cntl2.fcb'
+
+      INTEGER*8       NMAX(*) !vmq
+      
+      CHARACTER*8 AFUEL
+      CHARACTER*40 AXSCINT,AXSCIN(*)
+      
+      DIMENSION
+     &  ADFS(NBUMAX,ICOLXY,NADFS,*)      ,RT(*)                  ,
+     &  ADFSRD(NBUMAX,ICOLXY,NADFS,*)    ,UPUDEN(ICOLXY,*)       ,
+     &  ZETA(*)                          ,
+     &  ALPHAN(NBUMAX,ICOLXY,*)          ,ALPHAI(NISOT,*)        ,
+     &  XFPNRO(NBUMAX,ICOLXY,NG,2,*)     ,
+     &  XFPNRI(NBUMAX,ICOLXY,NG,2,*)     ,
+     &  GPN(NBUMAX,*)                    ,
+     &  GIN(NBUMAX,*)                    ,GXN(NBUMAX,*)          ,
+     &  GINMI(*)                         ,GXNMI(*)               ,
+     &  GPNMI(*)                         ,SEXT(*)                ,
+     &  ALAMDA(*),ALAMDAMI(NISOT,*),
+     &  BETAMI(NISOT,NPREC)              ,BETAN(NBUMAX,ICOLXY,*) ,
+     &  XHIDMI(NG,*)                     ,
+     &  WTFRRO(*)                        ,WTFRRI(*)              ,
+     &  RHOWREF(*)                       ,TCOLREF(*)             ,
+     &  BUBOS(NBUMAX,*),TFREF(*),REFB(*),
+     &  XSECRO(NBUMAX,ICOLXY,NRXMAX,NG,*),TMODREF(*)             ,
+     &  XSECRI(NBUMAX,ICOLXY,NRXMAX,NG,*),RHOWMREF(*)            ,
+     &  XHIPMI(NISOT+1,*),XHIPN(NBUMAX,ICOLXY,*),
+     &  VELOCN(NBUMAX,ICOLXY,*),BFACTN(NBUMAX,ICOLXY,*)          ,
+     &  UCHAINRO(NBUMAX,ICOLXY,21,NG,*)  ,
+     &  UCHAINRI(NBUMAX,ICOLXY,21,NG,*)  ,
+     &  XSECSCRO(NBUMAX,ICOLXY,NG,NMG,*) ,
+     &  XSECSCRI(NBUMAX,ICOLXY,NG,NMG,*) ,
+     &  B2COL(NBUMAX,ICOLXY,*)           ,
+     &  RNUU5(*)                         ,RNUU8(*)               ,
+     &  RNUP9(*)                         ,RNUP1(*)               ,
+     &  RNUP0(*),RNUP2(*),RNUA1(*),
+     &  FUFR(*)                          ,NCOLOR(*)              ,
+     &  XSECRRO(NBUMAX,ICOLXY,NG,*)      ,RNUU6(*)               ,
+     &  XSECRRI(NBUMAX,ICOLXY,NG,*)      ,RNUU4(*)
+
+      REAL*8 INITND(ICOLXY,NBUMAX,*)
+
+      CHARACTER LINE*100
+      INTEGER*8 IVER  !...0=input format of v5.0.2 1=format of v5.2.0
+
+      IREFB=0  !...v5.2 REFB is fuel type dependent
+               !...v5.0.2 REFB is one value for the whole fuel types
+               !...to maintain backward compatibility use this flag
+
+!....initialize remove?)
+      do ig=1,ng
+       do i=1,icolxy
+        do ibu=1,nbumax
+         velocn(ibu,i,ig)=1.
+        enddo
+       enddo
+      enddo
+C     
+C     ------SKIP FOLLOWING INPUT IF X-SECTION CORRECTION OPTION IS OFF
+C     
+      IF(NXSEC.EQ.'Y') THEN
+C     
+C     ---- READ IN DECAY CONSTANTS FOR XE, SM AND I
+C     
+       READ (3,*) RLI,RLX,RLPM
+C     
+C     ---------READ  PRECURSORS DECAY CONSTANTS [ 1/SEC ]
+C     
+!.....check isotope-dependent alamda exists/not (backward compatible v5.0.2) 
+       READ(3,'(A8)')LINE
+       IVER=0
+       IF(LINE(1:8).EQ.'ALAMDAMI')THEN
+        IVER=1
+        DO 11 J=1,NISOT
+         READ(3,*)(ALAMDAMI(J,I),I=1,NPREC)
+ 11     CONTINUE
+       ELSE
+        BACKSPACE(3)
+        READ (3,*) (ALAMDA(I),I=1,NPREC)
+        IF(IMICRO.EQ.'Y')THEN
+         DO I=1,NPREC
+          DO J=1,NISOT
+           ALAMDAMI(J,I)=ALAMDA(I)
+          ENDDO
+         ENDDO
+        ENDIF
+       ENDIF
+C     
+C     ---------READ PRECURSORS FISSION SPECTRA
+C     
+       DO 393 IG=1,NG
+        READ (3,*) (XHIDMI(IG,IPREC),IPREC=1,NPREC)
+ 393   CONTINUE
+C     
+C     ---------READ DECAY RATE OF THE DECAYED HEAT PRECURSORS
+C     
+       READ (3,*) (ZETA(I),I=1,NDECAY)
+       
+      ELSE
+       
+       RLI=1.
+       RLX=1.
+       RLPM=1.
+       ALAMDA(1)=1.
+       DO 394 IG=1,NG
+        XHIDMI(IG,1)=0.0
+ 394   CONTINUE
+       ZETA(1)=1.0
+       
+      ENDIF
+C     
+C     ------SKIP FOLLOWING INPUT IF X-SECTION CORRECTION OPTION IS OFF
+C     
+      IF(NXSEC.EQ.'Y') THEN
+       
+C     ---  READ IN MICROSCOPIC COEFFICIENTS IF IMICRO='Y'
+       
+       IF(IMICRO.EQ.'Y') THEN
+
+        DO 390 ISOT=1,NISOT
+         READ (3,*) (BETAMI(ISOT,IPREC),IPREC=1,NPREC)
+         DO IPREC=1,NPREC
+          IF(BETAMI(ISOT,IPREC).EQ.0.)BETAMI(ISOT,IPREC)=1E-20
+         ENDDO
+ 390    CONTINUE
+        DO 391 IG=1,NG
+         READ (3,*) (XHIPMI(ISOT,IG),ISOT=1,NISOT+IVER)
+ 391    CONTINUE
+        DO 392 ISOT=1,NISOT
+         READ (3,*) (ALPHAI(ISOT,IDECH),IDECH=1,NDECAY)
+ 392    CONTINUE
+        DO 395 ISOT=1,NISOT
+         READ (3,*) GINMI(ISOT),GXNMI(ISOT),GPNMI(ISOT)
+ 395    CONTINUE
+C     
+C     ---- READ ISOTOPIC NU AND KAPPA VALUES
+C     
+        DO 6995 IG=1,NG
+         READ(3,*) RNUU4(IG),RNUU5(IG),RNUU6(IG)
+         IF(IVER.EQ.1)THEN
+          READ(3,*) RNUU8(IG),RNUP9(IG),RNUP0(IG),RNUP1(IG),RNUP2(IG)
+     &     ,RNUA1(IG)
+         ELSE !...IVER=0
+          READ(3,*) RNUU8(IG),RNUP9(IG),RNUP0(IG),RNUP1(IG),RNUP2(IG)
+          RNUA1(IG)=0.
+         ENDIF
+ 6995   CONTINUE
+        READ(3,*) RKU34,RKU35,RKU36
+        IF(IVER.EQ.1)THEN
+         READ(3,*) RKU38,RKPU39,RKPU40,RKPU41,RKPU42,RKAM41
+        ELSE !...IVER=0 
+         READ(3,*) RKU38,RKPU39,RKPU40,RKPU41,RKPU42
+         RKAM41=0.
+        ENDIF
+C     
+C     ---- READ LUMPED FISSION PRODUCT YIELDS
+C     
+        READ(3,*) GLFP1,GLFP2
+        
+       ENDIF
+       
+      ENDIF
+C     
+C     -----READ THE NUMBER OF NON-FUEL MATERIAL COLORS
+C     
+      READ (3,*) NFUEXY
+C     
+C     ------READ IN COLOR NUMBERS OF NON-FUEL REGIONS
+C     ------ICOLXY  > NFUEXY FOR A FUEL REGION
+C     
+      NBASE=2
+      NMISC=NFUEXY-NBASE
+      IF (NMISC.LT.0) NMISC=0
+C     
+C     ---- LOOP OVER ALL FUEL COLORS
+C     
+      IFUEL=NFUEXY
+      INONFUEL=0
+
+      DO 500 ICOL=1,ICOLXY
+C     
+C     ---- READ BURNUP
+C     ---- READ BACKGROUND MACRO CROSS SECTIONS & ASSEMBLY DISCOUNTINUITY
+C     FACTORS [ADF`S]
+       
+       IF(AXSEC.EQ.'Y') THEN
+        READ(3,5) AXSCINT
+ 5      FORMAT(A40)
+        OPEN(UNIT=33,FILE=AXSCINT,STATUS='OLD')
+        NIO=33
+       ELSE
+        NIO=3
+       ENDIF
+       
+       READ (NIO,*)
+       READ (NIO,*)
+       
+       READ (NIO,10) AFUEL
+ 10    FORMAT (A8)
+       CALL INPUTCK('AFUEL',AFUEL,'Y','N',' ',IOERROR)
+       
+       IF(AFUEL.EQ.'Y') THEN
+        IFUEL=IFUEL+1
+        I=IFUEL
+       ELSE
+        INONFUEL=INONFUEL+1
+        I=INONFUEL
+       ENDIF
+       IF(AXSEC.EQ.'Y') AXSCIN(I)=AXSCINT
+C     
+C     ---- READ THE MATERIAL COLOR
+C     
+       READ(NIO,*) NCOLOR(I)
+C     
+C     ---- READ NUMBER OF BURNUP STEP FOR EACH FUEL TYPE
+C     
+       IF(AFUEL.EQ.'Y') THEN
+        READ(NIO,*) NMAX(I)
+       ELSE
+        NMAX(I)=1
+       ENDIF
+       NMX=NMAX(I)
+       IF(NMX.GT.NBUMAX) THEN
+        WRITE(6,*)' FATAL ERROR: NOT ENOUGH SPACE SETUP FOR ',
+     &    'CROSS-SECTION BURNUP MASK: SET NBUMAX = ',NMX
+        STOP 'FILE_XSC'
+       ENDIF
+C     
+C     --------READ IN WET AND FUEL FRACTIONS
+C     
+       READ(NIO,*) WTFRRO(I),WTFRRI(I),FUFR(I)
+       IF (WTFRRO(I).EQ. 0.0) WTFRRO(I) = 1.0 !vmq added in order to avoid user errors defining with a default 0.0 those channels in which mass is defined directly with GMASS parameter
+       IF (WTFRRI(I).EQ. 0.0) WTFRRI(I) = 1.0 !vmq added in order to avoid user errors defining with a default 0.0 those channels in which mass is defined directly with GMASS parameter
+C     
+C     ---------READ COOLANT REFERENCE COOLANT DENSITY (LB/FT**3)
+C     ----------COOLANT TEMPERATURE (DEGREE-F) AND
+C     ----------FUEL TEMPERATURE (DEGREE-F)
+C     ----------ALSO MODERATOR REFERENCE COOLANT DENSITY (LB/FT**3)
+C     ----------AND MODERATOR TEMPERATURE (DEGREE-F) IF OPTION 'Y'
+C     
+       IF(ICOL.EQ.1)THEN  !...CHECK REFB V5.0.2 OR V5.2
+        READ(NIO,'(A100)')LINE
+        IS=0
+        IE=0
+        DO 111 II=1,100
+         IF(LINE(II:II).NE.' '.AND.IS.EQ.0)THEN
+          IS=1
+          IE=1
+          GOTO 111
+         ENDIF
+         IF(LINE(II:II).NE.' '.AND.IE.EQ.0)THEN
+          IS=IS+1
+          IE=1
+          GOTO 111
+         ENDIF
+         IF(LINE(II:II).NE.' '.AND.IE.EQ.0)THEN
+          IS=IS+1
+          IE=1
+         ENDIF
+         IF(LINE(II:II).EQ.' '.AND.IE.EQ.1)IE=0
+         IF(IS.EQ.4)GOTO 112
+ 111    CONTINUE
+ 112    BACKSPACE(NIO)
+        IF(IS.EQ.3)IREFB=1
+       ENDIF
+
+       IF(NMOD.EQ.'N') THEN
+        IF(NXSEC.EQ.'Y')THEN
+         IF(IREFB.NE.0)THEN
+          READ (NIO,*) RHOWREF(I),TCOLREF(I),TFREF(I)
+         ELSE
+          READ (NIO,*) RHOWREF(I),TCOLREF(I),TFREF(I),REFB(I)
+         ENDIF
+        ELSE
+         READ(NIO,*) RHOWREF(I),TCOLREF(I),TFREF(I)
+        ENDIF
+       ELSE
+        READ (NIO,*) RHOWREF(I),TCOLREF(I),TFREF(I),
+     &    RHOWMREF(I),TMODREF(I)
+       ENDIF
+C     
+C     ----------READ BURNUP MASK VALUES (MWD/MTU)
+C     
+       READ(NIO,*) (BUBOS(N,I),N=1,NMX)
+C     
+C     
+C     MACROSCOPIC CROSS-SECTIONS INPUT-UNRODDED
+C     
+       DO 150 ITERM=1,NTERMMACRO
+        DO 250 N=1,NMX
+         DO 200 IG=1,NG
+          READ (NIO,*) (XSECRO(N,I,IRX,IG,ITERM),IRX=1,NRXMAX)
+ 200     CONTINUE
+ 250    CONTINUE
+ 150   CONTINUE
+C     
+C     SCATTERING KERNEL FOR SCATTERING FROM GROUP IGP (OR IGP-1 IF UP SCATTE
+C     TO GROUP IG-UNRODDED
+C     
+       DO 252 ITERM=1,NTERMCSCATRO
+        DO 251 N=1,NMX
+         DO 220 IG=1,NG
+          READ(NIO,*) (XSECSCRO(N,I,IG,IGP,ITERM),IGP=1,NG-1)
+          DO 210 IGP=1,NG
+           IGPP=IGP
+           IF(IGP.EQ.IG) GOTO 210
+           IF(IGP.GT.IG) IGPP=IGP-1
+           XSECRRO(N,I,IGP,ITERM)=
+     &       XSECRRO(N,I,IGP,ITERM)+XSECSCRO(N,I,IG,IGPP,ITERM)
+ 210      CONTINUE
+ 220     CONTINUE
+ 251    CONTINUE
+ 252   CONTINUE
+C     
+C     ---- SKIP FOLLOWING INPUT IF X-SECTION CORRECTION OPTION IS OFF
+C     
+       IF(NXSEC.EQ.'Y') THEN
+C     
+C     MACROSCOPIC CROSS-SECTIONS INPUT-RODDED
+C     
+        DO 4250 ITERM=1,NTERMMACRI
+         DO 5250 N=1,NMX
+          DO 5200 IG=1,NG
+           READ (NIO,*) (XSECRI(N,I,IRX,IG,ITERM),IRX=1,NRXMAX)
+ 5200     CONTINUE
+ 5250    CONTINUE
+ 4250   CONTINUE
+C     
+C     SCATTERING KERNEL FOR SCATTERING FROM GROUP IGP (OR IGP-1 IF UP SCATTE
+C     TO GROUP IG-RODDED
+C     
+        DO 5252 ITERM=1,NTERMCSCATRI
+         DO 5251 N=1,NMX
+          DO 5220 IG=1,NG
+           READ(NIO,*) (XSECSCRI(N,I,IG,IGP,ITERM),IGP=1,NG-1)
+           DO 5210 IGP=1,NG
+            IGPP=IGP
+            IF(IGP.EQ.IG) GOTO 5210
+            IF(IGP.GT.IG) IGPP=IGP-1
+            XSECRRI(N,I,IGP,ITERM)=
+     &        XSECRRI(N,I,IGP,ITERM)+XSECSCRI(N,I,IG,IGPP,ITERM)
+ 5210      CONTINUE
+ 5220     CONTINUE
+ 5251    CONTINUE
+ 5252   CONTINUE
+       ENDIF
+C     
+C     READ IN BUCKLING**2 VALUES
+C     
+       DO 206 N=1,NMX
+        DO 205 IG=1,NG
+         READ (NIO,*) B2COL(N,I,IG)
+ 205    CONTINUE
+ 206   CONTINUE
+C     
+       IF (I.GT.NFUEXY) THEN
+C     
+C     ------SKIP FOLLOWING INPUT IF A NON-FUEL COLOR
+C     
+C     ---------READ FISSION SOURCE ENERGY SPECTRUM
+C     
+        DO 153 N=1,NMX
+         READ(NIO,*) (XHIPN(N,I,IG),IG=1,NG)
+ 153    CONTINUE
+       ENDIF
+C     
+C     ---  READ IN ADF'S FOR UNRODDED STATE
+C     
+C     ---  FOR CARTEZIAN GEOMETRY
+C     
+C     IADF=1.......Y-AXIS NORTH
+C     IADF=2.......X-AXIS EAST
+C     IADF=3.......Y-AXIS SOUTH
+C     IADF=4.......X-AXIS WEST
+C     IADF=5.......Z-AXIS UP
+C     IADF=6.......Z-AXIS DOWN
+C     
+C     ---  FOR HEXAGONAL GEOMETRY
+C     
+C     IADF=1.......V-AXIS NORTHEAST
+C     IADF=2.......X-AXIS EAST
+C     IADF=3.......U-AXIS SOUTHEAST
+C     IADF=4.......V-AXIS SOUTHWEST
+C     IADF=5.......X-AXIS WEST
+C     IADF=6.......U-AXIS NORTHWEST
+C     IADF=7.......Z-AXIS UP
+C     IADF=8.......Z-AXIS DOWN
+C     
+       DO 255 N=1,NMX
+        DO 256 IG=1,NG
+         READ (NIO,*) (ADFS(N,I,IADF,IG),IADF=1,NADFS)
+ 256    CONTINUE
+ 255   CONTINUE
+C     
+C     ---- SKIP FOLLOWING INPUT IF X-SECTION CORRECTION OPTION IS OFF
+C     
+       IF(NXSEC.EQ.'Y') THEN
+C     
+C     ---------READ IN ADF'S FOR RODDED STATE
+C     
+        DO 1255 N=1,NMX
+         DO 1256 IG=1,NG
+          READ (NIO,*) (ADFSRD(N,I,IADF,IG),IADF=1,NADFS)
+ 1256    CONTINUE
+ 1255   CONTINUE
+C     
+C     ---------READ THE VELOCITY OF THE GROUP DEPENDENT NEUTRONS [CM/SEC]
+C     
+        IF(I.LE.NFUEXY)THEN
+         DO 154 N=1,NMX
+          READ(NIO,*) (VELOCN(N,I,IG),IG=1,NG)
+          DO 156 IPREC=1,NPREC
+           BFACTN(N,I,IPREC)=1.0
+ 156      CONTINUE
+ 154     CONTINUE
+        ELSE
+         IF(IMICRO.EQ.'Y'.AND.IVER.EQ.1)THEN
+          DO 157 N=1,NMX
+           READ(NIO,*) (VELOCN(N,I,IG),IG=1,NG)
+     $       ,(BFACTN(N,I,IPREC),IPREC=1,NPREC)
+ 157      CONTINUE
+         ELSE !...MACRO or IVER=0
+          DO 159 N=1,NMX
+           READ(NIO,*)(VELOCN(N,I,IG),IG=1,NG)
+           DO 160 IPREC=1,NPREC
+            BFACTN(N,I,IPREC)=1.0
+ 160       CONTINUE
+ 159      CONTINUE
+         ENDIF
+        ENDIF 
+       ENDIF
+C     
+C     ------SKIP FOLLOWING INPUT IF X-SECTION CORRECTION OPTION IS OFF
+C     
+       IF(NXSEC.EQ.'Y') THEN
+C     
+C     ------SKIP FOLLOWING INPUT IF A NON-FUEL COLOR
+C     
+        IF (I.GT.NFUEXY) THEN
+C     
+C     ---- READ FISSION PRODUCT MICROSCOPIC ABSORPTION CROSS-SECTIONS
+C     
+         DO 350 ITERM=1,NTERMFPRO
+          DO 351 N=1,NMX
+           DO 352 IG=1,NG
+            READ (NIO,*) (XFPNRO(N,I,IG,IFP,ITERM),IFP=1,2)
+ 352       CONTINUE
+ 351      CONTINUE
+ 350     CONTINUE
+         
+         DO 6350 ITERM=1,NTERMFPRI
+          DO 6351 N=1,NMX
+           DO 6352 IG=1,NG
+            READ (NIO,*) (XFPNRI(N,I,IG,IFP,ITERM),IFP=1,2)
+ 6352      CONTINUE
+ 6351     CONTINUE
+ 6350    CONTINUE
+         IF(IMICRO.NE.'Y') THEN
+C     
+C     ---- READ IN FISSION PRODUCT YIELD FRACTIONS
+C     
+          DO 152 N=1,NMX
+           READ (NIO,*) GIN(N,I),GXN(N,I),GPN(N,I)
+ 152      CONTINUE
+C     
+C     ---------READ DELAYED NEUTRON FRACTION
+C     
+          DO 155 N=1,NMX
+           READ (NIO,*) (BETAN(N,I,IPREC),IPREC=1,NPREC)
+ 155      CONTINUE
+C     
+C     ----------READ DECAY HEAT FRACTION
+C     
+          DO 158 N=1,NMX
+           READ (NIO,*) (ALPHAN(N,I,IDECH),IDECH=1,NDECAY)
+ 158      CONTINUE
+         ENDIF
+        ENDIF
+       ENDIF
+C     
+C     ------SKIP FOLLOWING INPUT IF X-SECTION CORRECTION OPTION IS OFF
+C     
+       IF(NXSEC.EQ.'Y') THEN
+C     
+C     ------SKIP FOLLOWING INPUT IF A NON-FUEL COLOR
+C     
+        IF (I.GT.NFUEXY) THEN
+C     
+C     ---  READ IN MICROSCOPIC X-SECTIONS FOR U_PU CHAIN IF IMICRO='Y'
+C     
+         IF(IMICRO.EQ.'Y') THEN
+c     
+c     Number densities at BOL
+c     
+          READ(NIO,*) (UPUDEN(I,IRX),IRX=1,3)
+          READ(NIO,*) (UPUDEN(I,IRX),IRX=4,8)
+          READ(NIO,*) (UPUDEN(I,IRX),IRX=9,10)
+          IF(IVER.EQ.1)THEN
+           READ(NIO,*)  UPUDEN(I,11),UPUDEN(I,12)
+          ELSE !...IVER=0
+           READ(NIO,*)  UPUDEN(I,11)
+           UPUDEN(I,12)=0.0
+          ENDIF
+c     
+c     Number densities at other exposures
+c     
+          DO 700 IRX=1,8
+           INITND(I,1,IRX)=UPUDEN(I,IRX)
+ 700      CONTINUE
+          INITND(I,1,11)=UPUDEN(I,11)
+          INITND(I,1,12)=UPUDEN(I,12)
+          IF(IVER.EQ.1)THEN
+           DO 701 N=2,NMX
+            READ(NIO,*)(INITND(I,N,IRX),IRX=1,4)
+            READ(NIO,*)(INITND(I,N,IRX),IRX=5,8)
+            READ(NIO,*)(INITND(I,N,IRX),IRX=11,12)
+ 701       CONTINUE
+          ENDIF
+          DO 355 ITERM = 1,NTERMMICRO
+           DO 356 N=1,NMX
+            DO 357 IG=1,NG
+             READ(NIO,*)(UCHAINRO(N,I,IRX,IG,ITERM),IRX=1,6)
+             READ(NIO,*)(UCHAINRO(N,I,IRX,IG,ITERM),IRX=7,12)
+             IF(IVER.EQ.1)THEN
+              READ(NIO,*)(UCHAINRO(N,I,IRX,IG,ITERM),IRX=13,16),
+     $         (UCHAINRO(N,I,IRX,IG,ITERM),IRX=20,21)
+             ELSE !...IVER=0
+              READ(NIO,*)(UCHAINRO(N,I,IRX,IG,ITERM),IRX=13,16)
+              UCHAINRO(N,I,20,IG,ITERM)=0.
+              UCHAINRO(N,I,21,IG,ITERM)=0.
+             ENDIF
+             READ(NIO,*)(UCHAINRO(N,I,IRX,IG,ITERM),IRX=17,18)
+             READ(NIO,*)UCHAINRO(N,I,19,IG,ITERM)
+ 357        CONTINUE
+ 356       CONTINUE
+ 355      CONTINUE
+          
+          DO 365 ITERM = 1,NTERMMICRI
+           DO 366 N=1,NMX
+            DO 367 IG=1,NG
+             READ(NIO,*)(UCHAINRI(N,I,IRX,IG,ITERM),IRX=1,6)
+             READ(NIO,*)(UCHAINRI(N,I,IRX,IG,ITERM),IRX=7,12)
+             IF(IVER.EQ.1)THEN
+              READ(NIO,*)(UCHAINRI(N,I,IRX,IG,ITERM),IRX=13,16),
+     $         (UCHAINRI(N,I,IRX,IG,ITERM),IRX=20,21)
+             ELSE !...IVER=0
+              READ(NIO,*)(UCHAINRI(N,I,IRX,IG,ITERM),IRX=13,16)
+              UCHAINRI(N,I,20,IG,ITERM)=0.
+              UCHAINRI(N,I,21,IG,ITERM)=0.
+             ENDIF
+             READ(NIO,*)(UCHAINRI(N,I,IRX,IG,ITERM),IRX=17,18)
+             READ(NIO,*)UCHAINRI(N,I,19,IG,ITERM)
+ 367        CONTINUE
+ 366       CONTINUE
+ 365      CONTINUE
+         ENDIF
+        ENDIF
+       ENDIF
+       
+       IF(AXSEC.EQ.'Y') CLOSE(UNIT=33)
+       
+ 500  CONTINUE
+      
+      READ (3,*)
+C     
+C     ---  SKIP FOLLOWING INPUT IF X-SECTION CORRECTION OPTION IS OFF
+C     
+      
+      IF(NXSEC.EQ.'Y') THEN
+       IF(IREFB.NE.0)THEN
+        READ(3,*)REFB(1)
+        DO ICOL=2,ICOLXY
+         REFB(ICOL)=REFB(1)
+        ENDDO
+       ENDIF
+C     
+C     ---------READ NUMBER OF FUEL RODS PER FUEL BUNDLE
+C     
+       READ(3,*)NFRODS
+C     
+C     ---------READ FUEL ROD RADIUS ( INCHES )
+C     
+       READ (3,*) FUELRAD
+C     
+C     ---------READ WEIGHT FACTORS FOR EFFECTIVE FUEL TEMPERATURE
+C     ---------WP     = FUEL AVERAGE TEMPERATURE WEIGTH ==>
+C     ---------(1-WP) = SURFACE TEMPERATURE WEIGHT
+C     ---------WC     = WEIGHTED FUEL TEMPERATURE RISE WEIGHT
+C     
+       READ (3,*) WC,WP
+C     
+C     
+C     ---------------READ T-H DATA ------------------
+       
+C     
+C     
+C     
+C     --------READ POLYNOMIAL ORDER & POLYNOMIAL COEFFICIENT
+C     FOR THE AVERAGE FUEL TEMPERATURE [F] VS. LINEAR POWER
+C     DENSITY [KW/FT]
+       
+       READ(3,*) NPOLTAF
+       READ(3,*) (COF_TAF(I),I=0,NPOLTAF-1)
+C     
+C     --------READ POLYNOMIAL ORDER & POLYNOMIAL COEFFICIENT
+C     FOR THE EFFECTIVE HEAT TRANSFER COEFFICIENT [KW/(FT**2-F)]
+C     VS. AVERAGE FUEL TEMPERATURE [DEGREE-F]
+C     
+       READ(3,*) NPOLHFF
+       READ(3,*) (COF_HFF(I),I=0,NPOLHFF-1)
+C     
+C     --------READ POLYNOMIAL ORDER & POLYNOMIAL COEFFICIENT
+C     FOR THE SURFACE FUEL TEMPERATURE [F] VS. LINEAR POWER
+C     DENSITY [KW/FT]
+C     
+       READ(3,*) NPOLTSF
+       READ(3,*) (COF_TSF(I),I=0,NPOLTSF-1)
+       
+C     
+C     --------READ ATOMIC WEIGHT OF THE COOLANT
+C     
+       READ(3,*) MOLW_COL
+C     
+C     --------READ ATOMIC WEIGHT FOR THE SOLUBLE POISON
+C     
+       READ(3,*) ATMW_SOLP
+C     
+C     --------ISOTOPIC ABUNDANCE FOR THE SOLUBLE POISON (A/O)
+C     
+       READ(3,*) ABUN_SOLP
+C     
+C     
+C     ---------READ SYSTEM PRESSURE (PSI)
+C     
+       READ (3,*) PIN
+C     ---------READ COOLANT GAS PROPERTIES AT SATURATION
+C     ---------SATURATION TEMPERATURE (DEGREE-F]
+C     ---------INTERNAL ENERGY [BTU/LBM]
+C     ---------DENSITY [LBM/FT**3]
+C     
+       READ (3,*) TCOLSAT,UCOLG,RHOG
+C     
+C     ---------READ FRACTION OF FISSION ENERGY DEPOSITED IN FUEL
+C     
+       READ (3,*) DEPF
+C     
+C     ---------READ COOLANT INLET TEMPERATURE (DEGREE-F)
+C     
+       READ (3,*) TCOLIN
+C     
+C     ---------READ COOLANT INLET TEMPERATURE SEARCH RANGE (DEGREE-F)
+C     
+       READ (3,*) TCOLMIN,TCOLMAX
+C     
+C     ---------READ MASS VELOCITY (LB/HR-FT**2)
+C     
+       READ (3,*) GMASS
+C     
+C     --------READ POLYNOMIAL ORDER & POLYNOMIAL COEFFICIENT
+C     FOR THE COOLANT LIQUID INTERNAL ENERGY [BTU/LBM]
+C     VS. COOLANT TEMPERATURE [DEGREE-F]
+C     
+       READ(3,*) NPOLUCOL
+       READ(3,*) (COF_UCOL(I),I=0,NPOLUCOL-1)
+C     
+C     --------READ POLYNOMIAL ORDER & POLYNOMIAL COEFFICIENT
+C     FOR THE COOLANT LIQUID TEMPERATURE [DEGREE-F]
+C     VS. COOLANT LIQUID INTERNAL ENERGY [BTU/LBM]
+C     
+       READ(3,*) NPOLTCOL
+       READ(3,*) (COF_TCOL(I),I=0,NPOLTCOL-1)
+C     
+C     --------READ POLYNOMIAL ORDER & POLYNOMIAL COEFFICIENT
+C     FOR THE COOLANT LIQUID DENSITY  (LB/FT**3)
+C     VS. COOLANT TEMPERATURE [DEGREE-F]
+C     
+       READ(3,*) NPOLRHOWC
+       READ(3,*) (COF_RHOWC(I),I=0,NPOLRHOWC-1)
+C     
+C     --------READ POLYNOMIAL ORDER & POLYNOMIAL COEFFICIENT
+C     FOR THE FUEL SPECIFIC HEAT (BTU/LBM-F)
+C     VS. FUEL TEMPERATURE [DEGREE-F]
+C     
+       READ(3,*) NPOLCPF
+       READ(3,*) (COF_CPF(I),I=0,NPOLCPF-1)
+C     
+C     --------READ THE FUEL DENSITY (LB/FT**3)
+C     [VALUE SUCH THAT GIVES CORRECT NODE AVERAGE FUEL
+C     DENSITY WHEN X BY NODE FUEL VOLUME FRACTION.]
+C     
+       READ(3,*) RHOWTF
+C     
+C     --------READ RATIO OF DENSITY OF HM TO FUEL MATERIAL
+C     
+       READ (3,*) RATIOHMFUEL
+C     
+C     --------READ CORE POWER DENSITY (KW/LITRE) :
+C     
+       READ (3,*) QQT
+       
+      ELSE
+C     
+C     ---------READ NUMBER OF FUEL RODS PER FUEL BUNDLE
+C     
+       NFRODS=1
+C     
+C     ---------READ FUEL ROD RADIUS ( INCHES )
+C     
+       FUELRAD=1.0
+C     
+C     --------READ ATOMIC WEIGHT OF THE COOLANT
+C     
+       MOLW_COL= 18.011
+C     
+C     --------READ ATOMIC WEIGHT FOR THE SOLUBLE POISON
+C     
+       ATMW_SOLP= 10.811
+C     
+C     --------ISOTOPIC ABUNDANCE FOR THE SOLUBLE POISON (A/O)
+C     
+       ABUN_SOLP = 0.198
+C     
+C     
+C     ---------------SET T-H DATA ------------------
+C     
+C     
+C     ---------READ SYSTEM PRESSURE (PSI)
+C     
+       PIN=2250.
+C     
+C     ---------READ FRACTION OF FISSION ENERGY DEPOSITED IN FUEL
+C     
+       DEPF=1.0
+C     
+C     ---------READ COOLANT INLET TEMPERATURE (DEGREE-F)
+C     
+       TCOLIN=542.50
+C     
+C     ---------READ MASS VELOCITY (LB/HR-FT**2)
+C     
+       GMASS=1.0
+C     
+C     ---- READ CORE POWER DENSITY (KW/LITRE) :
+C     
+       QQT=1.0
+       
+C     
+C     ---------FAST TO THERMAL FLUX RATIO GUESS
+C     
+      ENDIF
+      
+C     
+C     ---------FAST TO THERMAL FLUX RATIO GUESS
+C     
+      READ (3,*) (RT(IG),IG=1,NG)
+      
+C     
+C     ---------READ THE EXTERNAL SOURCE STRENGTH [#/CM^3-SEC]
+      
+      READ (3,*)(SEXT(IG), IG=1,NG)
+
+      CLOSE(UNIT=3)
+      RETURN
+      END

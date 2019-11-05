@@ -1,0 +1,100 @@
+      subroutine corrosh (icor, tcoi, qci, zro2ai,
+     &       zro2bi,zoxki, delhi, phi)
+c
+c  input variables
+c
+c    icor  - flag for reactor type
+c       >= 2 for PWR
+c       < 2 for BWR
+c    tcoi   - cladding oxide-water interface temperature, K
+c    qci   - cladding surface heat flux, W/m^2
+c    zro2ai - previous oxide thickness, meters
+c    zoxki - cladding thermal conductivity, W/m-K
+c    delhi - time step size in seconds
+c    phi - current fast neutron flux, n/m^2-sec
+c
+c  output variables
+c
+c    zro2bi - oxide thickness, meters
+c
+c  internal variables
+c
+c    tcok   - cladding-oxide interface temperature, K
+c
+       tcok = tcoi + qci*zro2ai/zoxki
+c
+c Convert to conductivity to W/cm-K, heat flux to W/cm^2, neutron
+c flux to n/cm^2-s, and time to days to match derived equation in
+c EPRI-NP-1472
+      zotc = zoxki/100.
+      qc = qci/1e4
+      phic = phi/1e4
+      dt = delhi/(24.*3600.)
+c r = gas constant, cal/mole-K;
+       r = 1.987
+c gama converts weight gain in g/cm^2  to cm oxide thickness.
+       gama = 0.6789
+       if (icor.ge.2) then
+c  coefficients for PWR; note rk and u are converted from microns per day
+c  to g/cm^2 per day.  rk unconverted is 8.04e7 microns per day and 
+c  u unconverted is 2.38e8 microns per day.
+         ra = 6.3e9
+         rq1 = 32289.
+         rk = 11863.
+         rq = 27354.
+         rp = 0.24
+         rm = 1.91e-15
+         u = 3.5e4
+         rkt = rk + u*(rm*phic)**rp
+c Pre transition oxidation
+         rold = zro2ai*1.e6
+         rnewthk = (3.0*ra*exp(-rq1/(tcok*r))*dt+rold**3)**0.33333
+         rnewthk = rnewthk*1.e-6
+         zro2bi = rnewthk
+         if(zro2ai.ge.2.e-6)then
+c add post transition oxidation  (EPRI-NP-5100 Model)
+           wt = zro2ai*100./gama
+           term = r*tcok**2*zotc/(gama*rq*qc)
+           term1 = 1.0/term
+           term2 = term1*rkt*exp(-rq/(r*tcok))
+           term3 = exp(term1*wt)
+           diff=1.0-term2*term3*dt
+c    Protect against 0 or negative values of 'diff'
+           if (diff.le.0.0) then
+             write (10,100)
+             stop
+           else
+c      adrwt is post transition wt. gain in grams per square centemeter
+             adrwt=term*log(1.e0/diff)
+c       addthk is added thickness, in meters
+             addthk= adrwt*gama/100.
+             zro2bi=zro2ai+addthk
+           endif
+         endif
+       else
+c      coefficients for BWR
+         rk = 11800.
+         rq = 27350.
+         rc = 2.5e-12
+         wt = zro2ai*100./gama
+         term = r*tcok**2*zotc/(gama*rq*qc)
+         term1 = 1.0/term
+         term2 = term1*rk*exp(-rq/(r*tcok))
+         term3 = exp(term1*wt)
+         diff=1.0-term2*term3*dt
+c    Protect against 0 or negative values of 'diff'
+         if (diff.le.0.0) then
+   80      write (10,100)
+  100    format(2x, 'Oxide thickness / time step size too great.'
+     #    ,/,'Review input and output.')
+           stop
+         else
+c      adrwt is post transition wt. gain in grams per square centemeter
+           adrwt=term*log(1.0/diff) + rc*rk*dt*qc
+c       addthk is added thickness, in meters
+           addthk=adrwt*gama/100.
+           zro2bi=zro2ai+addthk
+         endif
+       endif
+       return
+       end

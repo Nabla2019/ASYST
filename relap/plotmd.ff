@@ -1,0 +1,423 @@
+*mlist
+       subroutine plotmd
+cmpfversion_aptplot_latest
+$if def,plots
+!  Generates plots from restart-plot file.
+!
+!  Cognizant engineer: rjw.
+!
+       use SciGraphDemo
+       use ufilef
+       use usrvarc
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'maxmem.h'
+!
+       type adatapt
+         real*4, pointer :: d(:)
+         type (adatapt), pointer :: next
+       end type adatapt
+       type adatat
+         real*4, pointer :: d(:)
+       end type adatat
+       type (adatapt), pointer :: first,crnt,prev
+       type (adatat), allocatable :: adata(:)
+!
+       integer i,inx,inx2,inx4,io,iopt(2),ip(10),iq,iz(2),j,k,l,
+     & lcontg,lcntgs,le,ler,li,lx,m,ml,n,nn(2),numb,pckcod(2)
+       integer iwrd
+       integer inx1
+       integer(1) ia1(8,lfsiz)
+       integer(8) ia8(lfsiz)
+       real(4) ha(2,lfsiz)
+       equivalence (ia8(1),ha(1,1),ia1(1,1),fa(1))
+       logical frstm(2),hit,hit1,hit2
+       integer, allocatable :: itp(:)
+       real*4, allocatable :: mxoutb(:),pdata(:,:,:)
+       real*4 mxoutbx(2)
+       real conv(2),conv2(2),convx,ftbnid
+       character crstrc*24,ihldc*72,labl*64,lablt*10,lablx*25,
+     & lably*25(2),lablz*20(10)
+       character chwrd*8
+       data crstrc/'restart-plot file'/
+       real*4 hz(2,1)
+       equivalence (hz(1,1),fa(1))
+!
+!  Get space for output buffer and position indicators.
+       if (nplotrq .eq. 0) return
+       rewind rstplt
+       io = 1
+       do i = 1,nplotrq
+         io = io + size(plotrq(i)%pl)
+       enddo
+       allocate (mxoutb(io),itp(io))
+       mxoutb = 0.0
+       filid(1) = ftbnid(1)
+       numb = 0
+       nullify (first)
+!  Get input buffer and read rstplt header and first plotinf record.
+       if (lcontg(1) .lt. 10) go to 100
+       filsiz(1) = 10
+       call ftbrsv (filid(1),filsiz(1),-1,inx)
+       read (rstplt,end=27,err=28) lx,iwrd
+       read (rstplt,end=27,err=28) (ia8(inx+i-1),i=1,10)
+       if (lx .ne. 10) go to 39
+       write (ihldc(1:24),'(3a8)') (ia8(inx+i-1),i=4,6)
+       if (ihldc(1:24) .ne. crstrc) then
+c      inquire (iolength=i) ihldc,iq
+c      read (rstplt,end=27,err=28) ihldc,iq
+c      if (lx .ne. i) go to 39
+c      if (ihldc(25:48) .ne. crstrc) then
+         write (output,"('0******** Label in first record of restart inp
+     &ut file is incorrect.')")
+         go to 201
+       endif
+       read (rstplt,end=74,err=62) lx,iwrd
+       read (rstplt,end=74,err=62) ia8(inx:inx+lx-1)
+       write (chwrd,'(a8)') ia8(inx)
+       if (chwrd .ne. 'plotinf') go to 204
+   20  if (lx .ne. 3) go to 205
+       ler = ia(inx+2)
+       le = ia(inx+1)
+       li = le - 1
+       j = le + 1
+       filsiz(1) = lcntgs(filid(1),1)
+       call ftbsft (filid(1),filsiz(1),2,inx)
+$if def,fourbyt,2
+       inx1 = inx
+       inx4 = inx
+       inx2 = inx + j
+!  Read plotalf and plotnum records.
+       read (rstplt,end=74,err=62) lx,iwrd
+       read (rstplt,end=74,err=62) ia8(inx:inx+lx-1)
+       if (lx .ne. le) go to 102
+       write (chwrd,'(a8)') ia8(inx)
+       if (chwrd .ne. 'plotalf') go to 202
+       read (rstplt,end=74,err=62) lx,iwrd
+       read (rstplt,end=74,err=62) ia8(inx2:inx2+lx-1)
+       if (lx .ne. le) go to 102
+       write (chwrd,'(a8)') ia8(inx2)
+       if (chwrd .ne. 'plotnum') go to 202
+!  Set pointers by scanning plotalf-plotnum records.
+       k = 2
+       itp(1) = 1
+       do i = 1,nplotrq
+         do m = 1,size(plotrq(i)%pl)
+           itp(k) = 0
+           do l = 1,li
+             write (chwrd,"(a8)") ia8(inx+l)
+             if (chwrd.eq.plotrq(i)%pl(m)%ntabla .and.
+     &       ia(inx2+l).eq.plotrq(i)%pl(m)%ntabl) then
+               plotrq(i)%pl(m)%ntabno =
+     &         ior(plotrq(i)%pl(m)%ntabno,ishft(1,24))
+               itp(k) = l
+               exit
+             endif
+           enddo
+           k = k + 1
+         enddo
+       enddo
+       do
+         read (rstplt,iostat=n) lx,iwrd
+         if (n .gt. 0) cycle
+         if (n .lt. 0) exit
+$if def,fourbyt
+         if (iwrd .eq. 4) then
+           read (rstplt,iostat=n) ha(2,inx4:inx4+lx-1)
+         elseif (iwrd .eq. 1) then
+           read (rstplt,iostat=n) ia1(8,inx1:inx1+lx-1)
+         else
+           read (rstplt,iostat=n) ia8(inx:inx+lx-1)
+         endif
+         if (n .gt. 0) cycle
+         if (n .lt. 0) exit
+$endif
+$if -def,fourbyt
+       read (rstplt,iostat=n) (ia8(inx:inx+lx-1)
+       if (n .gt. 0) cycle
+       if (n .lt. 0) exit
+$endif
+       write (chwrd,'(a8)',iostat=n) ia8(inx)
+       if (n .gt. 0) cycle
+       if (chwrd .eq. 'plotinf') go to 20
+       if (chwrd .ne. 'plotrec') cycle
+       if (ler .ne. 0) then
+         if (lx .ne. ler) go to 102
+         call unsqoz (ia8(inx+1),ia8(inx+1),li)
+       else
+         if (lx .ne. le) go to 102
+       endif
+!  Move requested plot variables from plot record in restart-plot file
+!  to a buffer and write buffer to scratch file. Data in each record is 
+!  ordered by time followed by requested plot variables. Variables are
+!  duplicated in this file if duplicated in the plot requests. 
+       if (numb .eq. 0) then
+         allocate (first)
+         allocate (first%d(io))
+         crnt => first
+       else
+         allocate (crnt%next)
+         crnt => crnt%next
+         allocate (crnt%d(io))
+       endif
+       do k = 1,io
+         if (itp(k) .eq. 0) then
+           crnt%d(k) = 0.0
+         else
+           crnt%d(k) = fa(inx+itp(k))
+         endif
+         mxoutb(k) = max(mxoutb(k),abs(crnt%d(k)))
+       enddo
+c      write (12,"('File data',3(i5,2es12.4))") itp(1),fa(inx+itp(1)),
+c    & crnt%d(1),itp(io-1),fa(inx+itp(io-1)),crnt%d(io-1),itp(io),
+c    & fa(inx+itp(io)),crnt%d(io)
+       numb = numb + 1
+       enddo
+!  End of rstplt file reached.
+       rewind rstplt
+!  Check on status of requested plot variables being found on restart-
+!  plot file.
+       hit1 = .false.
+       hit2 = .false.
+       do i = 1,nplotrq
+         do m = 1,size(plotrq(i)%pl)
+           hit = iand(plotrq(i)%pl(m)%ntabno,ishft(1,24)) .ne. 0
+           hit1 = hit1 .or. hit
+           hit2 = hit2 .or. .not.hit
+         enddo
+       enddo
+       if (.not.hit1) then
+         write (output,"('0$$$$$$$$ None of the requested plot variables
+     & were found on the restart-plot file.')")
+       else
+         if (hit2) then
+           write (output,"('0The following plot variables were not found
+     & on the restart-plot file.')")
+           do i = 1,nplotrq
+             do m = 1,size(plotrq(i)%pl)
+               if (iand(plotrq(i)%pl(m)%ntabno,ishft(1,24)) .eq. 0)
+     &         write (output,"(' ',a,i11)") plotrq(i)%pl(m)%ntabla,
+     &         plotrq(i)%pl(m)%ntabl
+             enddo
+           enddo
+         endif
+       endif
+!  Read in requested plot variables from scratch file.
+       allocate (adata(numb))
+       crnt => first
+       do i = 1,numb
+         adata(i)%d => crnt%d
+c        write (12,"('Data Record',i5/(10es12.4))") i,adata(i)%d(:)
+         prev => crnt
+         crnt => crnt%next
+         deallocate (prev)
+       enddo
+!
+!  Start of loop for each plot request.
+       call plotquit
+       k = 2
+       do i = 1,nplotrq
+!  Process plot request only if all variables in request are available.
+         if (any(iand(plotrq(i)%pl%ntabno,ishft(1,24)) .eq. 0)) then
+           write (output,"('0$$$$$$$$ Graph',i3,' is being skipped becau
+     &se not all the variables in the request are available.')")
+     &     iand(plotrq(i)%pl(1)%ntabno,z'ff')
+           write (tty,"('0$$$$$$$$ Graph',i3,' is being skipped because 
+     &not all the variables in the request are available.')")
+     &     iand(plotrq(i)%pl(1)%ntabno,z'ff')
+           ml = size(plotrq(i)%pl)
+         else
+           plotrq(i)%pl%ntabno = iand(plotrq(i)%pl%ntabno,z'7ff')
+           lablt = '?'; lablx = '?'; lably = '?'; lablz= '?'
+!  Get number of variables on each axis.
+           ml = size(plotrq(i)%pl)
+           nn(1) = count(iand(ishft(plotrq(i)%pl%ntabno,-8),z'3') .eq.
+     &     1)
+           nn(2) = ml - nn(1)
+           iz(1) = 0;  iz(2) = nn(1)
+           iopt = 0
+           mxoutbx = 0.0_4
+           frstm = .true.
+           do m = 1,ml
+             iq = iand(ishft(plotrq(i)%pl(m)%ntabno,-8),z'3')
+!  Get reordering information to be able to move data for a request into
+!  order by axis being used. Get labels and conversion factors for each
+!  axis.  Accumulate overall maximums for each axis.
+             iz(iq) = iz(iq) + 1
+             ip(iz(iq)) = m
+             call scnreq (iand(plotrq(i)%pl(m)%ntabno,z'ff'),
+     &       plotrq(i)%pl(m)%ntabla,plotrq(i)%pl(m)%ntabl,2,pckcod,
+     &       convx,labl,hit)
+             lablx = ' '
+             j = index(labl,'(')
+             if (j .ne. 0) then
+               l = index(labl(j+1:64),')')
+               if (l .ne. 0) lablx = labl(j:j+l)
+               lablz(iz(iq)) = labl(1:j-1)
+             else
+               l = index(labl,' ')
+               if (plotrq(i)%pl(m)%ntabl .ne. 0) then
+                 l = index(labl(l+1:32),' ') + l
+                 lablz(iz(iq)) = labl(1:l)
+               else
+                 l = index(labl,' ')
+                 lablz(iz(iq)) = labl(1:l)
+               endif
+             endif
+!  Use labels and conversion factors for an axis from the first
+!  variable using that axis. 
+             if (frstm(iq)) then
+               frstm(iq) = .false.
+               conv(iq) = convx
+               lably(iq) = lablx
+               iopt(iq) = iand(ishft(plotrq(i)%pl(m)%ntabno,-10),1)
+             endif
+             mxoutbx(iq) = max(mxoutbx(iq),mxoutb(m+k-1))
+           enddo
+           lablx = 'time (s)'
+           write (lablt,"('Graph',i4)") 
+     &     iand(plotrq(i)%pl(1)%ntabno,z'ff')
+!  Move variables for this plot request from array adata to array
+!  pdata in order of pairs of time, dependent variable, for each
+!  variable to be plotted in order of axis used, and for time.
+           allocate (pdata(2,numb,ml))
+!  Move time variable.
+           do j = 1,ml
+             do n = 1,numb
+               pdata(1,n,j) = adata(n)%d(1)
+             enddo
+           enddo
+!  Move dependent variables, putting them in proper order and applying
+!  conversion factor from British to SI is needed.
+           if (unito) then
+             do j = 1,ml
+               do n = 1,numb
+                 pdata(2,n,j) = adata(n)%d(ip(j)+k-1)
+               enddo
+             enddo
+             conv2 = mxoutbx
+           else
+             j = 0
+             do iq = 1,2
+               if (nn(iq) .eq. 0) cycle
+               if (conv(iq) .gt. 0.0) then
+                 do l = 1,nn(iq)
+                   j = j + 1
+                   do n = 1,numb
+                     pdata(2,n,j) = adata(n)%d(ip(j)+k-1)*conv(iq)
+                   enddo
+                 enddo
+                 conv2(iq) = mxoutbx(iq)*conv(iq)
+               else
+                 do l = 1,nn(iq)
+                   j = j + 1
+                   do n = 1,numb
+                     pdata(2,n,j) = 1.8*(adata(n)%d(ip(j)+k-1) +
+     &               conv(iq))
+                   enddo
+                 enddo
+                 conv2(iq) = 1.8*(mxoutbx(iq) + conv(iq))
+               endif
+             enddo
+           endif
+!  Determine whether further conversion factors of 10**3 or 10**(-3) are
+!  needed to obtain convenient range for axis notation.
+           j = 0
+           do iq = 1,2
+             if (nn(iq) .eq. 0) cycle
+             conv(iq) = 1.0
+             if (conv2(iq) .eq. 0.0) conv2(iq) = 1.0
+             do
+               if (conv2(iq) .ge. 1.0e4) then
+                 conv2(iq) = conv2(iq)*1.0e-3
+                 conv(iq) = conv(iq)*1.0e-3
+               elseif (conv2(iq) .lt. 1.0e-3) then
+                 conv2(iq) = conv2(iq)*1.0e3
+                 conv(iq) = conv(iq)*1.0e3
+               else
+                 exit
+               endif
+             enddo
+!  If powers of 10**3 or 10**(-3) are appropriate, apply conversion
+!  factor and notation to axis label.
+             if (conv(iq) .ne. 1.0) then
+               do l = 1,nn(iq)
+                 j = j + 1
+                 pdata(2,:,ip(j)) = pdata(2,:,ip(j))*conv(iq)
+               enddo
+               write (chwrd,"(a,es7.1)") '*',conv(iq)
+               li = verify(lably(iq),' ',.true.)
+               lably(iq)(li+1:li+8) = chwrd
+             else
+               j = j + nn(iq)
+             endif
+           enddo
+!  Check for negative values to be plotted on a log axis; if found, 
+!  switch to linear axis.
+           j = 0
+           do iq = 1,2
+             if (iopt(iq) .ne. 0) then
+               do l = 1,nn(iq)
+                 j = j + 1
+                 if (minval(pdata(2,:,j)) .le. 0.0) then
+                   iopt(iq) = 0
+                   write (output,"('0$$$$$$$$ For ',a,' variable ',a,
+     & ' contains zero or negative values, requested log scaling changed
+     & to linear scaling.')") trim(lablt),trim(lablz(ip(j)))
+                 endif
+               enddo
+             else
+               j = j + nn(iq)
+             endif
+           enddo
+!  Draw the graph.
+           if (nn(1) .eq. 0) then
+             nn(1) = nn(2)
+             lably(1) = lably(2)
+           endif
+           call plotmd2 (i,numb,pdata,ml,nn(1),iopt,lablt,lablx,lably,
+     &     lablz)
+           deallocate (pdata)
+         endif
+         k = k + ml
+       enddo
+       write (output,"('0','Successful end of plot processing.')")
+       write (tty,"('$$$$$$$$ ','Successful end of plot processing.')")
+       return
+!
+   39  write (output,"('0******** Wrong length on first record of restar
+     &t inputfile.')")
+       go to 201
+   27  write (output,"('0******** Eof encountered on first read of resta
+     &rt input file, no file available.')")
+       go to 201
+   28  write (output,"('0******** Parity error on first record.')")
+       go to 201
+  100  write (output,"('0******** Insufficient space for writing strip f
+     &ile.')")
+       go to 201
+  101  write (output,"('0******** Write error on stripf file.')")
+       go to 201
+  102  write (output,"('0******** A plotalf, plotnum, or plotrec record 
+     &on rstplt has the wrong length.')")
+       go to 201
+   62  write (output,"('0******** Parity error on file rstplt reading pl
+     &otalf or plotnum record.')")
+       go to 201
+   74  write (output,"('0******** Eof on file rstplt before reading plot
+     &alf or plotnum record.')")
+       go to 201
+  202  write (output,"('0******** Record label should be plotalf or plot
+     &num but is not.')")
+       go to 201
+  204  write (output,"('0******** Plotinf record not read when it should
+     & have been read.')")
+       go to 201
+  205  write (output,"('0******** Plotinf record is wrong length.')")
+  201  fail = .true.
+$endif
+       return
+       end

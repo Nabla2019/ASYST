@@ -1,0 +1,476 @@
+       program tsuper
+c  Program to test thermodynamic water properties above the critical
+c  pressure.
+c  Uses astem routines -- ANCR-1026 and sth2x6 subroutine.
+*in32 ia
+*in32end
+       implicit none
+       common /fast/ a(20000)
+       real a
+       integer ia(1)
+       equivalence (a(1),ia(1))
+*call efiless
+       integer sth2xt
+c
+       common /contrl/ stindx
+       integer stindx
+       common /sth2xc/ nt,np,ns,ns2
+       integer nt,np,ns,ns2
+c
+       integer i,j,lcontg
+       real tol,tol2
+       real ttrip,tcrit,ptrip,pcrit
+       real temps(201),press(80)
+       external ftbint,ftbrsv,ftbsft,iasme,lcontg,
+     * snph
+$if def,ibm,1
+       external xuflow
+       integer is
+c
+       data sth2xt/10/
+       data ttrip/273.16/,tcrit/647.3/,ptrip/611.2445/,pcrit/2.212e7/,
+     * tol/0.00001/,tol2/0.1/
+*call efilesd
+c
+       is = 0
+       open (unit=output,file='outdta',status='new',form='formatted',
+     * iostat=is)
+       if (is .ne. 0) then
+         write (tty,3001) is
+ 3001  format ('Open error number',i8,' on file outdta, perhaps file alr
+     *eady exists.')
+         stop 'output'
+       endif
+       open (unit=sth2xt,file='sth2xt',status='old',form='unformatted')
+$if def,ibm,1
+       call xuflow (0)
+       write (output,2000)
+ 2000  format ('1Program to test thermodynamic water properties over the
+     * critical pressure.')
+       call ftbint (2)
+       i = lcontg(1)
+       call ftbrsv (1.0,i,-1,stindx)
+       j = i
+       call sth2xj (a(stindx),sth2xt,j)
+       if (j .le. 0) stop 'sth2xt'
+       write (output,3050) j,nt,np
+ 3050  format ('0Length of water property table is ',i6,'.'/
+     * ' Number of temperatures is ',i4,', number of pressures is',i4,
+     * '.')
+c
+       temps(1) = 600.0
+       do 10 i = 1,200
+         temps(i+1) = temps(i) + 1.0
+   10  continue
+       write (output,3003) (i,temps(i),i=1,201)
+ 3003  format ('0Temperatures'/(4(i13,f7.1)))
+       press(1) = 2.212e7
+       press(2) = 2.25e7
+       do 11 j = 3,5
+         press(j) = press(j-1) + 0.05e7
+   11  continue
+       do 12 j = 6,80
+         press(j) = press(j-1) + 0.10e7
+   12  continue
+       write (output,3002) (i,press(i),i=1,80)
+ 3002  format ('0Presssues',1p/(4(i8,e12.4)))
+c
+       call iasme (2)
+       call snph (temps,press,201,80)
+       stop
+       end
+       subroutine iratio (ratio,mapp)
+c
+       real ratio(6)
+       character mapp(6)*1
+c
+       integer i,kk
+       real rat
+c
+       kk0 = ichar('0')
+       do 10 i = 1,6
+         if (ratio(i) .eq. 0.0) then
+           mapp(i) = '-'
+         else
+           rat = log10(abs(ratio(i)))
+           if (rat .ge. 1.0) then
+             mapp(i) = '+'
+           else if (rat .ge. 0.0) then
+             mapp(i) = '0'
+           else
+             kk = int(-rat) + 1
+             if (kk .gt. 9) then
+               mapp(i) = '-'
+             else
+               mapp(i) = char(kk + kk0)
+             endif
+           endif
+         endif
+   10  continue
+       return
+       end
+       subroutine snph (t,p,nt,np)
+c
+c      s(1) - v
+c      s(2) - u
+c      s(3) - beta (thermal expansion)
+c      s(4) - kappa (compressibility)
+c      s(5) - c sub p (heat capacity)
+c      s(6) - s (entropy)
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+*call efiless
+       common /contrl/ stindx
+       integer stindx
+       common /fast/ a(20000)
+       real a
+       integer ia(1)
+       equivalence (a(1),ia(1))
+       common /munits/ crpm,crtm,crvm,crhm,crsm,tom,jcm,gcm,sqjcm,sonicm
+       real jcm
+       real t(1),p(1),s(6),prop(26),ratio(6)
+       real af(6),f(6)
+       logical nogo
+       character mapp(6,201,80)
+       external sth2x6
+*call efilesd
+c
+       t1 = 62315.0/64730.0
+       t2 = 86315.0/64730.0
+       call psatk (p1,t1,0)
+c
+       do 10 i = 1,nt
+         ta = t(i)/crtm
+         if (ta .le. 1.0) call psatk (pk,ta,0)
+         if (ta.gt.t1 .and. ta.le.t2) call psatl (pl,ta,0)
+c
+         do 11 j = 1,np
+           pa = p(j)/crpm
+           if (t(i) .gt. 1073.15) go to 100
+           if (ta .gt. t1) go to 12
+           if (pa .lt. pk) go to 22
+           go to 21
+   12      if (ta .ge. 1.0) go to 13
+           if (pa .le. pl) go to 22
+           if (pa .lt. pk) go to 23
+           go to 24
+   13      if (ta .ge. t2) go to 22
+           if (pa .le. pl) go to 22
+           go to 23
+   21      ir = 1
+           go to 26
+   22      ir = 2
+   26      call gibbab (af,pa,ta,2,ir)
+           call cona (af,2,f,0,0,crhm,crpm,crtm)
+           v = af(2)
+           s(1) = f(2)
+           s(2) = f(1) - t(i)*f(4) - p(j)*f(2)
+           s(3) = f(5)/f(2)
+           s(4) = -f(3)/f(2)
+           s(5) = -t(i)*f(6)
+           s(6) = -f(4)
+           go to 111
+   23      ir = 3
+           go to 27
+   24      ir = 4
+   27      call root (v,pa,ta,u,d1,ir,nogo)
+           if (nogo) write (output,2001) p(j),t(i),ir
+ 2001  format ('0******** Root failure, p =',1p,e14.6,', t =',e14.6,', i
+     * =',i2)
+           call helmcd (af,v,ta,2,ir)
+           call cona (af,2,f,0,0,crhm,crvm,crtm)
+           s(1) = v*crvm
+           s(2) = u*crhm
+           d1 = s(1)*f(3)
+           s(3) = -f(5)/d1
+           s(4) = 1.0/d1
+           s(5) = t(i)*(f(5)*f(5)/f(3) - f(6))
+           s(6) = -f(4)
+c  Finished now with astem.  this area has been used for temps
+c  within the range of astem - up to 1073.15 deg k.
+           go to 111
+c
+  100      continue
+c
+c  This branch for the case where temperatures are beyond astem's
+c  upper limit of 1073.15 deg k.  The janaf treatment of Stull
+c  and Prophet is used here.
+           ta = 1073.15/crtm
+           ir = 2
+           call gibbab ( af, pa, ta, 2, ir)
+           call cona ( af, 2, f, 0, 0, crhm, crpm, crtm )
+           s0 = -f(4)
+           u0 = f(1) - 1073.15*f(4) - p(j)*f(2)
+           v = f(2)
+           r = p(j)*v/1073.15
+           v = r * t(i) / p(j)
+c
+c  Integrate c sub p.
+           call intgrc ( 1073.15, t(i), csubpi, cpint, ier )
+           if (ier .ne. 0) write (output,101) p(j), t(i)
+  101 format ('0******** Integration error in snph; p,t =',2e14.6)
+           u = u0 + cpint - r * ( t(i) - 1073.15 )
+c
+c  Calculate ds from 1073.15 to t(i).
+           call dels ( 1073.15, t(i), ds, ier )
+           if ( ier .ne. 0 ) write (output,102) p(j), t(i)
+  102 format ('0******** Error in routine dels')
+           s(1) = v
+           s(2) = u
+           s(3) = 1.0/t(i)
+           s(4) = 1.0/p(j)
+           s(5) = csubpi
+           s(6) = s0 + ds
+  111      prop(2) = p(j)
+           prop(4) = s(2)
+           call sth2x6 (a(stindx),prop,ip,ierr)
+           if (ierr) stop 'ierr'
+           ratio(1) = (prop(1) - t(i))/t(i)
+           ratio(2) = (prop(3) - s(1))/s(1)
+           ratio(3) = (prop(6) - s(3))/s(3)
+           ratio(4) = (prop(7) - s(4))/s(4)
+           ratio(5) = (prop(8) - s(5))/s(5)
+           ratio(6) = (prop(24) - s(6))/s(6)
+           if (i.eq.125 .and. j.eq.18) then
+             write (output,3101) t(i),p(j),s(1),s(2),s(3),s(4),s(5),
+     *       s(6),prop(1),prop(2),prop(3),prop(4),prop(6),prop(7),
+     *       prop(8),prop(24),ratio
+ 3101  format ('0',1p,8e12.4/1x,8e12.4/1x,e12.4,12x,e12.4,12x,4e12.4)
+           endif
+           call iratio (ratio,mapp(1,i,j))
+   11    continue
+   10  continue
+c
+       write (output,3001)
+ 3001  format ('1Temperature Comparisons')
+       write (output,3011)
+ 3011  format ('               1         2         3         4         5
+     *         6         7         8'/
+     *         '      12345678901234567890123456789012345678901234567890
+     *123456789012345678901234567890')
+       write (output,3010) (i,(mapp(1,i,j),j=1,80),i=1,201)
+ 3010  format (' ',i3,2x,80a1)
+       write (output,3011)
+       write (output,3002)
+ 3002  format ('1Specific Volume Comparisons')
+       write (output,3011)
+       write (output,3010) (i,(mapp(2,i,j),j=1,80),i=1,201)
+       write (output,3011)
+       write (output,3003)
+ 3003  format ('1Beta Comparisons')
+       write (output,3011)
+       write (output,3010) (i,(mapp(3,i,j),j=1,80),i=1,201)
+       write (output,3011)
+       write (output,3004)
+ 3004  format ('1Kappa Comparisons')
+       write (output,3011)
+       write (output,3010) (i,(mapp(4,i,j),j=1,80),i=1,201)
+       write (output,3011)
+       write (output,3005)
+ 3005  format ('1Csubp Comparisons')
+       write (output,3011)
+       write (output,3010) (i,(mapp(5,i,j),j=1,80),i=1,201)
+       write (output,3011)
+       write (output,3006)
+ 3006  format ('1Entropy Comparisons')
+       write (output,3011)
+       write (output,3010) (i,(mapp(6,i,j),j=1,80),i=1,201)
+       write (output,3011)
+c
+       prop(2) = 2.211986e7
+       prop(4) = 2.038085e6
+       call sth2x6 (a(stindx),prop,ip,ierr)
+       write (output,3099) (prop(i),i=1,22),(prop(i),i=24,26),ip
+ 3099  format ('0',1p,6e20.10/6e20.10/6e20.10/4e20.10/3e20.10,i5)
+       prop(4) = 1.484904e6
+       call sth2x6 (a(stindx),prop,ip,ierr)
+       write (output,3099) (prop(i),i=1,22),(prop(i),i=24,26),ip
+       return
+       end
+      subroutine intgrc ( tlo, thi, csubpp, a, ier)
+c
+c  This routine integrates c sub p for water from a lower limit of tlo
+c  to an upper limit of thi.  A trapezoidal method is employed to do
+c  the integration.
+c
+c     inputs: tlo - lower temperature limit (k)
+c     thi - upper temperature limit (k)
+c     outputs:
+c     a - the integral of csubp from tlo to thi ( j/kg) )
+c     csubpp - c sub p at temperature thi (j kg(-1) deg(-1))
+c     ier - error flag: no error if ier = 0.
+c
+c  This routine was written by S. W. James.
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+*call efiless
+      real tcp(52), csubp(52)
+*call efilesd
+c
+c  The following sp.heats for water are taken from janaf thermo-
+c  chemical tables by Stull and Prophet.
+c  The units are cal.mole(-1)deg(-1) in the data statements.
+c  The temperatures are in degrees kelvin.
+      data  csubp /  9.851, 10.152, 10.444, 10.753, 10.987,
+     *              11.233, 11.462, 11.674, 11.869, 12.048,
+     *              12.214, 12.366, 12.505, 12.634, 12.753,
+     *              12.863, 12.965, 13.059, 13.146, 13.226,
+     *              13.304, 13.374, 13.441, 13.503, 13.562,
+     *              13.617, 13.669, 13.716, 13.768, 13.808,
+     *              13.850, 13.890, 13.957, 13.963, 13.997,
+     *              14.030, 14.061, 14.091, 14.120, 14.148,
+     *              14.174, 14.201, 14.228, 14.254, 14.279,
+     *              14.303, 14.328, 14.351, 14.375, 14.396,
+     *              14.422, 14.422/
+      data  tcp /  1000.,1100.,1200.,1300.,1400.,1500.,
+     *             1600.,1700.,1800.,1900.,2000.,2100.,
+     *             2200.,2300.,2400.,2500.,2600.,2700.,
+     *             2800.,2900.,3000.,3100.,3200.,3300.,
+     *             3400.,3500.,3600.,3700.,3800.,3900.,
+     *             4000.,4100.,4200.,4300.,4400.,4500.,
+     *             4600.,4700.,4800.,4900.,5000.,5100.,
+     *             5200.,5300.,5400.,5500.,5600.,5700.,
+     *             5800.,5900.,6000.,6000. /
+c  si is the conversion factor to si units for csubp:
+      data si/232.238/
+      ier = 0
+c
+c  Check that 1000 .le. tlo .le. thi .le. 6000 (deg k).
+      if ( 1000.0 .le. tlo ) go to 20
+      write (output,10)
+   10 format ('0******** Error:1000.le.tlo.le.thi.le.6000 violated')
+      ier = 1
+   20 if ( tlo .le. thi ) go to 30
+      write (output,10)
+      ier = 1
+   30 if ( thi .le. 6000.) go to 40
+      write (output,10)
+      ier = 1
+   40 if ( ier .ne. 1 ) go to 60
+      write (output,50)
+   50 format ('0******** Error in routine to integrate csubp for water')
+      go to 130
+   60 continue
+c
+c  Find bracketing intervals for tlo and thi.
+      do 70 n = 1, 51
+         if (tcp(n).le.tlo.and.tlo.lt.tcp(n+1)) go to 80
+   70    continue
+c
+   80 do 90 m = 1, 51
+         if (tcp(m).le.thi.and.thi.lt.tcp(m+1)) go to 100
+   90    continue
+  100 continue
+      slope1 = ( csubp(n+1) - csubp(n) )*0.01
+      slope2 = ( csubp(m+1) - csubp(m) )*0.01
+c
+      cplo = slope1 * ( tlo - tcp(n) ) + csubp(n)
+      cphi = slope2 * ( thi - tcp(m) ) + csubp(m)
+      a = 0.5*( ( cplo + csubp(n+1)) * (tcp(n+1) - tlo)
+     *     +   ( cphi + csubp(m)) * (thi - tcp(m))  )
+      if ( n .eq.m ) a = 0.5*( cplo + cphi )*( thi - tlo )
+      if ( n + 1  .ge.  m  ) go to 120
+      j1 = n + 1
+      j2 = m - 1
+      do 110 j = j1, j2
+  110    a = a + 0.5*(csubp(j) + csubp(j+1))*(tcp(j+1) - tcp(j))
+  120 continue
+c
+c  Convert area and csubpp to si.
+      csubpp = si * cphi
+      a = si * a
+  130 continue
+      return
+      end
+      subroutine dels ( tlo, thi, ds, ier )
+c
+c  This routine calculates the change in entropy of steam
+c  from temperature tlo to temperature thi in the janaf tables.
+c
+c     inputs: tlo - lower temperature limit (k)
+c     thi - upper temperature limit (k)
+c     output:
+c     ds - delta entropy,(tlo to thi)--(j/kg deg-1**2)
+c
+c     this routine was written by s. w. james
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+*call efiless
+      real tcp(52), s(52)
+*call efilesd
+c
+c  The following entropy values are taken from janaf thermo-chemical
+c  tables by Stull and Prophet.
+c  The units are cal.mole(-1)deg(-2) in the data statements.
+c  The temperatures are in degrees kelvin.
+      data s / 55.592, 56.545, 57.441, 58.288, 59.092,
+     *         59.859, 60.591, 61.293, 61.965, 62.612,
+     *         63.234, 63.834, 64.412, 64.971, 65.511,
+     *         66.034, 66.541, 67.032, 67.508, 67.971,
+     *         68.421, 68.856, 69.284, 69.698, 70.102,
+     *         70.496, 70.881, 71.256, 71.622, 71.980,
+     *         72.331, 72.673, 73.008, 73.336, 73.658,
+     *         73.973, 74.281, 74.584, 74.881, 75.172,
+     *         75.459, 75.740, 76.016, 76.287, 76.553,
+     *         76.816, 77.074, 77.327, 77.577, 77.823,
+     *         78.065, 78.065/
+      data  tcp /  1000.,1100.,1200.,1300.,1400.,1500.,
+     *             1600.,1700.,1800.,1900.,2000.,2100.,
+     *             2200.,2300.,2400.,2500.,2600.,2700.,
+     *             2800.,2900.,3000.,3100.,3200.,3300.,
+     *             3400.,3500.,3600.,3700.,3800.,3900.,
+     *             4000.,4100.,4200.,4300.,4400.,4500.,
+     *             4600.,4700.,4800.,4900.,5000.,5100.,
+     *             5200.,5300.,5400.,5500.,5600.,5700.,
+     *             5800.,5900.,6000.,6000. /
+c  si is the conversion factor to si units for entropy.
+      data si / 232.238/
+      ier = 0
+c
+c  Check that 1000 .le. tlo .le. thi .le. 6000 (deg k).
+      if ( 1000.0 .le. tlo ) go to 20
+      write (output,10)
+   10 format('0******** Error, 1000.le.tlo.le.thi.le.6000 violated.')
+      ier = 1
+   20 if ( tlo .le. thi ) go to 30
+      write (output,10)
+      ier = 1
+   30 if ( thi .le. 6000.) go to 40
+      write (output,10)
+      ier = 1
+   40 if ( ier .ne. 1 ) go to 60
+      write (output,50)
+   50 format ('0******** Error inputs out of range in dels')
+      go to 110
+   60 continue
+c
+c  Find bracketing intervals for tlo and thi.
+      do 70 n = 1, 51
+         if (tcp(n).le.tlo.and.tlo.lt.tcp(n+1)) go to 80
+   70    continue
+c
+   80 do 90 m = 1, 51
+         if (tcp(m).le.thi.and.thi.lt.tcp(m+1)) go to 100
+   90    continue
+  100 continue
+      slope1 = ( s(n+1) - s(n) )*0.01
+      slope2 = ( s(m+1) - s(m) )*0.01
+      slo = slope1 * ( tlo - tcp(n) ) + s(n)
+      shi = slope2 * ( thi - tcp(m) ) + s(m)
+      ds = shi - slo
+c
+c  Convert entropy to si units.
+      ds = ds * si
+  110 continue
+      return
+      end
+       subroutine ftbmem (lscm,llcm)
+$if def,in32,1
+       implicit real*8 (a-h,o-z)
+       common /fast/ a(20000)
+       if (lscm .eq. 0) lscm = 30000 + locf(a(1))
+       return
+       end

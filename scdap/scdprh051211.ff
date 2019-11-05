@@ -1,0 +1,399 @@
+*mlist
+       subroutine scdprh
+c
+c  Controls advancement of scdap before call to hydro.
+c
+c  Cognizant engineer: rjw.
+c
+*if def,selap
+       use invtbl
+       use scdmod
+       implicit none
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'scddat.h'
+       include 'scdcom.h'
+       include 'cpmdat.h'
+       include 'coupl.h'
+       include 'fast.h'
+       include 'iocom.h'
+       include 'jundat.h'
+       include 'scrtch.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'alcm.h'
+       include 'debcom.h'
+       include 'iparm.h'
+       include 'intcom.h'
+       include 'scdout.h'
+       include 'slumpv.h'
+       include 'tblsp.h'
+       include 'radata.h'
+       include 'ndxara.h'
+       include 'bconds.h'
+       include 'upccon.h'
+       include 'upcvar.h'
+       include 'statec.h'
+c
+c  Local variables.
+       integer i,il1,il1s,ix,j,jd,jj,js,k,m,nr1,nrd,invloc
+       logical lhelp
+       real ffac,tx,ty
+cc
+       real qrjw,qrjw2,qrjw3,qrjw4
+       integer mmm
+       integer ndbg
+c
+         ndbg=0
+cljs       if(timehy.ge.19000.0.and.timehy.lt.19002.0)ndbg=1
+             if(ndbg.eq.1)then
+             write(output,9005)timehy
+9005         format(' SCDPRH entered; timehy=',e12.6)
+             end if
+c  upsmov must be called before succes is modified in scdadv.
+       if (ntups .ge. 1) call upsmov
+       call scdadv
+       if (succes .eq. 8) return
+       if (ntups.ge.1) call upsdrv
+       if (ncpmsh .gt. 0) then
+         if (invc(1) .ge. 0) then
+           invloc = invc(1)
+         else
+           invloc = inv
+         endif
+         call cour5q (ncevr5,a(ivcnpt),a(iqcopt),a(iqwcpt),a(igmcpt),
+     &   a(inodpt),invloc)
+       endif
+       do j = 1,ncomp
+         nrd = numelm((j-1)*ndax+1)
+         nr1 = nrd + 1
+         do k = 1,2
+           if (k .eq. 2) then
+             if (nsout(j).ge.1 .and. islbot(j).eq.0) then
+               il1s = (ndcomp + nsout(j) - 1)*ndax + 1
+               jd = nsout(j)
+               jj = 1
+               js = 0
+             else
+               il1s = 0
+             endif
+           else
+             il1s = (j - 1)*ndax + 1
+             jd = j
+             jj = nrd
+             js = 1
+           endif
+           il1 = il1s
+           do i = 1,naz
+             if (il1s .ne. 0) then
+               m = nvad(il1) + filndx(4)
+                 if(ndbg.eq.1)then
+                   if(i.eq.2.and.m.eq.34269)then
+                   write(output,9011)j,i,m,volno(m)
+9011               format(' SCDPRH; j=',i5,' i=',i5,
+     &             ' m=',i8, ' volno=',i10)
+                   write(output,9013)timehy,tempg(m),voidf(m),p(m),
+     &             noncn,rhog(m)
+9013               format(' SCDPRH; timehy=',e14.8,' tempg=',e10.4,
+     &             ' voidf=',e10.4,' p=',e10.4,' noncn=',i5,
+     &             ' rhog=',e10.4)
+                   write(output,9015)velg(m),dt
+9015               format(' SCDPRH; velg=',e10.4,' dt=',e10.4)
+                     do mmm=1,noncn
+                     write(output,9015)mmm,gaman(m+mmm-1)
+9017                 format(' SCDPRH; mmm=',i5,' gaman=',e10.4)
+                     end do
+                   end if
+                 end if
+               qrjw = q(m)
+               qrjw2 = qwg(m)
+               qrjw3 = gammaw(m)
+               q(m) = q(m) + scd21(i,jd,k)%qscd
+               qwg(m) = qwg(m) + scd21(i,jd,k)%qwgscd
+               gammaw(m) = gammaw(m) + scd21(i,jd,k)%gamscd
+               gammac(m) = gammac(m) + scd21(i,jd,k)%gamccd
+                 if(ndbg.eq.1)then
+                 if(i.eq.2.and.m.eq.34269)then
+                 write(output,9021)i,jd,k,scd21(i,jd,k)%qscd,
+     &           scd21(i,jd,k)%gamscd,scd21(i,jd,k)%gamccd
+9021             format(' i=',i5,' jd=',i5,' k=',i5,' qscd=',e10.4,
+     &           ' gamscd=',e10.4,' gamccd=',e10.4)
+                 write(output,9023)scd21(i,jd,k)%qwgscd
+9023             format(' SCDPRH; qwgscd=',e10.4)
+                 end if
+                 end if
+               if (help .ne. 0)
+     &         write (12,"(a,i8,3i5,i10,7es13.5/18x,6es13.5)")
+     &         'scdprh01',ncount,j,i,k,volno(m),voidg(m),qrjw,qrjw2,
+     &         qrjw-qrjw2,q(m),qwg(m),q(m)-qwg(m),
+     &         qrjw3,gammaw(m),scd21(i,jd,k)%qscd,scd21(i,jd,k)%qwgscd,
+     &         htssmf(il1),scd21(i,jd,k)%gamscd
+               if (iand(print,64) .ne. 0) then
+                 ix = vctrls(m)
+                 tx = htshff(il1) + htshft(il1)
+                 ty = tx*dfx(jj,js+1,j) - htshff(il1)
+                 htcff(ix) = htcff(ix) + ty*htsasv(il1)
+                 htgwff(ix) = htgwff(ix) + htssmf(il1)*ty
+                 ty = tx*dfx(jj,js+2,j)
+                 htcfg(ix) = htcfg(ix) + ty*htsasv(il1)
+                 htgwfg(ix) = htgwfg(ix) + htssmf(il1)*ty
+                 ty = tx*dfx(jj,js+3,j) - htshft(il1)
+                 htcft(ix) = htcft(ix) + ty*htsasv(il1)
+                 htgwft(ix) = htgwft(ix) + htssmf(il1)*ty
+                 ty = tx*dfx(jj,js+4,j)
+                 htcfp(ix) = htcfp(ix) + ty*htsasv(il1)
+                 htgwfp(ix) = htgwfp(ix) + htssmf(il1)*ty
+                 tx = htshgg(il1) + htshgt(il1) + htshgp(il1)
+                 ty = tx*dfx(jj,js+1,j)
+                 htcgf(ix) = htcgf(ix) + ty*htsasv(il1)
+                 htgcgf(ix) = htgcgf(ix) + htssmg(il1)*ty
+                 ty = tx*dfx(jj,js+2,j) - htshgg(il1)
+                 htcgg(ix) = htcgg(ix) + ty*htsasv(il1)
+                 htgcgg(ix) = htgcgg(ix) + htssmg(il1)*ty
+                 ty = tx*dfx(jj,js+3,j) - htshgt(il1)
+                 htcgt(ix) = htcgt(ix) + ty*htsasv(il1)
+                 htgcgt(ix) = htgcgt(ix) + htssmg(il1)*ty
+                 ty = tx*dfx(jj,js+4,j) - htshgp(il1)
+                 htcgp(ix) = htcgp(ix) + ty*htsasv(il1)
+                 htgcgp(ix) = htgcgp(ix) + htssmg(il1)*ty
+               endif
+             endif
+             il1 = il1 + 1
+             jj = jj + nr1
+           enddo
+         enddo
+       enddo
+       if (ntups.ge.1) then
+c  Add heat transfer from upper plenum structures to adjacent volumes.
+         do j = 1,ntups
+           do k = 1,ntupax(j)
+c  Left surface nodes.
+             m = nvadul(k,j) + filndx(4)
+             qrjw = q(m)
+             qrjw2 = qwg(m)
+             qrjw3 = gammaw(m)
+             q(m) = q(m) + qupl(k,j)
+             qwg(m) = qwg(m) + qwgupl(k,j)
+             gammaw(m) = gammaw(m) + gamupl(k,j)
+             if (help .ne. 0)
+     &       write (12,"(a,i8,2i5,i10,7es13.5/18x,3es13.5)")
+     &       'scdprh02',ncount,j,k,volno(m),voidg(m),qrjw,qrjw2,
+     &       qrjw-qrjw2,q(m),qwg(m),q(m)-qwg(m),
+     &       qrjw3,gammaw(m),gamupl(k,j)
+c  Right surface nodes.
+             m = nvadur(k,j) + filndx(4)
+             qrjw = q(m)
+             qrjw2 = qwg(m)
+             qrjw3 = gammaw(m)
+             q(m) = q(m) + qupr(k,j)
+             qwg(m) = qwg(m) + qwgupr(k,j)
+             gammaw(m) = gammaw(m) + gamupr(k,j)
+             if (help .ne. 0)
+     &       write (12,"(a,i8,2i5,i10,7es13.5/18x,3es13.5)")
+     &       'scdprh03',ncount,k,j,volno(m),voidg(m),qrjw,qrjw2,
+     &       qrjw-qrjw2,q(m),qwg(m),q(m)-qwg(m),
+     &       qrjw3,gammaw(m),gamupr(k,j)
+           enddo
+         enddo
+       endif
+       do j = 1,ncomp
+         if (qinvtp(j) .ne. 0.0) then
+c  Add heat transferred from core debris to volume just above core.
+           m = uhvol(j) + filndx(4)
+           qrjw = q(m)
+           qrjw2 = qwg(m)
+           qrjw3 = gammaw(m)
+           qrjw4 = 0.0
+           q(m) = q(m) + qinvtp(j)
+           if (voidf(m).gt.0.01 .and. (tempg(m) - satt(m)).ge.300.) then
+             gammaw(m) = gammaw(m) + qinvtp(j)*
+     &       (1.0 - voidg(m))*recipv(m)/sathg(m)
+             qrjw4 = qinvtp(j)*
+     &       (1.0 - voidg(m))*recipv(m)/sathg(m)
+           else
+             qwg(m) = qwg(m) + qinvtp(j)
+           endif
+           if (help .ne. 0)
+     &     write (12,"(a,i8,i5,i10,7es13.5/18x,3es13.5)")
+     &     'scdprh04',ncount,j,volno(m),voidg(m),qrjw,qrjw2,qrjw-qrjw2,
+     &     q(m),qwg(m),q(m)-qwg(m),qrjw3,qinvtp(j),qrjw4
+         endif
+       enddo
+       do k = 1,nbypss
+         m = lbypss(k) + filndx(4)
+         qrjw = q(m)
+         qrjw2 = qwg(m)
+         qrjw3 = gammaw(m)
+         q(m) = q(m) + qbps(k)
+         qwg(m) = qwg(m) + qwgbps(k)
+         gammaw(m) = gammaw(m) + qgmbps(k)
+         if (help .ne. 0)
+     &   write (12,"(a,i8,i5,i10,7es13.5/18x,3es13.5)")
+     &   'scdprh05',ncount,k,volno(m),voidg(m),qrjw,qrjw2,qrjw-qrjw2,
+     &   q(m),qwg(m),q(m)-qwg(m),qrjw3,gammaw(m),qgmbps(k)
+       enddo
+c  Heat transfer to fluid in RELAP5 control volumes that represent
+c  embedded flow channels.
+       do j = 1,ncomp
+         do k = 1,naz
+           if (ishdcr(j).eq. 1.and. nodech(j).ge.1) then
+             m = nvechn(k,j) + filndx(4)
+             qrjw = q(m)
+             qrjw2 = qwg(m)
+             qrjw3 = gammaw(m)
+             q(m) = q(m) + qrfl(k,j)
+             qwg(m) = qwg(m) + qwgrfl(k,j)
+             gammaw(m) = gammaw(m) + gamrfl(k,j)
+             if (help .ne. 0)
+     &       write (12,"(a,i8,2i5,i10,7es13.5/18x,3es13.5)")
+     &       'scdprh06',ncount,j,k,volno(m),voidg(m),qrjw,qrjw2,
+     &       qrjw-qrjw2,q(m),qwg(m),q(m)-qwg(m),qrjw3,gammaw(m),
+     &       gamrfl(k,j)
+           endif
+         enddo
+       enddo
+c  If volume representing lower plenum is almost filled with debris,
+c  then stop heat transfer to this volume to avoid severe time step
+c  reduction due to mass error.
+c  Ultimate fixup is to read in data that defines the number of the next
+c  volume above the volume representing the lower plenum and then
+c  transfer heat from debris to  this volume.
+c  Note.  Typical volume of lower plenum is 7 m**3.
+c  This threshold for cutting off heat transfer is the same as that
+c  used in subroutine COUR5Q.
+       do j = 1,ncomp
+cljs
+ctesting
+         qinv(j) = 0.0
+         if (abs(qinv(j)) .le. 1.e-8) then
+c  Add heat transferred by radiation from core debris to lower vessel.
+           m = lhvol(j) + filndx(4)
+           qrjw = q(m)
+           qrjw2 = qwg(m)
+           qrjw3 = gammaw(m)
+           q(m) = q(m) + qinv(j)
+           if (voidg(m) .ge. 0.0001) then
+             ffac = (sathg(m) - sathf(m))/sathg(m)
+             if (tempf(m) .gt. (satt(m) + 1.0)) then
+               ffac = ffac + (1.0 - ffac)*(tempf(m) - satt(m))*0.2
+               if (ffac .gt. 1.0) ffac = 1.0
+             endif
+             qwg(m) = qwg(m) + qinv(j)*voidg(m)
+             gammaw(m) = gammaw(m) + ffac*qinv(j)*(1.0 - voidg(m))*
+     &       recipv(m)/sathg(m)
+             qrjw4 = ffac*qinv(j)*(1.0 - voidg(m))*
+     &       recipv(m)/sathg(m)
+           endif
+           if (help .ne. 0)
+     &     write (12,"(a,i8,i5,i10,7es13.5/18x,3es13.5)")
+     &     'scdprh07',ncount,j,volno(i),voidg(m),qrjw,qrjw2,qrjw-qrjw2,
+     &     q(m),qwg(m),q(m)-qwg(m),qrjw3,gammaw(m),qrjw4
+         endif
+       enddo
+c  Zero out q term for any volume that was part of molten pool.
+       do i = 1,ndcomp
+         do k = 1,ndax
+           if ((lcrucb(k,i).eq.1 .and. nbublk(ncmpgp(i),k).eq.1) .or.
+     &     lcrucb(k,i).eq.2) then
+             m = nvad((i-1)*ndax + k) + filndx(4)
+             q(m) = 0.0
+             qwg(m) = 0.0
+             gammaw(m) = 0.0
+           endif
+         enddo
+       enddo
+       do i = 1,igp
+         do k = 1,naz
+           if (nbublk(i,k).eq.1) then
+             do jj = 1,icp(i)
+               m = nvad((ngpc(i,jj)-1)*ndax+k) + filndx(4)
+               q(m) = 0.0
+               qwg(m) = 0.0
+               gammaw(m) = 0.0
+             enddo
+           endif
+         enddo
+       enddo
+c  RELAP5 volume named to receive debris for first COUPLE mesh is
+c  assumed to be volume that slumping material enters.
+c  Thus invc(1) is invc(mcp=1).
+       if (invc(1).ge.0 .or. inv.ge.0) then
+         if (nsqslp.gt.0 .or. qinslp.ge.1.e-3) then
+c  Add on volumetric vapor generation due to slumping of material
+c  into lower vessel region.
+c  Get index for lower vessel head volume.
+           if (invc(1).ge.0) then
+c  At least one COUPLE mesh defined.
+             m = invc(1) + filndx(4)
+           else
+c  No COUPLE mesh defined.
+             m = inv + filndx(4)
+           endif
+           if (v(m) .ge. 1.e-6) then
+           qrjw = q(m)
+           qrjw2 = qwg(m)
+           qrjw3 = gammaw(m)
+             q(m) = q(m) + qinslp
+             if (voidf(m) .gt. 0.0001) then
+c  Case of user-defined slumping, which may have large lower head volume
+c  that represent part of core region, or else case of small voidg.
+               gammaw(m) = gammaw(m) + qinslp*recipv(m)/sathg(m)
+               qrjw4 = qinslp*recipv(m)/sathg(m)
+             else
+               qwg(m) = qwg(m) + qinslp
+             endif
+             if (help .ne. 0)
+     &       write (12,"(a,i8,i10,7es13.5/18x,3es13.5)")
+     &       'scdprh08',ncount,volno(m),voidg(m),qrjw,qrjw2,qrjw-qrjw2,
+     &       q(m),qwg(m),q(m)-qwg(m),qrjw3,gammaw(m),qrjw4
+           endif
+         endif
+       endif
+c  If a volume is blocked, zero out all heat tranferred to that volume.
+       i = filndx(4)
+       do m = 1,nvols(i)
+         lhelp = .true.
+         jj = invfnd(i)
+         do il1 = 1,invcnt(i)
+           j = invj(jj)%invvnx
+           if (iand(jc(j),32768).ne.0 .or. iand(jc(j),2).eq.0) then
+             lhelp = .false.
+           else
+             if (cmptyp(jcnfnd(j)).eq.9 .or. cmptyp(jcnfnd(j)).eq.12)
+     &       lhelp = .false.
+           endif
+           if (.not.lhelp) exit
+           jj = jj + 1
+         enddo
+         if (lhelp) then
+           vctrlx(i) = ior(vctrlx(i),4096)
+           q(i) = 0.0
+           qwg(i) = 0.0
+           gammaw(i) = 0.0
+           gammac(i) = 0.0
+           ix = vctrls(i)
+           htcff(ix) = 0.0
+           htcfg(ix) = 0.0
+           htcft(ix) = 0.0
+           htcfp(ix) = 0.0
+           htcgf(ix) = 0.0
+           htcgg(ix) = 0.0
+           htcgt(ix) = 0.0
+           htcgp(ix) = 0.0
+           htgwff(ix) = 0.0
+           htgwfg(ix) = 0.0
+           htgwft(ix) = 0.0
+           htgwfp(ix) = 0.0
+           htgcgf(ix) = 0.0
+           htgcgg(ix) = 0.0
+           htgcgp(ix) = 0.0
+           htgcgt(ix) = 0.0
+         else
+           vctrlx(i) = iand(vctrlx(i),not(4096))
+         endif
+         i = i + ivskp
+       enddo
+       return
+       end
+*endif

@@ -1,0 +1,511 @@
+*mlist
+       subroutine tsetsl
+!  Obtains space and sets arrays needed to control loading and
+!  solving of pressure equations.
+!
+!  Cognizant engineer: rjw.
+!
+       use invtbl
+       use lpdatc
+$if def,ma28,1
+       use ma28mod, only: idispc
+       use tstpctc
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+!
+       interface 
+!
+       subroutine ma28ad (n,nz,a,licn,irn,lirn,icn,u,ikeep,iw,w,iflag)
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer n,nz,licn,lirn,iflag
+       real(kr) a(:),u,w(:)
+       integer icn(:),ikeep(:,:),irn(:),iw(:,:)
+       end subroutine ma28ad
+!
+       subroutine pminvd (a,ind,iw,n,np,g,ux,ia)
+$if def,in32,1
+       implicit none
+       integer n,np,ia
+       real a(:),g,ux
+       integer ind(:,:),iw(:,:)
+       end subroutine pminvd
+!
+       end interface
+!
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'temp3d.h'
+       include 'lvectr.h'
+       include 'rflhtc.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       real(kr), allocatable :: ma28a(:)
+       integer i2,j2,k2
+       integer i,iend,ii,iii,iiip,iip,ijc,ijx1,ijx2,ilim,ivoff,ivc,
+     & ivv,ix,ix2,ixvfm,j,js,jx,jxm,k,l,l1,l2,lcn,lcontg,
+     & ln,lnz,lrn,ls,lsv,lx1,lx2,m,mm,mxcvl,mxicn,mxirn,mxn,mxnz,mxnz2,
+     & n,nn,nx
+       integer nvarp
+       real ftbnid
+       logical lphlp,tsp,tdo
+c
+c  Find out if two step will be used.
+       tsp = .false.
+       do i = 1,curclm
+         tsp = tsp .or. iand(tstpct(i)%tsppac,40) .ne. 0
+       enddo
+c  Test if matrix strategy file exists.
+       tdo = .true.
+       if (allocated(lpr)) then
+         if (iand(iextra,1).eq.0 .and. (.not.tsp .or. ma28tsp) .and.
+     &   (chngno(33).eqv.ma28used)) tdo = .false.
+       endif
+c
+       if (tdo) then
+c  Create file to control sparse matrix solution.
+         call lpdatclear (.false.)
+         ma28tsp = tsp
+         ma28used = chngno(33)
+         if (ma28used) allocate (ma28p(nloops,3),ma28idisp(2,nloops,3))
+c  Set sparse matrix controls for volume oriented solution.
+         if (.not.ma28tsp) then
+           i = 1
+         else
+           i = 2
+         endif
+         allocate (lpr(nloops,i))
+         if (tsp) allocate (lps(nloops))
+         do issys = 1,nloops
+c  Set indexes for arrays proportional to number of unknowns.
+           lpdat(issys)%nvr(1) = lpdat(issys)%livn
+           lpdat(issys)%nvrp(1) = lpdat(issys)%nvr(1) + 1
+           if (lvtvol(lpdat(issys)%llvect) .ne. 0) then
+             j = lvptr(lvtvol(lpdat(issys)%llvect))
+           else
+             j = 0
+           endif
+           lpdat(issys)%nnz(1) = lpdat(issys)%nvr(1) +
+     &     2*lpdat(issys)%lijn - j
+           allocate (lpr(issys,1)%ipr(lpdat(issys)%nvrp(1)),
+     &     lpr(issys,1)%ip(lpdat(issys)%nvrp(1),5),
+     &     lpr(issys,1)%irnr(lpdat(issys)%nnz(1)))
+           ivoff = lpdat(issys)%livnn - 1
+c  Set irnr and ipr arrays which describe location of nonzeros.
+           j = 1
+           ii = 1
+           i = lpdat(issys)%liv
+           do ivc = 1,lpdat(issys)%livn
+             lpr(issys,1)%ipr(ii) = j
+             lpr(issys,1)%irnr(j) = ii
+             js = j
+             j = j + 1
+             if (iand(vctrl(i),1) .eq. 0) then
+               k = lpdat(issys)%lij
+               lp1: do ijc = 1,lpdat(issys)%lijn
+                 if (ij1vn(k) - ivoff .eq. ii) then
+                   m = ij2vn(k) - ivoff
+                 else
+                   if (ij2vn(k) - ivoff .ne. ii) go to 10
+                   m = ij1vn(k) - ivoff
+                 endif
+                 jxm = j - 1
+                 do nx = js,jxm
+                   if (lpr(issys,1)%irnr(nx) .eq. m) go to 10
+                 enddo
+                 nx = j
+                 j = j + 1
+                 do
+                   if (lpr(issys,1)%irnr(nx-1) .lt. m) exit
+                   lpr(issys,1)%irnr(nx) = lpr(issys,1)%irnr(nx-1)
+                   nx = nx - 1
+                   if (nx .le. js) exit
+                 enddo
+                 lpr(issys,1)%irnr(nx) = m
+   10            k = k + ijskp
+               enddo lp1
+             endif
+             ii = ii + 1
+             i = i + ivskp
+           enddo
+           lpr(issys,1)%ipr(ii) = j
+           j = j - 1
+           if (lpdat(issys)%nnz(1) .lt. j) stop "tsetsl-1"
+cc         lpdat(issys)%nnz(1) = j
+c  Set sparse matrix controls for two velocity equations per junction.
+c  Set indexes for arrays proportional to number of unknowns.
+           lpdat(issys)%nvr(2) = 2*lpdat(issys)%lijn
+           lpdat(issys)%nvrp(2) = lpdat(issys)%nvr(2) + 1
+           if (tsp) then
+             j = -lpdat(issys)%lijn
+             i = lpdat(issys)%lij
+             do ivc = 1,lpdat(issys)%lijn
+               ii = ij1nx(i)
+               j = j + invcnt(ii)
+               ii = ij2nx(i)
+               j = j + invcnt(ii)
+               i = i + ijskp
+             enddo
+             lpdat(issys)%nnz(2) = 4*j
+c  Set irnr and ipr arrays which describe location of nonzeros.
+             allocate (lpr(issys,2)%ipr(lpdat(issys)%nvrp(2)),
+     &       lpr(issys,2)%ip(lpdat(issys)%nvrp(2),5),
+     &       lpr(issys,2)%irnr(lpdat(issys)%nnz(2)))
+             j = 1
+             ii = 1
+             i = lpdat(issys)%lij
+             do ivc = 1,lpdat(issys)%lijn
+               iip = ii + 1
+               lpr(issys,2)%ipr(ii) = j
+               lpr(issys,2)%ipr(ii+1) = lpr(issys,2)%ipr(ii) + 2
+               lpr(issys,2)%irnr(j) = ii
+               lpr(issys,2)%irnr(j+1) = iip
+               lpr(issys,2)%irnr(j+2) = ii
+               lpr(issys,2)%irnr(j+3) = iip
+               js = j
+               jxm = j + 1
+               j = j + 4
+               iii = 1
+               k = lpdat(issys)%lij
+               do ijc = 1,lpdat(issys)%lijn
+                 if (iii .eq. ii) go to 63
+                 if (ij1vn(k).ne.ij1vn(i) .and. ij1vn(k).ne.ij2vn(i))
+     &           then
+                   if (ij2vn(k).ne.ij1vn(i) .and. ij2vn(k).ne.ij2vn(i))
+     &             go to 63
+                 endif
+                 do nx = js,jxm,2
+                   if (lpr(issys,2)%irnr(nx) .eq. iii) go to 63
+                 enddo
+                 iiip = iii + 1
+                 nx = j
+                 j = j + 4
+                 jxm = jxm + 2
+                 do
+                   if (lpr(issys,2)%irnr(nx-1) .lt. iii) exit
+                   lpr(issys,2)%irnr(nx+3) = lpr(issys,2)%irnr(nx-1)
+                   lpr(issys,2)%irnr(nx+2) = lpr(issys,2)%irnr(nx-2)
+                   nx = nx - 2
+                   if (nx .le. jxm) exit
+                 enddo
+                 lpr(issys,2)%irnr(nx+2) = iii
+                 lpr(issys,2)%irnr(nx+3) = iiip
+                 do
+                   if (nx .le. jxm) then
+                     if (lpr(issys,2)%irnr(nx-1) .lt. iii) exit
+                   endif
+                   lpr(issys,2)%irnr(nx+1) = lpr(issys,2)%irnr(nx-1)
+                   lpr(issys,2)%irnr(nx) = lpr(issys,2)%irnr(nx-2)
+                   nx = nx - 2
+                   if (nx .le. js) exit
+                 enddo
+                 lpr(issys,2)%irnr(nx) = iii
+                 lpr(issys,2)%irnr(nx+1) = iiip
+                 lpr(issys,2)%ipr(ii+1) = lpr(issys,2)%ipr(ii+1) + 2
+   63            iii = iii + 2
+                 k = k + ijskp
+               enddo
+               ii = ii + 2
+               i = i + ijskp
+             enddo
+             lpr(issys,2)%ipr(ii) = j
+             j = j - 1
+             if (lpdat(issys)%nnz(2) .lt. j) stop "tsetsl-2"
+cc           lpdat(issys)%nnz(2) = j
+c  Set pointers for volume-junction**2 loop.
+             j = 0
+             i = lpdat(issys)%liv
+             do mm = 1,lpdat(issys)%livn
+               j = j + invcnt(i)*invcnt(i)
+               i = i + ivskp
+             enddo
+             lpdat(issys)%nvjsq = j
+             lpdat(issys)%nivrn = j + 2*lpdat(issys)%lijn
+             allocate (lps(issys)%ivrn(lpdat(issys)%nivrn))
+             ivoff = njcn(lpdat(issys)%lic) - 1
+             i = lpdat(issys)%liv
+             j = 1
+             do mm = 1,lpdat(issys)%livn
+               l = invfnd(i)
+               if (invcnt(i) .ne. 0) then
+                 lsv = l
+                 do ix = 1,invcnt(i)
+                   l1 = 2*(invj(l)%invvno - ivoff) - 1
+                   l2 = 1 + l1
+                   lx1 = lpr(issys,2)%ipr(l2-1)
+                   n = lpr(issys,2)%ipr(l2) - lx1
+                   lps(issys)%ivrn(j) = n
+                   j = j + 1
+                   nn = 1
+                   lx2 = lx1
+                   ls = lsv
+                   do ix2 = 1,invcnt(i)
+                     l2 = 2*(invj(ls)%invvno - ivoff) - 1
+                     lphlp = .false.
+                     do ivv = nn,n,2
+                       if (lpr(issys,2)%irnr(lx2) .eq. l2) then
+                         lphlp = .true.
+                         exit
+                       endif
+                       lx1 = lx1 + 2
+                       lx2 = lx2 + 2
+                     enddo
+                     if (.not.lphlp) call fabend
+                     nn = ivv
+                     lps(issys)%ivrn(j) = lx1
+                     j = j + 1
+                     ls = ls + 1
+                   enddo
+                   l = l + 1
+                 enddo
+               endif
+               i = i + ivskp
+             enddo
+           endif
+c  Find out how much space is needed to factor matrices.
+           if (.not.chngno(33) .and. .not.chngno(34)) then
+c  Sparse matrix method or ssor.
+             do ls = 1,2
+               if (ls.eq.1 .or. tsp) then
+                 lpdat(issys)%nnz2(ls) = 5*lpdat(issys)%nnz(ls)
+                 allocate (coefp(lpdat(issys)%nnz2(ls)),
+     &           maipx(lpdat(issys)%nvrp(ls),13),
+     &           irnx(lpdat(issys)%nnz2(ls),2))
+                 do i = 1,lpdat(issys)%nvrp(ls)
+                   maipx(i,1) = lpr(issys,ls)%ipr(i)
+                 enddo
+                 do i = 1,lpdat(issys)%nnz(ls)
+                   irnx(i,1) = lpr(issys,ls)%irnr(i)
+                   coefp(i) = -1.0e-6
+                 enddo
+                 do i = 1,lpdat(issys)%nvr(ls)
+                   do ii = maipx(i,1),maipx(i+1,1)-1
+                     if (irnx(ii,1) .eq. i) coefp(ii) = 1.0
+                   enddo
+                 enddo
+                 call pminvd (coefp,irnx,maipx,lpdat(issys)%nvr(ls),
+     &           lpdat(issys)%nvrp(ls),gerr,0.25,lpdat(issys)%nnz2(ls))
+                 if (gerr .lt. 0.0) go to 200
+                 lpdat(issys)%nnz2(ls) =
+     &           2*maipx(lpdat(issys)%nvr(ls)+1,1)
+                 deallocate (coefp,irnx,maipx)
+               endif
+             enddo
+c  Set indexes of irn arrays needed for hydrodynamic solution.
+             allocate (lpr(issys,1)%irn(lpdat(issys)%nnz2(1)))
+             if (tsp) then
+               allocate (lpr(issys,2)%irn(lpdat(issys)%nnz2(2)))
+             endif
+c  Initialize advancement controls.
+             lpdat(issys)%sflag(1:2) = .true.
+$if def,ma28
+           elseif (chngno(33)) then
+             do ls = 1,2
+               if (ls.eq.1 .or. tsp) then
+                 lrn = lpdat(issys)%nnz(ls) + lpdat(issys)%nnz(ls)/2
+                 lcn = 10*lpdat(issys)%nnz(ls)
+                 lnz = lpdat(issys)%nnz(ls)
+                 ln = lpdat(issys)%nvr(ls)
+                 allocate (ma28a(lcn),ma28p(issys,ls)%icn(lcn),
+     &           ma28irn(lrn),ma28p(issys,ls)%ikeep(ln,5),ma28iw(ln,8),
+     &           ma28w(ln))
+                 j = 1
+                 do i = 1,ln
+                   do m = lpr(issys,ls)%ipr(i),
+     &             lpr(issys,ls)%ipr(i+1)-1
+                     ma28irn(j) = i
+                     j = j + 1
+                   enddo
+                 enddo
+                 ma28p(issys,ls)%icn(1:lnz) = lpr(issys,ls)%irnr(1:lnz)
+                 do i = 1,lnz
+                   if (ma28irn(i) .eq. ma28p(issys,ls)%icn(i)) then
+                     ma28a(i) = 1.0
+                   else
+                     ma28a(i) = 1.0e-3
+                   endif
+                 enddo
+                 call ma28ad (ln,lnz,ma28a,lcn,ma28irn,lrn,
+     &           ma28p(issys,ls)%icn,0.1,ma28p(issys,ls)%ikeep,ma28iw,
+     &           ma28w,m)
+                 deallocate (ma28a,ma28p(issys,ls)%icn,ma28irn,
+     &           ma28p(issys,ls)%ikeep,ma28iw,ma28w)
+                 if (m .lt. 0) go to 200
+                 lpdat(issys)%llicn(ls) = 2*idispc(2)
+                 lpdat(issys)%lirn(ls) = lrn
+                 allocate (ma28p(issys,ls)%icn(lpdat(issys)%llicn(ls)),
+     &           ma28p(issys,ls)%ikeep(ln,5))
+               endif
+             enddo
+             if (tsp) then
+               lpdat(issys)%llicn(3) = lpdat(issys)%llicn(1)
+               lpdat(issys)%lirn(3) = lpdat(issys)%lirn(1)
+               allocate (ma28p(issys,3)%icn(lpdat(issys)%llicn(3)),
+     &         ma28p(issys,3)%ikeep(lpdat(issys)%nvr(1),5))
+             endif
+             lpdat(issys)%mflag(:) = .true.
+$endif
+           else
+             call fabend
+           endif
+         enddo
+       endif
+c
+c  Set indexes of other arrays needed for hydrodynamic solution.
+       filid(1) = -ftbnid(1)
+       filsiz(1) = lcontg(1)
+       call ftbrsv (filid(1),filsiz(1),-1,filndx(1))
+       ilim = filndx(1) + filsiz(1)
+       ixpc = filndx(1)
+       jx = ixpc + lhtsol
+       if (.not.chngno(33) .and. .not.chngno(34)) then
+         mxn = 0;  mxnz2 = 0;  mxcvl = 0
+         do issys = 1,nloops
+           mxn = max(mxn,lpdat(issys)%nvr(1))
+           mxnz2 = max(mxnz2,lpdat(issys)%nnz2(1))
+           if (tsp) then
+             mxn = max(mxn,lpdat(issys)%nvr(2))
+             mxnz2 = max(mxnz2,lpdat(issys)%nnz2(2))
+             ii = 2
+$if def,mmfld,1
+             if (lpdat(issys)%lnoncn .ne. 0) ii = 3
+             mxcvl = max(mxcvl,ii*lpdat(issys)%nvjsq)
+           endif
+         enddo
+         allocate (coefp(mxnz2),coefx(mxnz2),sourcp(mxn),
+     &   maipx(mxn+1,13),ma28w(mxn+1),irnx(mxnz2,2))
+         if (tsp) allocate (cvelfg(mxcvl))
+$if def,ma28
+       elseif (chngno(33)) then
+         mxn = 0; mxnz = 0; mxirn = 0; mxicn = 0; mxcvl = 0
+         do issys = 1,nloops
+           mxn = max(mxn,lpdat(issys)%nvr(1))
+           mxnz = max(mxnz,lpdat(issys)%nnz(1))
+           mxirn = max(mxirn,lpdat(issys)%lirn(1))
+           mxicn = max(mxicn,lpdat(issys)%llicn(1))
+           if (tsp) then
+             mxn = max(mxn,lpdat(issys)%nvr(2))
+             mxnz = max(mxnz,lpdat(issys)%nnz(2))
+             mxirn = max(mxirn,lpdat(issys)%lirn(2))
+             mxicn = max(mxicn,lpdat(issys)%llicn(2))
+             ii = 2
+$if def,mmfld,1
+             if (lnoncn(issys) .ne. 0) ii = 3
+             mxcvl = max(mxcvl,ii*lpdat(issys)%nvjsq)
+           endif
+         enddo
+         allocate (coefp(mxicn),ma28as(mxnz),sourcp(mxn),ma28w(mxn),
+     &   ma28irn(mxirn),ma28jvect(mxnz),ma28iw(mxn,8))
+         if (tsp) allocate (cvelfg(mxcvl))
+$endif
+       else
+         call fabend
+       endif
+!  Set beginning of volume and junction scratch space.
+       ixvf = jx
+       ixvfm = ixvf - scskp
+c  Include heat structure requirements in storage requirements.
+       iend = ixvf + scskp*max(nvols(filndx(4)),njuns(filndx(5)))
+       if (iend .gt. ilim) go to 202
+c  Set indexes for computing and storing matrix elements.
+       do issys = 1,nloops
+c  Set pointer to diagonal element for volume loop in preseq.
+         ivoff = lpdat(issys)%livnn - 1
+         ivv = lpdat(issys)%liv
+         do i = 1,lpdat(issys)%nvr(1)
+           lphlp = .false.
+           do k = lpr(issys,1)%ipr(i),lpr(issys,1)%ipr(i+1)-1
+             if (lpr(issys,1)%irnr(k) .ne. i) cycle
+             vctrld(ivv) = k
+             lphlp = .true.
+             exit
+           enddo
+           if (.not.lphlp) call fabend
+           ivv = ivv + ivskp
+         enddo
+c  Set pointers for junction loop in preseq.
+         j = lpdat(issys)%lij
+         do ijc = 1,lpdat(issys)%lijn
+           ijx1 = ij1vn(j) - ivoff
+           ijx2 = ij2vn(j) - ivoff
+           jcnx1(j) = ixvfm + ij1vn(j)*scskp
+           jcnx1(j+1) = ixvfm + ij2vn(j)*scskp
+           m = lpr(issys,1)%ipr(ijx1)
+           n = lpr(issys,1)%ipr(ijx1+1) - 1
+           do k = m,n
+             if (lpr(issys,1)%irnr(k) .eq. ijx1) then
+               jcnx2(j) = k
+               exit
+             endif
+           enddo
+           do k = m,n
+             if (lpr(issys,1)%irnr(k) .eq. ijx2) then
+               jcnx3(j) = k
+               exit
+             endif
+           enddo
+           m = lpr(issys,1)%ipr(ijx2)
+           n = lpr(issys,1)%ipr(ijx2+1) - 1
+           do k = m,n
+             if (lpr(issys,1)%irnr(k) .eq. ijx2) then
+               jcnx2(j+1) = k
+               exit
+             endif
+           enddo
+           do k = m,n
+             if (lpr(issys,1)%irnr(k) .eq. ijx1) then
+               jcnx3(j+1) = k
+               exit
+             endif
+           enddo
+           j = j + ijskp
+         enddo
+c  Set pointers for diagonal element in ipr.
+         if (tsp) then
+           j = lpdat(issys)%lij
+           js = 0
+           do i = 1,lpdat(issys)%nvr(2)
+             lphlp = .false.
+             do k = lpr(issys,2)%ipr(i),lpr(issys,2)%ipr(i+1)-1
+               if (lpr(issys,2)%irnr(k) .eq. i) then
+                 lphlp = .true.
+                 exit
+               endif
+             enddo
+             if (.not.lphlp) then
+c              write(output,*)'lplr(issys,2)%irnr(k),k,i',
+c    &         lplr(issys,2)%irnr(k),k,i
+               call fabend
+             endif
+             jcnxd(j+js) = k
+             if (js .eq. 0) then
+               js = 1
+             else
+               js = 0
+               j = j + ijskp
+             endif
+           enddo
+         endif
+       enddo
+c  Return excess space.
+       filsiz(1) = iend - filndx(1)
+       call ftbsft (filid(1),filsiz(1),3,filndx(1))
+       return
+c
+  200  write (output,2000)
+ 2000  format ('0******** Insufficient space for hydrodynamics solution
+     &arrays and scratch space.')
+       go to 999
+  202  ilim = iend - ilim
+       write (output,2002) ilim
+ 2002  format ('0******** Insufficient space for',i8,' words of scratch
+     &space.')
+  999  fail = .true.
+       return
+       end

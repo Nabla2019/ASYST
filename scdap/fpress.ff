@@ -1,0 +1,132 @@
+*mlist
+      subroutine fpress (gasms, vtvod)
+c
+c  fpress performs the fuel rod internal gas pressure calculation
+c  based on application of the ideal gas law.
+c
+c  Cognizant engineer: ewc (txh gxh).
+c
+c Modification history
+c  T. Haste and G. Hodson, Winfrith,7/89 to allow external volumes
+c  E.W. Coryell 7/94 to use common blocks and allow lower plenum
+c
+c     calling subroutines:  fuelan
+c
+c     input variables                  description
+c        gasms          gas inventory = fill gas +released fission gases
+c                         ( gm mole )
+c
+c     i/o variables                    description
+c        vtvod          fuel void volumes in axial zones ( m3 )
+c        vtvod0         fuel void volumes at last time step ( m3 ) for
+c                         naz(icomp) axial zones
+c
+c     local variables                  description
+c        cp             correction factor for calculation of relative
+c                         plenum volume,
+c        fstd           fabricated plenum length related to fabricated
+c                         fuel stack length, standard
+c        rfv            relative fuel void volume,related to
+c                         as-fabricated fuel void volume
+c        rp             relative plenum volume
+c        tcavrd         fuel (or component) temperature ( k ) averaged
+c                         over nrcond radial nodes
+c        tp             plenum gas temperature ( k )
+c        vgap           additional gap volume caused by cladding
+c                         ballooning ( m3 )
+c
+      implicit none
+*call contrl
+*call scddat
+*call farays
+*call intcom
+*call iocom
+*call miscon
+*call ptscom
+*call ndxara
+*call scdcom
+*call scdout
+*call trnot1
+c  Local variables.
+      real gasms, vtvod
+      dimension vtvod(ndax)
+      real tcavrd
+      dimension tcavrd(ndax)
+      integer n,numm1
+      real cp,fstd,fvt,rfv,rp,tcld,tp,vgap,tpl,vplenl
+      real avfunc,rfvoid,rplen,brntot,brnave
+      real fvte,vplenx
+      external avfunc,rfvoid,rplen,intvol
+c
+c if failed cladding set pressure to coolant pressure and return
+      if( ibrch(icomp) .gt. 0 ) then
+        pgas(icomp)= pcool
+        return
+      endif
+c intact cladding
+c  radial and axial averaging of fuel temperatures
+      do 10 n=1,naz
+        tcavrd(n)= avfunc(ngeom(icomp),xcond3(1,n,icomp),
+     &        tcond3(1,n,icomp),nrcond2(n,icomp))
+   10   continue
+c calculation of upper & lower plenum gas temperature (tp & tpl)
+      tp=tcond3(nrods2(naz,icomp),naz,icomp)+6.
+      tpl=tcond3(nrods2(naz,icomp),1,icomp)+6.
+c calculation of plenum volume vplen
+c rp = relative plenum volume ( related to as-fabricated plenum volume )
+      if (nvirn.ge.3) then
+        rp= 0.
+        do 20 n=1,naz
+   20     rp=rp+rplen(tcavrd(n),burnup2(n,icomp)) *  dzcnd2(n,icomp)
+        vplen(icomp)= rp*vpleni(icomp)/rl(icomp)
+      else
+        if( tp .le. 750. .or. pcool .lt. pgas(icomp) ) then
+          rp= 0.
+          do 40 n=1,naz
+   40       rp= rp +rplen(tcavrd(n),burnup2(n,icomp)) * dzcnd2(n,icomp)
+          rp= rp/rl(icomp)
+        else
+          brntot = 0.0
+          do 50 n=1,naz
+   50       brntot = brntot + burnup2(n,icomp)
+          brnave = brntot/real(naz)
+          rp= rplen(tp,brnave)
+        endif
+c approximative correction of plenum volume for rods with as-fabricated
+c fuel stack and/or plenum lengths differing from standard geometies
+        fstd= 4.727e-2
+        if( nvirn .eq. 2 ) fstd= 11.093e-2
+        cp= fstd * rl(icomp)/pllnth(icomp)
+        rp= 1. +cp * (rp - 1.)
+        vplen(icomp)= rp * vpleni(icomp)
+      endif
+c calculation of fuel void volumes
+c rfv = fuel void volume relative to as-fabricated fuel void volume
+      fvt= 0.
+      fvte=0.
+      do 70 n=1,naz
+        numm1= nrods2(n,icomp) -1
+        tcld = tcond3(numm1,n,icomp)
+        rfv = rfvoid(nvirn,tcld,tcavrd(n),burnup2(n,icomp),pcool,
+     &         pgas(icomp))
+        voidfu(ndax * ( icomp - 1 ) + n) = rfv
+        vgap = vtvod( n ) - vfvod0( n )
+        if(npsw .ne. 0) vgap = 0.0
+        vfvod2(n,icomp) = rfv * vfvodi2(n,icomp) *dzcnd2(n,icomp)
+        fvt = fvt + (vfvod2(n,icomp) + vgap)/tcavrd(n)
+   70   continue
+c include external free volumes.
+      call intvol(timehy,fvte)
+c gas pressure calculation
+c ignore standard input volume for this component
+c if external volume data read in.
+      if (nvinp(icomp).eq.0) then
+        vplenx=vplen(icomp)
+        vplenl=vlplen(icomp)
+      else
+        vplenx=0.0
+        vplenl=0.0
+      end if
+      pgas(icomp)= 8.314*gasms/(vplenx/tp+vplenl/tpl+fvt+fvte )
+      return
+      end

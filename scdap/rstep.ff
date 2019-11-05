@@ -1,0 +1,161 @@
+*mlist
+*if def,selap
+       subroutine rstep(icomp)
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: ewc.
+*in32 idat
+*in32end
+c
+       implicit none
+*call alcm
+*call iparm
+*call parm
+*call fast
+*call contrl
+*call comctl
+       external titl
+*call ufiles
+      integer i, icomp,inext,nstart,ndata,knt
+      integer l6(10),l6a(7),l7(12),l7a(31)
+      integer idat(25)
+      real rdat(25)
+      equivalence (idat(1),rdat(1))
+      data l6 /7*0,3*1/
+      data l6a /6*0,1/
+      data l7 /0,0,4,6,0,1,1,1,0,0,1,1/
+      data l7a /31*0/
+c
+c     input routine for heat conduction control parameters
+      tempin = 0.
+      nnli = 10
+      rlxn = 0.0
+      contr = 0.0
+      amult = 2.0
+      call titl
+      write (output,2000)
+ 2000 format(/'control information')
+c *************************************************
+c use inp routines to read control parameters
+c ***********************************************
+c
+c 5m060000 Temperature control card
+      l6(1)=50060000+1000000*icomp
+      l6(2)=0
+      l6(3)=4
+      l6(4)=4
+      l6(5)=0
+      l6(6)=1
+      call inp2(fa(filndx(1)),rdat,l6)
+      if (l6(6) .gt. 0) then
+        ncld = idat(1)
+        rlxn = rdat(2)
+        contr= rdat(3)
+        alhir= rdat(4)
+      endif
+c 4m060001-99
+c this card will be changed when full temperature mesh
+c  capabilities are added
+      l6a(1)=50060001+1000000*icomp
+      l6a(2)=l6a(1)+98
+      l6a(3)=1
+      l6a(4)=1
+      l6a(5)=0
+      l6a(6)=1
+      call inp2(fa(filndx(1)),rdat,l6a)
+      if (l6a(6) .gt. 0) then
+        tempin = rdat(1)
+      endif
+c 5ccc0700 Description of the lower head
+      l7(1)=50070000+1000000*icomp
+      dradis=1.
+      dh=0.15
+      lhead=1
+      nnli=10
+      dradin=0.
+      depthp=0.
+      if(npp.eq.1)l7(3)=6
+      call inp2(fa(filndx(1)),rdat,l7)
+      if (l7(6) .gt. 0) then
+        dradis = rdat(1)
+        dh = rdat(2)
+        lhead = idat(3)
+        nnli = idat(4)
+        if(nnli.eq.1)then
+          if(l7(6) .le. 4)then
+            fail=.true.
+            write(output,2030)l7(1)
+ 2030 format('0******** Card ',i9,' - Insufficient Data.')
+          else
+            dradin = rdat(5)
+          endif
+        endif
+        if(l7(6) .eq. 6) depthp = rdat(6)
+      else
+        fail=.true.
+      endif
+c 5ccc0701-99 user defined layers of the couple mesh
+      l7a(1) = 50070001 + icomp*1000000
+      l7a(2) = -l7a(1) - 98
+      knt = 0
+   51 call inplnk(l7a(1),inext,nstart,ndata,fa(filndx(1)))
+      if(ndata.eq.0.) then
+        if(inext.le.abs(l7a(2)) )then
+          l7a(1)=inext
+          goto 51
+        endif
+      else
+        knt=knt+1
+        natrop=1
+        l7a(2)=0
+        l7a(3)=1
+        l7a(4)=25
+        l7a(5)=0
+        l7a(6)=1
+        call inp2(fa(filndx(1)),rdat,l7a)
+        if(l7a(6).lt.0)then
+          fail=.true.
+          return
+        endif
+        iafp(inelms+knt)=l7a(6)
+        do 52 i=0,l7a(6)-1
+  52      iafp(ilayer+(knt*25)+i)=rdat(i+1)
+        l7a(1)=inext
+        goto 51
+      endif
+c *************************************************
+c  end of input
+c *************************************************
+      dh=dh*uncon
+      depthp=depthp*uncon
+      dradin=dradin*uncon
+      write(output,2025)dradin
+ 2025 format (/'Inner radius of region that receives relocated',
+     # ' material=',e12.6)
+      if (nslph .ge. 0) height = dh
+      alhir = alhir*uncon
+      dradis = dradis*uncon
+      if(rlxn.eq.0.0.and.rlxo.eq.0.0) rlxn=1.0
+      if(rlxn.gt.1.0) rlxn=1.0
+      rlxo=1.0-rlxn
+      if(contr.le.0.0) contr=1.0
+      if(nnli.le.0) nnli = 10
+      if (ncld.ne.1 .and. ncld.ne.2) ncld = 0
+      write (output,2020) ncld, tempin, lhead, nnli, rlxn, contr,
+     +              dradis,dh,alhir
+ 2020 format (5x,'melt progression opt =',i5/
+     #  5x,'initial temperature  =',f10.4/
+     * 5x,'lower head flag      =',i5/
+     6 5x,'num of iterations    =',i5/
+     * 5x,'relaxation parameter =',f5.3/
+     * 5x,'convergence parameter=',f5.3/
+     # 5x,'outer radius of region that receives relocated material=',
+     # 1p,e13.6/
+     # 5x,'height of surface supporting debris=',e13.6/
+     * 5x,'radius lower head(id)=',e13.6/)
+       if(depthp.ne.0.)write(output,2027)depthp
+ 2027  format (/'Depth of plane for nonaxisymmetric geometry=',e10.4)
+      return
+      end
+*endif

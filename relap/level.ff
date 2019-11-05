@@ -1,0 +1,1617 @@
+*mlist
+       subroutine level(icheck)
+!
+!  Tracks two-phase level in 1-D vertical components.
+!
+!  Cognizant engineer: kuo,wlw
+c
+c  Purpose --
+c    perform calculations to detect a two-phase level within a
+c      hydrodynamic cell.
+c    compute level propagation velocity, above-level void fraction,
+c      below-level void fraction, and level position related to
+c      the bottom of the cell.
+c    set level flags.
+c  icheck = 0, level calculation at end of advancement, compute
+c     level position at end of advancement and move to adjacent volume
+c     if appropriate
+c  icheck = 1, level calculation at beginning of time step, project
+c     level position at end of time step and move to adjacent volume
+c     if appropriate
+c  New volume variables
+c    voidla   void fraction above the two-phase level
+c    voidao
+c    voidlb   void fraction below the two-phase level
+c    voidbo
+c    vlev    velocity of the two-phase level movement
+c    dlev    location of the two-phase level
+c    dlevo
+c  Parameters define the existance of two-phase level
+c    dvoidc  critical void difference
+c    dvoidi  critical void difference for inverse profile
+c    voidlt  void fraction limit for volume
+c
+c    this subroutine consists of three main blocks.
+c    1) the first block determines the level position, either by
+c       examination on the level criteria ( icheck = 0 ), or by
+c       extrapolation of the level position( icheck = 1 ).
+c    2) the second block detemines the pressure gradient correction
+c       term for each volume containing a level after propigating
+c       the level to the adjacent volume if the level position
+c       determined in the first block lies outside of the volume. The
+c       junctions effected by either level movement or by level
+c       appearance are marked for processing by the next block.
+c    3) the velocities in the junctions marked by the second block
+c       are recomputed to be consistant with the level positions.
+c     the first two blocks are contained in a loop over all volumes
+c     while the second loop is over a list containing the indices
+c     of the junctions marked by the loop over volumes.
+c
+       use invtbl
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'eccmxc.h'
+       include 'jundat.h'
+       include 'levtbl.h'
+       include 'lvectr.h'
+       include 'przdat.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'lvel.h'
+c
+c  Local variables.
+       integer i,ibot,itop,j,jbot,ifrmto,jtop,jx,jxx,jtype,
+     & jvx,jupdw,jupdwb,jupdwt,l,loop,m,mm,ll,jlx,lj,iconv,mj
+       integer l4,k,kf,k4,lf,il,icheck,iter,itmax,iare,iarb,
+     & ilv,ilvb,ilvtp,ilvbt,ilvbtp,ilvbbt,icross,ilvl,ilvk,lk
+       real ck,cinf,co,dll,dmax,fctr,flxfm,flxg,flxgm,
+     & flxm,glent,testa,testb,vcrt,vfm,vfp,vgj,vgm,vgp,
+     & rhofg,flxfj,flxgj,sum,eps,dtl,voida,voidb,alpa,alpb,cfac,
+     & vlevc,svlev,epsa,epsb
+       real  voidgb,voidgt,voidfb,voidft,dvol,dalp
+       real x,gvis,visl,vism,gm,rem,fjunfk,fjunrk,
+     & delpza,delpzz,vpgnxx,virmas,scrach,ravrt,
+     & fijdv,figvj,fifvj,fij1,alpg,alpf,det,c0,c1,rhofga
+       real dpgza,dpfza,dpgzz,dpfzz
+       real psld1(1)
+       equivalence (psld1(1),fa(102))
+       logical offmod
+       data offmod/.false./
+c
+c  Data statements.
+       data eps/1.0e-04/,itmax/20/
+c
+       lk = lpdat(issys)%levstk
+c  Loop over volumes.
+       if( levskn(lk).gt.0 ) then
+       do 266 m = 1,levskn(lk)
+         if( levskl(lk).ne.0 ) then
+           i = levskl(lk)
+         else
+           i = levskh(lk)
+         endif
+         if( icheck.eq.0 ) then
+   10      continue
+c  Loop over junctions attached to volume.
+           ilv = iand(ishft(vctrlx(i),-7),1)
+           ilvb = iand(ishft(vctrlx(i),-8),1)
+           iare = 0
+           iarb = 0
+           alpb = voidg(i)
+           alpa = voidg(i)
+           dplev(i) = 0.0
+           itop = 0
+           ibot = 0
+           jtop = 0
+           jbot = 0
+           rhofg = max((rhof(i)-rhog(i)), 1.0e-7)
+           l = invfnd(i)
+           do 228 loop = 1,invcnt(i)
+             jx = invj(l)%invvnx
+c  Consider this jun if it is not a jet jun.
+             if( iand(jc(jx),ishft(1,25)) .ne. 0) go to 227
+c  jx is junction  index.
+             jxx = jcnxs(jx)
+             jtype = iand(ishft(jc(jx),-26),1)
+             if (chngno(48)) then
+               if (jtype.eq.0) go to 227
+             else
+               if (jtype.eq.0) go to 227
+             endif
+c
+c  Get from-to junction flag.
+             ifrmto = iand(ishft(invj(l)%invjun,-2),1)
+c  Get up-down juction flag.
+             jupdw  = iand(ishft(jc(jx),-27),1)
+c
+c  Set top-bot flag.
+             jtype = abs(ifrmto - jupdw)
+             jvx = ij1nx(jx-ifrmto+1)
+             if (jtype .eq. 1) then
+               if( jbot.ne.0 ) go to 3999
+               jbot = jx
+               jupdwb = jupdw
+               ibot = jvx
+             else
+               if( jtop .ne. 0 ) go to 3999
+               jtop = jx
+               jupdwt = jupdw
+               itop = jvx
+             endif
+  227        l = l + 1
+  228      continue
+c
+c  Volume must have at least one vertical momentum junction.
+           if( (jtop.eq.0) .and. (jbot.eq.0)) go to 3999
+c
+           if( ilv.eq.1 ) then
+             alpa = voidla(i)
+             alpb = voidlb(i)
+           endif
+cc         voidgb = 0.0
+           voidgb = 1.0
+           if( ibot.ne.0 ) then
+             voidgb = voidg(ibot)
+             ilvbt = iand(ishft(vctrlx(ibot),-7),1)
+             ilvbbt = iand(ishft(vctrlx(ibot),-8),1)
+           endif
+cc         voidgt = 1.0
+           voidgt = 0.0
+           if( itop.ne.0 ) then
+             voidgt = voidg(itop)
+             ilvtp = iand(ishft(vctrlx(itop),-7),1)
+             ilvbtp = iand(ishft(vctrlx(itop),-8),1)
+           endif
+           voidft = 1.0 - voidgt
+           voidfb = 1.0 - voidgb
+           testb = (voidgb - voidg(i)) - dvoidi
+           testa = (voidg(i) - voidgt) - dvoidi
+c
+           if( jtop.eq.0 ) then
+             iare = 1
+             go to 170
+           elseif (testa  .gt. 0.0) then
+             go to 130
+           elseif ( jbot.eq.0 ) then
+             iarb = 1
+             go to 190
+           elseif (testb  .gt. 0.0) then
+             go to 140
+           else
+             go to 150
+           endif
+  130      continue
+           if( iand(jc(jtop),ishft(1,8)).ne.0 .and.
+     &     (levska(lk).ne.0 .and. levskl(levska(lk)).ne.0) ) then
+             iare = 1
+             go to 170
+           else
+             go to 3999
+           endif
+  140      continue
+           if( iand(jc(jbot),ishft(1,8)).ne.0 .and.
+     &     (levskb(lk).ne.0 .and. levskl(levskb(lk)).ne.0) ) then
+             iarb = 1
+             go to 190
+           else
+             go to 3999
+           endif
+c C .. volume i ** normal void profile.
+  150      continue
+           testa = (voidgt - voidg(i)) - dvoidc
+           testb = (voidg(i) - voidgb) - dvoidc
+cc         ltesta = .false.
+cc         ltestb = .false.
+cc         if( jtop.ne.0 .and. jbot.ne.0 ) then
+cc           ltesta = floreg(itop).eq.3
+cc           ltesta = ltesta .or. floreg(itop).eq.6
+cc           ltesta = ltesta .or. floreg(itop).eq.7
+cc           ltesta = ltesta .or. floreg(itop).eq.10
+cc           ltesta = ltesta .or. floreg(itop).eq.11
+cc           ltestb = floreg(ibot).eq. 1
+cc           ltestb = ltestb .or. floreg(ibot).eq.4
+cc         elseif ( jtop.eq.0 ) then
+cc           ltesta = .true.
+cc           ltestb = floreg(ibot).eq. 1
+cc           ltestb = ltestb .or. floreg(ibot).eq.4
+cc           ltestb = ltestb .and. testb.gt.0.0
+cc         else
+cc           ltestb = .true.
+cc           ltesta = floreg(itop).eq.3
+cc           ltesta = ltesta .or. floreg(itop).eq.6
+cc           ltesta = ltesta .or. floreg(itop).eq.7
+cc           ltesta = ltesta .or. floreg(itop).eq.10
+cc           ltesta = ltesta .or. floreg(itop).eq.11
+cc           ltesta = ltesta .and. testa.gt.0.0
+cc         endif
+c
+           if (ilv .eq. 1) then
+             go to 160
+           elseif ( ilvtp.eq.1) then
+             go to 3999
+           elseif( ilvb.eq.1 ) then
+             go to 3999
+           elseif( ilvbt.eq.1 ) then
+             go to 3999
+           elseif( ilvbbt.eq.1 ) then
+             go to 3999
+           elseif ( testa.gt.0.0 .and. ( voidgt.gt.voidlt .or.
+     &       iare.eq.1 ) ) then
+             go to 160
+           elseif ( testb.gt.0.0 .and. ( voidg(i).gt.voidlt .or.
+     &       iarb.eq.1 ) ) then
+cc         elseif ( ltesta .and. ltestb ) then
+             go to 160
+           endif
+           go to 3999
+  160      continue
+           voidb = voidgb
+           voida = voidgt
+           if( iare.eq.1 ) voida = 0.999
+           if( iarb.eq.1 ) voidb = 0.000
+           go to 210
+c
+  170      continue
+c B .. volume i ** below a void profile inversion.
+           if (ilv.eq.1) then
+             go to 180
+           elseif( ilvb.eq.1 ) then
+             go to 3999
+           elseif ( ilvb.eq. 1 ) then
+               go to 3999
+           elseif ( ilvbbt.eq.1 ) then
+               go to 3999
+           elseif ((0.999-voidg(i)) .gt. dvoidc) then
+               go to 180
+           elseif ((voidg(i)-voidgb) .gt. dvoidc) then
+             go to 180
+           else
+             go to 3999
+           endif
+  180      continue
+           voidb = voidgb
+           voida = 0.999
+           go to 210
+c A .. volume i ** above a void profile inversion.
+  190      continue
+           if ( ilv.eq.1 ) then
+             go to 200
+           elseif ( ilvtp.eq.1 ) then
+               go to 3999
+           elseif( ilvb.eq.1 ) then
+               go to 3999
+           elseif ( (voidg(itop)-voidg(i)).gt.dvoidc .and.
+     &     voidg(itop) .gt. voidlt ) then
+             go to 200
+           elseif ( (voidg(i)-0.001).gt.dvoidc .and.
+     &       voidg(itop).gt.voidlt ) then
+             go to 200
+           else
+             go to 3999
+           endif
+c
+  200      continue
+           voida = voidgt
+           voidb = 0.0
+           if( jbot.ne.0 ) then
+              vfm = velfj(jbot)*ajun(jbot)/avol(i)
+              vgm = velgj(jbot)*ajun(jbot)/avol(i)
+            else
+              vfm = 0.0
+              vgm = 0.0
+            endif
+            fctr = 1.0
+            if (jupdwb .eq. 1) fctr = - 1.0
+            vfm = vfm*fctr
+            vgm = vgm*fctr
+            if(vfm*vgm .ne. 0.0 ) then
+              flxgm = 0.5*vgm*((voidgb+alpb) +
+     &        sign(1.0,vgm)*(voidgb-alpb))
+              flxfm = 0.5*vfm*((voidfb+(1.0-alpb)) +
+     &        sign(1.0,vfm)*(voidfb-(1.0-alpb)))
+              flxm = flxgm + flxfm
+              vgj = 1.41*(rhofg*gravcn*sigma(i)/
+     &        (rhof(i)*rhof(i)))**0.25
+              cinf = 1.0 + 0.2*sqrt((rhof(i)*sqrt(gravcn*diamv(i)))/
+     &        (abs(vgm)*voidg(i)*rhog(i) +
+     &        abs(vfm)*voidf(i)*rhof(i)))
+              co = cinf - (cinf-1.0)*sqrt(rhog(i)/rhof(i))
+              co = min(co,1.33)
+              voidb = flxgm/(co*flxm + vgj)
+              voidb = min(voidb,1/co)
+              voidb = max(voidb,0.0)
+            endif
+  210      continue
+           voidlb(i) = min(voidb,voidg(i))
+           if( ilv.eq.1 .and. ilvb.eq.0 ) go to 220
+           if( voidg(i)-voidlb(i).lt.1.e-06 .and. jtop.eq.0 ) then
+             go to 3999
+           endif
+  220      continue
+           if( dlev(i).eq.dl(i)) go to 230
+           fctr = 1.0
+           if (jupdwt .eq. 1) fctr = -1.0
+           if( jtop.ne.0 ) then
+             vgp = velgj(jtop)*ajun(jtop)/avol(i)
+             vfp = velfj(jtop)*ajun(jtop)/avol(i)
+           else
+             vgp = 0.0
+             vfp = 0.0
+           endif
+           vgp = vgp*fctr
+           vfp = vfp*fctr
+           flxg = voida*vgp
+           if (vgp .le. 0.0 .or. vfp.le.0.0 ) go to 230
+             dmax = 0.3375*(rhog(i)*vgp*vgp/
+     &       (gravcn*rhofg))
+             vcrt = 2.0*(sigma(i)*gravcn*rhofg/
+     &       (rhog(i)*rhog(i)))**0.25
+             ck = 2.0*dmax*flxg/
+     &       (vcrt*gravcn*sqrt(sigma(i)/(rhofg)))
+             glent = (3.0e-5*(sqrt(ck)+530.0*(ck**2.1))*
+     &       sqrt((rhofg)/rhog(i)))*flxg*rhog(i)
+             voidla(i) = 1.0 - glent/(rhof(i)*vfp)
+             voidla(i) = max(voidla(i),0.9)
+             go to 240
+  230      continue
+           voidla(i) = voida
+  240      continue
+           voidla(i) = min(voidla(i),voida)
+           voidla(i) = max(voidg(i),voidla(i))
+           if( ilv.eq.1 .and. ilvb.eq.0 ) go to 250
+           if( voidla(i)-voidg(i).lt.1.e-06 .and. jbot.eq.0 ) then
+             go to 3999
+           endif
+  250      continue
+c
+           if( ilv.eq.1 ) go to 260
+           alpa = voidla(i)
+           alpb = voidlb(i)
+  260      continue
+c
+c  Location of the two-phase level.
+           dll = dl(i)
+           if ((voidla(i)-voidlb(i)) .gt. 0.1) then
+            if (chngno(48)) then
+             dlev(i) = dll*(voidla(i)-voidg(i))/(voidla(i)-voidlb(i))
+             dlev(i) = max(0.0,min(dlev(i), dl(i)))
+           else
+             dlev(i) = dll*(voidla(i)-voidg(i))/(voidla(i)-voidlb(i))
+            endif
+           else
+cc    level not present voidla < voidlb ?????
+cc           dlev(i) = -1.0
+cc           voidla(i) = 0.0
+cc           voidlb(i) = 0.0
+cc           vlev(i) = 0.0
+cc           vollev(i) = 0.0
+cc           if (vollev(i)/dl(i) .le. 0.02) vollev(i) = 0.0
+cc           if (vollev(i)/dl(i) .ge. 0.02) vollev(i) = dl(i)
+             go to 3999
+           endif
+cc         dlev(i) = min(dlev(i),dl(i)-1.0e-06)
+           dlev(i) = min(dlev(i),dl(i))
+cc         dlev(i) = max(dlev(i),1.e-06)
+           dlev(i) = max(dlev(i),0.0)
+           vollev(i) = dlev(i)
+           if( (dlev(i).eq.0.0 .or. dlev(i).eq.dl(i)) .and.
+     &       ilvb.eq.1 ) then
+cc           go to 3999
+           endif
+c  Calculation of level velocity.
+             vlev(i) = ( dll*(voidg(i)-voidgo(i))-dlev(i)*
+     &         (voidlb(i)-alpb) - (dll-dlev(i))*(voidla(i)-alpa))/
+     &         (dt*(voidlb(i)-voidla(i)))
+            if( ilv.eq.0 .and. jbot.ne.0 ) then
+               vlev(i) = velfj(jbot)
+               if( iand(jc(jbot),ishft(1,27)).ne.0 ) vlev(i) = - vlev(i)
+            endif
+            vctrlx(i) = ior(vctrlx(i),ishft(1,7))
+            ilv = 1
+c  Test if level is near the cell boundary.
+          if (chngno(48)) then
+             if ((dlev(i)/dl(i) .le. 0.020) .or.
+     &       (dlev(i)/dl(i) .gt. 0.980)) go to 3999
+         endif
+c
+c     test to see if junction jbot is abrupt
+c
+cc      if( jbot.ne.0 .and. iand(jc(jbot),ishft(1,8)).ne.0 ) then
+cc        jbot = 0
+cc        ibot = 0
+cc      endif
+         levskl(lk) = i
+         go to 4000
+c  No level in volume i.
+ 3999   continue
+c   set junction bit if level disappears during this time step
+c   determine affected junction
+cc         if( dlev(i).gt.dl(i)/2.0 ) then
+cc           if( jtop.ne.0 )
+cc   &       jcex(jtop) = ior(jcex(jtop),ishft(1,27))
+cc         elseif( dlev(i).ge.0.0 .and. dlev(i).lt.dl(i)/2.0 ) then
+cc           if( jbot.ne.0 )
+cc   &       jcex(jbot) = ior(jcex(jbot),ishft(1,27))
+cc         endif
+c    shift bit 8(=128) into bit position 9(=256)8
+           vctrlx(i) = ior(iand(vctrlx(i),not(256)),
+     &     ishft(iand(vctrlx(i),128),1))
+c    turn off bit 8(=128)
+           vctrlx(i) = iand(vctrlx(i),not(ishft(1,7)))
+           ilv = 0
+           voidla(i) = 0.0
+           voidlb(i) = 0.0
+           vlev(i) = 0.0
+           dplev(i) = 0.0
+           vollev(i) = 0.0
+cc         if( dlev(i).eq.0.0 .or. dlev(i).eq.dl(i) ) go to 4000
+           dlev(i) =  0.0
+           if( voidg(i).lt.voidlt ) dlev(i) = dl(i)
+           if( jbot.eq.0 .or. iand(ishft(jc(jbot),-8),1).eq.1
+     &     .or. iand(ishft(jc(jbot),-1),1).eq.1
+     &     .or. iand(vctrl(ibot),1).eq.1 ) then
+              go to 4000
+           else
+              i = ibot
+              go to 10
+           endif
+ 4000      continue
+           if( ilv .eq. 0 ) voidla(i) = 0.
+           levskd(lk) = 0
+c
+cc   icheck = 1
+      elseif( icheck.eq.1 ) then
+cc   project level position
+        if( levskl(lk).ne.0 .and. levskd(lk).eq.0 ) then
+cc   determine above and below volumes and junctions if level outside
+cc   of this volume
+          itop = 0
+          ibot = 0
+          jtop = 0
+          jbot = 0
+          l = invfnd(i)
+          do loop = 1,invcnt(i)
+            j = invj(l)%invvnx
+c  Consider this jun if it is not a jet jun
+            if( iand(jc(j),ishft(1,25)) .eq. 0) then
+            jtype = iand(ishft(jc(j),-26),1)
+            if( jtype.eq.1 ) then
+              ifrmto = iand(ishft(invj(l)%invjun,-2),1)
+              jupdw = iand(ishft(jc(j),-27),1)
+              if( abs(ifrmto-jupdw).eq.1 ) then
+                if( jbot.ne.0 ) go to 390
+                jbot = j
+                ibot=ij1nx(j-ifrmto+1)
+              else
+                if( jtop.ne.0 ) go to 390
+                jtop = j
+                itop=ij1nx(j-ifrmto+1)
+              endif
+            endif
+            endif
+            l = l + 1
+          enddo
+c               !loop
+           voidgb = 1.0
+           if( ibot.ne.0 ) then
+             voidgb = voidg(ibot)
+             ilvbt = iand(ishft(vctrlx(ibot),-7),1)
+             ilvbbt = iand(ishft(vctrlx(ibot),-8),1)
+           endif
+cc         voidgt = 1.0
+           voidgt = 0.0
+           if( itop.ne.0 ) then
+             voidgt = voidg(itop)
+             ilvtp = iand(ishft(vctrlx(itop),-7),1)
+             ilvbtp = iand(ishft(vctrlx(itop),-8),1)
+           endif
+           voidft = 1.0 - voidgt
+           voidfb = 1.0 - voidgb
+           testb = (voidgb - voidg(i)) - dvoidi
+           testa = (voidg(i) - voidgt) - dvoidi
+           ilv = iand(ishft(vctrlx(i),-7),1)
+           ilvb = iand(ishft(vctrlx(i),-8),1)
+           if( vlev(i).lt.0.0 ) then
+             cfac = voidlb(i)-min(voidla(i),0.999)
+           else
+             cfac = max(voidlb(i),0.001)-voidla(i)
+           endif
+           cfac = (voidlb(i) - voidla(i) ) / cfac
+           vlevc = vlev(i)*cfac
+           svlev = sign(1.0,vlev(i))
+           if( vlev(i).eq.0.0 ) svlev = 0.0
+           dtl = (dl(i)+svlev*(dl(i)-2.0*dlev(i)))/
+     &     (2.0*(abs(vlevc)+1.e-05))
+cccc    Where is level ???
+           icross = 0
+           if( dtl.lt.dt ) icross = 1
+ccc set before bit to current level bit
+            vctrlx(i) = ior(iand(vctrlx(i),not(256)),
+     &      ishft(iand(vctrlx(i),128),1))
+            ilvb = iand(ishft(vctrlx(i),-8),1)
+            vctrlx(i) = ior(vctrlx(i),ishft(1,7))
+            ilv = iand(ishft(vctrlx(i),-7),1)
+            epsa = abs(voidg(i)-voidla(i))
+            epsb = abs(voidg(i)-voidlb(i))
+            iare = 0
+            if( jtop.ne.0 ) iare = iand(ishft(jc(jtop),-8),1)
+            iarb = 0
+            if( jbot.ne.0 ) iarb = iand(ishft(jc(jbot),-8),1)
+            if( ilvb.eq.0 .and. icross.eq.1 )
+     &        go to 390
+            if( svlev.lt.0.0 .and. epsa.lt.epsal1 .and.
+     &        ilvb.eq.1 ) then
+                go to 300
+            elseif( svlev.lt.0.0 .and. icross.eq.1 .and.
+     &        ilvb.eq.1 ) then
+                go to 300
+            elseif( svlev.gt.0.0 .and. epsb.lt.epsal1 .and.
+     &        ilvb.eq.1 ) then
+                go to 340
+            elseif( svlev.gt.0.0 .and. icross.eq.1 .and.
+     &        ilvb.eq.1 ) then
+                go to 340
+            else
+                go to 500
+            endif
+  300       continue
+c    level moved into volume below
+c    set before bit in volume to current bit in volume
+            vctrlx(i) = ior(iand(vctrlx(i),not(256)),
+     &        ishft(iand(vctrlx(i),128),1))
+            vctrlx(i) = iand(vctrlx(i),not(ishft(1,7)))
+            ilv = 0
+            dlev(i) = 0.0
+            vollev(i) = 0.0
+            dplev(i) = 0.
+            if( ilvb.ne.1 ) go to 390
+            if( jbot.eq.0 ) go to 390
+cc          if( ilvbt.eq.1 ) go to 390
+cc          if( ilvbbt.eq.1 ) go to 390
+            if( iand(ishft(jc(jbot),-1),1).eq.1 ) go to 390
+            if( iarb.eq.1 .and. (testb.gt.0.0 .or.
+     &        (levskb(lk).ne.0 .and. levskl(levskb(lk)).ne.0))  )
+     &        go to 390
+c
+c   level can propigate into volume ibot if junction jbot is not
+c   abrupt. If junction jbot is abrupt, level can pass thru junction
+c   if void profile in not inverted.
+c
+              if( iand(ishft(imap(ibot),-28),1).eq.1 ) then
+c    set before bit in volume below to current bit in volume below
+              vctrlx(ibot) = ior(iand(vctrlx(ibot),not(256)),
+     &        ishft(iand(vctrlx(ibot),128),1))
+c   set current bit in volume below
+              vctrlx(ibot) = ior(vctrlx(ibot),ishft(1,7))
+              ilvbt = 1
+              dlev(ibot) = dl(ibot)
+              vlev(ibot) = vlev(i)
+c transfer a small amount of vapor to cell below if void fraction
+c in cell below is too small in cell below
+              if( voidg(ibot).lt.epsal1 ) then
+                voidg(ibot) = voidg(ibot) + epsal1
+cc              ug(ibot) =((voidg(ibot)-epsal1)*ug(ibot)+
+cc   &          epsal1*ug(i))/voidg(ibot)
+                if( quala(i).gt.0.0 ) then
+                  quala(ibot)=((voidg(ibot)-epsal1)*quala(ibot)+
+     &            epsal1*quala(i))/voidg(ibot)
+                endif
+                dvol = avol(ibot)*(rhof(ibot)-rhog(ibot))*epsal1
+                dalp = dvol/((rhof(i)-rhog(i))*avol(i))
+                voidg(i) = voidg(i) - dalp
+                voidg(i) = max(0.0,voidg(i))
+                voidf(ibot) = 1.0 - voidg(ibot)
+                voidf(i) = 1.0 - voidg(i)
+cc              uf(i) = ((1.-voidg(i)-dalp)*uf(i)+dalp*uf(ibot))/
+cc   &          voidf(i)
+                hyarg(i) = voidg(i)*rhog(i)
+                hyarug(i) = hyarg(i)*ug(i)
+                hyarf(i) = voidf(i)*rhof(i)
+                hyaruf(i) = hyarf(i)*uf(i)
+                hyarg(ibot) = voidg(ibot)*rhog(ibot)
+                hyarug(ibot) = hyarg(ibot)*ug(ibot)
+                hyarf(ibot) = voidf(ibot)*rhof(ibot)
+                hyaruf(ibot) = hyarf(ibot)*uf(ibot)
+              endif
+              voidla(ibot) = voidla(i)
+              voidlb(ibot) = voidg(ibot)
+  310         continue
+              vollev(ibot) = dlev(ibot)
+c     set bit 7 in vctrlx to say volume ibot processed
+              vctrlx(ibot) = ior( vctrlx(ibot),ishft(1,6) )
+              dplev(ibot) =  0.0
+c   find junction at bottom of volume ibot
+              ll = invfnd(ibot)
+              do mm = 1,invcnt(ibot)
+                jlx = invj(ll)%invvnx
+                if( junno(jlx).ne.junno(jbot) .and.
+     &          iand(jc(jlx),ishft(1,26)).ne.0 .and.
+     &          iand(jc(jlx),ishft(1,25)).eq.0 .and.
+     &          cmptyp(jcnfnd(jlx)).ne.9 ) then
+                  dplev(ibot)=2.0*(p(ij2nx(jlx))-p(ij1nx(jlx)))/
+     &            (dl(ij1nx(jlx))+dl(ij2nx(jlx)))
+                  if( iand(jc(jlx),ishft(1,27)).ne.0 ) then
+                    dplev(ibot) = - dplev(ibot)
+                  endif
+                endif
+                ll = ll + 1
+              enddo
+              if( dplev(ibot).eq.0.0 ) then
+                dplev(ibot)=-gravcn*(voidlb(ibot)*rhog(ibot)+
+     &          (1.0-voidlb(ibot))*rhof(ibot))
+              endif
+cc            dplev(ibot)=dplev(ibot)*(dlev(ibot)-0.5*dl(ibot))
+c
+c   level crossed junction jbot, set precessing flag if not time
+c   dependent junction
+c
+              jcex(jbot) = ior(jcex(jbot),ishft(1,27))
+c
+c    if jbot abrupt then set level flag in stack below and set stack
+c    processed flag
+              if( iarb.eq.1  ) then
+                levskl(lk) = 0
+                if( levskb(lk).ne.0 ) then
+                  levskl(levskb(lk)) = ibot
+                  levskd(levskb(lk)) = 1
+                endif
+              else
+                levskl(lk) = ibot
+              endif
+            else
+c  if cannot go in volume below, volume must be tail of stack
+              levskl(lk) = 0
+            endif
+            vlev(i) = 0.0
+            voidla(i) = 0.0
+            voidlb(i) = 0.0
+            go to 400
+  340     continue
+c   level moved into volume above
+c   set before bit in volume to current bit in volume
+          vctrlx(i) = ior(iand(vctrlx(i),not(256)),
+     &    ishft(iand(vctrlx(i),128),1))
+          vctrlx(i) = iand(vctrlx(i),not(ishft(1,7)))
+          ilv = 0
+          dlev(i) = 0.0
+          vollev(i) = 0.0
+          dplev(i) = 0.0
+          if( ilvb.ne.1 ) go to 390
+          if( jtop.eq.0 ) go to 390
+cc        if( ilvtp.eq.1 ) go to 390
+          if( iand(ishft(jc(jtop),-1),1).eq.1 ) go to 390
+          if( iare.eq.1 .and. (levska(lk).ne.0 .and.
+     &    levskl(levska(lk)).ne.0) ) go to 390
+          if( iand(ishft(imap(itop),-28),1).eq.1 ) then
+c   set before bit in volume above to current bit in volume above
+            vctrlx(itop) = ior(iand(vctrlx(itop),not(256)),
+     &      ishft(iand(vctrlx(itop),128),1))
+            vctrlx(itop) = ior(vctrlx(itop),ishft(1,7))
+            ilvtp = 1
+c
+c    level in volume above
+c
+            vlev(itop) = vlev(i)
+            dlev(itop) = 0.0
+            vollev(itop) = 0.0
+c
+c    level can be moved into volume above if level flag is on and if
+c    no level already in volume. Level can be in this volume and
+c    volume above if junction between them is abrupt, for normal
+c    junctions, levels in adjacent volumes in not allowed.
+c
+c   move small amount of liquid into cell above if void fraction is too
+c   high in cell above
+              if( voidg(itop).gt.1.0-epsal1 ) then
+                voidg(itop) = voidg(itop)-epsal1
+                voidf(itop) = 1.0 - voidg(itop)
+cc              uf(itop) = ((1.0-voidg(itop)-epsal1)*uf(itop)+
+cc   &          epsal1*uf(i))/voidf(itop)
+                dvol = avol(itop)*(rhof(itop)-rhog(itop))*epsal1
+                dalp = dvol/((rhof(i)-rhog(i))*avol(i))
+                voidg(i) = voidg(i) + dalp
+                voidg(i) = min(1.0,voidg(i))
+                voidf(i) = 1.0 - voidg(i)
+cc              ug(i) = ((voidg(i)-dalp)*ug(i)+dalp*ug(itop))/
+cc   &          voidg(i)
+                if( quala(itop).gt.0.0 ) then
+                  quala(i) = ((voidg(i)-dalp)*quala(i)+dalp*quala(itop))
+     &            /voidg(i)
+                endif
+                hyarg(itop) = voidg(itop)*rhog(itop)
+                hyarug(itop) = hyarg(itop)*ug(itop)
+                hyarf(itop) = voidf(itop)*rhof(itop)
+                hyaruf(itop) = hyarf(itop)*uf(itop)
+                hyarg(i) = voidg(i)*rhog(i)
+                hyarug(i) = hyarg(i)*ug(i)
+                hyarf(i) = voidf(i)*rhof(i)
+                hyaruf(i) = hyarf(i)*uf(i)
+              endif
+              voidla(itop) = voidg(itop)
+              voidlb(itop) = voidg(i)
+c   set bit 7 in vctrlx to mark top cell as already processed
+              vctrlx(itop) = ior(vctrlx(itop),ishft(1,6))
+              dplev(itop) = 0.0
+c
+c   level in bottom half of volume itop, compute pressure gradient in
+c   junction at bottom of volume i
+c
+              if( jbot.ne.0 .and. cmptyp(jcnfnd(jbot)).ne.9 .and.
+     &            iand(jc(jbot),ishft(1,8)).eq.0 ) then
+                dplev(itop) = 2.0*(p(ij2nx(jbot))-p(ij1nx(jbot)))/
+     &          (dl(ij1nx(jbot))+dl(ij2nx(jbot)))
+                  if( iand(jc(jbot),ishft(1,27)).ne.0 )
+     &            dplev(itop) = - dplev(itop)
+              else
+                dplev(itop)=-gravcn*(voidg(i)*rhog(i)+
+     &            voidf(i)*rhof(i))
+              endif
+cc            dplev(itop)=dplev(itop)*(dlev(itop)-0.5*dl(itop))
+c
+c   set bit 28 in jcex for junction jtop for crossing processing
+              jcex(jtop) = ior( jcex(jtop),ishft(1,27))
+c
+c    if jtop is abrupt, then level moved into stack above, set
+c    level flag in stack above and set stack processed flag
+              if( iare.eq.1 ) then
+                levskl(lk) = 0
+                if( levska(lk).ne.0 ) then
+                  levskl(levska(lk)) = itop
+                  levskd(levska(lk)) = 1
+                endif
+              else
+                levskl(lk) = itop
+              endif
+            else
+c  if cannot go into volume above, volume must be head of stack
+              levskl(lk) = 0
+            endif
+            vlev(i) = 0.0
+            voidla(i) = 0.0
+            voidlb(i) = 0.0
+          go to 400
+  500     continue
+cc   level still in volume
+              dplev(i) = 0.0
+c
+c   compute pressure gradient in bottom junction if level is in top
+c   half of this volume and in bottom junction of bottom volume
+c   if level is in bottom half of this volume
+c
+              if( dlev(i).ge.dl(i)/2.0 ) then
+c                                             ! level in top half
+                if( jbot.ne.0 .and. cmptyp(jcnfnd(jbot)).ne.9 .and.
+     &            iand(jc(jbot),ishft(1,8)).eq.0 ) then
+                  dplev(i) = 2.0*( p(ij2nx(jbot)) - p(ij1nx(jbot)))/
+     &            ( dl(ij2nx(jbot)) + dl(ij1nx(jbot)))
+                  if( iand(jc(jbot),ishft(1,27)).ne.0 )
+     &            dplev(i) = - dplev(i)
+                else
+c                    ! no junction at bottom
+c   dead end at top
+                  dplev(i) = - gravcn*(voidlb(i)*rhog(i)+
+     &            (1.0-voidlb(i))*rhof(i))
+                endif
+              else
+c                  ! level in bottom half of volume
+                if( jbot.ne.0 .and. cmptyp(jcnfnd(jbot)).ne.9 .and.
+     &            iand(jc(jbot),ishft(1,8)).eq.0 ) then
+c
+c    volume on other side of jbot, find junction of opposite side
+c    of this volume
+c
+                  ll = invfnd(ibot)
+                  do mm = 1,invcnt(ibot)
+                    jlx = invj(ll)%invvnx
+                    if( junno(jlx).ne.junno(jbot) .and.
+     &              iand(jc(jlx),ishft(1,26)).ne.0 .and.
+     &              iand(jc(jlx),ishft(1,25)).eq.0 .and.
+     &              cmptyp(jcnfnd(jlx)).ne.9 ) then
+                      dplev(i) = 2.0*(p(ij2nx(jlx))-p(ij1nx(jlx)))
+     &                /(dl(ij2nx(jlx)) + dl(ij1nx(jlx)))
+                      if( iand(jc(jlx),ishft(1,27)).ne.0 )
+     &                dplev(i) = - dplev(i)
+                    endif
+                    ll = ll + 1
+                  enddo
+                  if( dplev(i).eq.0.0 ) then
+                    dplev(i) = -gravcn*(voidg(ibot)*rhog(ibot)+
+     &              voidf(ibot)*rhof(ibot))
+                  endif
+                else
+c                    ! no junction at bottom
+c   dead end at bottom
+                  dplev(i) = - gravcn*(voidlb(i)*rhog(i)+
+     &            (1.0-voidlb(i))*rhof(i))
+                endif
+              endif
+cc            dplev(i) = dplev(i)*(dlev(i)-0.5*dl(i))
+              levskd(lk) = 1
+c
+c   set junction bit if level appears during this time step
+c   top and bottom junctions affected by appearance
+c
+c             if( dlevo(i).lt.0.0 ) then
+c               if( jbot.ne.0 )
+c    &            jcex(jbot) = ior(jcex(jbot),ishft(1,27))
+c               if( jtop.ne.0 )
+c    &            jcex(jtop) = ior(jcex(jtop),ishft(1,27))
+c             endif
+           go to 400
+  390    continue
+c        no level in volume
+c   set before bit in volume to current bit in volume
+         vctrlx(i) = ior(iand(vctrlx(i),not(256)),
+     &   ishft(iand(vctrlx(i),128),1))
+         vctrlx(i) = iand(vctrlx(i),not(ishft(1,7)))
+         vlev(i) = 0.0
+         voidla(i) = 0.0
+         voidlb(i) = 0.0
+         levskl(lk) = 0
+         levskd(lk) = 1
+         if ( dlev(i).eq.0.0 .or. dlev(i).eq.dx(i) ) go to 400
+         dlev(i) = 0.0
+         if( voidg(i).lt. voidlt ) dlev(i) = dl(i)
+  400    continue
+         if( iand(ishft(vctrlx(i),-7),1).ne.1 ) voidla(i) = 0.0
+         endif
+c              ! level in stack and stack not processed yet for
+c                icheck = 1
+         endif
+c              ! icheck
+         lk = lk + levskp
+  266  continue
+cc
+c  Process junctions through which levels passed from one volume to
+c  another volume, i.e. junctions for which bit 28 is set in jcex.
+        if( icheck.eq.1 ) then
+        ll = lvajun(lpdat(issys)%llvect)
+        lj = lvscr(lpdat(issys)%llvect)
+        lvptr(lj) = 0
+        do mm=1,lvptr(ll)
+          ll = ll + 1
+          if( iand(jcex(lvptr(ll)),ishft(1,27)).ne.0 ) then
+            lj = lj + 1
+            lvptr(lj) = lvptr(ll)
+          endif
+        enddo
+c             !mm
+        if (lj - lvscr(lpdat(issys)%llvect) .ne. 0)
+     &  lvptr(lvscr(lpdat(issys)%llvect)) = lj -
+     &  lvscr(lpdat(issys)%llvect)
+c  if scratch list is not zero length then level passed thru
+c  junction on list
+        ll = lvscr(lpdat(issys)%llvect)
+        if( lvptr(ll).ne.0 ) then
+c
+c   set bit to reduce timestep due to level crossing
+c
+            imdctl(1) = ior(imdctl(1),ishft(1,1))
+c  compute major phase velocity for each junction having a level,
+c  note that the reset legic can be called for a junction which
+c  had a level at the beginning of the advancement but the level
+c  disappeared during the current advancement, in that case both
+c  sum and difference momentun equations should be solved.
+          do mm=1,lvptr(ll)
+            ll = ll + 1
+            j = lvptr(ll)
+            if( iand(jc(j),ishft(1,27)).eq.0 ) then
+              itop = ij2nx(j)
+              ibot = ij1nx(j)
+            else
+              itop = ij1nx(j)
+              ibot = ij2nx(j)
+            endif
+            fijo(j) = 0.0
+            jcex(j) = iand(jcex(j),not(ishft(1,27)))
+            vctrlx(ibot) = iand(vctrlx(ibot),not(ishft(1,6)))
+            vctrlx(itop) = iand(vctrlx(itop),not(ishft(1,6)))
+            ilvtp = iand(ishft(vctrlx(itop),-7),1)
+            ilvbt = iand(ishft(vctrlx(ibot),-7),1)
+            if( ilvtp.eq.1 ) then
+c  level moved thru junction and is in top half of junction
+              jcex(j) = ior(jcex(j),ishft(1,27))
+              higo(itop) = 0.0
+              hifo(itop) = 0.0
+              hgfo(itop) = 0.0
+            elseif( ilvbt.eq.1 ) then
+c  level moved thru junction and is in bottom half of junction
+              jcex(j) = ior(jcex(j),ishft(1,28))
+              higo(ibot) = 0.0
+              hifo(ibot) = 0.0
+              hgfo(ibot) = 0.0
+            else
+c  level disappeared from junction
+              jcex(j) = ior(jcex(j),ishft(1,27))
+              jcex(j) = ior(jcex(j),ishft(1,28))
+            endif
+            if( iand(jcex(j),ishft(1,27)).ne.0 .and.
+     &          iand(jcex(j),ishft(1,28)).eq.0 ) then
+c  Compute liquid continuity on bottom volume.
+              sum = 0.
+              lj = invfnd(ibot)
+              do mj=1,invcnt(ibot)
+                jx = invj(lj)%invvnx
+                if( junno(j).ne.junno(jx)) then
+                  flxfj = voidfj(jx)*rhofj(jx)*ajun(jx)*abs(velfj(jx))
+                  if( iand(invj(lj)%invjun,ishft(1,2)).ne.0 ) then
+                    if( velfj(jx).gt.0.0 ) then
+                      sum = sum + flxfj
+                    else
+                      sum = sum - flxfj
+                    endif
+                  else
+                    if( velfj(jx).gt.0.0 ) then
+                      sum = sum - flxfj
+                    else
+                      sum = sum + flxfj
+                    endif
+                  endif
+                else
+                  ifrmto = iand(ishft(invj(lj)%invjun,-2),1)
+                endif
+                lj = lj + 1
+              enddo
+c  ! mj
+              velfj(j) = sum/((1.0-voidg(ibot))*rhofj(j)*ajun(j))
+              if( ifrmto.eq.1 ) velfj(j) = - velfj(j)
+              velgj(j) = velfj(j)
+              velfjo(j) = velfj(j)
+              velgjo(j) = velgj(j)
+cc            if( iand(print,128) .eq. 0 ) then
+                jcex(j) = iand(jcex(j),not(ishft(1,27)))
+cc            endif
+            elseif( iand(jcex(j),ishft(1,27)).eq.0 .and.
+     &      iand(jcex(j),ishft(1,28)).ne.0 ) then
+c  Compute vapor continuity on top volume.
+              sum = 0.
+              lj = invfnd(itop)
+              do mj=1,invcnt(itop)
+                jx = invj(lj)%invvnx
+                if( junno(j).ne.junno(jx)) then
+                  flxgj = voidgj(jx)*rhogj(jx)*ajun(jx)*abs(velgj(jx))
+                  if( iand(invj(lj)%invjun,ishft(1,2)).ne.0 ) then
+                    if( velgj(jx).gt.0.0 ) then
+                      sum = sum + flxgj
+                    else
+                      sum = sum - flxgj
+                    endif
+                  else
+                    if( velgj(jx).gt.0.0 ) then
+                      sum = sum - flxgj
+                    else
+                      sum = sum + flxgj
+                    endif
+                  endif
+                else
+                  ifrmto = iand(ishft(invj(lj)%invjun,-2),1)
+                endif
+                lj = lj + 1
+              enddo
+c                   ! mj
+              velgj(j) = sum/(voidg(itop)*rhogj(j)*ajun(j))
+              velgj(j) = sum/(voidla(ibot)*rhogj(j)*ajun(j))
+              if( ifrmto.eq.1 ) velgj(j) = - velgj(j)
+              velfj(j) = velgj(j)
+              velfjo(j) = velfj(j)
+              velgjo(j) = velgj(j)
+cc            if (iand(print,128) .eq. 0) then
+                jcex(j) = iand(jcex(j),not(ishft(1,28)))
+cc            endif
+            endif
+          enddo
+c               ! mm
+          call jprop(2)
+c   begin iterations
+          iconv = 1
+c   turn off solution of minor phase velocity
+cc        if (iand(print,128) .eq. 0) then
+            iconv = 0
+cc        endif
+          iter = 0
+          do while ( iconv.eq.1 )
+            iconv = 0
+            iter = iter + 1
+            call jprop(2)
+            call phantj(1)
+            ll = lvscr(lpdat(issys)%llvect)
+            do mm =1,lvptr(ll)
+              ll = ll + 1
+              j = lvptr(ll)
+c   compute terms in difference momentum eqn
+           jx = jcnxs(j)
+           l4 = iand(ishft(jcex(j),-13),3)
+           k = ij1nx(j)
+           kf = k + l4
+           k4 = vctrls(k) + l4
+           l4 = iand(ishft(jcex(j),-10),3)
+           l = ij2nx(j)
+           lf = l + l4
+           l4 = vctrls(l) + l4
+           ncrosk(jx) = 1.0
+           if (iand(jc(j),8192) .ne. 0) ncrosk(jx) = 0.0
+           ncrosl(jx) = 1.0
+           if (iand(jc(j),4096) .ne. 0) ncrosl(jx) = 0.0
+           dxx(jx) = 1.0/(dxkx(jx) + dxlx(jx))
+c   modify for level
+           voidgk(jx) = voidg(k)
+           ilvk = iand(ishft(vctrlx(k),-7),1)
+           if( ilvk.eq.1 ) then
+             if( iand(jc(j),ishft(1,27)).eq.0 ) then
+               voidgk(jx) = voidla(k)
+             else
+               voidgk(jx) = voidlb(k)
+             endif
+           endif
+           voidgl(jx) = voidg(l)
+           ilvl = iand(ishft(vctrlx(l),-7),1)
+           if( ilvl.eq.1 ) then
+             if( iand(jc(j),ishft(1,27)).eq.0 ) then
+               voidgl(jx) = voidlb(l)
+             else
+               voidgl(jx) = voidla(l)
+             endif
+           endif
+           voidfa(jx) = ((1.0-voidgk(jx))*dxkx(jx) +
+     &      (1.0-voidgl(jx))*dxlx(jx))*dxx(jx)
+           voidga(jx) = (voidgk(jx)*dxkx(jx) + voidgl(jx)*dxlx(jx))*
+     &     dxx(jx)
+           rhofa(jx) = (rhof(k)*dxkx(jx) + rhof(l)*dxlx(jx))*dxx(jx)
+           rhoga(jx) = (rhog(k)*dxkx(jx) + rhog(l)*dxlx(jx))*dxx(jx)
+           vpgen(jx) = (vapgen(k)*dxkx(jx) + vapgen(l)*dxlx(jx))*
+     &     dxx(jx)
+           if (chngno(14)) vpgen(jx) = 0.0
+c  Noncondensible mass thrust term
+           vngen(jx) = 0.
+           if (lpdat(issys)%lnoncn .ne. 0) then
+             snk(jx) = 0.
+             snl(jx) = 0.
+             do il=1,lpdat(issys)%lnoncn
+               if( il.ne.nonhy ) then
+                 snk(jx) = snk(jx) + gaman(ij1nx(j)+il-1)
+                 snl(jx) = snl(jx) + gaman(ij2nx(j)+il-1)
+               else
+                 snk(jx) = snk(jx) - 8.0*gaman(ij1nx(j)+il-1)
+                 snl(jx) = snl(jx) - 8.0*gaman(ij2nx(j)+il-1)
+               endif
+             enddo
+             vngen(jx) = (snk(jx)*dxkx(jx)+snl(jx)*dxlx(jx))*dxx(jx)
+           endif
+c  Average of (void*rho) for the junction.
+           avrf(jx) = max(voidfa(jx),1.0e-15)*rhofa(jx)
+           avrg(jx) = max(voidga(jx),1.0e-15)*rhoga(jx)
+           ravrf(jx) = 1.0/avrf(jx)
+           ravrg(jx) = 1.0/avrg(jx)
+$if -def,decalpha,1
+           ltestt(jx) = iand(ior(vctrl(k),vctrl(l)),1) .ne. 0
+$if def,decalpha,1
+           ltestt(jx) = iand(vctrl(k),1).ne.0.or.iand(vctrl(l),1).ne.0
+           rfvfj(jx) = 0.5
+           if (.not.ltestt(jx)) rfvfj(jx) = max(1.0e-15,voidfj(j))*
+     &     rhofj(j)*ravrf(jx)*0.5
+           rgvgj(jx) = 0.5
+           if (.not.ltestt(jx)) rgvgj(jx) = max(1.0e-15,voidgj(j))*
+     &     rhogj(j)*ravrg(jx)*0.5
+           dxk(jx) = dxkx(jx)*avkx(jx)*0.5
+           dxl(jx) = dxlx(jx)*avlx(jx)*0.5
+           dx(jx) = dxl(jx) + dxk(jx)
+c  Liquid wall friction.
+           fricfk(jx) = dxk(jx)*fwalf(kf)*ravrf(jx)
+           fricfl(jx) = dxl(jx)*fwalf(lf)*ravrf(jx)
+           if (chngno(14)) then
+             fricfk(jx) = 0.0
+             fricfl(jx) = 0.0
+           endif
+c  Vapor wall friction.
+           fricgk(jx) = dxk(jx)*fwalg(kf)*ravrg(jx)
+           fricgl(jx) = dxl(jx)*fwalg(lf)*ravrg(jx)
+           if (chngno(14)) then
+             fricgk(jx) = 0.0
+             fricgl(jx) = 0.0
+           endif
+           kf = k + iand(ishft(jcex(j),-12),7)
+           lf = l + iand(ishft(jcex(j),-9),7)
+c  Head loss terms.
+c  User input form losses.
+           scrxch(jx) = 0.01*athrot(j)
+c  Loss factors for momentum equations
+           if (fjunfc(j).ne.0.0 .or. fjunrc(j).ne.0.0) then
+             if (velgj(j) .ge. 0.0) then
+               x = quals(k)
+               gvis = viscg(k)
+             else
+               x = quals(l)
+               gvis = viscg(l)
+             endif
+             if (velfj(j) .ge. 0.0) then
+               visl = viscf(k)
+             else
+               visl = viscf(l)
+             endif
+             vism = x*gvis + (1.0 - x)*visl
+             gm = abs(voidgj(j)*rhogj(j)*velgj(j) + voidfj(j)*rhofj(j)*
+     &       velfj(j))
+             rem = max(50.0,gm*diamj(j)/vism)
+           endif
+           if (fjunfb(j) .ne. 0.0) then
+             if (fjunfc(j) .ne. 0.0) then
+               fjunfk = fjunf(j) + fjunfb(j)/rem**fjunfc(j)
+             else
+               fjunfk = fjunf(j) + fjunfb(j)
+             endif
+           else
+             fjunfk = fjunf(j)
+           endif
+           if (fjunrb(j) .ne. 0.0) then
+             if (fjunrc(j) .ne. 0.0) then
+               fjunrk = fjunr(j) + fjunrb(j)/rem**fjunrc(j)
+             else
+               fjunrk = fjunr(j) + fjunrb(j)
+             endif
+           else
+             fjunrk = fjunr(j)
+           endif
+           hlossf(jx) = fjunfk
+           if (velfj(j) .lt. 0.0) hlossf(jx) = fjunrk
+           hlossf(jx) = (abs(velfj(j)) + scrxch(jx))*rfvfj(jx)*
+     &     (formfj(j) + fjet(jx) + hlossf(jx))
+           hlossg(jx) = fjunfk
+           if (velgj(j) .lt. 0.0) hlossg(jx) = fjunrk
+           hlossg(jx) = (abs(velgj(j)) + scrxch(jx))*rgvgj(jx)*
+     &     (formgj(j) + fjet(jx) + hlossg(jx))
+c   modify for level
+           delpza = voidgk(jx)*rhog(k)+(1.0-voidgk(jx))*rhof(k)
+           if (iand(jc(j),4) .ne. 0) delpza = -delpza
+           delpzz = voidgl(jx)*rhog(l)+(1.0-voidgl(jx))*rhof(l)
+           if (iand(jc(j),8) .ne. 0) delpzz = -delpzz
+cc         if( chngno(74) ) then
+             dpgza = voidgk(jx)*rhog(k)
+             dpfza = (1.0-voidgk(jx))*rhof(k)
+             if( iand(imap(k),64).ne.0 ) then
+c                         non-condensable gas appeared this time step
+                 dpgza = rhog(k)*max(1.e-05,voidgk(jx))
+                 dpfza = rhof(k)*(1.0 -  max(1.e-05,voidgk(jx)))
+             endif
+             if (iand(jc(i),4) .ne. 0) then
+               dpgza = -dpgza
+               dpfza = -dpfza
+             endif
+             dpgzz = voidgl(jx)*rhog(l)
+             dpfzz = (1.0-voidgl(jx))*rhof(l)
+             if( iand(imap(l),64).ne.0 ) then
+c                         non-condensable gas appeared this time step
+                 dpgzz = rhog(l)*max(1.e-05,voidgl(jx))
+                 dpfzz = rhof(l)*(1.0 - max(1.e-05,voidgl(jx)))
+             endif
+             if (iand(jc(i),8) .ne. 0) then
+               dpgzz = -dpgzz
+               dpfzz = -dpfzz
+             endif
+               dpgza = gravcn*(hydzc(kf)*dpgza + hydzc(lf)*dpgzz)
+               dpfza = gravcn*(hydzc(kf)*dpfza + hydzc(lf)*dpfzz)
+cc         endif
+           pk(jx) = p(k)
+           if( ilvk.eq.1 ) then
+             if( dlev(k).gt.dl(k)/2.0 .and.
+     &         iand(jc(j),ishft(1,27)).eq.0 ) then
+               pk(jx) = p(k) + dplev(k)*(dlev(k)-0.5*dl(k))
+             elseif ( dlev(k).lt.dl(k)/2.0 .and.
+     &         iand(jc(j),ishft(1,27)).ne.0 ) then
+               pk(jx) = p(k) - dplev(k)*(dlev(k)-0.5*dl(k))
+             endif
+           endif
+           pl(jx) = p(l)
+           if( ilvl.eq.1 ) then
+             if( dlev(l).gt.dl(l)/2.0 .and.
+     &         iand(jc(j),ishft(1,27)).ne.0 ) then
+               pl(jx) = p(l) + dplev(l)*(dlev(l)-0.5*dl(l))
+             elseif ( dlev(l).lt.dl(l)/2.0 .and.
+     &         iand(jc(j),ishft(1,27)).eq.0 ) then
+               pl(jx) = p(l) - dplev(l)*(dlev(l)-0.5*dl(l))
+             endif
+           endif
+             delpza = gravcn*(hydzc(kf)*delpza + hydzc(lf)*delpzz)
+c  Junction friction.
+           fricfj(jx) = fricfk(jx) + fricfl(jx)
+           fricgj(jx) = fricgk(jx) + fricgl(jx)
+           psmf(jx) = (fricfj(jx) + hlossf(jx))*avrf(jx)
+           psmg(jx) = (fricgj(jx) + hlossg(jx))*avrg(jx)
+           psld(jx) = - delpza
+c   gam ghanges
+cc         if( chngno(74)) then
+             psmf(jx) = (fricfj(jx)
+     &                 + hlossf(jx))*voidfa(jx)*rhofa(jx)
+             psmg(jx) = (fricgj(jx)
+     &                 + hlossg(jx))*voidga(jx)*rhoga(jx)
+c gas equation
+             psld(jx) = - dpgza
+c liquid equation, put pump head in liquid equation
+             psld1(jx) =  - dpfza
+c  end gam changes
+cc         endif
+           vpgnx(jx) = vpgen(jx)*dx(jx)
+           vngen(jx) = vngen(jx)*dx(jx)
+c  Vapor generation term for difference equation.
+           vpgnxx = ravrg(jx)
+           if (vpgen(jx) .lt. 0.0) vpgnxx = -ravrf(jx)
+           vpgnx(jx) = vpgnx(jx)*vpgnxx
+           vngen(jx) = vngen(jx)*ravrg(jx)
+c  Virtual mass interaction.
+           rhofga = 1.0/(rhofa(jx)*rhoga(jx))
+c
+c  This needs to be uncommented for the gravity driven wave test problem
+c  for 3-D RELAP5/NPR.
+c          faaj(j) = 0.0001*faaj(j)
+           virmas = faaj(j)*(avrf(jx) + avrg(jx))**2*rhofga
+c   gam change
+cc         if( chngno(74) ) then
+             virmas = faaj(j)*(avrf(jx) + avrg(jx))
+     &              *voidga(jx)*voidfa(jx)*dx(jx)
+c   end gam change
+cc         endif
+           if (chngno(14)) then
+             virmas = 0.0
+             dpstf(jx) = 0.0
+           endif
+c  Difference momentum equation.
+           difr(jx) = (rhoga(jx) - rhofa(jx))*rhofga
+           scrach = (1.0 + virmas)*dx(jx)
+c  Incorporate fij(i), fxj(i) and c0j(i) into interphase
+c  friction terms of momentum difference equation.
+           c0 = c0j(j)
+           if (voidj(j) .gt. 0.0) c0 = min(c0,1.0/voidj(j))
+           if (voidj(j) .lt. 0.99999) then
+             c1 = ( 1.0 - c0*voidj(j) )/(1.0 - voidj(j))
+           else
+             c1 = ((voidj(j) - 0.99999) + (1.0 - voidj(j))*(1.0 -
+     &       0.99999*c0)
+     &       *1.0e5)*1.0e5
+           endif
+c
+c  This needs to be uncommented for the gravity driven wave test problem
+c  for 3-D RELAP5/NPR.
+c          fij(j) = 0.0001*fij(j)
+           if (chngno(14)) then
+             figj(jx) = 0.0
+             fifj(jx) = 0.0
+           elseif ((iand(print,128) .eq. 0 .and. chngno(47))
+     &     .or.    (iand(print,128) .ne. 0 .and. .not. chngno(47))) then
+cc           if( chngno(74) ) then
+               ravrt = 1.0
+cc           else
+cc             ravrt = ravrf(jx) + ravrg(jx)
+cc           endif
+             fijdv = ravrt*dx(jx)*fij(j)*abs(c1*velgj(j) -
+     &       c0*velfj(j))
+             figvj = fijdv*c1
+             fifvj = fijdv*c0
+             fij1 = ravrt*(dx(jx)*fij(j)*0.01 + fidxup(jx))
+             figj(jx) = figvj + fij1
+             fifj(jx) = fifvj + fij1
+           else
+             figj(jx) = (ravrf(jx) + ravrg(jx))*
+     &       (dx(jx)*(fij(j)*(abs(c1*velgj(j) - c0*velfj(j))*c1 +
+     &       0.01)) + fidxup(jx))
+             fifj(jx) = (ravrf(jx) + ravrg(jx))*
+     &       (dx(jx)*(fij(j)*(abs(c1*velgj(j) - c0*velfj(j))*c0 +
+     &       0.01)) + fidxup(jx))
+           endif
+c  Incorporate interphase friction terms fifj and figj into diff and
+c  difg.
+           alpg = max(1.0e-5,voidga(jx))
+           alpf = max(1.0e-5,voidfa(jx))
+           fricgj(jx) = fricgj(jx)*(1.0 - fxj(j) +
+     &     fxj(j)*alpg*(1.0 - rhoga(jx)/rhofa(jx)))
+           fricfj(jx) = fricfj(jx)*(1.0 - fxj(j) +
+     &     fxj(j)*alpf*(1.0 - rhofa(jx)/rhoga(jx)))
+           if ((iand(print,128) .eq. 0 .and. chngno(47))
+     &     .or.    (iand(print,128) .ne. 0 .and. .not. chngno(47))) then
+             diff(jx) = (2.0*fricfj(jx) + fifj(jx) + vpgnx(jx) +
+     &       fifvj + 2.0*hlossf(jx))
+             difg(jx) = - (2.0*fricgj(jx) + figj(jx) + vpgnx(jx) +
+     &       figvj + 2.0*hlossg(jx) + vngen(jx))
+             difold(jx) = - (difr(jx)*
+     &       (pl(jx) - pk(jx)) - dpstf(jx) +
+     &       fifvj*velfj(j) - figvj*velgj(j)) +
+     &       (fricfj(jx) + hlossf(jx))*velfj(j) -
+     &       (fricgj(jx) + hlossg(jx))*velgj(j)
+           else
+             diff(jx) = (fricfj(jx) + fifj(jx) + vpgnx(jx) +
+     &       hlossf(jx))
+             difg(jx) = - (fricgj(jx) + figj(jx) + vpgnx(jx) +
+     &       hlossg(jx) + vngen(jx))
+             difold(jx) = - (difr(jx)*(pl(jx) - pk(jx)) - dpstf(jx))
+           endif
+cc         if( chngno(74) ) then
+c  difference equation => liquid momentum equation
+               diff(jx) =
+cc   &             + voidfa(jx)*rhofa(jx)*dx(jx)
+cc   &             + virmas
+     &             + fifj(jx)
+     &             + (psmf(jx) + psumf(jx))
+               if (vpgnx(jx) .lt. 0.0) then
+                 diff(jx) = diff(jx) - vpgnx(jx)
+               endif
+               difg(jx) =
+cc   &             - virmas
+     &             - figj(jx)
+               if (vpgnx(jx) .lt. 0.0) then
+                 difg(jx) = difg(jx) + vpgnx(jx)
+               endif
+               difold(jx) =
+cc   &             + voidfa(jx)*rhofa(jx)*velfjo(i)*dx(jx)
+     &             + scvtur(jx)*voidfa(jx)*(pk(jx) - pl(jx))
+     &             + psld1(jx)
+     &             + psumf(jx)*velfjo(j)
+     &             - (voidfa(jx)*rhofa(jx)*voidga(jx)*rhoga(jx))*
+     &               dpstf(jx)/
+     &               (voidfa(jx)*rhofa(jx)+voidga(jx)*rhoga(jx))
+               if ((iand(print,128) .eq. 0 .and. chngno(47))
+     &         .or.(iand(print,128) .ne. 0 .and. .not. chngno(47))) then
+                 diff(jx) = diff(jx) + fifvj + psmf(jx)
+                 difg(jx) = difg(jx) - figvj
+                 difold(jx) = difold(jx) + fifvj*velfjo(j) -
+     &           figvj*velgjo(j) + psmf(jx)*velfjo(j)
+               endif
+cc         endif
+c   compute terms in sum momentum equation
+c  Sum momentum equation.
+           sumf(jx) = (2.0*psmf(jx) - vpgnx(jx))
+           sumg(jx) = (2.0*psmg(jx) + vpgnx(jx) + vngen(jx))
+           sumold(jx) = pk(jx) - pl(jx) + psld(jx) +
+     &     psmf(jx)*velfj(jx) + psmg(jx)*velgj(jx)
+c  sum equation => gas momentum equation
+cc         if( chngno(74) ) then
+               sumf(jx) =
+cc   &          - virmas
+     &          - fifj(jx)
+               if (vpgnx(jx) .gt. 0.0) then
+                 sumf(jx) = sumf(jx) - vpgnx(jx)
+               endif
+c
+               sumg(jx) =
+cc   &          + voidga(jx)*rhoga(jx)*dx(jx)
+cc   &          + virmas
+     &          + (psmg(jx) + psumg(jx))
+     &          + figj(jx)
+               if (vpgnx(jx) .gt. 0.0) then
+                 sumg(jx) = sumg(jx) + vpgnx(jx)
+               endif
+               sumold(jx) =
+cc   &          + voidga(jx)*rhoga(jx)*velgjo(j)*dx(jx)
+     &          + scvtur(jx)*voidga(jx)*(pk(jx) - pl(jx))
+     &          + psld(jx)
+     &          + psumg(jx)*velgjo(i)
+     &          + (voidfa(jx)*rhofa(jx)*voidga(jx)*rhoga(jx))*
+     &            dpstf(jx)/
+     &            (voidfa(jx)*rhofa(jx)+voidga(jx)*rhoga(jx))
+               if ((iand(print,128) .eq. 0 .and. chngno(47))
+     &         .or.(iand(print,128) .ne. 0 .and. .not. chngno(47))) then
+                 sumg(jx) = sumg(jx) + psmg(jx) + figvj
+                 sumf(jx) = sumf(jx) - fifvj
+                 sumold(jx) = sumold(jx) + psmg(jx)*velgjo(j) +
+     &           figvj*velgjo(j) - fifvj*velfjo(j)
+               endif
+cc         endif
+           if( iand(jcex(j),ishft(1,27)).ne.0 .and.
+     &       iand(jcex(j),ishft(1,28)).ne.0 ) then
+c   solve for both phase velocities
+c  Solution of sum and difference momentum equations for
+c  velocity of liquid and velocity of gas.
+             det = 1.0/(sumf(jx)*difg(jx) - sumg(jx)*diff(jx))
+             vfp = velfj(j)
+             vgp = velgj(j)
+             velfj(j) = (difg(jx)*sumold(jx) - sumg(jx)*difold(jx))*
+     &       det
+             velgj(j) = (sumf(jx)*difold(jx) - diff(jx)*sumold(jx))*
+     &       det
+                if( abs((velgj(j)-vgp)/velgj(j)).gt.eps .or.
+     &          abs((velfj(j)-vfp)/velfj(j)).gt.eps ) then
+                  if( iter.le.itmax ) then
+                    iconv = 1
+                  else
+c   if fail to converge, set velocities to old values and continue
+                    velfj(j) = velfjo(j)
+                    velgj(j) = velgjo(j)
+                    jcex(j) = iand(jcex(j),not(ishft(1,27)))
+                    jcex(j) = iand(jcex(j),not(ishft(1,28)))
+                  endif
+                else
+                  jcex(j) = iand(jcex(j),not(ishft(1,27)))
+                  jcex(j) = iand(jcex(j),not(ishft(1,28)))
+                endif
+              elseif( iand(jcex(j),ishft(1,27)).ne.0 ) then
+c   solve diff momentum eqn for vapor velocity
+                vgp = velgj(j)
+cc              if( chngno(74) ) then
+                velgj(j) = ( sumold(jx) - sumf(jx)*velfj(j))/sumg(jx)
+cc              else
+cc              velgj(j) = ( difold(jx) - diff(jx)*velfj(j))/difg(jx)
+cc              endif
+                if( abs((velgj(j)-vgp)/velgj(j)).gt.eps ) then
+                  if( iter.le.itmax ) then
+                    iconv = 1
+                    velgj(j) = 0.5*(vgp + velgj(j))
+                  else
+c  if fail to converge, set velocities equal and continue
+                    velgj(j) = velfj(j)
+                    jcex(j) = iand(jcex(j),not(ishft(1,27)))
+                    write(output,*) ' vapor velocity in junction ',
+     &              junno(j),' failed to converge at time ',timehy,
+     &              ' and count ',ncount
+c
+                  endif
+                else
+                  jcex(j) = iand(jcex(j),not(ishft(1,27)))
+                  velgj(j) = velfj(j)
+cc                if( ncount.gt.1 ) then
+cc                vgp = ( sumold(jx) - sumf(jx)*velfj(j)) / sumg(jx)
+cc                endif
+cc                write(output,*) ' ncount,junno,timehy,vapor ',
+cc   &            ncount,junno(j),timehy,velgj(j),vgp
+                endif
+              elseif( iand(jcex(j),ishft(1,28)).ne.0 ) then
+c   solve diff momentum eqn for liquid velocity
+                vfp = velfj(j)
+                velfj(j) = ( difold(jx) - difg(jx)*velgj(j))/diff(jx)
+                if( abs((velfj(j)-vfp)/velfj(j)).gt.eps ) then
+                  if( iter.le.itmax ) then
+                    iconv = 1
+                    velfj(j) = 0.5*(velfj(j) + vfp)
+                  else
+c  if fail to converge, set velocities equal and continue
+                    velfj(j) = velgj(j)
+                    jcex(j) = iand(jcex(j),not(ishft(1,28)))
+                    write(output,*) ' liquid velocity in junction',
+     &              junno(j),' failed to converge at time ',timehy,
+     &              ' and count ',ncount
+                  endif
+                else
+                  jcex(j) = iand(jcex(j),not(ishft(1,28)))
+                  velfj(j) = velgj(j)
+cc                if( ncount.gt.1 ) then
+cc                vfp = ( sumold(jx) - sumg(jx)*velgj(j))/sumf(jx)
+cc                endif
+cc                write(output,*) 'ncount,junno,timehy,liquid',
+cc   &            ncount,junno(j),timehy,velfj(j),vfp
+                endif
+              endif
+              velfjo(j) = velfj(j)
+              velgjo(j) = velgj(j)
+              fijo(j) = 0.0
+c It is OK to have sudden large reductions in interfacial ht but not sud
+c large increases. Setting old ht's to zero will stop time smoothing in
+              if (ilvk .eq. 1) then
+                higo(k) = 0.0
+                hifo(k) = 0.0
+                hgfo(k) = 0.0
+              endif
+              if (ilvl .eq. 1) then
+                higo(l) = 0.0
+                hifo(l) = 0.0
+                hgfo(l) = 0.0
+              endif
+            enddo
+c                 ! mm
+c
+c  Debug printout.
+       if (help .eq. 0) go to 999
+$if def,dbgprnt
+       if( iand(ihlppr(2),ishft(1,8)).ne.0 ) then
+       call helphd ('level',8)
+       ll = lvscr(lpdat(issys)%llvect)
+       if (lvptr(ll) .ne. 0) then
+         write (output,2001)
+ 2001  format ('0Sum and difference terms'/1x,119('=')/7x,
+     & 'junno(i)',3x,'sumf',9x,'sumg',9x,'sumold',7x,'diff',9x,'difg',
+     & 9x,'difold',7x,'avrf',9x,'avrg'/1x,119('='))
+         do m = 1,lvptr(ll)
+           ll = ll + 1
+           j = lvptr(ll)
+           jx = jcnxs(j)
+           if( iand(jcex(j),ishft(1,20)).ne.0 ) then
+           write (output,2002) junno(j),sumf(jx),sumg(jx),
+     &     sumold(jx),diff(jx),difg(jx),difold(jx),avrf(jx),
+     &     avrg(jx)
+           endif
+ 2002  format (6x,i10.9,1p,8g13.5)
+         enddo
+cc       write (output,2003)
+cc 2003  format('0volume terms'/1x,132('=')/7x,'volno(i)',3x,
+cc   & 'dl(i)',8x,'voidf(i)',5x,'rhof(i)',6x,'fwalf(i)',5x,'velf(i)',6x,
+cc     & 'difvfx(ix)',3x,'sourcf(ix)',3x,'sourcm(ix)',3x,'gamas(i)'/
+cc     & 18x,'hydzc(i)',5x,'voidg(i)',5x,'rhog(i)',6x,'fwalg(i)',5x,
+cc     & 'velg(i)',6x,'difvgx(ix)',3x,'sourcg(ix)',3x,'sourca(ix)',
+cc     & 3x,'enths(i)'/1x,132('='))
+cc         ll = lvscr(issys)
+cc         do m = 1,lvptr(ll)
+cc           ll = ll + 1
+cc           j = lvptr(ll)
+cc           if( iand(vctrlx(j),1).ne.0 ) then
+cc           write (output,2004) volno(j),dl(j),voidf(j),rhof(j),
+cc     &     fwalf(j),velf(j),difvfx(jx),sourcf(jx),sourcm(jx),gamas(j),
+cc     &     hydzc(j)+hydzc(j+1),voidg(j),rhogo(j),fwalg(j),velg(j),
+cc     &     difvgx(jx),sourcg(jx),sourca(jx),enths(j)
+cc 2004  format (6x,i10.9,1p,9g13.5/16x,9g13.5)
+cc           if (iand(imap(j+1),16384) .ne. 0) write (output,2015)
+cc     &     dl(j+1),fwalf(j+1),velf(j+1),difvfx(jx+1),hydzc(j+2) +
+cc     &     hydzc(j+3),fwalg(j+1),velg(j+1),difvgx(jx+1)
+cc           endif
+cc 2015  format (16x,1p,g13.5,26x,3g13.5/16x,g13.5,26x,3g13.5)
+cc           if (iand(imap(j+2),16384) .ne. 0) write (output,2015)
+cc     &     dl(j+2),fwalf(j+2),velf(j+2),difvfx(jx+2),hydzc(j+4) +
+cc     &     hydzc(j+5),fwalg(j+2),velg(j+2),difvgx(jx+2)
+cc         enddo
+cc         if (lpdat(issys)%lnoncn .ne. 0) then
+cc           write (output,2007)
+cc 2007  format('0Noncondensibles'/1x,132('=')/7x,'volno(i)',3x,
+cc     & 'gaman(1)',5x,'gaman(2)',5x,'gaman(3)',5x,'gaman(4)',5x,
+cc     & 'gaman(5)'/18x,'sourcn(1)',4x,'sourcn(2)',4x,'sourcn(3)',4x,
+cc     & 'sourcn(4)',4x,'sourcn(5)'/18x,'enthn(1)',5x,'enthn(2)',5x,
+cc     & 'enthn(3)',5x,'enthn(4)',5x,'enthn(5)'/1x,132('='))
+cc           ll = lvsrc(issys)
+cc           do m = 1,lvptr(ll)
+cc             ll = ll + 1
+cc             j = lvptr(ll)
+cc             if (lpdat(issys)%lnoncn .lt. 5) then
+cc               do ii = lpdat(issys)%lnoncn,4
+cc                 sourcn(jx+ii) = 0.0
+cc               enddo
+cc             endif
+cc             if( iand(vctrlx(j),1).ne.0 ) then
+cc             write (output,2008) volno(j),gaman(j),gaman(j+1),
+cc     &       gaman(j+2),gaman(j+3),gaman(j+4),sourcn(jx),sourcn(jx+1),
+cc   &       sourcn(jx+2),sourcn(jx+3),sourcn(jx+4),enthn(j),enthn(j+1),
+cc     &       enthn(j+2),enthn(j+3),enthn(j+4)
+cc             endif
+cc 2008  format(6x,i10.9,1p,5g13.5/16x,5g13.5/16x,5g13.5)
+cc           enddo
+cc         endif
+         write (output,2005)
+ 2005  format ('0Junction terms'/1x,132('=')/7x,'junno(i)',
+     & 3x,'fij(i)',7x,'ajun(i)',6x,'arat(i)',6x,'fjunf(i)',5x,
+     & 'formfj(i)',4x,'velfj(i)',5x,'velgj(i)',5x,'fifj(ix)',5x,
+     & 'vfdpk(ix)'/18x,'fidxup(ix)',3x,'athrot(i)',4x,
+     & 'arat(i+1)',4x,'fjunr(i)',5x,'formgj(i)',4x,'velfj(i)',5x,
+     & 'velgj(i)',5x,'figj(ix)',5x,'vgdpk(ix)'/1x,132('='))
+         ll = lvscr(lpdat(issys)%llvect)
+         do m = 1,lvptr(ll)
+           ll = ll + 1
+           j = lvptr(ll)
+           jx = jcnxs(j)
+           if( iand(jcex(j),ishft(1,20)).ne.0 ) then
+           write (output,2006) junno(j),fij(j),ajun(j),arat(j),
+     &     fjunf(j),formfj(j),velfj(j),velgj(j),fifj(jx),vfdpk(jx),
+     &     fidxup(jx),athrot(j),arat(j+1),fjunr(j),formgj(j),
+     &     velfj(j),velgj(j),figj(jx),vgdpk(jx)
+           endif
+ 2006  format (6x,i10.9,1p,9g13.5/16x,9g13.5)
+         enddo
+       endif
+       endif
+$endif
+  999  continue
+          enddo
+c               ! while iconv.eq.1
+c  Recompute volume average velocities for all volumes affected by
+c  level crossing.
+          call vlvela
+c   make list of volumes to be used later
+c   change vlvela to use alternate list later
+c all junctions converged
+        endif
+c             end of check for number of junctions to be reset
+        endif
+c             end of icheck = 1 for velocity reset logic
+        endif
+c             end of check for level stacks for this system
+       return
+       end

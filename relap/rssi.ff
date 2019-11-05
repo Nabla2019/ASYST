@@ -1,0 +1,373 @@
+*mlist
+       subroutine rssi
+c
+c
+c  Reads the optional self-initialization control and identification
+c  cards (cards 140-147).  These cards allow the user to have extra
+c  input checking when running a self initialization steady state
+c  problem.  This option pertains only to s.i. steady state, for pwr
+c  plant models for which no reactor kinetics feedback is modeled
+c  and for which the two step scheme is enabled.
+c
+c  Cognizant engineer: swj/dmk
+c
+*in32 ixl2
+*in32end
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'ssiblk.h'
+       include 'ufiles.h'
+c
+c  Local variables.
+       real xl2(12)
+       integer ixl2(12)
+       equivalence (ixl2(1),xl2(1))
+       integer l3a(9)
+       integer i,ipoint,isfdes,ix,j,k,krd1,krd2,krdlas,l,
+     & lcontg,maxlen,n3,n4,nf,np,ns
+       real conin,conout,ftbnid,psia
+       logical pziput
+       character lablp*9,labpsi*9,labpbr*9,chwrd*8
+c
+       data  krd1/140/, krdlas/147/, maxlen/213/
+       data pziput/.false./
+       data labpsi/'(pa)'/, labpbr/'(lbf/in2)'/, psia/6894.757/
+       data l3a/3*0,12,0,0,2,0,0/
+c
+c  look for self-initialization control and identification cards
+       l3a(1) = 140
+       call inplnk(l3a(1), ix, n3, n4, fa(filndx(1)))
+       if (n4 .ne. 0) go to 10
+       if ((ix .lt. 0) .or. (ix .gt. krdlas)) return
+       krd2 = krd1 + 1
+       write (output, '(''0******** Input error, one or more of the self
+     &-initialization cards'',i4,'' through'',i4,'' have been input''/
+     & 10x,''but the self-initialization control card no.'',
+     & i4,'' is missing'')') krd2, krdlas, krd1
+       fail = .true.
+c  Get space for ssiblk = filid(37).
+   10  if (filid(37) .ne. 0.0) then
+c  This is a restart, delete previously defined s.i. block.
+         if (isfdes(filid(37)) .ne. 0) call ftbdel (filid(37))
+         filndx(37) = 0
+         filsiz(37) = 0
+       else
+c  s.i. block is currently undefined
+         filid(37) = -ftbnid(1)
+       endif
+c  reserve space for new s.i. block
+       ix = lcontg(1)
+       if (ix .lt. maxlen) then
+       write (output, '(''0******** Space insufficient to process self-i
+     &nitialization control cards''/10x,''space available ='',i7,'' spac
+     &e requested ='',i7)') ix, maxlen
+         fail = .true.
+         return
+       endif
+       call ftbrsv(filid(37), maxlen, -1, filndx(37))
+       l = filndx(37)
+c  initialize units conversion and labels
+       conin = 1.0
+       if (.not.uniti) conin = psia
+       conout = 1.0
+       lablp = labpsi
+       if (.not.unito) then
+         conout = 1.0/psia
+         lablp = labpbr
+       endif
+c  initialize the ssiblk.
+       ipoint = l
+       npumps(l) = 0
+       nstctl(l) = 0
+       nfeeds(l) = 0
+       k = l
+       do 11 j = 1,19
+         chwrd = ' '
+         read (chwrd,'(a8)') cmpvnm(k)
+         pzpres(k) = 0.0
+         compid(k) = 0
+         contid(k) = 0
+         cvrtno(k) = 0
+         cmptno(k) = 0
+         cmpvno(k) = 0
+         cmptrp(k) = 0
+         cmpiii(k) = 0
+         k = k + ssiskp
+   11  continue
+c  input the self-initialization control card, no. 140.
+       do 20 i = 1, 12
+         ixl2(i) = 0
+   20  continue
+       l3a(1) = 140
+       l3a(2) = 0
+       l3a(3) = 0
+       l3a(4) = 3
+       l3a(6) = 1
+       l3a(7) = 0
+       if (n4 .eq. 1) then
+         l3a(4) = 1
+         l3a(7) =-1
+       endif
+        call inp2 (fa(filndx(1)),xl2,l3a)
+        if (l3a(6) .eq. 3) go to 22
+        if (l3a(4) .eq. 1) then
+          write (chwrd,'(a8)') xl2(1)
+          if (chwrd.eq.'delete' .or. chwrd.eq.'discard') go to 190
+        endif
+        write (output,'(''0******** Input error, either three integer nu
+     &mbers or one alpha-numeric = delete or discard must be input on ca
+     &rd 140'')')
+        fail = .true.
+   22  npumps(l) = ixl2(1)
+       nstctl(l) = ixl2(2)
+       nfeeds(l) = ixl2(3)
+c  input the self-initialization pump controller id cards, no. 141-142
+       do 21 i = 1, 12
+         ixl2(i) = 0
+   21  continue
+       l3a(1) =  141
+       l3a(2) = -142
+       l3a(3) = 0
+       l3a(4) = 12
+       l3a(6) = 1
+       l3a(7) = 2
+       np     = 0
+       call inp2 (fa(filndx(1)), ixl2, l3a(1))
+c  check for no input or error
+       if (l3a(6) .le. 0) then
+         if ((npumps(l) .ne. 0) .and. (l3a(6) .eq. 0)) then
+           write (output, '(''0******** Input error, number of pumps inp
+     &ut on the self-initialization control card 140 is'',i2/10x,
+     & '' but none have been input on cards 141-142'')')
+     &     npumps(l)
+           fail = .true.
+         else
+           if (l3a(6) .lt. 0) fail = .true.
+         endif
+         go to 110
+       endif
+c  input = ok, check for input in data pairs
+       if (mod(l3a(6), 2) .ne. 0 ) then
+         write (output,3001)
+ 3001  format ('0******** Input error, the data on the self-initializati
+     &on pump controller id cards 141-142 have not been entered in data
+     &pairs.'/10x,'Each data pair must be entered as the pump component
+     &number followed by the pump control component number'/10x,'(up to
+     &6 pairs may be entered).')
+         fail = .true.
+       endif
+c  data pairs = ok, process the s.i. pump controller info.
+       if (l3a(6) .ne. 0) then
+         j = l3a(6)
+         do 101 k = 1, j, 2
+           compid(ipoint) = ixl2(k)
+           contid(ipoint) = ixl2(k+1)
+           ipoint = ipoint + ssiskp
+           np = np + 1
+  101    continue
+         if (npumps(l) .ne. np) then
+           write (output, '(''0******** Input error, the number of pump
+     &component, controller pairs input on cards 141-142 is''/
+     & 10x,'' inconsistent with the number of pumps input on card 140.''
+     &)')
+           fail = .true.
+         endif
+       endif
+c  input the self-initialization steam controller id cards, no. 143-144
+  110  do 112 i = 1, 12
+         ixl2(i) = 0
+  112  continue
+       l3a(1) =  143
+       l3a(2) = -144
+       l3a(6) = 1
+       l3a(7) = 2
+       l3a(8) = 0
+       l3a(9) = 0
+       ns     = 0
+       call inp2 (fa(filndx(1)), ixl2, l3a(1))
+c  check for no input or error
+       if (l3a(6) .le. 0) then
+         if ((nstctl(l) .ne. 0) .and. (l3a(6) .eq. 0)) then
+           write (output, '(''0******** Input error, number of steam con
+     &trollers input on the self-initialization control''/
+     & 10x,''card 140 is'',i2,'' but none have been input on cards 143-1
+     &44'')') nstctl(l)
+           fail = .true.
+         else
+           if (l3a(6) .lt. 0) fail = .true.
+         endif
+         go to 120
+       endif
+c  input = ok, check for input in data pairs
+       if (mod(l3a(6), 2) .ne. 0 ) then
+         write (output, '(''0******** Input error, the data on the self-
+     &initialization steam controller id cards 143-144 has not been ente
+     &red in data pairs.''/10x,''each data pair must be entered as the s
+     &team component number followed by the steam control component numb
+     &er''/10x,''(up to 6 pairs may be entered).'')')
+         fail = .true.
+       endif
+c  data pairs = ok, process the s.i. steam controller info.
+       if (l3a(6) .ne. 0) then
+         j = l3a(6)
+         do 111 k = 1, j, 2
+           compid(ipoint) = ixl2(k)
+           contid(ipoint) = ixl2(k+1)
+           ipoint = ipoint + ssiskp
+           ns = ns + 1
+  111    continue
+         if (nstctl(l) .ne. ns) then
+           write (output, '(''0******** Input error, the number of steam
+     & component, controller pairs input on cards 143-144 is''/
+     &10x,''inconsistent with the number of steam controllers input on c
+     &ard 140'')')
+           fail = .true.
+         endif
+       endif
+c  input the self-initialization feed controller id cards, no. 145-146
+  120  do 122 i = 1, 12
+         ixl2(i) = 0
+  122  continue
+       l3a(1) =  145
+       l3a(2) = -146
+       l3a(6) = 1
+       l3a(7) = 2
+       l3a(8) = 0
+       l3a(9) = 0
+       nf     = 0
+       call inp2 (fa(filndx(1)), ixl2, l3a(1))
+c  check for no input or error
+       if (l3a(6) .le. 0) then
+         if ((nfeeds(l) .ne. 0) .and. (l3a(6) .eq. 0)) then
+           write (output, '(''0******** Input error, number of feed cont
+     &rollers input on the self-initialization control card 140 is'',
+     &i2/10x,''but none have been input on cards 145-146'')') nfeeds(l)
+           fail = .true.
+         else
+           if (l3a(6) .lt. 0) fail = .true.
+         endif
+         go to 130
+       endif
+c  input = ok, check for input in data pairs
+       if (mod(l3a(6), 2) .ne. 0 ) then
+         write (output,3002)
+ 3002  format ('0******** Input error, the data on the self-initializati
+     &on feed controller id cards 145-146 have not been entered in data
+     &pairs.'/10x,'Each data pair must be entered as the feed component
+     &number followed by the feed control component number'/10x,'(up to
+     &6 pairs may be entered).')
+         fail = .true.
+       endif
+c  data pairs = ok, process the s.i. feed controller info.
+       if (l3a(6) .ne. 0) then
+         j = l3a(6)
+         do 121 k = 1, j, 2
+           compid(ipoint) = ixl2(k)
+           contid(ipoint) = ixl2(k+1)
+           ipoint = ipoint + ssiskp
+           nf = nf + 1
+  121    continue
+         if (nfeeds(l) .ne. nf) then
+           write (output, '(''0******** Input error, the number of feed
+     &component, controller pairs input on cards 145-146 is''/10x,
+     & ''inconsistent with the number of feeds input on card 140.'')')
+           fail = .true.
+         endif
+       endif
+c  input the pressurizer replacment card, no. 147
+  130  do 132 i = 1, 12
+         ixl2(i) = 0
+  132  continue
+       l3a(1) = 147
+       l3a(2) = 0
+       l3a(3) = 0
+       l3a(4) = 3
+       l3a(6) = 1
+       l3a(7) = 0
+       l3a(8) = 0
+       l3a(9) = 1
+       call inp2(fa(filndx(1)), ixl2, l3a(1))
+       if (l3a(6) .eq. 0) go to 131
+       if (l3a(6) .lt. 0) then
+         fail = .true.
+       else
+       if (l3a(6) .ne. 3) then
+         write (output, '(''0******** Input error, three numbers (2 inte
+     &ger, 1 real) must be input on card 147 but'',i2,'' numbers have ac
+     &tually been input'')') l3a(6)
+         fail = .true.
+       endif
+       endif
+       compid(ipoint) = ixl2(1)
+       contid(ipoint) = ixl2(2)
+       pzpres(ipoint) =  xl2(3)*conin
+       ipoint = ipoint + ssiskp
+       pziput = .true.
+c  printout of si input
+  131  ipoint = l
+       j = filsiz(37)
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output, 260)
+  260 format('0Self-initialization input data')
+       write (output, 270) npumps(l), nstctl(l), nfeeds(l)
+  270 format('  no. of pump controllers =',i2/
+     &       ' no. of steam controllers =',i2/
+     &       '  no. of feed controllers =',i2)
+       npumps(l) = np
+       if (np .ne. 0) then
+         write (output, 280)
+  280 format('0 Pump controller  component no.  controller no.')
+         do 140 i = 1, np
+           write (output, 310) i, compid(ipoint), contid(ipoint)
+           ipoint = ipoint + ssiskp
+  140    continue
+       endif
+c
+       nstctl(l) = ns
+       if (ns .ne. 0) then
+         write (output, 290)
+  290 format('0Steam controller  component no.  controller no.')
+         do 150 i = 1, ns
+           write (output, 310) i, compid(ipoint), contid(ipoint)
+           ipoint = ipoint + ssiskp
+  150    continue
+       endif
+c
+       nfeeds(l) = nf
+       if (nf .ne. 0) then
+         write (output, 300)
+  300 format('0 Feed controller  component no.  controller no.')
+         do 160 i = 1, nf
+           write (output, 310) i, compid(ipoint), contid(ipoint)
+  310 format(12x, i5, 9x, i5, 11x, i5 )
+           ipoint = ipoint + ssiskp
+  160    continue
+       endif
+c
+c  edit the pressurizer replacment info
+       if (pziput) then
+         xl2(3) = pzpres(ipoint)*conout
+         write (output, 320) compid(ipoint), contid(ipoint),
+     &                       xl2(3), lablp
+  320 format('0Pressurizer replacement information, pressurizer componen
+     &t',i5,' connects to junction component',i5/' and the pressurizer p
+     &ressure =',1p,g14.6,1x,a9)
+         ipoint = ipoint + ssiskp
+       endif
+       endif
+c
+c  Get final size of filid(37).
+       if (ipoint .gt. l) then
+         filsiz(37) = ipoint - l + 3
+         call ftbsft (filid(37), filsiz(37), 2, filndx(37))
+         return
+       endif
+c  Delete the s.i. info.
+  190  if (isfdes(filid(37)) .ne. 0) call ftbdel(filid(37))
+       filid(37) = 0.0
+       filndx(37) = 0
+       filsiz(37) = 0
+       return
+       end

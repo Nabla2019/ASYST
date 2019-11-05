@@ -1,0 +1,167 @@
+*mlist
+*if def,selap
+       subroutine floab (kb,naz,wab,rftemp,tsur,z,dz,rogt,avoidl,ifrag,
+     & vladeb,wfroab,tliq,tsol,wremab,dzfrcl,wbotab,hadd,haddbt,
+     & hremov,afracl)
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: ljs.
+c
+c#
+c#     calling subroutine: liqcon
+c#     subroutines called: solab,solss,solgt,matpro
+c#     engineer/programmer: l. j. siefken
+c#
+c#     argument list definition:
+c#     kb        = elevation at which liquid neutron ab-
+c#                  sorber material begins to flow. (m)
+c#                  (input)
+c#     naz       = number of axial zones      (input)
+c#     wab(k)    = mass of in-situ liquified neutron ab-
+c#                 sorber material in axial zone k. (kg)
+c#                 (output)
+c#     rftemp    = reference temperature for enthalpy cal-
+c#                 culations. normally, rftemp is set equal
+c#                 to room temperature. (k)    (input)
+c#     tsur(k)   = average temperature of control rod in
+c#                 axial zone k at end of time step. (k).
+c#                 (input)
+c#     z(k)      = elevation of midplane of axial zone k. (m)
+c#                 (input)
+c#     dz(k)     = height of each axial zone  (m)  (input)
+c#     rogt(k)   = outer radius of guide tube with outer
+c#                 oxide layer. (m)     (input)
+c#     avoidl(k) = flow area around guide tube. (m*2)
+c#                 (input)
+c#     ifrag(k)  = variable indicating whether or not in-
+c#                 tact control rod, debris bed or void
+c#                 region exists in axial zone k.
+c#                 0 = intact control rod
+c#                 1 or 2 = debris bed
+c#                 3 = void region
+c#                 (input)
+c#     vladeb(k) = volume of liquid which can be absorbed
+c#                 by debris bed in axial zone k. (m**2)
+c#                 (input)
+c#    wfroab(k) = mass of solidified neutron absorber
+c#                axial zone k. (kg)    (input/output)
+c#    tliq      = liquidus temperature of ag-in-cd (k)
+c#                 (input)
+c#     tsol      = solidus temperature of ag-in-cd (k)
+c#                 (input)
+c#     wremab(k) = mass of neutron absorber material removed
+c#                 from axial zone k. (kg)    (input/output)
+c#    dzfrcl(k) = fraction of height of axial zone k which
+c#                is completely filled with liquified/
+c#                solidified control rod material resting
+c#                on top of debris bed.  (input/output)
+c#    wbotab    = mass of liquified neutron absorber
+c#                material which flowed below bottom
+c#                of core. (kg)    (input/output)
+c#     hadd(k)   = heat added to axial zone k during time
+c#                 step due to flow of liquified control
+c#                 rod material. (j)    (output)
+c#     haddbt    = heat added to region below core due to
+c#                 flow of liquified control rod material.
+c#                 (j)     (input/output)
+c#     hremov(k) = heat removed from axial zone k during
+c#                 time step due to flow of liquified con-
+c#                 trol rod material. (j)    input/output)
+c#    afracl(k) = fractional reduction in flow area around
+c#                guide tube due to crust formation on out-
+c#                side of guide tube. if afracl(k) = 1.0,
+c#                then flow area around guide tube is com-
+c#                pletely filled with crust. (output)
+c
+       implicit none
+c
+*call cons
+*call scddat
+*call contrl
+*call ufiles
+       integer kb,naz,ifrag
+       real wab,rftemp,tsur,z,dz,rogt,avoidl,vladeb,wfroab,tliq,tsol,
+     * wremab,dzfrcl,wbotab,hadd,haddbt,hremov,afracl
+      dimension rogt(ndax)  ,
+     #          tsur(ndax) , z(ndax)    , dz(ndax)   ,
+     #          avoidl(ndax), ifrag(ndax) , vladeb(ndax),
+     #          wfroab(ndax),
+     #          wremab(ndax),
+     #          hadd(ndax)  ,
+     #          hremov(ndax), wab(ndax),
+     #          afracl(ndax), dzfrcl(ndax)
+c
+c  Local variables.
+       integer ictype,k,ktop,nsw
+       integer ndbg
+       real hrem,tliqav,tliqwt,wflo
+       real aenthl
+       external aenthl
+       external solab
+c
+c       calculate mass of liquid absorber material which
+c       flows during time step.
+c       ktop = top contiguous axial zone with liquified
+c              ag-in-cd.
+        ndbg=0
+          if(timehy.gt.1.e+9)ndbg=1
+          if(ndbg.eq.1)then
+          write(output,9005)timehy
+9005      format(' FLOAB entered, timehy=',e11.4)
+          end if
+        ktop=kb
+        wflo=0.0
+        tliqwt=0.0
+        nsw=0
+        do100k=kb,naz
+        if(wremab(k).gt.1.e-15)go to 100
+        if(tsur(k).lt.tliq)then
+        nsw=1
+        end if
+        if(nsw.eq.1)go to 100
+        tliqwt=tliqwt+wab(k)*tsur(k)
+        wflo=wflo+wab(k)
+!       write(output,9005)timehy,icomp,k
+!9005    format(' core degradation event - ',
+!    #  ' breach of liquefied absorber material; ',
+!    #  ' time=',e12.6,' s,  component no. =',i3,' axial node =',i5)
+        ktop=k
+  100   continue
+        tliqav=tliqwt/wflo
+c
+c       calculate axial zone at which ag-in-cd began to flow
+c       out of stainless steel cladding onto outer surface
+c       of guide tube.
+c
+c       calculate mass of ag-in-cd removed by liquefaction
+c       and flow.
+        ictype=1
+        hrem=0.0
+        do124k=kb,ktop
+        wremab(k)=wab(k)
+        hremov(k)=wab(k)*aenthl(ictype, tliqav, rftemp)
+     #   + hremov(k)
+        hrem=hrem+wab(k)*aenthl(ictype,tliqav, rftemp)
+  124   continue
+c
+c       calculate position of solidified ag-in-cd.
+c       assume ag-in-cd solidifies randomly with equal
+c       probability over 10 cm length. for simplification
+c       however, ag-in-cd assumed to solidify over integral
+c       number of axial zones. the number of zones is found
+c       whose zone lengths sum closest to 10 cm. in all cases,
+c       the first axial zone with solidified ag-in-cd is first
+c       axial zone below solidification temperature minus
+c       200k, second axial zone is next axial zone below this
+c       temperature, etc. if all zones have length of
+c       20 cm, all ag-in-cd will solidify in one axial zone.
+c       if all zones are 5 cm long, ag-in-cd solidifies uni-
+c       formily in two axial zones.
+        call solab(kb    , naz   , tsur  , tsol  ,
+     #             tliqav, wbotab, wflo  , haddbt,
+     #             dz    , wfroab, avoidl, hadd  ,
+     #             rftemp, ifrag , vladeb, dzfrcl)
+        return
+        end
+*endif

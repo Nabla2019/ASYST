@@ -1,0 +1,1115 @@
+*mlist
+*if def,selap
+       subroutine upsolv(is)
+c
+c  this subroutine solves the mass and energy equations for the upper
+c  plenum structures and includes the following:
+c    (1) oxidation calculations and boundary conditions (call ssoxup)
+c    (2) solidification calculations and boundary conditions
+c    (3) conduction and melting calculations (call tridg1)
+c    (4) relocation calculations
+c
+c  Cognizant engineer: ljs (frg).
+c
+       implicit none
+*call scddat
+*call upccon
+*call upcvar
+*call fast
+*call voldat
+*call contrl
+*call comctl
+*call statec
+*call scntl
+c
+c  local variables (must be defined every call)
+c
+c  is      index that represents current upper plenum structure number
+c  iax     index that represents current upper plenum axial level number
+c  icn     index that represents current upper plenum conduction node
+c          number
+c  iox     index that represents current upper plenum oxide species
+c  inul    complete index for the relap5 coolant condition arrays
+c          corresponding to the upper plenum left surface nodes.
+c          inul = nvadul(iax,is) + filndx(4)
+c  inur    complete index for the relap5 coolant condition arrays
+c          corresponding to the upper plenum right surface nodes.
+c          inur = nvadur(iax,is) + filndx(4)
+c  il      index that represents current noncondensable gas constituent
+c  nleft   conduction node number of left node for matrix solution
+c  ntot    total number of conduction nodes for matrix solution
+c  tnups   new (end of timestep) temperature (k) of upper plenum
+c          structure nodes
+c  aups    tridiagonal matrix, aups(i,n), where i=1,3 are -, 0, and +
+c          elements for nth equation
+c  bups    constant vector for matrix solution
+c  albc    portion of matrix term assoc. with left boundary conditions
+c  arbc    portion of matrix term assoc. with right boundary conditions
+c  blbc    portion of vector term assoc. with left boundary conditions
+c  brbc    portion of vector term assoc. with right boundary conditions
+c  qlbc    heat transfer rate assoc. with left boundary conditions
+c  qrbc    heat transfer rate assoc. with right boundary conditions
+c  flbc    heat transfer fraction assoc. with left boundary conditions
+c  frbc    heat transfer fraction assoc. with right boundary conditions
+c  conduc  thermal conductance
+c  imeltl  flag that indicates melting at left surface; 0=no, 1=yes
+c  imeltr  flag that indicates melting at right surface; 0=no, 1=yes
+c  irem    flag that ind. nodes removed during timestep; 0=no, 1=yes
+c  qreml   energy of material removed from left surface during timestep
+c  qremr   energy of material removed from right surface during timestep
+c  mmmelt  mass (kg) of metal melted during timestep
+c  mxmelt  mass (kg) of oxides carried along with liquid metal during
+c          timestep
+c  fracx   mass fraction of oxides removed
+c  mlrunl  mass (kg) of liquid metal that runs down left surface
+c  mlrunr  mass (kg) of liquid metal that runs down right surface
+c  mlfal   mass (kg) of liquid metal that falls from horiz. surface
+c  mxrunl  mass (kg) of liquid oxides that run down left surface
+c  mxrunr  mass (kg) of liquid oxides that run down right surface
+c  mxfal   mass (kg) of liquid oxides that fall from horiz. surface
+c  etrunl  initial top elevation (m) of liquid metal on left surface
+c  ectrnl  top elevation change (m) of liquid metal on left surface
+c  ecbrnl  bottom elevation change (m) of liquid metal on left surface
+c  etrunr  initial top elevation (m) of liquid metal on right surface
+c  ectrnr  top elevation change (m) of liquid metal on right surface
+c  ecbrnr  bottom elevation change (m) of liquid metal on right surface
+c  flrun   mass fraction of liquid metal and oxides that run below node
+c  iar     index that represents axial level number for relocation
+c  salupl  surface area (m2) of liquid metal and oxides on left surface
+c  salupr  surface area (m2) of liquid metal and oxides on right surface
+c  qcnvec  convective heat trans. rate (w) available for solidification
+c  qfrez   heat trans. rate (w) required for complete solidification
+c  flfrez  mass fraction of liquid metal that solidifies
+c  fstm    total flow rate (kg/s) of steam for upper plenum volume
+       integer is, iax, icn, iox
+       integer inul, inur, il
+       integer nleft, ntot
+       real tnups(nmupcn), aups(3,nmupcn), bups(nmupcn)
+       real albc, arbc, blbc, brbc, qlbc, qrbc, flbc, frbc
+       real conduc
+       integer imeltl, imeltr, irem
+       real qreml, qremr
+       real mmmelt, mxmelt(7), fracx
+       real mlrunl, mlrunr, mlfal, mxrunl(7), mxrunr(7), mxfal(7)
+       real etrunl, ectrnl, ecbrnl, etrunr, ectrnr, ecbrnr, flrun
+       integer iar
+       real salupl, salupr, qcnvec, qfrez, flfrez
+       real fstm
+       real scp, sthcon
+       real mmtot,lmtot,ph2,wh2oin,amss,dh2o,wh2oo,qmw
+       integer iflgx1, iflgxc
+       real co,do,uo
+       data co/10310.75/, do/0.52257/, uo/182783.4/
+c
+c  oxidation calculations and boundary conditions
+c
+       do 610 iax=1,ntupax(is)
+         qoupls(iax,is)=0.0
+         qouprs(iax,is)=0.0
+         if(iupls(iax,is).eq.0) goto 610
+c  perform calculations first for surface with greatest steam flow rate
+         iflgx1=1
+         if(fstmur(iax,is).gt.fstmul(iax,is)) goto 640
+  630    continue
+c  beginning of left surface oxidation calculations
+         mmtot=0.0
+         do 650 icn=iupls(iax,is),iuprs(iax,is)
+           mmtot=mmtot+mmups(icn,iax,is)
+  650    continue
+         lmtot=mmtot/saups(iax,is)/dnmups
+         if(lmtot.lt.1.0e-10) goto 620
+         inul=nvadul(iax,is)+filndx(4)
+         ph2=0.0
+         do 660 il=1,noncn
+           ph2=ph2+qualan(inul+il-1)/wmolea(il)
+  660    continue
+         if(ph2.gt.0.)
+     #   ph2=(p(inul)-pps(inul))*qualan(inul+nonhy-1)/wmolea(nonhy)/ph2
+         wh2oin=fstmul(iax,is)*dt
+         call ssoxup(tups(iupls(iax,is),iax,is),pps(inul),ph2,dt,
+     &   saups(iax,is),mmtot,wh2oin,
+     &   mxupls(1,iax,is),lxupls(iax,is),
+     &   iflgxc,amss,dh2o,wh2oo,qmw)
+  670    continue
+         if(iupls(iax,is).lt.iuprs(iax,is)) then
+c  two or more nodes remain
+           if(amss.lt.mmups(iupls(iax,is),iax,is)) then
+c  some metal oxidizes
+             mmups(iupls(iax,is),iax,is)=
+     &       mmups(iupls(iax,is),iax,is)-amss
+             mmgupl(iax,is)=mmgupl(iax,is)-amss
+           else
+c  all metal oxidizes and left node disappears
+             amss=amss-mmups(iupls(iax,is),iax,is)
+             mmups(iupls(iax,is),iax,is)=0.0
+             mmgupl(iax,is)=0.0
+             lups(iupls(iax,is),iax,is)=0.0
+             iupls(iax,is)=iupls(iax,is)+1
+             goto 670
+           endif
+         else
+c  one node remains
+           mmtot=mmups(iupls(iax,is),iax,is)-
+     &     1.0e-11*saups(iax,is)*dnmups
+           if(amss.lt.mmtot) then
+c  some metal oxidizes
+             mmups(iupls(iax,is),iax,is)=
+     &       mmups(iupls(iax,is),iax,is)-amss
+             mmgupl(iax,is)=mmgupl(iax,is)-amss
+           else
+c  all metal oxidizes except for thin layer
+             amss=mmtot
+             mmups(iupls(iax,is),iax,is)=1.0e-11*saups(iax,is)*dnmups
+             mmgupl(iax,is)=mmgupl(iax,is)-amss
+           endif
+         endif
+         if(.not.scntrl(8))then
+c  calculate hydrogen generation rate from amount of steam reacted
+           gaman(inul+nonhy-1)=gaman(inul+nonhy-1)+recipv(inul)*
+     &       dh2o/9.0/dt
+           enthn(inul+nonhy-1)=uo+co*tups(iupls(iax,is),iax,is)+
+     &     do/2.0*(tups(iupls(iax,is),iax,is)-tao)**2
+         endif
+c  ensure hydrogen generation rate does not exceeed steam flow rate for
+c  entire volume
+         fstm=(1.0-quala(inul))*
+     &   hyarg(inul)*abs(velg(inul))*avol(inul)
+         gaman(inul+nonhy-1)=min(gaman(inul+nonhy-1),recipv(inul)*
+     &   fstm*0.1111)
+c  calculate oxidation heat generation rate
+         qoupls(iax,is)=qmw/dt
+c  end of left surface oxidation calculations
+         if(iflgx1.eq.2) goto 620
+         iflgx1=2
+  640    continue
+c  beginning of right surface oxidation calculations
+         mmtot=0.0
+         do 680 icn=iupls(iax,is),iuprs(iax,is)
+           mmtot=mmtot+mmups(icn,iax,is)
+  680    continue
+         lmtot=mmtot/saups(iax,is)/dnmups
+         if(lmtot.lt.1.0e-10) goto 620
+         inur=nvadur(iax,is)+filndx(4)
+         ph2=0.0
+         do 690 il=1,noncn
+           ph2=ph2+qualan(inur+il-1)/wmolea(il)
+  690    continue
+         if(ph2.gt.0.0)
+     #   ph2=(p(inur)-pps(inur))*qualan(inur+nonhy-1)/wmolea(nonhy)/ph2
+         wh2oin=fstmur(iax,is)*dt
+         call ssoxup(tups(iuprs(iax,is),iax,is),pps(inur),ph2,dt,
+     &   saups(iax,is),mmtot,wh2oin,
+     &   mxuprs(1,iax,is),lxuprs(iax,is),
+     &   iflgxc,amss,dh2o,wh2oo,qmw)
+  700    continue
+         if(iupls(iax,is).lt.iuprs(iax,is)) then
+c  two or more nodes remain
+           if(amss.lt.mmups(iuprs(iax,is),iax,is)) then
+c  some metal oxidizes
+             mmups(iuprs(iax,is),iax,is)=
+     &       mmups(iuprs(iax,is),iax,is)-amss
+             mmgupr(iax,is)=mmgupr(iax,is)-amss
+           else
+c  all metal oxidizes and right node disappears
+             amss=amss-mmups(iuprs(iax,is),iax,is)
+             mmups(iuprs(iax,is),iax,is)=0.0
+             mmgupr(iax,is)=0.0
+             lups(iuprs(iax,is),iax,is)=0.0
+             iuprs(iax,is)=iuprs(iax,is)-1
+             goto 700
+           endif
+         else
+c  one node remains
+           mmtot=mmups(iuprs(iax,is),iax,is)-
+     &     1.0e-11*saups(iax,is)*dnmups
+           if(amss.lt.mmtot) then
+c  some metal oxidizes
+             mmups(iuprs(iax,is),iax,is)=
+     &       mmups(iuprs(iax,is),iax,is)-amss
+             mmgupr(iax,is)=mmgupr(iax,is)-amss
+           else
+c  all metal oxidizes except for thin layer
+             amss=mmtot
+             mmups(iuprs(iax,is),iax,is)=1.0e-11*saups(iax,is)*dnmups
+             mmgupr(iax,is)=mmgupr(iax,is)-amss
+           endif
+         endif
+         if(.not.scntrl(8))then
+c  calculate hydrogen generation rate from amount of steam reacted
+           gaman(inur+nonhy-1)=gaman(inur+nonhy-1)+recipv(inur)*
+     &       dh2o/9.0/dt
+           enthn(inur+nonhy-1)=uo+co*tups(iuprs(iax,is),iax,is)+
+     &       do/2.0*(tups(iuprs(iax,is),iax,is)-tao)**2
+         endif
+c  ensure hydrogen generation rate does not exceeed steam flow rate for
+c  entire volume
+         fstm=(1.0-quala(inur))*
+     &   hyarg(inur)*abs(velg(inur))*avol(inur)
+         gaman(inur+nonhy-1)=min(gaman(inur+nonhy-1),recipv(inur)*
+     &   fstm*0.1111)
+c  calculate oxidation heat generation rate
+         qouprs(iax,is)=qmw/dt
+c  end of right surface oxidation calculations
+         if(iflgx1.eq.1) then
+           iflgx1=2
+           goto 630
+         endif
+  620    continue
+c  calculate lups for left and right surface nodes
+         lups(iupls(iax,is),iax,is)=mmups(iupls(iax,is),iax,is)/
+     &   saups(iax,is)/dnmups
+         lups(iuprs(iax,is),iax,is)=mmups(iuprs(iax,is),iax,is)/
+     &   saups(iax,is)/dnmups
+         lups(iupls(iax,is),iax,is)=lups(iupls(iax,is),iax,is)+
+     &   lxupls(iax,is)
+         lups(iuprs(iax,is),iax,is)=lups(iuprs(iax,is),iax,is)+
+     &   lxuprs(iax,is)
+  610  continue
+c
+c  solidification calculations and boundary conditions
+c
+       do 510 iax=1,ntupax(is)
+         qsupls(iax,is)=0.0
+         qsuprs(iax,is)=0.0
+c  note that if node is gone (iupls=iuprs=0) then there is no liquid on
+c  left (etlupl=eblupl=-1.0) or right (etlupr=eblupr=-1.0) surfaces
+         if((etlupl(iax,is).le.-0.5 .or.
+     &   tups(iupls(iax,is),iax,is).ge.tmlups) .and.
+     &   (etlupr(iax,is).le.-0.5 .or.
+     &   tups(iuprs(iax,is),iax,is).ge.tmlups)) goto 510
+         if(etlupl(iax,is).gt.-0.5 .and.
+     &   tups(iupls(iax,is),iax,is).lt.tmlups) then
+c  calculate solidification for left surface nodes
+           salupl=min(
+     &     (mlupl(iax,is)/dnlups+mxlupl(1,iax,is)/dnxups)/thlups,
+     &     (etlupl(iax,is)-eblupl(iax,is))/hvups(iax,is)*saups(iax,is))
+           qcnvec=hlups*salupl*(tmlups-tups(iupls(iax,is),iax,is))
+           qfrez=(mlupl(iax,is)+mxlupl(1,iax,is))*
+     &     scp(tups(iupls(iax,is),iax,is))/dt*
+     &     (tmlups-tups(iupls(iax,is),iax,is))+mlupl(iax,is)*hfuups/dt
+           if(qcnvec.ge.qfrez) then
+c  all liquid metal solidifies
+             qsupls(iax,is)=qfrez
+             mmups(iupls(iax,is),iax,is)=mmups(iupls(iax,is),iax,is)+
+     &       mlupl(iax,is)
+             mmgupl(iax,is)=mmgupl(iax,is)+mlupl(iax,is)
+             mlupl(iax,is)=0.0
+             mxupls(1,iax,is)=0.0
+             mxlupl(1,iax,is)=0.0
+             do 520 iox=2,7
+               mxupls(iox,iax,is)=mxupls(iox,iax,is)+mxlupl(iox,iax,is)
+               mxlupl(iox,iax,is)=0.0
+               mxupls(1,iax,is)=mxupls(1,iax,is)+mxupls(iox,iax,is)
+  520        continue
+             lxupls(iax,is)=mxupls(1,iax,is)/saups(iax,is)/dnxups
+             etlupl(iax,is)=-1.0
+             eblupl(iax,is)=-1.0
+           else
+c  some liquid metal solidifies
+             qsupls(iax,is)=qcnvec
+             flfrez=qcnvec/qfrez
+             mmups(iupls(iax,is),iax,is)=mmups(iupls(iax,is),iax,is)+
+     &       flfrez*mlupl(iax,is)
+             mmgupl(iax,is)=mmgupl(iax,is)+flfrez*mlupl(iax,is)
+             mlupl(iax,is)=(1.0-flfrez)*mlupl(iax,is)
+             mxupls(1,iax,is)=0.0
+             mxlupl(1,iax,is)=0.0
+             do 530 iox=2,7
+               mxupls(iox,iax,is)=mxupls(iox,iax,is)+flfrez*
+     &         mxlupl(iox,iax,is)
+               mxlupl(iox,iax,is)=(1.0-flfrez)*mxlupl(iox,iax,is)
+               mxupls(1,iax,is)=mxupls(1,iax,is)+mxupls(iox,iax,is)
+               mxlupl(1,iax,is)=mxlupl(1,iax,is)+mxlupl(iox,iax,is)
+  530        continue
+             lxupls(iax,is)=mxupls(1,iax,is)/saups(iax,is)/dnxups
+           endif
+         endif
+         if(etlupr(iax,is).gt.-0.5 .and.
+     &   tups(iuprs(iax,is),iax,is).lt.tmlups) then
+c  calculate solidification for right surface nodes
+           salupr=min(
+     &     (mlupr(iax,is)/dnlups+mxlupr(1,iax,is)/dnxups)/thlups,
+     &     (etlupr(iax,is)-eblupr(iax,is))/hvups(iax,is)*saups(iax,is))
+           qcnvec=hlups*salupr*(tmlups-tups(iuprs(iax,is),iax,is))
+           qfrez=(mlupr(iax,is)+mxlupr(1,iax,is))*
+     &     scp(tups(iuprs(iax,is),iax,is))/dt*
+     &     (tmlups-tups(iuprs(iax,is),iax,is))+mlupr(iax,is)*hfuups/dt
+           if(qcnvec.ge.qfrez) then
+c  all liquid metal solidifies
+             qsuprs(iax,is)=qfrez
+             mmups(iuprs(iax,is),iax,is)=mmups(iuprs(iax,is),iax,is)+
+     &       mlupr(iax,is)
+             mmgupr(iax,is)=mmgupr(iax,is)+mlupr(iax,is)
+             mlupr(iax,is)=0.0
+             mxuprs(1,iax,is)=0.0
+             mxlupr(1,iax,is)=0.0
+             do 540 iox=2,7
+               mxuprs(iox,iax,is)=mxuprs(iox,iax,is)+mxlupr(iox,iax,is)
+               mxlupr(iox,iax,is)=0.0
+               mxuprs(1,iax,is)=mxuprs(1,iax,is)+mxuprs(iox,iax,is)
+  540        continue
+             lxuprs(iax,is)=mxuprs(1,iax,is)/saups(iax,is)/dnxups
+             etlupr(iax,is)=-1.0
+             eblupr(iax,is)=-1.0
+           else
+c  some liquid metal solidifies
+             qsuprs(iax,is)=qcnvec
+             flfrez=qcnvec/qfrez
+             mmups(iuprs(iax,is),iax,is)=mmups(iuprs(iax,is),iax,is)+
+     &       flfrez*mlupr(iax,is)
+             mmgupr(iax,is)=mmgupr(iax,is)+flfrez*mlupr(iax,is)
+             mlupr(iax,is)=(1.0-flfrez)*mlupr(iax,is)
+             mxuprs(1,iax,is)=0.0
+             mxlupr(1,iax,is)=0.0
+             do 550 iox=2,7
+               mxuprs(iox,iax,is)=mxuprs(iox,iax,is)+flfrez*
+     &         mxlupr(iox,iax,is)
+               mxlupr(iox,iax,is)=(1.0-flfrez)*mxlupr(iox,iax,is)
+               mxuprs(1,iax,is)=mxuprs(1,iax,is)+mxuprs(iox,iax,is)
+               mxlupr(1,iax,is)=mxlupr(1,iax,is)+mxlupr(iox,iax,is)
+  550        continue
+             lxuprs(iax,is)=mxuprs(1,iax,is)/saups(iax,is)/dnxups
+           endif
+         endif
+         if(iupls(iax,is).ge.2) then
+c  check for addition of new left surface node
+           if(mmgupl(iax,is)/saups(iax,is)/dnmups.ge.
+     &     0.05*min(liups(iupls(iax,is),iax,is),
+     &     liups(iupls(iax,is)-1,iax,is))) then
+c  calculate variables for new left surface node (lups calc. later)
+             mmups(iupls(iax,is)-1,iax,is)=mmgupl(iax,is)
+             mmgupl(iax,is)=mmgupl(iax,is)-
+     &       liups(iupls(iax,is)-1,iax,is)*saups(iax,is)*dnmups
+             tups(iupls(iax,is)-1,iax,is)=tups(iupls(iax,is),iax,is)
+c  calculate variables for old left surface node (tups does not change)
+             mmups(iupls(iax,is),iax,is)=mmups(iupls(iax,is),iax,is)-
+     &       mmups(iupls(iax,is)-1,iax,is)
+             lups(iupls(iax,is),iax,is)=mmups(iupls(iax,is),iax,is)/
+     &       saups(iax,is)/dnmups
+c  reset left surface node number
+             iupls(iax,is)=iupls(iax,is)-1
+           endif
+         endif
+         if(iuprs(iax,is).le.ntupcn(iax,is)-1) then
+c  check for addition of new right surface node
+           if(mmgupr(iax,is)/saups(iax,is)/dnmups.ge.
+     &     0.05*min(liups(iuprs(iax,is),iax,is),
+     &     liups(iuprs(iax,is)+1,iax,is))) then
+c  calculate variables for new right surface node (lups calc. later)
+             mmups(iuprs(iax,is)+1,iax,is)=mmgupr(iax,is)
+             mmgupr(iax,is)=mmgupr(iax,is)-
+     &       liups(iuprs(iax,is)+1,iax,is)*saups(iax,is)*dnmups
+             tups(iuprs(iax,is)+1,iax,is)=tups(iuprs(iax,is),iax,is)
+c  calculate variables for old right surface node (tups does not change)
+             mmups(iuprs(iax,is),iax,is)=mmups(iuprs(iax,is),iax,is)-
+     &       mmups(iuprs(iax,is)+1,iax,is)
+             lups(iuprs(iax,is),iax,is)=mmups(iuprs(iax,is),iax,is)/
+     &       saups(iax,is)/dnmups
+c  reset right surface node number
+             iuprs(iax,is)=iuprs(iax,is)+1
+           endif
+         endif
+c  calculate lups for left and right surface nodes
+         lups(iupls(iax,is),iax,is)=mmups(iupls(iax,is),iax,is)/
+     &   saups(iax,is)/dnmups
+         lups(iuprs(iax,is),iax,is)=mmups(iuprs(iax,is),iax,is)/
+     &   saups(iax,is)/dnmups
+         lups(iupls(iax,is),iax,is)=lups(iupls(iax,is),iax,is)+
+     &   lxupls(iax,is)
+         lups(iuprs(iax,is),iax,is)=lups(iuprs(iax,is),iax,is)+
+     &   lxuprs(iax,is)
+  510  continue
+c
+c  conduction and melting calculations
+c
+       do 10 iax=1,ntupax(is)
+         if(iupls(iax,is).eq.0) goto 10
+         do 20 icn=1,ntupcn(iax,is)
+c  load current temperatures into new temperature vector
+           tnups(icn)=tups(icn,iax,is)
+   20    continue
+         irem=0
+         qreml=0.0
+         qremr=0.0
+   25    continue
+         nleft=iupls(iax,is)
+         ntot=iuprs(iax,is)-iupls(iax,is)+1
+c  load mass terms into arrays for matrix solution
+         do 30 icn=nleft,nleft+ntot-1
+           aups(2,icn)=mmups(icn,iax,is)*scp(tups(icn,iax,is))/dt
+   30    continue
+         aups(2,nleft)=aups(2,nleft)+
+     &   mxupls(1,iax,is)*scp(tups(nleft,iax,is))/dt
+         aups(2,nleft+ntot-1)=aups(2,nleft+ntot-1)+
+     &   mxuprs(1,iax,is)*scp(tups(nleft+ntot-1,iax,is))/dt
+         do 40 icn=nleft,nleft+ntot-1
+           bups(icn)=aups(2,icn)*tups(icn,iax,is)
+   40    continue
+c  load boundary condidtion terms into arrays for matrix solution
+         inul=nvadul(iax,is)+filndx(4)
+         inur=nvadur(iax,is)+filndx(4)
+         albc=saups(iax,is)*htctul(iax,is)
+         blbc=qoupls(iax,is)+qsupls(iax,is)+qrupls(iax,is)+
+     &   saups(iax,is)*htctul(iax,is)*tsnkul(iax,is)
+         arbc=saups(iax,is)*htctur(iax,is)
+         brbc=qouprs(iax,is)+qsuprs(iax,is)+qruprs(iax,is)+
+     &   saups(iax,is)*htctur(iax,is)*tsnkur(iax,is)
+         if(irem.eq.1) then
+           irem=0
+           blbc=blbc-qreml
+           brbc=brbc-qremr
+         endif
+         aups(2,nleft)=aups(2,nleft)+albc
+         aups(2,nleft+ntot-1)=aups(2,nleft+ntot-1)+arbc
+         bups(nleft)=bups(nleft)+blbc
+         bups(nleft+ntot-1)=bups(nleft+ntot-1)+brbc
+         if(ntot.eq.1) then
+c  single node analytical solution
+           tnups(nleft)=bups(nleft)/aups(2,nleft)
+         else
+c  multiple node matrix solution
+c  lups limit below is large enough to prevent numerical errors/failures
+c  and small enough to predict negligible delta t across thin nodes
+           do 50 icn=nleft,nleft+ntot-2
+             conduc=saups(iax,is)/0.5/
+     &       (max(lups(icn,  iax,is),1.0e-7)/sthcon(tups(icn,  iax,is))+
+     &        max(lups(icn+1,iax,is),1.0e-7)/sthcon(tups(icn+1,iax,is)))
+             aups(2,icn  )=aups(2,icn  )+conduc
+             aups(2,icn+1)=aups(2,icn+1)+conduc
+             aups(3,icn  )=0.0-conduc
+             aups(1,icn+1)=0.0-conduc
+   50      continue
+           call tridg1(aups(1,nleft),bups(nleft),tnups(nleft),ntot)
+         endif
+c  perform melting calculations
+         imeltl = 0
+         imeltr = 0
+         if(tnups(nleft).gt.tmlups .or.
+     &   tnups(nleft+ntot-1).gt.tmlups) then
+           if(ntot.eq.1) then
+             tnups(nleft) = tmlups
+             qlbc=blbc-albc*tnups(nleft)
+             qrbc=brbc-arbc*tnups(nleft)
+             if(qlbc.gt.0.0 .and. qrbc.le.0.0) then
+               imeltl = 1
+               flbc = 1.0
+               frbc = 0.0
+             elseif(qlbc.le.0.0 .and. qrbc.gt.0.0) then
+               imeltr = 1
+               flbc = 0.0
+               frbc = 1.0
+             elseif(qlbc.gt.0.0 .and. qrbc.gt.0.0) then
+               imeltl = 1
+               imeltr = 1
+               flbc = qlbc/(qlbc+qrbc)
+               frbc = 1.0-flbc
+             else
+               flbc = 0.0
+               frbc = 0.0
+             endif
+c  calc. mass melted and set iupls=iuprs=0, mxupls=mxuprs=0.0,
+c  lxupls=lxuprs=0.0 if gone
+             mmmelt=dt/hfuups*(bups(nleft)-aups(2,nleft)*tnups(nleft))
+             if((imeltl.eq.1 .or. imeltr.eq.1) .and.
+     &       mmmelt.gt.0.0) then
+               if(mmmelt.ge.mmups(nleft,iax,is)) then
+c  all metal in node melts
+                 mmmelt=mmups(nleft,iax,is)
+                 iupls(iax,is)=0
+                 iuprs(iax,is)=0
+                 mmups(nleft,iax,is)=0.0
+                 mmgupl(iax,is)=0.0
+                 mmgupr(iax,is)=0.0
+                 lups(nleft,iax,is)=0.0
+               else
+c  some metal in node melts
+                 mmups(nleft,iax,is)=mmups(nleft,iax,is)-mmmelt
+                 if(imeltl.eq.1)
+     &           mmgupl(iax,is)=mmgupl(iax,is)-flbc*mmmelt
+                 if(imeltr.eq.1)
+     &           mmgupr(iax,is)=mmgupr(iax,is)-frbc*mmmelt
+               endif
+               if(imeltl.eq.1) then
+                 mlupl(iax,is)=mlupl(iax,is)+flbc*mmmelt
+                 etlupl(iax,is)=hvups(iax,is)
+                 eblupl(iax,is)=0.0
+                 mxmelt(1)=fxlups*flbc*mmmelt
+                 if(mxmelt(1).ge.mxupls(1,iax,is) .or.
+     &           iupls(iax,is).eq.0) then
+c  all oxide is carried away with liquid metal
+                   do 60 iox=1,7
+                     mxmelt(iox)=mxupls(iox,iax,is)
+                     mxupls(iox,iax,is)=0.0
+   60              continue
+                   lxupls(iax,is)=0.0
+                   if(iupls(iax,is).eq.0 .and. imeltr.eq.0) then
+                     mxmelt(1)=0.0
+                     mxuprs(1,iax,is)=0.0
+                     do 65 iox=2,7
+                       mxmelt(iox)=mxmelt(iox)+mxuprs(iox,iax,is)
+                       mxuprs(iox,iax,is)=0.0
+                       mxmelt(1)=mxmelt(1)+mxmelt(iox)
+   65                continue
+                     lxuprs(iax,is)=0.0
+                   endif
+                 else
+c  some oxide is carried away with liquid metal
+                   fracx=mxmelt(1)/mxupls(1,iax,is)
+                   mxupls(1,iax,is)=0.0
+                   do 70 iox=2,7
+                     mxmelt(iox)=mxupls(iox,iax,is)*fracx
+                     mxupls(iox,iax,is)=mxupls(iox,iax,is)-mxmelt(iox)
+                     mxupls(1,iax,is)=mxupls(1,iax,is)+
+     &               mxupls(iox,iax,is)
+   70              continue
+                   lxupls(iax,is)=mxupls(1,iax,is)/saups(iax,is)/dnxups
+                 endif
+                 mxlupl(1,iax,is)=0.0
+                 do 80 iox=2,7
+                   mxlupl(iox,iax,is)=mxlupl(iox,iax,is)+mxmelt(iox)
+                   mxlupl(1,iax,is)=mxlupl(1,iax,is)+
+     &             mxlupl(iox,iax,is)
+   80            continue
+               endif
+               if(imeltr.eq.1) then
+                 mlupr(iax,is)=mlupr(iax,is)+frbc*mmmelt
+                 etlupr(iax,is)=hvups(iax,is)
+                 eblupr(iax,is)=0.0
+                 mxmelt(1)=fxlups*frbc*mmmelt
+                 if(mxmelt(1).ge.mxuprs(1,iax,is) .or.
+     &           iupls(iax,is).eq.0) then
+c  all oxide is carried away with liquid metal
+                   do 90 iox=1,7
+                     mxmelt(iox)=mxuprs(iox,iax,is)
+                     mxuprs(iox,iax,is)=0.0
+   90              continue
+                   lxuprs(iax,is)=0.0
+                   if(iupls(iax,is).eq.0 .and. imeltl.eq.0) then
+                     mxmelt(1)=0.0
+                     mxupls(1,iax,is)=0.0
+                     do 95 iox=2,7
+                       mxmelt(iox)=mxmelt(iox)+mxupls(iox,iax,is)
+                       mxupls(iox,iax,is)=0.0
+                       mxmelt(1)=mxmelt(1)+mxmelt(iox)
+   95                continue
+                     lxupls(iax,is)=0.0
+                   endif
+                 else
+c  some oxide is carried away with liquid metal
+                   fracx=mxmelt(1)/mxuprs(1,iax,is)
+                   mxuprs(1,iax,is)=0.0
+                   do 100 iox=2,7
+                     mxmelt(iox)=mxuprs(iox,iax,is)*fracx
+                     mxuprs(iox,iax,is)=mxuprs(iox,iax,is)-mxmelt(iox)
+                     mxuprs(1,iax,is)=mxuprs(1,iax,is)+
+     &               mxuprs(iox,iax,is)
+  100              continue
+                   lxuprs(iax,is)=mxuprs(1,iax,is)/saups(iax,is)/dnxups
+                 endif
+                 mxlupr(1,iax,is)=0.0
+                 do 110 iox=2,7
+                   mxlupr(iox,iax,is)=mxlupr(iox,iax,is)+mxmelt(iox)
+                   mxlupr(1,iax,is)=mxlupr(1,iax,is)+
+     &             mxlupr(iox,iax,is)
+  110            continue
+               endif
+               if(iupls(iax,is).gt.0) then
+c  calculate lups for single node
+                 lups(iupls(iax,is),iax,is)=mmups(iupls(iax,is),iax,is)/
+     &           saups(iax,is)/dnmups
+                 lups(iupls(iax,is),iax,is)=lups(iupls(iax,is),iax,is)+
+     &           lxupls(iax,is)
+                 lups(iupls(iax,is),iax,is)=lups(iupls(iax,is),iax,is)+
+     &           lxuprs(iax,is)
+               endif
+             endif
+           elseif(ntot.ge.2) then
+             if(ntot.eq.2) then
+c  melting of hottest surface
+               if(tnups(nleft).gt.tnups(nleft+ntot-1)) then
+                 tnups(nleft)=tmlups
+                 imeltl=1
+c  calc. temp. for single right node
+                 tnups(nleft+ntot-1)=(bups(nleft+ntot-1)-
+     &           aups(1,nleft+ntot-1)*tmlups)/aups(2,nleft+ntot-1)
+               else
+                 tnups(nleft+ntot-1)=tmlups
+                 imeltr=1
+c  calc. temp. for single left node
+                 tnups(nleft)=(bups(nleft)-
+     &           aups(3,nleft)*tmlups)/aups(2,nleft)
+               endif
+c  possible melting of second surface
+               if(imeltl.eq.0 .and. tnups(nleft).gt.tmlups) then
+                 tnups(nleft)=tmlups
+                 imeltl=1
+               endif
+               if(imeltr.eq.0 .and. tnups(nleft+ntot-1).gt.tmlups) then
+                 tnups(nleft+ntot-1)=tmlups
+                 imeltr=1
+               endif
+             elseif(ntot.ge.3) then
+c  melting of hottest surface
+               if(tnups(nleft).gt.tnups(nleft+ntot-1)) then
+                 tnups(nleft)=tmlups
+                 imeltl=1
+c  calc. temps. for nodes (nleft+1) to (nleft+ntot-1)
+                 bups(nleft+1)=bups(nleft+1)-aups(1,nleft+1)*tmlups
+                 call tridg1(aups(1,nleft+1),bups(nleft+1),
+     &           tnups(nleft+1),ntot-1)
+               else
+                 tnups(nleft+ntot-1)=tmlups
+                 imeltr=1
+c  calc. temps. for nodes (nleft) to (nleft+ntot-2)
+                 bups(nleft+ntot-2)=bups(nleft+ntot-2)-
+     &           aups(3,nleft+ntot-2)*tmlups
+                 call tridg1(aups(1,nleft),bups(nleft),
+     &           tnups(nleft),ntot-1)
+               endif
+c  possible melting of second surface
+               if(imeltl.eq.0 .and. tnups(nleft).gt.tmlups) then
+                 tnups(nleft)=tmlups
+                 imeltl=1
+                 bups(nleft+1)=bups(nleft+1)-aups(1,nleft+1)*tmlups
+                 if(ntot.eq.3) then
+c  calc. temp. for single middle node
+                   tnups(nleft+1)=bups(nleft+1)/aups(2,nleft+1)
+                 else
+c  calc. temps. for nodes (nleft+1) to (nleft+ntot-2)
+                   call tridg1(aups(1,nleft+1),bups(nleft+1),
+     &             tnups(nleft+1),ntot-2)
+                 endif
+               endif
+               if(imeltr.eq.0 .and. tnups(nleft+ntot-1).gt.tmlups)then
+                 tnups(nleft+ntot-1)=tmlups
+                 imeltr=1
+                 bups(nleft+ntot-2)=bups(nleft+ntot-2)-
+     &           aups(3,nleft+ntot-2)*tmlups
+                 if(ntot.eq.3) then
+c  calc. temp. for single middle node
+                   tnups(nleft+1)=bups(nleft+1)/aups(2,nleft+1)
+                 else
+c  calc. temps. for nodes (nleft+1) to (nleft+ntot-2)
+                   call tridg1(aups(1,nleft+1),bups(nleft+1),
+     &             tnups(nleft+1),ntot-2)
+                 endif
+               endif
+             endif
+c  calc. mass of left surface node melted and set iupls if gone
+             if(imeltl.eq.1) then
+               mmmelt=dt/hfuups*(bups(nleft)-
+     &         aups(2,nleft)*tnups(nleft)-
+     &         aups(3,nleft)*tnups(nleft+1))
+               if(mmmelt.gt.0.0) then
+                 if(mmmelt.ge.mmups(nleft,iax,is)) then
+c  all metal in node melts
+                   mmmelt=mmups(nleft,iax,is)
+                   iupls(iax,is)=nleft+1
+                   mmups(nleft,iax,is)=0.0
+                   mmgupl(iax,is)=0.0
+                   lups(nleft,iax,is)=0.0
+                 else
+c  some metal in node melts
+                   mmups(nleft,iax,is)=mmups(nleft,iax,is)-mmmelt
+                   mmgupl(iax,is)=mmgupl(iax,is)-mmmelt
+                 endif
+                 mlupl(iax,is)=mlupl(iax,is)+mmmelt
+                 etlupl(iax,is)=hvups(iax,is)
+                 eblupl(iax,is)=0.0
+c
+                 mxmelt(1)=fxlups*mmmelt
+                 if(mxmelt(1).ge.mxupls(1,iax,is)) then
+c  all oxide is carried away with liquid metal
+                   do 120 iox=1,7
+                     mxmelt(iox)=mxupls(iox,iax,is)
+                     mxupls(iox,iax,is)=0.0
+  120              continue
+                   lxupls(iax,is)=0.0
+                 else
+c  some oxide is carried away with liquid metal
+                   fracx=mxmelt(1)/mxupls(1,iax,is)
+                   mxupls(1,iax,is)=0.0
+                   do 130 iox=2,7
+                     mxmelt(iox)=mxupls(iox,iax,is)*fracx
+                     mxupls(iox,iax,is)=mxupls(iox,iax,is)-mxmelt(iox)
+                     mxupls(1,iax,is)=mxupls(1,iax,is)+
+     &               mxupls(iox,iax,is)
+  130              continue
+                   lxupls(iax,is)=mxupls(1,iax,is)/saups(iax,is)/dnxups
+                 endif
+                 mxlupl(1,iax,is)=0.0
+                 do 140 iox=2,7
+                   mxlupl(iox,iax,is)=mxlupl(iox,iax,is)+mxmelt(iox)
+                   mxlupl(1,iax,is)=mxlupl(1,iax,is)+
+     &             mxlupl(iox,iax,is)
+  140            continue
+                 if(iupls(iax,is).eq.(nleft+1)) irem=1
+                 qreml = qreml + (mmmelt+mxmelt(1))*
+     &           scp(tups(nleft,iax,is))*(tnups(nleft)-
+     &           tups(nleft,iax,is))/dt + mmmelt*hfuups/dt
+               endif
+             endif
+c  calc. mass of right surface node melted and set iuprs if gone
+             if(imeltr.eq.1) then
+               mmmelt=dt/hfuups*(bups(nleft+ntot-1)-
+     &         aups(1,nleft+ntot-1)*tnups(nleft+ntot-2)-
+     &         aups(2,nleft+ntot-1)*tnups(nleft+ntot-1))
+               if(mmmelt.gt.0.0) then
+                 if(mmmelt.ge.mmups(nleft+ntot-1,iax,is)) then
+c  all metal in node melts
+                   mmmelt=mmups(nleft+ntot-1,iax,is)
+                   iuprs(iax,is)=nleft+ntot-2
+                   mmups(nleft+ntot-1,iax,is)=0.0
+                   mmgupr(iax,is)=0.0
+                   lups(nleft+ntot-1,iax,is)=0.0
+                 else
+c  some metal in node melts
+                   mmups(nleft+ntot-1,iax,is)=
+     &             mmups(nleft+ntot-1,iax,is)-mmmelt
+                   mmgupr(iax,is)=mmgupr(iax,is)-mmmelt
+                 endif
+                 mlupr(iax,is)=mlupr(iax,is)+mmmelt
+                 etlupr(iax,is)=hvups(iax,is)
+                 eblupr(iax,is)=0.0
+c
+                 mxmelt(1)=fxlups*mmmelt
+                 if(mxmelt(1).ge.mxuprs(1,iax,is)) then
+c  all oxide is carried away with liquid metal
+                   do 150 iox=1,7
+                     mxmelt(iox)=mxuprs(iox,iax,is)
+                     mxuprs(iox,iax,is)=0.0
+  150              continue
+                   lxuprs(iax,is)=0.0
+                 else
+c  some oxide is carried away with liquid metal
+                   fracx=mxmelt(1)/mxuprs(1,iax,is)
+                   mxuprs(1,iax,is)=0.0
+                   do 160 iox=2,7
+                     mxmelt(iox)=mxuprs(iox,iax,is)*fracx
+                     mxuprs(iox,iax,is)=mxuprs(iox,iax,is)-mxmelt(iox)
+                     mxuprs(1,iax,is)=mxuprs(1,iax,is)+
+     &               mxuprs(iox,iax,is)
+  160              continue
+                   lxuprs(iax,is)=mxuprs(1,iax,is)/saups(iax,is)/dnxups
+                 endif
+                 mxlupr(1,iax,is)=0.0
+                 do 170 iox=2,7
+                   mxlupr(iox,iax,is)=mxlupr(iox,iax,is)+mxmelt(iox)
+                   mxlupr(1,iax,is)=mxlupr(1,iax,is)+
+     &             mxlupr(iox,iax,is)
+  170            continue
+                 if(iuprs(iax,is).eq.(nleft+ntot-2)) irem=1
+                 qremr = qremr + (mmmelt+mxmelt(1))*
+     &           scp(tups(nleft+ntot-1,iax,is))*(tnups(nleft+ntot-1)-
+     &           tups(nleft+ntot-1,iax,is))/dt + mmmelt*hfuups/dt
+               endif
+             endif
+             if(iupls(iax,is).le.iuprs(iax,is)) then
+c  calculate lups for left and right surface nodes
+               lups(iupls(iax,is),iax,is)=mmups(iupls(iax,is),iax,is)/
+     &         saups(iax,is)/dnmups
+               lups(iuprs(iax,is),iax,is)=mmups(iuprs(iax,is),iax,is)/
+     &         saups(iax,is)/dnmups
+               lups(iupls(iax,is),iax,is)=lups(iupls(iax,is),iax,is)+
+     &         lxupls(iax,is)
+               lups(iuprs(iax,is),iax,is)=lups(iuprs(iax,is),iax,is)+
+     &         lxuprs(iax,is)
+               if(irem.eq.1) then
+c  calculate new initial temp. for nodes that oxide layer is added to
+c  and repeat timestep
+                 if(iupls(iax,is).eq.iuprs(iax,is)) then
+                   tups(iupls(iax,is),iax,is)=
+     &             (mmups(iupls(iax,is),iax,is)*
+     &             tups(iupls(iax,is),iax,is)+
+     &             mxupls(1,iax,is)*tups(nleft,iax,is)+
+     &             mxuprs(1,iax,is)*tups(nleft+ntot-1,iax,is))/
+     &             (mmups(iupls(iax,is),iax,is)+
+     &             mxupls(1,iax,is)+mxuprs(1,iax,is))
+                 else
+                   if(iupls(iax,is).eq.nleft+1)
+     &             tups(iupls(iax,is),iax,is)=
+     &             (mmups(iupls(iax,is),iax,is)*
+     &             tups(iupls(iax,is),iax,is)+
+     &             mxupls(1,iax,is)*tups(nleft,iax,is))/
+     &             (mmups(iupls(iax,is),iax,is)+mxupls(1,iax,is))
+                   if(iuprs(iax,is).eq.nleft+ntot-2)
+     &             tups(iuprs(iax,is),iax,is)=
+     &             (mmups(iuprs(iax,is),iax,is)*
+     &             tups(iuprs(iax,is),iax,is)+
+     &             mxuprs(1,iax,is)*tups(nleft+ntot-1,iax,is))/
+     &             (mmups(iuprs(iax,is),iax,is)+mxuprs(1,iax,is))
+                 endif
+                 goto 25
+               endif
+             else
+c  set iupls=iuprs=0, mxupls=mxuprs=0.0, lxupls=lxuprs=0.0
+c  if final two nodes gone
+               iupls(iax,is)=0
+               iuprs(iax,is)=0
+               mxupls(1,iax,is)=0.0
+               mxuprs(1,iax,is)=0.0
+               mxlupl(1,iax,is)=0.0
+               mxlupr(1,iax,is)=0.0
+               do 180 iox=2,7
+                 mxlupl(iox,iax,is)=mxlupl(iox,iax,is)+
+     &           mxupls(iox,iax,is)
+                 mxupls(iox,iax,is)=0.0
+                 mxlupr(iox,iax,is)=mxlupr(iox,iax,is)+
+     &           mxuprs(iox,iax,is)
+                 mxuprs(iox,iax,is)=0.0
+                 mxlupl(1,iax,is)=mxlupl(1,iax,is)+
+     &           mxlupl(iox,iax,is)
+                 mxlupr(1,iax,is)=mxlupr(1,iax,is)+
+     &           mxlupr(iox,iax,is)
+  180          continue
+               lxupls(iax,is)=0.0
+               lxuprs(iax,is)=0.0
+             endif
+           endif
+         endif
+c  load new values back into tups
+         do 190 icn=1,ntupcn(iax,is)
+           tups(icn,iax,is)=tnups(icn)
+  190    continue
+   10  continue
+c
+c  relocation calculations
+c
+       do 210 iax=1,ntupax(is)
+c  note that if node is gone (iupls=iuprs=0) then there is no liquid on
+c  left (etlupl=eblupl=-1.0) or right (etlupr=eblupr=-1.0) surfaces
+         if(etlupl(iax,is).lt.-0.5 .and.
+     &      etlupr(iax,is).lt.-0.5) goto 210
+         mlrunl=0.0
+         mlrunr=0.0
+         mlfal=0.0
+         do 220 iox=1,7
+           mxrunl(iox)=0.0
+           mxrunr(iox)=0.0
+           mxfal(iox)=0.0
+  220    continue
+         etrunl=hvups(iax,is)
+         ectrnl=0.0
+         ecbrnl=ulups*dt
+         etrunr=hvups(iax,is)
+         ectrnr=0.0
+         ecbrnr=ulups*dt
+         if(etlupl(iax,is).gt.-0.5) then
+           if(isoups(iax,is).eq.0) then
+c  relocation from left surfaces
+             etrunl=etlupl(iax,is)
+             etlupl(iax,is)=etlupl(iax,is)-min(ulups*dt,hvups(iax,is))
+             eblupl(iax,is)=eblupl(iax,is)-ulups*dt
+             ectrnl=max(0.0,-1.0*etlupl(iax,is))
+             ecbrnl=max(0.0,-1.0*eblupl(iax,is))
+             if(etlupl(iax,is).lt.1.0e-8 .or. iupls(iax,is).eq.0) then
+c  all liquid metal and oxides run below node
+               mlrunl=mlupl(iax,is)
+               mlupl(iax,is)=0.0
+               do 230 iox=1,7
+                 mxrunl(iox)=mxlupl(iox,iax,is)
+                 mxlupl(iox,iax,is)=0.0
+  230          continue
+               etlupl(iax,is)=-1.0
+               eblupl(iax,is)=-1.0
+             elseif(eblupl(iax,is).lt.0.0) then
+c  some liquid metal and oxides run below node
+               flrun=eblupl(iax,is)/(eblupl(iax,is)-etlupl(iax,is))
+               mlrunl=mlupl(iax,is)*flrun
+               mlupl(iax,is)=mlupl(iax,is)-mlrunl
+               mxrunl(1)=0.0
+               mxlupl(1,iax,is)=0.0
+               do 240 iox=2,7
+                 mxrunl(iox)=mxlupl(iox,iax,is)*flrun
+                 mxlupl(iox,iax,is)=mxlupl(iox,iax,is)-mxrunl(iox)
+                 mxrunl(1)=mxrunl(1)+mxrunl(iox)
+                 mxlupl(1,iax,is)=mxlupl(1,iax,is)+
+     &           mxlupl(iox,iax,is)
+  240          continue
+               eblupl(iax,is)=0.0
+             endif
+           else
+c  relocation from bottom surfaces (all liquid metal and oxides fall
+c  below node)
+             mlfal=mlfal+mlupl(iax,is)
+             mlupl(iax,is)=0.0
+             mxfal(1)=0.0
+             mxlupl(1,iax,is)=0.0
+             do 250 iox=2,7
+               mxfal(iox)=mxfal(iox)+mxlupl(iox,iax,is)
+               mxlupl(iox,iax,is)=0.0
+               mxfal(1)=mxfal(1)+mxfal(iox)
+  250        continue
+             etlupl(iax,is)=-1.0
+             eblupl(iax,is)=-1.0
+           endif
+         endif
+         if(etlupr(iax,is).gt.-0.5) then
+           if(isoups(iax,is).eq.0) then
+c  relocation from right surfaces
+             etrunr=etlupr(iax,is)
+             etlupr(iax,is)=etlupr(iax,is)-min(ulups*dt,hvups(iax,is))
+             eblupr(iax,is)=eblupr(iax,is)-ulups*dt
+             ectrnr=max(0.0,-1.0*etlupr(iax,is))
+             ecbrnr=max(0.0,-1.0*eblupr(iax,is))
+             if(etlupr(iax,is).lt.1.0e-8 .or. iupls(iax,is).eq.0) then
+c  all liquid metal and oxides run below node
+               mlrunr=mlupr(iax,is)
+               mlupr(iax,is)=0.0
+               do 260 iox=1,7
+                 mxrunr(iox)=mxlupr(iox,iax,is)
+                 mxlupr(iox,iax,is)=0.0
+  260          continue
+               etlupr(iax,is)=-1.0
+               eblupr(iax,is)=-1.0
+             elseif(eblupr(iax,is).lt.0.0) then
+c  some liquid metal and oxides run below node
+               flrun=eblupr(iax,is)/(eblupr(iax,is)-etlupr(iax,is))
+               mlrunr=mlupr(iax,is)*flrun
+               mlupr(iax,is)=mlupr(iax,is)-mlrunr
+               mxrunr(1)=0.0
+               mxlupr(1,iax,is)=0.0
+               do 270 iox=2,7
+                 mxrunr(iox)=mxlupr(iox,iax,is)*flrun
+                 mxlupr(iox,iax,is)=mxlupr(iox,iax,is)-mxrunr(iox)
+                 mxrunr(1)=mxrunr(1)+mxrunr(iox)
+                 mxlupr(1,iax,is)=mxlupr(1,iax,is)+
+     &           mxlupr(iox,iax,is)
+  270          continue
+               eblupr(iax,is)=0.0
+             endif
+           else
+c  relocation from top surfaces (all liquid metal and oxides fall below
+c  node if surface fails)
+             if(iupls(iax,is).eq.0) then
+               mlfal=mlfal+mlupr(iax,is)
+               mlupr(iax,is)=0.0
+               mxfal(1)=0.0
+               mxlupr(1,iax,is)=0.0
+               do 280 iox=2,7
+                 mxfal(iox)=mxfal(iox)+mxlupr(iox,iax,is)
+                 mxlupr(iox,iax,is)=0.0
+                 mxfal(1)=mxfal(1)+mxfal(iox)
+  280          continue
+               etlupr(iax,is)=-1.0
+               eblupr(iax,is)=-1.0
+             endif
+           endif
+         endif
+         if(mlrunl.gt.0.0) then
+c  liquid metal and oxides run down left surface
+           if(iax.ge.2) then
+             do 290 iar=iax-1,1,-1
+               if(isoups(iar,is).eq.1 .or. iupls(iar,is).eq.0) then
+c  liquid metal and oxides skip axial level because horizontal surface
+c  does not block left side or structure is gone
+                 goto 290
+               elseif(isoups(iar,is).eq.0) then
+c  all liquid metal and oxides added to left surface
+                 mlupl(iar,is)=mlupl(iar,is)+mlrunl
+                 mxlupl(1,iar,is)=0.0
+                 do 300 iox=2,7
+                   mxlupl(iox,iar,is)=mxlupl(iox,iar,is)+mxrunl(iox)
+                   mxlupl(1,iar,is)=mxlupl(1,iar,is)+mxlupl(iox,iar,is)
+  300            continue
+                 etlupl(iar,is)=max(hvups(iar,is)-ectrnl,
+     &           min(etrunl,hvups(iar,is)))
+                 if(eblupl(iar,is).lt.-0.5) eblupl(iar,is)=
+     &           max(hvups(iar,is)-ecbrnl,0.0)
+                 goto 310
+               elseif(isoups(iar,is).eq.2) then
+c  all liquid metal and oxides added to top surface
+                 mlupr(iar,is)=mlupr(iar,is)+mlrunl
+                 mxlupr(1,iar,is)=0.0
+                 do 320 iox=2,7
+                   mxlupr(iox,iar,is)=mxlupr(iox,iar,is)+mxrunl(iox)
+                   mxlupr(1,iar,is)=mxlupr(1,iar,is)+mxlupr(iox,iar,is)
+  320            continue
+                 etlupr(iar,is)=hvups(iar,is)
+                 eblupr(iar,is)=0.0
+                 goto 310
+               endif
+  290        continue
+           endif
+c  all liquid metal and oxides relocate below left side of structure
+           mlupl(0,is)=mlupl(0,is)+mlrunl
+           mxlupl(1,0,is)=0.0
+           do 330 iox=2,7
+             mxlupl(iox,0,is)=mxlupl(iox,0,is)+mxrunl(iox)
+             mxlupl(1,0,is)=mxlupl(1,0,is)+mxlupl(iox,0,is)
+  330      continue
+  310      continue
+         endif
+         if(mlrunr.gt.0.0) then
+c  liquid metal and oxides run down right surface
+           if(iax.ge.2) then
+             do 340 iar=iax-1,1,-1
+               if(iupls(iar,is).eq.0) then
+c  liquid metal and oxides skip axial level because structure is gone
+                 goto 340
+               elseif(isoups(iar,is).eq.0 .or. isoups(iar,is).eq.1 .or.
+     &         isoups(iar,is).eq.2) then
+c  all liquid metal and oxides added to right or top surface
+                 mlupr(iar,is)=mlupr(iar,is)+mlrunr
+                 mxlupr(1,iar,is)=0.0
+                 do 350 iox=2,7
+                   mxlupr(iox,iar,is)=mxlupr(iox,iar,is)+mxrunr(iox)
+                   mxlupr(1,iar,is)=mxlupr(1,iar,is)+mxlupr(iox,iar,is)
+  350            continue
+                 if(isoups(iar,is).eq.0) then
+                   etlupr(iar,is)=max(hvups(iar,is)-ectrnr,
+     &             min(etrunr,hvups(iar,is)))
+                   if(eblupr(iar,is).lt.-0.5) eblupr(iar,is)=
+     &             max(hvups(iar,is)-ecbrnr,0.0)
+                 else
+                   etlupr(iar,is)=hvups(iar,is)
+                   eblupr(iar,is)=0.0
+                 endif
+                 goto 360
+               endif
+  340        continue
+           endif
+c  all liquid metal and oxides relocate below right side of structure
+           mlupr(0,is)=mlupr(0,is)+mlrunr
+           mxlupr(1,0,is)=0.0
+           do 370 iox=2,7
+             mxlupr(iox,0,is)=mxlupr(iox,0,is)+mxrunr(iox)
+             mxlupr(1,0,is)=mxlupr(1,0,is)+mxlupr(iox,0,is)
+  370      continue
+  360      continue
+         endif
+         if(mlfal.gt.0.0) then
+c  liquid metal and oxides fall freely from horizontal surface
+           if(iax.ge.2) then
+             do 380 iar=iax-1,1,-1
+               if(isoups(iar,is).eq.0 .or. iupls(iar,is).eq.0) then
+c  liquid metal and oxides skip axial level because surface is vertical
+c  or structure is gone
+                 goto 380
+               elseif(isoups(iar,is).eq.1 .or. isoups(iar,is).eq.2) then
+c  all liquid metal and oxides added to top surface
+                 mlupr(iar,is)=mlupr(iar,is)+mlfal
+                 mxlupr(1,iar,is)=0.0
+                 do 390 iox=2,7
+                   mxlupr(iox,iar,is)=mxlupr(iox,iar,is)+mxfal(iox)
+                   mxlupr(1,iar,is)=mxlupr(1,iar,is)+mxlupr(iox,iar,is)
+  390            continue
+                 etlupr(iar,is)=hvups(iar,is)
+                 eblupr(iar,is)=0.0
+                 goto 400
+               endif
+  380        continue
+           endif
+c  all liquid metal and oxides relocate below structure
+           mluph(is)=mluph(is)+mlfal
+           mxluph(1,is)=0.0
+           do 410 iox=2,7
+             mxluph(iox,is)=mxluph(iox,is)+mxfal(iox)
+             mxluph(1,is)=mxluph(1,is)+mxluph(iox,is)
+  410      continue
+  400      continue
+         endif
+  210  continue
+       return
+       end
+*endif

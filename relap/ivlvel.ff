@@ -1,0 +1,252 @@
+*mlist
+       subroutine ivlvel
+c
+c  Compute initial average volume velocities and stream tube area
+c  ratios.  (See also subroutines vovela and volvel.)
+c
+c  Cognizant engineer:  dmk/hxc.
+c
+       use invtbl
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'statec.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer i,inout,ixr,jrat,jx,l,ls,m,mm
+       real alprhg,arhof,arhog,arhom,avf,avg,avm,dumf,dumg,dumm,
+     & ggasa,gliqa,hliq,hmix,hvap,signaj,xflow
+       real jtype,jupdw,ifrmto
+       real vfx(6),vgx(6),gsum(6),vrhof(6),vrhog(6),area(6),
+     & vmx(2),vrhom(2)
+c
+c  Loop over junctions, set arat(i), arat(i+1) = 1.0.
+       i = filndx(5)
+       do mm = 1,njuns(i)
+         arat(i) = 1.0
+         arat(i+1) = 1.0
+         i = i + ijskp
+       enddo
+c  Loop over volumes, set velf, velg = 0.0.
+       i = filndx(4)
+       do mm = 1,nvols(i)
+         velf(i) = 0.0
+         velf(i+1) = 0.0
+         velf(i+2) = 0.0
+         velg(i) = 0.0
+         velg(i+1) = 0.0
+         velg(i+2) = 0.0
+$if def,mmfld,1
+         velmt(i) = 0.0
+         ggas(i) = 0.
+         ggas(i+1) = 0.
+         ggas(i+2) = 0.
+         gliq(i) = 0.
+         gliq(i+1) = 0.
+         gliq(i+2) = 0.
+         vo(i) = v(i)
+         rhofo(i) = rhof(i)
+         rhogo(i) = rhog(i)
+         i = i + ivskp
+       enddo
+c  If inverted junction table does not exist, then quit.
+       if (.not.allocated(invj)) return
+c  Loop over volumes, compute velf, velg, mass flux, quale and arat term
+       l = 1
+       i = filndx(4)
+       do mm = 1,nvols(i)
+         jjet(i)= 0
+         if (invcnt(i) .ne. 0) then
+           jrat = 0
+           do m = 1,6
+             area(m) = 0.0
+             gsum(m) = 0.0
+             vfx(m) = 0.0
+             vgx(m) = 0.0
+             vrhof(m) = 0.0
+             vrhog(m) = 0.0
+           enddo
+$if def,mmfld,6
+           avm = 0.0
+           arhom = 0.0
+           vmx(1) = 0.0
+           vmx(2) = 0.0
+           vrhom(1) = 0.0
+           vrhom(2) = 0.0
+c  Stream tube ratios (used in hzflow, hloss, momentum solution)
+c  for inlet junction inout=1, for outlet junction inout=2.
+           ls = l
+           do m = 1,invcnt(i)
+             jx = invj(l)%invvnx
+c  Begin ras; to find volume with jet junction.
+c  jx is junction index.
+             ifrmto = iand(ishft(invj(l)%invjun,-2),1)
+c  Get up-down juction flag.
+             jupdw  = iand(ishft(jc(jx),-27),1)
+c
+c  Set top-bot flag.
+             jtype = abs(ifrmto - jupdw)
+             if (jtype .eq. 1) then
+c  If multiple junction on bottom face, no level in volume
+c  However, let jet junctions be ghost junctions for the level model.
+               if (iand(jc(jx),ishft(1,25)) .ne. 0) then
+                 if (ifrmto .eq. 1) jjet(i) = jx
+               endif
+             else
+c  Check for jet junctions on top face; a no-no.
+               if (iand(jc(jx),ishft(1,25)) .ne. 0) then
+                 if (ifrmto .eq. 1) then
+                   fail = .true.
+                   write (output,1515) junno(jx)
+ 1515  format ('0******** A jet junction on the top face of a TO '
+     & 'volume is not allowed. Junction number= ',i9,/,
+     & 10x,' Flow from the jet must be positive.')
+                 endif
+               endif
+             endif
+c  End ras
+             inout = iand(ishft(invj(l)%invjun,-1),1)
+c  Limited void terms.
+             avf = max(1.0e-15,voidfj(jx))
+             avg = max(1.0e-15,voidgj(jx))
+$if def,mmfld,1
+             if (nonmf .ne. 0) avm = max(1.0e-15,voidmj(jx))
+c  Stream tube ratio terms.
+             jrat = 1 - 2*inout
+             if (iand(invj(l)%invjun,1) .ne. 0) jrat = -jrat
+             jrat = jx + max(0,jrat)
+$if def,mmfld,1
+             if (nonmf .eq. 0) then
+               arat(jrat) = ajun(jx)*(avf*max(1.0e-20,abs(velfj(jx))) +
+     &         avg*max(1.0e-20,abs(velgj(jx))))
+$if def,mmfld,5
+             else
+               arat(jrat) = ajun(jx)*(avf*max(1.0e-20,abs(velfj(jx))) +
+     &         avg*max(1.0e-20,abs(velgj(jx))) + avm*max(1.0e-20,
+     &         abs(velmj(jx))))
+             endif
+             inout = 12 - 3*iand(ishft(invj(l)%invjun,-2),1)
+             inout = iand(ishft(jcex(jx),-inout),7)
+             gsum(inout+1) = gsum(inout+1) + arat(jrat)
+             l = l + 1
+           enddo
+c  Compute the sums looping over all junctions connected to a vol.
+c  For inlet junction inout=1, for outlet junction inout=2.
+           l = ls
+           do m = 1,invcnt(i)
+             jx = invj(l)%invvnx
+             inout = iand(ishft(invj(l)%invjun,-1),1)
+c  Limited void * density terms.
+             dumf = 1.0
+             if (velfj(jx).eq.0.0 .or. athrot(jx).eq.0.0) dumf = 0.0
+             dumg = 1.0
+             if (velgj(jx).eq.0.0 .or. athrot(jx).eq.0.0) dumg = 0.0
+             arhof = rhofj(jx)*max(1.0e-15, voidfj(jx))*dumf
+             arhog = rhogj(jx)*max(1.0e-15, voidgj(jx))*dumg
+$if def,mmfld,5
+             if (nonmf .ne. 0) then
+               dumm = 1.0
+               if (velmj(jx).eq.0.0 .or. athrot(jx).eq.0.0) dumm = 0.0
+               arhom = rhomj(jx)*max(1.0e-15,voidmj(jx))*dumm
+             endif
+c  Junction area and sign relative to volume orientation.
+             signaj = ajun(jx)
+             if (iand(invj(l)%invjun,1) .ne. 0) signaj = -signaj
+c  Stream tube ratio terms.
+             jrat = 1 - 2*inout
+             if (iand(invj(l)%invjun,1) .ne. 0) jrat = -jrat
+             jrat = jx + max(0,jrat)
+             inout = 12 - 3*iand(ishft(invj(l)%invjun,-2),1)
+             inout = iand(ishft(jcex(jx),-inout),7)
+             if (gsum(inout+1) .ne. 0.0) arat(jrat) = arat(jrat)/
+     &       gsum(inout+1)
+c  Inflow and outflow sums.
+             vfx(inout+1) = vfx(inout+1) + signaj*arhof*velfj(jx)
+             vgx(inout+1) = vgx(inout+1) + signaj*arhog*velgj(jx)
+c  Inflow and outflow area sum.
+             avf = ajun(jx)*max(1.0e-15,athrot(jx))
+             area(inout+1) = area(inout+1) + avf*dumf
+$if def,mmfld,2
+             if (nonmf .ne. 0) vmx(inout+1) = vmx(inout+1) +
+     &       signaj*arhom*velmj(jx)
+c  Inflow and outflow density sums.
+             vrhof(inout+1) = vrhof(inout+1) + avf*arhof
+             vrhog(inout+1) = vrhog(inout+1) + avf*arhog
+$if def,mmfld,2
+             if (nonmf .ne. 0) vrhom(inout+1) = vrhom(inout+1) +
+     &       avf*arhom
+             l = l + 1
+           enddo
+c  Volume average velocities for all three directions.
+           do jrat = 0,2
+             inout = i + jrat
+             if (iand(imap(inout),16384) .ne. 0) then
+c  Compute cell centered mass flux (kg/s-m2).
+               avf = 0.5/avol(i+jrat)
+               gliq(i+jrat) = (vfx(2*jrat+1) + vfx(2*jrat+2))*avf
+               ggas(i+jrat) = (vgx(2*jrat+1) + vgx(2*jrat+2))*avf
+               arhof = 1.0/(avol(inout)*
+     &         max(1.0e-65,(vrhof(2*jrat+1) + vrhof(2*jrat+2))))
+               arhog = 1.0/(avol(inout)*
+     &         max(1.0e-65,(vrhog(2*jrat+1) + vrhog(2*jrat+2))))
+$if def,mmfld,2
+               if (nonmf .ne. 0) arhom = 1.0/(avol(i)*max(1.0e-65,
+     &         (vrhom(1) + vrhom(2))))
+               do ixr = 1,2
+                 if (area(2*jrat+ixr).gt.0.0 .or. iand(vctrl(i),1).eq.0)
+     &           then
+                   velf(inout) = velf(inout) +
+     &             vfx(2*jrat+ixr)*area(2*jrat+ixr)*arhof
+                   velg(inout) = velg(inout) +
+     &             vgx(2*jrat+ixr)*area(2*jrat+ixr)*arhog
+$if def,mmfld,2
+                   if (nonmf .ne. 0) velmt(i) = velmt(i) +
+     &             (vmx(1)*area(1) + vmx(2)*area(2))*arhom
+                 endif
+               enddo
+             endif
+           enddo
+c  Base quale on 1st direction flows.
+           alprhg = voidg(i)*rhog(i)
+           if (ggas(i) .gt. 0.) then
+             ggasa = abs(vgx(2))
+             gliqa = abs(vfx(2))
+           else
+             ggasa = abs(vgx(1))
+             gliqa = abs(vfx(1))
+           endif
+c  Minimun velocity use 1 cm/sec.
+           xflow = (ggasa+.01*alprhg*avol(i))/
+     &              (ggasa+gliqa+.01*rho(i)*avol(i))
+           hliq = uf(i) + p(i)/rhof(i)
+           hvap = hsteam(i)
+           if (p(i) .lt. pcrit) then
+             hmix = hliq + xflow*(hvap-hliq)
+             quale(i) = (hmix - sathf(i))/(sathg(i)-sathf(i))
+           else
+             quale(i) = quals(i)
+           endif
+           ggasa = abs(ggas(i))
+           gliqa = abs(gliq(i))
+           velfo(i) = velf(i)
+           velgo(i) = velg(i)
+           velfoo(i) = velf(i)
+           velgoo(i) = velg(i)
+c  Initialize the stratification flag for chfcal routine.
+           if (iand(vctrl(i),8) .ne. 0) then
+             if (iand(imap(i),63) .eq. 2) then
+               fstrt(i) = voidg(i)
+             else
+               fstrt(i) = 0.
+             endif
+           endif
+         endif
+         i = i + ivskp
+       enddo
+       return
+       end

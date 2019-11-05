@@ -1,0 +1,451 @@
+*if def,selap
+      subroutine fstate ( xdeltz,rmzr, tzr)
+c
+c  Defines the component state based upon the separate descriptions
+c  given by individual component behavioral models.
+c
+c  Cognizant engineer: ewc.
+c
+c     calling subroutines:  fuelan, simuan
+c     engineer/programmer:  e.w. coryell
+c
+c     input variables                  description
+c        xdeltz         work array for locating moved,peaking
+c                       factor boundaries (m)
+c
+c     output variables                 description
+c        rmzr           radius of phase-change (melting or freezing)
+c                         front ( m )
+c        tzr            thickness of zr portion of cladding  (m)
+c
+      implicit none
+*call contrl
+*call cons
+*call cmatp
+*call scddat
+*call buntim
+*call cora
+*call debout
+*call fpdkht
+*call intcom
+*call miscon
+*call ndxara
+*call nhtara
+*call ptscom
+*call scdads
+*call scdcom
+*call scdout
+*call tblsp
+*call dbacct
+*call ufiles
+c  local variables.
+      real xdeltz, rmzr,tzr
+      dimension  rmzr(ndax),tzr(ndax), xdeltz(ndax)
+      integer i,i0,i1,i1m1,k,n1,n2,n3,n4,ndebsw,ndz,ndzp1,nmat,nz1,
+     *nz2,nz2p1
+      real areaa,areaf,arar1,areat,deltaz,dzleft,dzlft,eletop,paxpzs,
+     *removd,voladd,zbot,ztop
+      integer mmm
+      integer mshmat(ndrd)
+      integer n,nsw,ldum
+      integer iselct
+      integer ndbg
+      external nheat
+      real rhozr,wzrloc,wzrmin
+      real rmshi,rmsho,romat1
+      data rhozr / 6490./
+          ndbg = 0
+          iselct = 2
+          if( modidx(1).eq.1)iselct = 1
+      select case(iselct)
+      case(1)
+          do i=1,naz
+            if(idcomp(icomp).eq.0)then
+cljs fuel rod
+            radmt3(2,i,icomp)=rpel2(i,icomp)
+            radmt3(3,i,icomp)=rci2(i,icomp)
+            radmt3(4,i,icomp)=rnoxd((icomp-1)*ndax+i)
+            radmt3(5,i,icomp)=rco2(i,icomp)
+              do n=numelm2(i,icomp),1,-1
+                if(rnoxd((icomp-1)*ndax+i).lt.
+     &          xcond3(n,i,icomp).and.mshmt3(n,i,icomp).eq.1)then
+                mshmt3(n,i,icomp)=5
+                end if
+              end do
+            else
+cljs   simulator rod
+              if (modidx(6) .eq. 0) then
+                radmt3(3,i,icomp)=rpel2(i,icomp)
+                radmt3(4,i,icomp)=rci2(i,icomp)
+                radmt3(5,i,icomp)=rnoxd((icomp-1)*ndax+i)
+                radmt3(6,i,icomp)=rco2(i,icomp)
+              else
+                radmt3(3,i,icomp) = rpeli2(i,icomp)	
+                radmt3(4,i,icomp) = rpel2(i,icomp)
+                radmt3(5,i,icomp) = rci2(i,icomp)
+                radmt3(6,i,icomp) = rnoxd((icomp-1)*ndax+i)
+                radmt3(7,i,icomp) = rco2(i,icomp)	
+              endif
+              do n=numelm2(i,icomp),1,-1
+                if(rnoxd((icomp-1)*ndax+i).lt.
+     &          xcond3(n,i,icomp).and.mshmt3(n,i,icomp).eq.1)then
+                mshmt3(n,i,icomp)=5
+                end if
+              end do
+            end if
+          end do
+      case(2)        
+c  the following coding calculates the axial peaking
+c  factors due to axial fuel relocation
+      deltaz = 0.0
+      nz1 = 0
+      nz2 = 0
+      do 10 i = 1,naz
+c  If axial fuel relocation model freloc is used, then modify it to
+c  output change in mass of fuel at each axial node and use these
+c  masses in the arithmetic statement below.
+        vfuel2(i,icomp)=(wuobng2(i,icomp)+wfrouo(ndax*(icomp-1)+i)
+     #  -wuorem(ndax*(icomp-1)+i)-wremuo(ndax*(icomp-1)+i))/denuo2
+        if(vfuel2(i,icomp).lt.0.0)vfuel2(i,icomp)=0.0
+c  Note. some zr can be removed due to interaction with inconel
+c  grid spacer.
+        wzrloc=rhozr*dzcnd2(i,icomp)*pi*
+     #   (rnoxd(ndax*(icomp-1)+i)**2-rci2(i,icomp)**2)
+        wzrmin=0.9*wzrloc
+c  If dissolved fuel has slumped away, then all metallic zr has also
+c  slumped away.
+        if(wremuo(ndax*(icomp-1)+i).ge.1.e-10)wzrmin=0.0
+c***    if(wremzr(ndax*(icomp-1)+i).gt.wzrmin .and.
+        if(fdrmn2(i,icomp).ge.(1.0-0.001).and.
+     #     noxide2(i,icomp).eq.0)  then
+          rci2(i,icomp) = rnoxd(ndax*(icomp-1)+i)
+          rnalf(ndax*(icomp-1)+i) = rnoxd(ndax*(icomp-1)+i)
+          noxide2(i,icomp) = 1
+          tzr(i) = 0.0
+        endif
+        if(vfuel2(i,icomp).le.1.e-20)then
+          ruliq(ndax*(icomp-1)+i) = 0.0
+        endif
+        if (ruliq(ndax*(icomp-1)+i) .lt. e) then
+          if (noxide2(i,icomp).gt.0 .and.
+     &        wremzr(ndax*(icomp-1)+i).gt.0.0 .and.
+     &    nfrslg(ndax*(icomp-1)+i).eq.0) ndisrp(ndax*(icomp-1)+i) = 3
+        else
+          if(noxide2(i,icomp).gt.0 .and.
+     &       wremzr(ndax*(icomp-1)+i).gt.0.0 .and.
+     &       oxdeo2(i,icomp).lt.e .and.
+     &       noxide2(i,icomp).ne.3 .and.
+     &       nfrslg(ndax*(icomp-1)+i).eq.0)then
+            noxide2(i,icomp) = 3
+            rco2(i,icomp) = rci2(i,icomp) + 1.0e-10
+            rcrst2(i,icomp) = rco2(i,icomp)
+          endif
+        endif
+        if  ( dzfrac(ndax*2*(icomp-1)+i) .lt. e )  then
+          rpel2(i,icomp) = e
+          ruliq(ndax*(icomp-1)+i) = e
+        endif
+c  Calculate the shift distance of the fuel stack top.
+        if( movesw(ndax*(icomp-1)+i) .eq. 1 ) then
+          deltaz=deltaz+dzcnd2(i,icomp)*(1.0-dzfrac(ndax*2*(icomp-1)+i))
+        else
+          go  to  10
+        endif
+c  Search for the ballooned zones.
+        if( ncrum(ndax*(icomp-1)+i) .eq. 1 ) then
+          if( nz1 .eq. 0 ) then
+            nz1 = i
+            nz2 = i
+          else
+            nz2 = i
+          endif
+        endif
+   10   continue
+      if (nz2.eq.naz .and. nz1.eq.naz) nz1 = 0
+c  Locate the new locations of peaking factor boundaries.
+ccma Should not have to do this if simulator rod, put in 
+c    jump around after debugging of original is completed
+c     if(idcomp(icomp).eq.6) go to 120
+ccmaend
+      do i = 1,naz
+        if (dzfrac(ndax*2*(icomp-1)+i) .le. 1.0) then
+          xdeltz(i) = zcond2(i,icomp) + 0.5*dzcnd2(i,icomp) - deltaz
+        else
+          xdeltz(i) = zcond2(i,icomp) + 0.5*dzcnd2(i,icomp)
+        endif
+      enddo
+      do 70 i = 1,naz
+        paxpz2( 1,i,1,icomp ) = paxpz0( 1,i,1 )
+        if( nz1 .ne. 0 ) then
+          if( i .lt. nz1 ) then
+            paxpz2( 1,i,1,icomp ) = paxpz0( 1,i,1 )
+          else if( i .le. nz2 ) then
+            eletop = zcond2(nz2,icomp) + 0.5 * dzcnd2(nz2,icomp)+ deltaz
+            do k = 1,naz
+              ztop = zcond2(k,icomp) + 0.5*dzcnd2(k,icomp)
+              if  ((eletop - ztop) .gt. e) then
+                ndz = k
+                dzleft = eletop - ztop
+              endif
+            enddo
+            paxpzs = 0.0
+            nz2p1 = nz2 + 1
+            ndzp1 = ndz + 1
+            ndzp1 = min(ndzp1,naz)
+            nz2p1 = min(nz2p1,naz)
+            areat = vfuel2(i,icomp) / dzcnd2(i,icomp)
+            voladd = vfuel2(i,icomp) - vfuel2(i+naz,icomp)
+            areaa = voladd / dzcnd2(i,icomp)
+            areaf = vfuel2(i+naz,icomp)/dzcnd2(i,icomp)
+            do k = nz2p1,ndzp1
+              if( k .lt. ndzp1 ) then
+                dzlft = dzcnd2(k,icomp)
+              else
+                dzlft = dzleft
+              endif
+              if  ( voladd .gt. e )  then
+                arar1 = rpel2(k,icomp)**2 * pi
+                paxpzs = paxpzs+paxpz0( 1,k,1 )*arar1 * dzlft / voladd
+              endif
+            enddo
+            paxpz2(1,i,1,icomp)=(paxpzs*areaa+paxpz0(1,i,1)*areaf)/areat
+          else
+            zbot = zcond2(i,icomp) - 0.5 * dzcnd2(i,icomp)
+            ztop = zcond2(i,icomp) + 0.5 * dzcnd2(i,icomp)
+            i0 = 0
+            i1 = 0
+            do k = 1,naz
+              if(zbot.le.xdeltz(k).and.i0.eq.0) i0 = k
+              if(ztop.le.xdeltz(k).and.i1.eq.0) i1 = k
+            enddo
+            if( i1 .lt. i0 ) i1 = i0 + 1
+            if( i0 .eq. i1 ) then
+              if (i0 .eq. 0) then
+                paxpz2(1,i,1,icomp) = 0.0
+              else
+                paxpz2(1,i,1,icomp) = paxpz0(1,i0,1)
+              end if
+            else
+              paxpzs = 0.0
+              i1m1 = i1 - 1
+              if( i1m1 .gt. i0 ) then
+                do 60 k=i0,i1m1
+                  paxpzs = paxpzs + paxpz2(1,k,1,icomp)
+     *                    * ( xdeltz(k+1) - xdeltz(k))
+   60             continue
+              endif
+              if (i1 .gt. naz) then
+                paxpzs = paxpz0(1,i0,1)*(xdeltz(i0) - zbot) + paxpzs
+              else
+                paxpzs = paxpz0(1,i0,1)*(xdeltz(i0) - zbot) +
+     &          paxpz0(1,i1,1)*(ztop - xdeltz(i1m1)) + paxpzs
+              endif
+              paxpz2(1,i,1,icomp) = paxpzs/dzcnd2(i,icomp)
+            endif
+          endif
+        endif
+   70   continue
+c locate elevations of breach and solidification
+      n1 = 0
+      n2 = 0
+      n3 = 0
+      n4 = 0
+       do i = 1,naz
+c  Locate axial zones where uo2 has been removed during the current
+c  timestep.
+         removd = wuorem(ndax*(icomp-1)+i) - wuorm0(i) +
+     &   wremuo(ndax*(icomp-1)+i) - wrmuo0(i)
+         if( removd .gt. e) then
+           if( n3 .eq. 0 ) then
+             n3 = i
+             n4 = i
+           else
+             n4 = i
+           endif
+         endif
+         if  ( nfrslg(ndax*(icomp-1)+i) .gt. 0 ) then
+c  Locate the axial zones with frozen crust.
+           if( n1 .eq. 0 ) then
+             n1 = i
+             n2 = i
+           else
+             n2 = i
+           endif
+         endif
+       enddo
+c  The following coding calculates the axial peaking factors for power
+c  in both the crust and the remaining regions.  The peaking factors are
+c  calculated as follows.
+       ncrust(icomp) = nshapz(icomp) + 1
+       do i = 1,naz
+        afuel(ndax*(icomp-1)+i) = vfuel2(i,icomp) / dzcnd2(i,icomp)
+        acrst(ndax*(icomp-1)+i) = wfrouo(ndax*(icomp-1)+i) /
+     &     ( denuo2 * dzcnd2(i,icomp) )
+        areaa = acrst(ndax*(icomp-1)+i) - acrst0(i)
+        if (nfrslg(ndax*(icomp-1)+i) .eq. 0) then
+          paxpz2(1,i,ncrust(icomp),icomp) = 0.0
+        else
+          paxpz2(1,i,ncrust(icomp),icomp) = 0.0
+        endif
+        if( areaa .gt. e ) then
+          if( n1 .ne. 0 .and. n3 .ne. 0 ) then
+            if( i .lt. n1 .or. i .gt. n2 ) then
+            else
+              paxpzs = 0.0
+              voladd = 0.0
+              do 90 k=n3,n4
+                if( acrst(ndax*(icomp-1)+i) .ne. 0.0 ) then
+                  removd = wuorem(ndax*(icomp-1)+k)-wuorm0(k)+
+     #               wremuo(ndax*(icomp-1)+k) - wrmuo0(k)
+                  arar1 = removd / (denuo2 * dzcnd2(k,icomp))
+                  voladd = voladd + arar1 * dzcnd2(k,icomp)
+                  paxpzs = paxpzs + paxpz2( 1,k,1,icomp ) * arar1 *
+     #                  dzcnd2(k,icomp)
+                endif
+   90           continue
+              if(acrst(ndax*(icomp-1)+i).ne.0.0)then
+                paxpz2(1,i,ncrust(icomp),icomp)=
+     #           paxpzs*areaa/(voladd*acrst(i)) +
+     #           paxpz2(1,i,2,icomp)*acrst0(i)/acrst(ndax*(icomp-1)+i)
+              endif
+            endif
+          endif
+        endif
+        enddo
+c  The following coding locates the materal interface locations
+c  and calculates the internal energy generation of the fuel and crust.
+c
+c  The following call to nheat calculates the nuclear heat generation
+c  in w/m for the axial nodes which have crust.
+c
+c  Check for debris formation.
+       ndebsw=0
+       do k = 1,naz
+c  ".ge.0" effectively makes statement below on nheat call a dummy.
+         if (irubpp(k,icomp) .ge. 0) ndebsw = 1
+       enddo
+       if (ndebsw .ne. 1)
+     & call nheat (acrst(ndax*(icomp-1)+1), ncrust(icomp), qfrel)
+       do i = 1,naz
+         nmat = 1
+         radmt3(1,i,icomp) = 0.0
+         qmat3(1,i,icomp) = 0.0
+c  For the fuel region.
+         iphase(ndax*(icomp-1)+i) = 0
+         if (idcomp(icomp) .eq. 6) then
+c  Simulator.
+           nmat = nmat + 1
+c  Heater system.
+           if (i.le.ielec .or. i.gt.naz - ielec) then
+             imatr3(nmat-1,i,icomp) = 21
+             radmt3(nmat,i,icomp) = relec
+cljs impose copper on bottom and top axial nodes
+               if(i .eq. 1) then
+                 if (icrmod.lt.3) imatr3(nmat-1,1,icomp) = 22
+               end if
+               if(i .eq. naz) then
+                 if (icrmod.lt.3) imatr3(nmat-1,naz,icomp) = 22
+               end if
+             qmat3(nmat-1,i,icomp) = unuc(i)
+c  Electric insulation.
+             nmat = nmat + 1
+             imatr3(nmat-1,i,icomp) = 5
+              radmt3(nmat,i,icomp) = max(rci2(i,icomp),relec + e)
+           else
+cljs tungsten section of simulator
+             imatr3(nmat-1,i,icomp) = 4
+             radmt3(nmat,i,icomp) = rtungs
+             qmat3(nmat-1,i,icomp) = unuc(i)
+c  Pellet material.
+             nmat = nmat + 1
+             if (icrmod.eq.2 .or. icrmod.eq.3) then
+c  Quench.
+               imatr3(nmat-1,i,icomp) = 5
+               radmt3(nmat,i,icomp) = max(rpel2(i,icomp),rtungs + e)
+             else
+c  CORA (depleted/intact U02).
+               imatr3(nmat-1,i,icomp) = 6
+               radmt3(nmat,i,icomp) = max(rpel2(i,icomp),rtungs + e)
+             endif
+c  Gap.
+           endif
+         endif
+c  If a fuel zone exists, set radii, indicies, and heat generations
+c  depending on the fuel configuration.
+        if( vfuel2(i,icomp) .gt. e ) then
+c  if a central void or liquid uo2 exists, set material
+c  radius, heat generation, and material index for a void or uo2
+c  if cracked fuel exists, set the material radius, heat
+c  generation, and material index depending of the fuel configuration
+          if( ( rci2(i,icomp) - radmt3(nmat,i,icomp) ) .gt. e .or.
+     &    imatr3(1,i,icomp) .eq.6)then
+            nmat = nmat + 1
+            qmat3(nmat-1,i,icomp) = 0.0
+c  if a partial filled of filled node exists, set the material
+c  radius and index
+            if( ncrum(ndax*(icomp-1)+i) .eq. 1 .and.
+     #            dzfrac(ndax*2*(icomp-1)+i) .lt. 1.0 ) then
+              imatr3(nmat-1,i,icomp) = 8
+              if( ruomlt(ndax*(icomp-1)+i) .gt. e ) then
+                radmt3(nmat,i,icomp) = sqrt(rci2(i,icomp)**2 *
+     #           dzfrac(ndax*2*(icomp-1)+i)+ruomlt(ndax*(icomp-1)+i)**2)
+              else
+                radmt3(nmat,i,icomp)=rci2(i,icomp)*
+     #               sqrt(dzfrac(ndax*2*(icomp-1)+i))
+              endif
+            else
+                radmt3(nmat,i,icomp) = rci2(i,icomp)
+                imatr3(nmat-1,i,icomp) = 7
+            endif
+          endif
+c  if fuel exists with no cladding, zr or zro2, set
+c  the last material to gas with a radius of rocrst
+          if (( rco2(i,icomp) - rci2(i,icomp) ) .lt. e .and.
+     #           noxide2(i,icomp) .eq. 3 )  then
+            nmat = nmat + 1
+            radmt3( nmat,i,icomp ) = rcrst2(i,icomp)
+            qmat3( nmat-1,i,icomp ) = 0.0
+            imatr3( nmat-1,i,icomp ) = 9
+            go to 130
+          endif
+        endif
+c  if an oxide layer exists on the cladding inside surface,
+c  set material radius, heat generation, and material index for zro2
+cljs  this coding applies to both fuel rods and simulator rods.
+        if  ( oxdei(ndax*(icomp-1)+i)  .gt. e )  then
+          nmat = nmat + 1
+          radmt3(nmat,i,icomp)=rci2(i,icomp)+oxdei(ndax*(icomp-1)+i)
+          qmat3( nmat-1,i,icomp ) = 0.0
+          imatr3( nmat-1,i,icomp ) = 5
+        endif
+c  if a layer of zr remains, set material radius, heat
+c  generation, and materias index for zr
+        if(abs(rnoxd(ndax*(icomp-1)+i)-radmt3(nmat,i,icomp)).gt.e)then
+          nmat = nmat + 1
+          radmt3( nmat,i,icomp ) = rnoxd( ndax*(icomp-1)+i )
+          qmat3( nmat-1,i,icomp ) = 0.0
+          imatr3( nmat-1,i,icomp ) = 1
+        endif
+c  if an outer zro2 layer exists, set material radius, heat
+c  generation, and material index for zro2
+        if( (rco2(i,icomp) - rnoxd(ndax*(icomp-1)+i)) .gt. e ) then
+          nmat = nmat + 1
+          radmt3( nmat,i,icomp ) = rco2(i,icomp)
+          imatr3( nmat-1,i,icomp ) = 5
+          qmat3( nmat-1,i,icomp ) = 0.0
+        endif
+c  if a crust layer of frozen zr-u-o exists, set material
+c  radius, heat generation, and material index for zr-u-o
+        if  (( rcrst2(i,icomp) - rco2(i,icomp)) .gt. e )  then
+          nmat = nmat + 1
+          radmt3( nmat,i,icomp ) = rcrst2(i,icomp)
+          imatr3( nmat-1,i,icomp ) = 3
+          qmat3(nmat-1,i,icomp)=oxdhfc(i,icomp)*pi*
+     &    abs(rcrst2(i,icomp)**2-rco2(i,icomp)**2)
+        endif
+  130    nmater2(i,icomp) = nmat - 1
+       enddo
+       end select
+       return
+       end
+*endif

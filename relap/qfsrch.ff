@@ -1,0 +1,374 @@
+*mlist
+       subroutine qfsrch (ih,jo)
+c
+c
+c  Searches heat transfer patterns and determine the number of axial
+c  nodes.
+c
+c  Cognizant engineer:  hxc.
+c
+       implicit none
+       integer ih,jo
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'flood.h'
+       include 'htrflb.h'
+       include 'htsrcm.h'
+       include 'rflhtc.h'
+       include 'statec.h'
+       include 'tmsrcm.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer hindex,i,ib,idv,idx,ifail,intm2,intm4,indy,indz,
+     & inscr3,int1,int2,int3,j,jndz,k,k1,k2,k3,kmax,knum,kx,ky,l,ll,lx,m
+       real deltw,dtmpmc,gterm,gterm1,hcchf,hcchfo,hcliq,qchf,qratio,
+     & reyn2,sattmx,sumgf,tchf,tchfo,term,term2,tfref,tibn,tibno,
+     & tchmid,tmax,tmaxa,tmin,tqf,tqfo,vdfref,xnegt,xpost,zuber,zcurr
+       logical upup,expand
+       equivalence (s(1),knum),(s(4),inscr3),(s(7),k3),(s(8),tfref),
+     & (s(9),vdfref),(s(10),sumgf),(s(11),gterm), (s(14),gterm1),
+     & (s(15),dtmpmc)
+       equivalence (prop(1),int1),(prop(2),int2),(prop(3),int3),
+     & (prop(4),hcchf),(prop(5),tchf),(prop(6),tqf),(prop(7),
+     & tibn),(prop(8),qchf),(prop(10),hcchfo),(prop(11),tchfo),
+     & (prop(12),tqfo),(prop(13),tibno),(prop(14),zuber),
+     & (prop(16),term2),(prop(17),term),(prop(20),qratio),
+     & (prop(21),xpost),(prop(22),xnegt),(prop(24),reyn2),
+     & (prop(25),hcliq),(prop(26),kmax)
+c
+       data ifail/0/
+c
+c  Save old information for under-relaxation.
+       do 102 l=4,7
+         prop(l+6)=prop(l)
+  102  continue
+c
+       gterm = 0.
+       gterm1 = 0.
+       tfref = 0.
+       vdfref = 0.
+       sumgf = 0.
+       dtmpmc = 0.
+c  Define quench front orientation.
+       upup = .true.
+       expand = .false.
+       k2 = 0
+       sattmx = 0.0
+       tmin = 1.0e20
+       tmaxa = 0.0
+       tmax = 0.0
+       indy = inscr1
+       indz = inscr1 + htnusr(jo)
+       lx = lhtrfl(ih) + filndx(8)
+       i = lx
+       zcurr = 0.
+       do 120 m = 1,htnusr(jo)
+         hindex = ihtptr(i) + filndx(8)
+         htchfo(hindex+idrfl) = 0.0
+         idx = htbvo(hindex+idrfl)
+         sattmx = max(tsatt(idx),sattmx)
+         if (voidg(idx) .lt. 0.9999) go to 104
+         if (zcurr .gt. wetbot + 0.5) then
+           ia(indy+nqfmov) = 2
+c Setting ia to 2 can result in reducing the number of fine mesh nodes.
+           go to 106
+         endif
+  104    upup=.false.
+  106    if (voidg(idx) .gt. tmin) go to 107
+         k1 = i
+         tmin = voidg(idx)
+  107    ll = ia(indy)/2
+c  ia(indy) = number of fines in the slab.
+         zcurr = zcurr + dl(idx)
+         do 112 j=1,2
+           if (fa(indz).le.tmaxa) go to 108
+           tmaxa = fa(indz)
+           k3 = i
+  108      if (voidg(idx) .gt. 0.95) go to 112
+           deltw = abs(fa(indz) - fa(indz+ll))
+           if (deltw .lt. tmax) go to 112
+           tmax = deltw
+           k2 = i
+  112     continue
+          indz = indz + ia(indy)
+          indy = indy + 1
+          i = i + 1
+  120   continue
+c  k1 = address of heat structure where the minimum voidg is stored.
+c        tmin
+c        tmin is the minimum voidg
+c  k2 = address of heat structure where the max deltwall is stored.
+c        tmax
+c  k3 = address of heat structure where the max twall is stored.
+c        tmaxa
+c  fa(indz) is the surface temperature.
+crex    if (fa(indz) .lt. tmin) k1 = lx + htnusr(jo) - 1
+        if (fa(indz) .le. tmaxa) go to 122
+        tmaxa = fa(indz)
+        k3 = lx + htnusr(jo) - 1
+  122   if (upup) go to 723
+        if (k2 .ne. 0) go to 123
+        upup = k3 .ge. k1
+        k2 = k1
+        go to 124
+c  Search for incipience of boiling.
+  123   upup = k2.ge.k1 .or.k3.ge.k1
+  124   ib = 0
+        if (upup) go to 128
+        j = -1
+        indy = inscr1 + htnusr(jo) - 1
+        do 125 i=inscr1,indy
+  125     ia(i) = -ia(i)
+          indz = indy + iglrfl(ih+1)
+          kmax = lx + htnusr(jo)
+          i = kmax - 1
+          kmax = kmax - k3
+          if (k2 .lt. k3) go to 129
+          go to 133
+  128     i = lx
+          kmax = k3 - lx + 1
+          j = 1
+          indy = inscr1
+          indz = inscr1 + htnusr(jo)
+          if (k2 .le. k3) go to 133
+  129     tmax = 0.0
+          idv = i
+          jndz = indz
+          idx = indy
+          do 131 k=1,kmax
+            ll = ia(idx)/2
+            do 130 l=1,2
+              deltw = abs(fa(jndz) - fa(jndz+ll))
+              if (deltw .lt. tmax) go to 130
+              tmax = deltw
+              k2 = idv
+              jndz = jndz + ll
+  130       continue
+            idx = idx + j
+            idv = idv + j
+  131     continue
+  133     zcurr = 0.
+          do 135 k=1,htnusr(jo)
+            hindex = ihtptr(i) + filndx(8)
+            idx = htbvo(hindex+idrfl)
+            if (voidg(idx) .gt. 0.0 ) go to 140
+crex        if (wetbot-dl(idx) .ge. zcurr+.2) go to 140
+            zcurr = zcurr + dl(idx)
+            ia(indy+nqfmov) = 1
+            ib = i
+            idv = idx
+            i = i + j
+            indz = indz + ia(indy)
+            indy = indy + j
+  135     continue
+          tmax = max(sattmx,tmaxa)+10.0
+          go to 148
+  140     if (ib .eq. 0) idv = idx
+c  Is this to look for temp above 2-phase mixture?
+  144     term = float(ia(indy))*voidf(idx)*max(0.0,1.0-2.5e-2*
+     &    (rhog(idx)*(voidg(idx)*velg(idx))**2)**2/
+     &    (sigma(idx)*(max(0.1,rhof(idx)-rhog(idx)))))
+          ll = term
+          tmax = max(sattmx,fa(indz+ll))
+c  Determine incipience of boiling.
+  148     tfref = min(tempf(idv),sattmx)
+c  710 K is the PSI mimimum film boiling temperature.
+          tmin = min(sattmx + 300.,710.)
+          tqf = tmin
+          twqf = tmin
+          tchf = sattmx + 40.
+          twchf = tchf
+          if (tfref+0.1 .lt. sattmx) then
+            tibn = sattmx - 5.
+          else
+            tibn = sattmx
+          endif
+          twnvg = tibn
+  178     if (ib .eq. 0) go to 186
+          if (idv .eq. idx) go to 238
+  186     int1 = i
+c  Calculation of critical temperature location.
+          ky = i
+          jndz = indz
+          kx = indy
+          do 300 l=k,htnusr(jo)
+            hindex = ihtptr(ky) + filndx(8)
+            idx = htbvo(hindex+idrfl)
+            jndz=jndz+ia(kx)
+            if (tchf .le.fa(jndz)) go to 187
+            ky = ky + j
+            kx = kx + j
+  300     continue
+          ky = ky - j
+  187     if (upup) then
+  188       kx = max(k2,ky)
+          else
+            kx = min(k2,ky)
+          endif
+c      search for positions of tqf and tchf
+        int2=0
+      int3=0
+      ib=i
+      term=0
+      k1=0
+      tchmid=(tchf+tibn)*0.5
+      sumgf=0.0
+      xpost=0.0
+      do 225 l=k,htnusr(jo)
+        hindex = ihtptr(i) + filndx(8)
+        idx = htbvo(hindex+idrfl)
+        xnegt=voidg(idx)*dl(idx)
+        xpost=xpost+xnegt
+        sumgf=sumgf+(abs(voidf(idx)*velf(idx))
+     &           +abs(voidg(idx)*velg(idx)))*xnegt
+        if (voidg(idx) .le. 0.999) go to 204
+        if (zcurr .gt. (wetbot + .2)) then
+          ia(indy+nqfmov) = 3
+          go to 220
+        endif
+  204   jndz=indz+j
+        tmax=fa(indz)
+        tmin=fa(indz)
+        ll=abs(ia(indy))-1
+        do 208 idv=1,ll,2
+          tmax=max(fa(jndz),fa(jndz+j),tmax)
+          tmin=min(fa(jndz),fa(jndz+j),tmin)
+  208   jndz=jndz+j+j
+        if(tmin.gt.tqf+100.0) go to 209
+        if(tmax.gt.tibn+1.0) go to 210
+  209   ia(indy+nqfmov)=3
+        intm2=(tmax-tmin)*0.01
+        if(intm2.gt.0) ia(indy+nqfmov)=-4+min(3,intm2)
+        go to 220
+  210   if ( l .gt. 1) then
+c Double nodes if quench front is close.
+          if (zcurr .lt. (wetbot + .2)) then
+            if (zcurr .gt. wetbot) go to 216
+          endif
+        endif
+        if(int3.gt.0) go to 220
+        if(int2.gt.0) go to 212
+        if(tchf.gt.tmax .or. tchf.lt.tmin) go to 220
+        int2=i
+  212   if(tqf.gt.tmax .or. tqf.lt.tmin) go to 220
+        int3=i
+        go to 220
+  216   if((tqf.le.tmax .and. tqf.ge.tmin) .or.
+     &   (tqf.ge.tmax .and. tchf.le.tmin) .or.
+     &  (tchmid.le.tmax .and. tchmid.ge.tmin).or.
+     &  (tchf.ge.tmax .and. tchmid.le.tmin)) ia(indy+nqfmov)=-3
+        if(tchf.le.tmax .and. tchf.ge.tmin) ia(indy+nqfmov)=-2
+        if(tmax-tmin.le.term) go to 220
+        k1=indy
+        term=tmax-tmin
+c Double nodes if quench front is close.
+  220   if (ia(indy+nqfmov) .eq. 0) then
+          if (zcurr .le. (wetbot + .5)) then
+            if (zcurr .gt. wetbot) ia(indy+nqfmov) = -2
+crex        if (zcurr .ge. wetbot) then
+crex          ia(indy+nqfmov) = -1
+crex          expand = .true.
+crex          if (fa(indz) .lt. tqf) then
+crex            knum = htnaxl(jo)
+crex          else
+crex            knum = 4
+crex          endif
+crex        endif
+          endif
+        endif
+c  Cut the number of nodes in half?
+        deltw = abs(fa(indz) - fa(indz+ia(indy)))
+        if (deltw .lt. 1. .and. zcurr .lt. (wetbot-.5)) then
+          ia(indy+nqfmov) = 2
+        endif
+        zcurr = zcurr + dl(idx)
+        i=i+j
+        indz=indz+ia(indy)
+        indy=indy+j
+  225 continue
+      if(k1.eq.0) go to 230
+      if(ia(k1+nqfmov).eq.-2) ia(k1+nqfmov)=-1
+      if(ia(k1+nqfmov).eq.-3) ia(k1+nqfmov)=-2
+  230 if(int3.gt.0) go to 238
+      if(int2.gt.0) go to 234
+      int2=ky
+         hindex = ihtptr(int2) + filndx(8)
+  234 int3=int2
+c  Determine the number of axial nodes in each heat structure.
+  238 if(xpost.gt.0.0) sumgf=sumgf/xpost
+      if(upup) go to 723
+      indy=inscr1+htnusr(jo)-1
+      do 727 i=inscr1,indy
+  727 ia(i)=-ia(i)
+          twchf = tchf
+  723 if(expand .or. knum.gt.2) go to 726
+      indz=inscr3+htnusr(jo)-1
+      do 722 i=inscr3,indz
+  722 ia(i)=2
+      meshy=htnusr(jo)+htnusr(jo)+1
+      go to 980
+  726 meshy=1
+      indy=inscr3
+      intm2=knum/2
+      intm4=min(max(2,intm2/2),16)
+       i = lx
+       do 770 m = 1,htnusr(jo)
+      indz=indy-nqfmov
+      if(ia(indy)) 730,732,750
+  730 if(ia(indy)+2) 745,758,762
+  732 if(i.eq.(int3+j)) go to 745
+      if(i.eq.(int1-j)) go to 745
+      if(upup) go to 736
+      if(i.gt.int1 .or. i.lt.int3) go to 750
+      go to 738
+  736 if(i.gt.int3 .or. i.lt.int1) go to 750
+  738 if(i.eq.k2) go to 762
+      if(i.eq.int2 .and. (i.eq.k2+j .or. i.eq.k2-j)) go to 762
+      go to 758
+c  knum here is the user allowed maximum fine mesh number in a slab.
+c  Doubled up to knum/4.
+  745 if(ia(indz).le.intm4) go to 747
+      ia(indy)=ia(indz)/2
+      go to 766
+  747 ia(indy)=min(intm4,ia(indz)+ia(indz))
+      go to 766
+c  Halved, down to 2.
+  750 ia(indy)=ia(indz)
+      if(ia(indy).gt.2) ia(indy)=ia(indy)/2
+      go to 766
+c  Doubled, up to knum/2.
+  758 ia(indy)=min(intm2,ia(indz)+ia(indz))
+      go to 766
+c  Doubled, up to knum.
+  762 ia(indy)=min(knum,ia(indz)+ia(indz))
+  766 meshy=meshy+ia(indy)
+      indy=indy+1
+         i = i + 1
+  770 continue
+      if(meshy.le.iglrfl(ih)) go to 980
+c  Too many axial nodes; warn and try to go back to old numbers.
+      if(ifail.ne.0) go to 800
+      ifail = 1
+       write (output,1001) timehy
+ 1001  format ('0reflood calculation became suspect at timehy =',1p,
+     & e12.5/' because the code did not allocate enough storage for the'
+     &' axial'/' nodes required for this transient, storage can not be '
+     &'increased by input data or jcl change, but the number of axial '
+     &'nodes can.')
+      indz=inscr3+htnusr(jo)-1
+       write (output,1002) meshy,iglrfl(ih),(ia(i),i=inscr3,indz)
+ 1002  format ('0 meshy =',i10,'  iglrfl(ih) =',i10,'   numbers of axial
+     & nodes are ... '/8(2x,i10))
+  800 meshy = 1
+      indy = inscr3
+       do 820 i = 1,htnusr(jo)
+      indz = indy-nqfmov
+      ia(indy) = min(ia(indy),ia(indz))
+      meshy = meshy+ia(indy)
+  820 indy = indy+1
+  980 if(.not.upup) k3=-k3
+      return
+      end

@@ -1,0 +1,1088 @@
+*mlist
+*if def,selap
+       subroutine scdad4
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: ewc.
+c
+       use invtbl
+       use scdmod
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'htrcom.h'
+       include 'jundat.h'
+       include 'scddat.h'
+       include 'cpmdat.h'
+       include 'debcom.h'
+       include 'statec.h'
+       include 'plndat.h'
+       include 'slumpv.h'
+       include 'hardpn.h'
+       include 'radata.h'
+       include 'solcom.h'
+       include 'buntim.h'
+       include 'cora.h'
+       include 'miscon.h'
+       include 'voldat.h'
+       include 'scntl.h'
+       include 'scdout.h'
+       include 'ndxara.h'
+       include 'tblsp.h'
+       include 'thplot.h'
+       include 'cons.h'
+       include 'nhtara.h'
+       include 'scdcom.h'
+       include 'trnot1.h'
+       include 'trnot2.h'
+       include 'ufiles.h'
+       include 'fpfast.h'
+       include 'fparm2.h'
+       include 'fpdkht.h'
+       include 'bconds.h'
+       include 'nrcom.h'
+       include 'uoxcom.h'
+       include 'fecom.h'
+       include 'bwgeom.h'
+       include 'intcom.h'
+       include 'debout.h'
+       include 'blageo.h'
+       include 'blinit.h'
+       include 'scdads.h'
+       include 'scdpow.h'
+       include 'bwtrns.h'
+       include 'dbacct.h'
+       include 'oldcom.h'
+c
+c  Local variables.
+       integer i,i2,ib,icm1,icmx,id1,id2,ij,ik,il,il1,il2,is,ise,
+     & j,ja,jb,jj,jn,k,k1,kdyn2,kk,l,l1,l2,lmap,luhv,ng1,nl,nsw
+       integer nrefll,icmfto,icomp1,nfuelr,nn,icm1ms,icm1op
+       integer lcrchn,lalopn,lclosj,nnn,ldropm,jmxcor,imaxcr,jblkmn
+       integer nj,idxjun,indxjn,icmmas,ifulch,lcrbm2,
+     & kkstt,lcrbm3,nplbk1,kki,m
+       integer n
+       integer jm1,nl2
+       integer ndbg
+       real depdb1,depmet,dthblk,famnbl,frcmc1,klsmxf,klsmxr,expkls,
+     & coefhy,aflow1,fadthr
+       real qscdmx,csbpgu,tw1,tw0,dtmx,dvsum,tmpsum,dvrod,tmploc
+       real qrdpv1
+       real aminfl
+c   dthblk = threshold equivalent depth of relocated material that
+c            causes change in hydraulic parameters such as flow
+c            area (m).
+c            equivalent depth = depth when all relocated material
+c                               fills in space between fuel rods.
+c  famnbl = fraction of flow area to as-fabricated flow area at
+c           threshold depth that causes plane blockage.
+      data dthblk / 0.02/, famnbl / 0.1/
+      data klsmxf/500./, klsmxr/500./, expkls/3.0/
+      data coefhy/0./, fadthr/0.0/
+        ndbg=0
+cljs      if(timehy.ge.5500.0.and.timehy.lt.5501.0)ndbg=1
+cljs      if(timehy.ge.100.0.and.timehy.le.110.0)ndbg=1
+          if(ndbg.eq.1)then
+          write(output,9005)timehy,igp
+9005      format(' SCDAD4 entered; timehy=',e12.6,' igp=',i5)
+          end if
+c
+c  If control rod material mixed in with rod debris, then set
+c  control rod temperatures to rod debris temperatures.
+       do k = 1,naz
+         do j = 1,ncomp
+           if (idcomp(j).eq. 0.and. rpel((j-1)*ndax+k).gt.0.2e-3) then
+             if (irubpp(k,j).eq. 1.or. lcrucb(k,j).ge.1) then
+               if (j .lt. ncomp) then
+cljs             if (idcomp(j+1) .eq. 1) then
+                 if(idcomp(j+1).eq.1.or.idcomp(j+1).eq.8)then
+                   do i = 1,nrods2(k,j+1)
+                     tcond3(i,k,j+1) = tcond3(1,k,j)
+                   enddo
+                 endif
+               endif
+             endif
+           endif
+         enddo
+       enddo
+c  jmxcor = largest value of component number for fuel rods.
+       jmxcor=0
+       do j = 1,ncomp
+         qos = qos + qsdt(j)
+         qon = qon + qndt(j)
+         qoo = qoo + qodt(j)
+         qoe = qoe + qedt(j)
+         qst = qst + qstor(j)
+         if (idcomp(j).eq.1 .and. rpel((j-1)*ndax+1).gt.0.2e-3)
+     &   jmxcor = j
+       enddo
+       do k = 1,naz
+         aflowp(k) = 0.
+       enddo
+       bgmct = 0.
+       bgmat = 0.
+       do j = 1,ncomp
+         do i = 1,naz
+           if(tmxful(i,j).lt.tcond3(nrods2(i,j),i,j))then
+           tmxful(i,j) = tcond3(nrods2(i,j),i,j)
+           tmxfl0(i,j) = timehy
+           end if
+           if(oxdhcc(i,j).gt.oxdhmx(i,j))then
+           oxdhmx(i,j) = oxdhcc(i,j)
+           toxhmx(i,j) = timehy
+           end if
+           if (lcrucb(i,j).ge.2) cycle
+           bgmcto = bgmct
+           if (idcomp(j).ne.8) then
+             bgmct = max(bgmct,tcond3(nrods2(i,j),i,j))
+               if(bgmct.gt.bgmcth)then
+               bgmcth = bgmct
+               jmaxhs = j
+               kmaxhs = i
+               tmaxhs = timehy
+               end if
+c  Calculate bulk average fuel temperature.
+             dvsum = 0.0
+             tmpsum = 0.0
+             do m = 2,nrods2(i,j)
+               dvrod = pi*(xcond3(m,i,j)**2-xcond3(m-1,i,j)**2)
+               dvsum = dvsum + dvrod
+               tmpsum = tmpsum + dvrod*0.5*(tcond3(m,i,j) +
+     &         tcond3(m-1,i,j))
+             enddo
+             tmploc=tmpsum/dvsum
+             bgmat = max(bgmat,tmploc)
+           else
+             if (wpsur2((j-1)*ndax+i).le.slbwd(j)*1.1e-10) then
+               bgmct = max(bgmct,300.0)
+             else
+               bgmct = max(bgmct,tcond3(1,i,j))
+             endif
+             if (wpsur1((j-1)*ndax+i).le.slbwd(j)*1.1e-10) then
+               bgmct = max(bgmct,300.0)
+             else
+               bgmct = max(bgmct,tcond3(nrods2(i,j),i,j))
+             endif
+           endif
+           if (bgmct .gt. bgmcto) then
+             imaxtp = i
+             jmaxtp = j
+             bgmcto = bgmct
+           endif
+         enddo
+       enddo
+       if (nvirn.eq. 3.or. nvirn.eq. 4.or. nvirn.eq.6) go to 420
+c  Adjust loss coefficients to account for distortion of fuel rod
+c  geometry due to meltdown, etc.
+       do i = 1,igp
+         do k =1,naz
+           nsw = 0
+           do k1 = 1,icp(i)
+             if (nsw.eq.1) cycle
+             icm1 = ngpc(i,k1)
+             if (idcomp(icm1).eq.0 .and.
+     &       rpel((icm1-1)*ndax+1).gt.0.2e-3) nsw = 1
+c  Extract from state of component icm1 a measure of the distortion
+c  from intact geometry of fuel rods in this flow channel.
+           enddo
+         enddo
+       enddo
+c  Store value of largest flow channel with fuel rods.
+       imaxcr = 0
+       ifulch = 0
+       do i = 1,igp
+         do k1 =1,icp(i)
+           icm1 = ngpc(i,k1)
+           if (idcomp(icm1).eq.0 .and. rpel((icm1-1)*ndax+1).gt.0.2e-3)
+     &     then
+             ifulch = ifulch + 1
+             imaxcr = i
+           endif
+         enddo
+       enddo
+         if(ndbg.eq.1)then
+         write(output,9115)imaxcr,igp,ifulch
+9115     format(' SCDAD4; imaxcr=',i5,' igp=',i5,' ifulch=',i5)
+         end if
+       do 350 i = 1,igp
+c  Check to see whether flow channel has cohesive debris region.
+         do 340 k = 1,naz
+           lcrchn = 0
+           ldropm = 0
+cxxx       do k1 = 1,icp(i)
+cxxx         icm1 = ngpc(i,k1)
+cxxx         if (idcomp(icm1).eq.0 .and.
+cxxx &       rpel((icm1-1)*ndax+1).gt.0.2e-3) then
+c  Check to see if any drops for this component are in motion.
+cxxx           do nnn = 1,naz
+cxxx             if (idrops(nnn,icm1).eq.1) ldropm = 1
+cxxx           enddo
+cxxx         endif
+cxxx       enddo
+           l = ngpv(i,k) + filndx(4)
+           wtpm = 0.0
+           ng1 = 0
+           nswcer = 0
+           avol0 = avol(l)
+           vol0 = v(l)
+           diamv0 = diamv(l)
+c  nswcer=indicator of whether area reduction is due to ceramic
+c  melting or not; 0=no, 1=yes.
+c  Axial node that is completely filled with relocated material is
+c  treated same as ceramic melting.
+c  nrefll = 1 = location that had been molten pool but pool slumped
+c               to lower location so that bulk blockage removed
+c               from location but then enough material from higher
+c               location slumped that pool filled up so that blockage
+c               again exists at node.
+c             = 0 = no cycling back to blockage.
+           nrefll = 0
+           nfuelr = 0
+           dzfrmx = 0.0
+           icmfto = 0
+           icomp1 = 0
+           lcrchn = 0
+c  Identify number of fuel rod groups in flow channel.
+c  Also identify "master" fuel rod in flow channel, icmmas.
+           icmmas = 0
+           do k1 = 1,icp(i)
+             icm1 = ngpc(i,k1)
+             if (idcomp(icm1).eq.0 .and.
+     &       rpel((icm1-1)*ndax+1).gt.0.2e-3) then
+                 if(ndbg.eq.1)then
+                 write(output,9117)i,k,icm1,lcrucb(k,icm1)
+9117             format(' SCDAD4; i=',i5,' k=',i5,' icm1=',i5,
+     &           ' lcrucb=',i5)
+                 end if
+               if (lcrucb(k,icm1).eq.2 .and. nbublk(i,k).ne.1)
+     &         lcrchn = 1
+               if (icomp1.eq.0) icomp1 = icm1
+               icmfto = icmfto + 1
+               if (icmmas.eq.0) icmmas = icm1
+             endif
+           enddo
+           if (icomp1.eq.0) icomp1 = ngpc(i,1)
+           do k1 = 1,icp(i)
+             icm1 = ngpc(i,k1)
+             if (idcomp(icm1).eq.0 .and.
+     &       rpel((icm1-1)*ndax+1).gt.0.2e-3) nfuelr = nfuelr + 1
+             if (nfuelr.eq.1) dzfrmx = dzfrcq(k,icm1)
+c  Enclosure flow is not blocked unless hardpan has formed.
+             lcrbm2 = 0
+             if (k.ge.2) then
+               nsw = 0
+               kkstt = k - 1
+               do kk = kkstt,1,-1
+                 if (nsw.eq.1) cycle
+                 if (lcrucb(kk,icm1).eq.1) then       
+                   lcrbm2 = 1
+                   nsw = 1
+                 endif
+               enddo
+             endif
+             lcrbm3 = 0
+             if (ztpcoh(icm1).ge.zcond((icm1-1)*ndax+k)) lcrbm3 = 1
+             if (lcrbm2.eq.0) lcrbm3 = 1
+             if (lcrucb(k,icm1).ge.1 .and. idcomp(icm1).eq.0 .and.
+     &       rpel((icm1-1)*ndax+1).gt.0.2e-3 .and. lcrbm3.eq.1)
+     &       nswcer = 1
+c  Check for possibility of complete blockage due to metallic meltdown
+c  that completely fills axial node.
+c  This criterion for blockage should be same as that applied in
+c  subroutine RUBTRN.
+             if (ztpcoh(icm1).gt.zcond((icm1-1)*ndax+k) .and.
+     &       nbublk(i,k).eq.2 .and. idcomp(icm1).eq. 0 .and.
+     &       lcrucb(k,icm1).eq.2) nrefll = 1
+           enddo
+c  nswblk = indicator of blockage in enclosure at this elevation.
+c  0=no, 1=yes.
+           nswblk = 0
+           fng1 = 0.0
+c  njunop = indicator that metallic blockage has been removed.
+c  0=no, 1=yes.
+           njunop = 0
+           nplbk1 = 0
+           do k1 = 1,icp(i)
+             icm1 = ngpc(i,k1)
+             if (idcomp(icm1).eq.0 .and.
+     &       rpel((icm1-1)*ndax+1).gt.0.2e-3 .and. igp.ge.2) then       
+               if (frcspr(k,icm1).gt.0.001) nplbk1 = 1
+               if (nbublk(i,k).eq.1) nplbk1 = 1
+               if (dzfrcl((icm1-1)*ndax+k).gt.tdrslp) nplbk1 = 1
+             endif
+           enddo
+           if (nplbk1.eq.0 .and. nplblk(i,k).eq.1) then
+             njunop = 1
+             nunblk(i,k) = 2
+           endif
+           do k1 = 1,icp(i)
+             icm1 = ngpc(i,k1)
+             if (njunop .eq. 1) then
+c  Increase flow area by size of metallic blockage that has slumped to
+c  lower elevation.
+               avol(l) = avol(l) + float(nsigl(icm1))*aflwto(i)/
+     &         anrden(i) - float(nsigl(icm1))*aflwr1
+               imdctl(1) = ior(imdctl(1),dmwrite)
+               write (inpout,"('0-------- Core degradation',es14.6,' s: 
+     &Flow area increase after slumping of metallic crust, axial node',
+     & i3,', component',i3,',')") timehy,k,icm1
+             endif
+             depdb1 = depdeb
+c  Represent last channel to be blocked as being harder to block due to
+c  concentration of flow into this channel.
+             if (i.eq.igp) depdb1 = 4.*depdeb
+c  If only grid spacer meltdown, require more material relocation for
+c  planar blockage.
+             if (wfrouo((icm1-1)*ndax+k).lt.1.e-6) depdb1 = 3.*depdeb
+             if (idcomp(icm1).eq.0 .and. igp.ge.2 .and.
+     &       rpel((icm1-1)*ndax+1).gt.0.2e-3 .and.
+     &       aflwr1.le.1.e-6 .and.
+     &       dzfrcl((icm1-1)*ndax+k).ge.tdrslp .and.
+     &       nbublk(i,k).ne. 2) then
+c  Note. If aflwr1.le.1.e-6, then plane blockage model applied.
+c  Default is application of plane blockage model.
+               nsw = 1
+             else
+               nsw = 0
+             endif
+c  nsw = 1 = blockage due to metallic meltdown of one or more fuel rods
+c  in flow channel.
+c  nswcer = 1 = melting of fuel in one or more fuel rods in flow channel
+c  or else metallic meltdown that completely fills axial node.
+             if (idcomp(icm1).eq. 0 .and. nswcer.eq.1) nsw = 1
+             if (frcspr(k,icm1).gt.0.001 .and. idcomp(icm1).eq. 0 .and.
+     &       nbublk(i,k).ne.2) nsw = 1
+             if (idcomp(icm1) .eq. 0) then
+c  Do not reduce flow area until molten pool has spread through entire
+c  node, at which time its mass is added to molten pool.
+               jblkmn = 0
+                 if(ndbg.eq.1)then
+                 write(output,9121)nswcer,i,imaxcr,flmpmn
+9121             format(' SCDAD4, nswcer=',i5,' i=',i5,' imaxcr=',i5,
+     &           ' flmpmn=',e10.4)
+                 end if
+               if (nswcer .eq. 1) then
+                 if (i.eq.imaxcr .and. flmpmn.ge.0.001) then
+                   jblkmn = 1
+                   fng1 = (1.-flmpmn)*float(nsigl(icm1))
+                   if (fng1.lt.0.0) fng1 = 0.0
+                 else
+                   fng1 = fng1 + float(nsigl(icm1))
+                 endif
+               endif
+             endif
+             if (nsw .eq. 1) nswblk = 1
+             il1 = (icm1 - 1)*ndax + k
+             if (idcomp(icm1) .eq. 2) then
+               wt(k1) = slbwd(icm1)*nsigl(icm1)
+             else
+               if (nsw .eq. 0) then
+                 if (idcomp(icm1) .eq. 8) then
+                   if (ngps(i,k1) .eq. 1) then
+c  Calculations for second surface (interstitial volume).
+                     avol(l) = avol(l) - dfasr2(il1)*nsigl(icm1)
+                     avol(l) = max(avol(l),0.02*aflwto(i))
+                     wt(k1) = wpsur2(il1)*nsigl(icm1)
+                   else
+c  Calculations for first surface (fuel bundle volume).
+                     avol(l) = avol(l) - dfasr1(il1)*nsigl(icm1)
+                     wt(k1) = wpsur1(il1)*nsigl(icm1)
+                   endif
+                 else
+                   avol(l) = avol(l) - pi*(rco(il1) + rcoz(il1))*
+     &             (rco(il1) - rcoz(il1))*nsigl(icm1)
+                   wt(k1) = 2.0*pi*rco(il1)*nsigl(icm1)
+                 endif
+               else
+                 wt(k1) = 2.*pi*rcos(icm1)*nsigl(icm1)
+               endif
+               if(idcomp(icm1).le.1)wt(k1) = rathsa(k,icm1)*wt(k1)
+             endif
+             wtpm = wtpm + wt(k1)
+           enddo
+cxxx       if (nsmgeo.eq.3) go to 195
+c  IF Block DD begins
+              if(ndbg.eq.1)then
+              write(output,9022)nswblk,i,k,avol(l),volno(l),
+     &        aflwto(i)
+9022          format(' SCDAD4; nswblk=',i5,' i=',i5,' k=',i5,
+     &        ' avol(l)=',e10.4,' volno=',i10,' aflwto=',e10.4)
+              end if
+           if (nswblk .eq. 0) then
+             aminfl = 0.25*aflwto(i)
+cljs         avol(l) = max(avol(l),1.0e-6)
+             avol(l) = max(avol(l),aminfl)
+cljs         avols0(i,k) = max(avol(l),1.e-6)
+             avols0(i,k) = max(avol(l),aminfl)
+             vs0(i,k) = max(v(l),1.e-5)
+             if (wtpm.ge.1.0e-5) diamv(l) = 4.0*avol(l)/wtpm
+c  To avoid difficulties in interphase models, limit how small
+c  diamv is set.
+             if (diamv(l) .lt. 0.5e-3) diamv(l) = 0.5e-3
+             v(l) = avol(l)*dl(l)
+           else
+c  Calculate flow area and volume for enclosure that has a cohesive
+c  debris region.
+c  Store start of time step area and volume.
+             avold = avols0(i,k)
+             vold = vs0(i,k)
+c  If blockage is due to metallic meltdown rather than ceramic melting
+c  or node completely filled, then add on user-defined minimum flow
+c  area.
+c  Do not apply smoothing models if more than two fuel rod components
+c  per channel.
+c  Begin IF Block CC.
+             if (icmmas.eq.0 .or.
+     &       (ifulch.le.1 .and. (nsmgeo.eq.2 .or. nsmgeo.eq.4))) then
+               avol(l) = ((anrden(i) - fng1)/anrden(i))*aflwto(i)
+                 if(ndbg.eq.1)then
+                 write(output,9031)avol(l),volno(l),icmmas,ifulch,
+     &           nsmgeo
+9031             format(' SCDAD4; avol=',e10.4,' volno=',i10,
+     &           ' icmmas=',i5,' ifulch=',i5,' nsmgeo=',i5)
+                 end if
+               if (nswcer.eq.0) avol(l) = avol(l) + fng1*aflwr1
+             else
+c  Begin IF Block BB.
+               if (nsw.eq.1) then
+c  Apply plane blockage.
+                 if (nswcer.eq.0) avol(l) = anrden(i)*aflwr1
+               else
+                 depmet = dzfrcq(k,icmmas)*dzcond((icmmas-1)*ndax+k)
+c  Begin IF Block AA.
+c  Do not apply smoothing if user has defined
+c  aflwr1 (minimum flow area per rod) > 0.0.
+                 if (dzfrcl((icmmas-1)*ndax+k).ge.fadthr .and.
+     &           dzfrcl((icmmas-1)*ndax+k).lt.tdrslp .and.
+     &           igp.ge.2 .and. aflwr1.lt.1.e-6) then
+                   if (abs(tdrslp - fadthr).ge.1.e-10) then
+                     frcmc1 = (dzfrcl((icmmas-1)*ndax+k) - fadthr)/
+     &               (tdrslp - fadthr)
+                   else
+                     frcmc1 = 0.0
+                   endif
+                   frcmc1 = min(frcmc1,1.0)
+                   frcmc1 = max(frcmc1,0.0)
+c  Adjust thermal hydraulic parameters to account for new level of
+c  degeneration in fuel rods.
+c  First adjust loss coefficients.
+                   klsif1(i,k) = klsif0(i,k) + (klsmxf - klsif0(i,k))*
+     &             frcmc1**expkls
+                   klsir1(i,k) = klsir0(i,k) + (klsmxr - klsir0(i,k))*
+     &             frcmc1**expkls
+                   klsof1(i,k) = klsof0(i,k) + (klsmxf - klsof0(i,k))*
+     &             frcmc1**expkls
+                   klsor1(i,k) = klsor0(i,k) + (klsmxr - klsor0(i,k))*
+     &             frcmc1**expkls
+c  Find junction numbers corresponding with RELAP5 control volume for
+c  location in reactor core and modify its thermal hydraulic parameters
+c  to account for incremental increase in fuel rod degeneration.
+                   indxjn = invfnd(l)
+                   do nj = 1,invcnt(l)
+c  Skip the cross flow junctions( 8 bit on).
+                     if (iand(invj(indxjn)%invjun,8).eq.0) then
+c  idxjun = junction index.
+                       idxjun = invj(indxjn)%invvnx
+                       if (iand(invj(indxjn)%invjun,2).ne.0) then
+c  Outlet junction (2 bit is on).
+                         fjunf(idxjun) = klsof1(i,k)
+                         fjunr(idxjun) = klsor1(i,k)
+                       else
+c  Inlet junction (2 bit is off).
+                         fjunf(idxjun)=klsif1(i,k)
+                         fjunr(idxjun)=klsir1(i,k)
+                       endif
+                     endif
+                     indxjn = indxjn + 1
+                   enddo
+                   aflow1 = aflwto(i)
+                   avold1(i,k) = aflwto(i) + frcmc1*(famnbl*aflwto(i) -
+     &             aflwto(i))
+c  Next update RELAP5 control volume parameters to correspond with
+c  incremental increase in damage of fuel rods.
+                   avol(l) = min(avold1(i,k),avol(l))
+                     if(ndbg.eq.1)then
+                     write(output,9041)avol(l),volno(l),i,k
+9041                 format(' SCDAD4; avol=',e10.4,' volno=',i10,
+     &               ' i=',i5,' k=',i5)
+                     end if
+                   avold1(i,k) = avol(l)
+                   dhydb1(i,k) = dhydb0(i,k)*(1.+coefhy*frcmc1)
+                   diamv(l) = dhydb1(i,k)
+                 endif
+c  IF Block AA terminated.
+               endif
+c  IF Block BB terminated.
+             endif
+c  IF Block CC terminated.
+           endif
+c  IF Block DD terminated.
+c  End of transition smoothing of blockage.
+  195      continue
+c  All flow paths are considered sealed only if ceramic melting
+c  of at least one component in enclosure is occurring.
+c  Thus for blockage due to metallic meltdown add on user-defined
+c  minimum flow area per rod to account for fact that blockages from
+c  metallic meltdown are not coplanar.
+c  aflwr1 = user-defined minimum flow area per rod.
+           aminfl = 0.25*aflwto(i)
+cljs       avols0(i,k)=max(avol(l),1.e-6)
+           avols0(i,k)=max(avol(l),aminfl)
+           if (ifulch.le.1) then
+c  For case of two or less flow channels, force finite flow area.
+cljs         avolmn = 0.05*aflwto(i)
+             avolmn = 0.25*aflwto(i)
+           else
+cljs         avolmn = 1.e-6
+             avolmn = aminfl
+           endif
+           avol(l) = max(avol(l),avolmn)
+             if(ndbg.eq.1)then
+             write(output,9051)avolmn,avol(l),volno(l)
+9051         format(' SCDAD4; avolmn=',e10.4,' avol=',e10.4,
+     &       ' volno=',i10)
+             end if
+           if (wtpm.ge.1.0e-5) diamv(l) = 4.*avol(l)/wtpm
+c  Limit how small diamv is set for interphase models.
+           if (diamv(l) .lt. 0.5e-3) diamv(l) = 0.5e-3
+           vs0(i,k) = max(v(l),1.e-5)
+cstart closed volume
+           v(l) = max(v(l),1.e-5)
+           recipv(l) = 1.0/v(l)
+           lalopn = 0
+c          lalopn = 1 = at least one open junction.
+           lmap = invfnd(l)
+           do jn = 1,invcnt(l)
+             ja = invj(lmap)%invvnx
+             if (jc(ja).eq.iand(jc(ja),not(2))) lalopn = 1
+             lmap = lmap + 1
+           enddo
+           lmap = invfnd(l)
+           lclosj = 0
+           do jn = 1,invcnt(l)
+             ja = invj(lmap)%invvnx
+c  nswcer = indication that at least one fuel rod component in this
+c  volume is experiencing ceramic melting or that node has been
+c  completely filled with relocated material from metallic meltdown.
+c  For case of nswcer = 1, no need to reduce junction areas because
+c  juntions are converted into closed valves.
+             if (nswcer.eq.0 .and. nrefll.eq.0 .and. nbublk(i,k).ne.2)
+     &       then
+               if (iand(invj(lmap)%invjun,8) .eq. 0) then
+c  Reduce flow area for flow in axial direction.
+                 if (avol(l) .lt. ajun(ja)) ajun(ja) = avol(l)
+               endif
+             elseif (nswcer.eq.1 .and. nunbl2(i,k).ne.1 .and.
+     &       ztpcoh(icmmas).gt.zcond((icmmas-1)*ndax+k) .and. 
+c    &       jblkmn.eq.0 .and.nbublk(i,k).ne.1) then
+     &       jblkmn.eq.0 .and.nbublk(i,k).lt.1) then
+               if (ienblk(i,k).ge.2) ienblk(i,k) = 1
+c  Model blockage as closed valve.
+               jc(ja) = ior(jc(ja),2)
+               velfj(ja) = 0.0
+               velgj(ja) = 0.0
+               lclosj = 1
+             endif
+             lmap = lmap + 1
+           enddo
+c end closed volume
+c  Note.  If k=1, then subroutine crucbr signals slumping of molten
+c  material to lower head. So no need to block channel due to molten
+c  pool formation. Also, if molten pool has slumped, then do not
+c  perform further blockage, since molten material is considered to
+c  drain to lower head as fast as it becomes molten.
+c  int(crucb)=1=molten pool has slumped.
+c
+c  If molten pool has spread to periphery of core but user has
+c  defined that minimum flow area is to be maintained at periphery,
+c  then do not impose blockage (jblkmn=1).
+c***       if ((nswcer.eq.1 .and. nunbl2(i,k).ne.1 .and. k.ge.2 .and.
+c          if ((nswcer.eq.1 .and. nunbl2(i,k).ne.1 .and. 
+c    #     int(crucb).ne.1 .and. jblkmn.eq.0) .or.
+c*** #     (nrefll.eq.1.and.nunbl2(i,k).ne.1 .and. k.ge.2 .and.
+c    #     (nrefll.eq.1.and.nunbl2(i,k).ne.1 .and.
+c    #     int(crucb).ne.1).and.jblkmn.eq.0) then
+           if (lclosj.eq.1) then
+c  Store start of time step values for volume quantities to avoid
+c  problems from small volume size.
+             avol(l) = avol0
+               if(ndbg.eq.1)then
+               write(output,9061)avol(l),volno(l)
+9061           format(' SCDAD4 9061; avol=',e10.4,' volno=',i10)
+               end if
+             v(l) = vol0
+             recipv(l) = 1.0/v(l)
+             diamv(l) = diamv0
+c  Complete blockage has occurred at this node.
+             nbublk(i,k) = 1
+             nunbl2(i,k) = 0
+             lcrucb(k,icmmas) = 1
+             do k1 = 1,icp(i)
+               icm1 = ngpc(i,k1)
+               if (ngps(i,k1) .eq. 1) then
+                 kdyn2 = (ndcomp + nsout(icm1) - 1)*ndax + k
+                 icmx = nsout(icm1)
+                 is = 2
+               else
+                 kdyn2 = (icm1 - 1)*ndax + k
+                 icmx = icm1
+                 is = 1
+               endif
+               flwh2(kdyn2) = 0.0
+               flwh20(kdyn2) = 0.0
+               flstm(kdyn2) = 0.0
+               flstm0(kdyn2) = 0.0
+               scd21(k,icmx,is)%qscd = 0.0
+               scd21(k,icmx,is)%qwgscd = 0.0
+               scd21(k,icmx,is)%gamscd = 0.0
+               scd21(k,icmx,is)%gamccd = 0.0
+               if (nblkrd(k,icm1) .eq. 0) then
+                 imdctl(1) = ior(imdctl(1),dmwrite)
+                 write (inpout,"('0-------- Core degradation',es14.6,' s
+     &: Flow blocked at axial node',i3,' component ',i3)") timehy,k,icm1
+               endif
+c  nblkrd(k,icm1) = indicator of blockage due to meltdown and freezing
+c  for flow channel within which component icm1 resides.
+               nblkrd(k,icm1) = 1
+               ienblk(k,icm1) = 1
+             enddo
+           endif
+c
+c  Check to see if a previous bulk blockage needs to be removed
+c  from this volume.
+c  Open bulk blockage only when region above it is open.
+           lreopn = 1
+c          if (k .lt. naz) then
+c            if (nunbl2(i,k+1).eq.1 .and. nbublk(i,k+1).eq.1) lreopn = 1
+c          endif
+c          if (k .eq. naz) lreopn = 1
+c  Over-ride constraints on opening volume.
+c          lreopn=1
+c  Identify master fuel rod component for this enclosure.
+           icm1ms = 0
+           do k1 =1,icp(i)
+             icm1 = ngpc(i,k1)
+             if (idcomp(icm1).eq.0 .and.
+     &       rpel((icm1-1)*ndax+k).gt.0.2e-3) then
+               icm1ms = icm1
+               exit
+             endif
+           enddo
+           if (k .lt. naz) then
+             if (frcmcl(ncmpgp(icm1ms),k+1).ge.0.001 .or.  
+     &       tcond3(1,k+1,icm1ms).ge.2830) lreopn = 0
+           endif
+           if (k .eq. naz) lreopn = 1
+           icm1op = 0
+           lalopn = 0
+c          lalopn = 1 = at least one closed juntion for volume
+           lmap = invfnd(l)
+           do jn = 1,invcnt(l)
+             ja = invj(lmap)%invvnx
+             if (jc(ja).eq.ior(jc(ja),2)) lalopn = 1
+             lmap = lmap + 1
+           enddo
+           if (nunbl2(i,k).eq.1 .and. nbublk(i,k).eq.1 .and.
+     &     lalopn.eq.1 .and. njundb.eq.0 .and. lreopn.eq.1) then
+c  Re-open all junctions to volume.
+             lmap = invfnd(l)
+             do jn = 1,invcnt(l)
+               ja = invj(lmap)%invvnx
+               jc(ja) = iand(jc(ja),not(2))
+               lmap = lmap + 1
+             enddo
+c  Flag volume as having been re-opened.
+             nbublk(i,k) = 2
+             nunbl2(i,k) = 2
+             do k1 = 1,icp(i)
+               icm1 = ngpc(i,k1)
+               ienblk(k,icm1) = 3
+             enddo
+c  Reset thermodynamic state of re-opened volume.
+             kabov1 = 0
+             if (k.lt.naz .and. nbublk(i,k+1).ne.1) then
+               kabov1 = 1
+               luhv = filndx(4) + nvad((icomp1-1)*ndax + k + 1)
+             else
+               luhv = filndx(4) + uhvol(icomp1)
+             endif
+             if (i .ge. 2) then
+               if (nbublk(i-1,k) .ne. 1) luhv = ngpv(i-1,k) + filndx(4)
+             else
+               if (i .lt. igp) then
+                 if (nbublk(i+1,k) .ne. 1) luhv = ngpv(i+1,k) +
+     &           filndx(4)
+               endif
+             endif
+             luhv = uhvol(1) + filndx(4)
+       write (12,"('scdad4, ncount =',i8,' time =',es13.5,
+     & ' volume data',i10,' being reset from',i10,'.')")
+     & ncount,timehy,volno(l),volno(luhv)
+             p(l) = p(luhv)
+             po(l) = p(luhv)
+             qualao(l) = quala(luhv)
+             quala(l) = quala(luhv)
+             ugo(l) = ug(luhv)
+             ug(l) = ug(luhv)
+             ufo(l) = uf(luhv)
+             uf(l) = uf(luhv)
+c            voidgo(l) = voidg(luhv)
+c            voidg(l) = voidg(luhv)
+             voidgo(l) = 1.0
+             voidg(l) = 1.0
+             rhom(l) = rhom(luhv)
+             qualan(l) = qualan(luhv)
+             qualan(l+1) = qualan(luhv+1)
+             qualan(l+2) = qualan(luhv+2)
+             qualan(l+3) = qualan(luhv+3)
+             qualan(l+4) = qualan(luhv+4)
+             qualno(l) = qualan(luhv)
+             qualno(l+1) = qualan(luhv+1)
+             qualno(l+2) = qualan(luhv+2)
+             qualno(l+3) = qualan(luhv+3)
+             qualno(l+4) = qualan(luhv+4)
+             velf(l) = velf(luhv)
+             velf(l+1) = velf(luhv+1)
+             velf(l+2) = velf(luhv+2)
+             velg(l) = velg(luhv)
+             velg(l+1) = velg(luhv+1)
+             velg(l+2) = velg(luhv+2)
+             voidf(l) = voidf(luhv)
+             drfduf(l) = drfduf(luhv)
+             dtfduf(l) = dtfduf(luhv)
+             drgdp(l) = drgdp(luhv)
+             dtfdp(l) = dtfdp(luhv)
+             rhof(l) = rhof(luhv)
+             tempf(l) = tempf(luhv)
+             betaff(l) = betaff(luhv)
+             csubpf(l) = csubpf(luhv)
+             viscf(l) = viscf(luhv)
+             thconf(l) = thconf(luhv)
+             hyarf(l) = hyarf(luhv)
+             hyarg(l) = hyarg(luhv)
+             hyaruf(l) = hyaruf(luhv)
+             hyarug(l) = hyarug(luhv)
+             ustm(l) = ustm(luhv)
+             ppso(l) = pps(luhv)
+             pps(l) = pps(luhv)
+             viscg(l) = viscg(luhv)
+             thcong(l) = thcong(luhv)
+             dtgdp(l) = dtgdp(luhv)
+             dtgdug(l) = dtgdug(luhv)
+             dtgdxa(l) = dtgdxa(luhv)
+             drgdp(l) = drgdp(luhv)
+             drgdug(l) = drgdug(luhv)
+             drgdxa(l) = drgdxa(luhv)
+             rhog(l) = rhog(luhv)
+             temp(l) = temp(luhv)
+             betagg(l) = betagg(luhv)
+             csubpg(l) = csubpg(luhv)
+             hsteam(l) = hsteam(luhv)
+             satt(l) = satt(luhv)
+             sathg(l) = sathg(luhv)
+             sathf(l) = sathf(luhv)
+             rho(l) = rho(luhv)
+             quals(l) = quals(luhv)
+             quale(l) = quale(luhv)
+             dtdp(l) = dtdp(luhv)
+             dtdug(l) = dtdug(luhv)
+             dtdxa(l) = dtdxa(luhv)
+             sounde(l) = sounde(luhv)
+             tsatt(l) = tsatt(luhv)
+             sigma(l) = sigma(luhv)
+c  Reset flow area of re-opened volume.
+             nrods = 0
+             areard = 0.0
+             do k1 = 1,icp(i)
+               icm1 = ngpc(i,k1)
+               nrods = nrods + nsigl(icm1)
+               areard = areard + float(nsigl(icm1))*pitch(icm1)**2
+             enddo
+             avol(l) = areard
+c  Set junction areas to volume areas for unblocked node.
+             lmap = invfnd(l)
+             do jn = 1,invcnt(l)
+               ja = invj(lmap)%invvnx
+               ajun(ja) = avol(l)
+               if (iand(invj(lmap)%invjun,8) .ne. 0) then
+c  Cross flow direction. Estimate flow area in this direction.
+                 j = ngpc(i,1)
+                 ajun(ja) = sqrt(float(nrods))*pitch(j)*dzcond(k)
+               endif
+               lmap = lmap + 1
+             enddo
+c  Reset length of re-opened volume.
+             icm1 = ngpc(i,1)
+             dl(l) = dzcond((icm1-1)*ndax + k)
+c  Reset total volume of re-opened volume.
+             v(l) = avol(l)*dl(l)
+             vo(l) = v(l)
+             if (v(l) .gt. 0.0) then
+               recipv(l) = 1.0/v(l)
+             else
+               recipv(l) = 0.0
+             endif
+c  Reset hydraulic diameter of re-opened volume.
+             diamv(l) = 2.0*sqrt(avol(l)/pi)
+c      if (ncount.gt.1028 .and. volno(l).eq.060010000) then
+c        write (12,"('scdad4b1',i6,i10,4es13.5)") ncount,volno(l),
+c    &   avol(l),dl(l),v(l),diamv(l)
+c      endif
+             imdctl(1) = ior(imdctl(1),dmwrite)
+c            write (inpout,"('0-------- Core degradation',es14.6,' s: Vo
+c    &lume ',i10,' re-opened at all junctions.')") timehy,volno(l)
+             write (inpout,"('0-------- Core degradation',i10,es14.6,
+     & ' s: Volume ',i10,' re-opened at all junctions.')") 
+     &       ncount,timehy,volno(l)
+           endif
+c  Check for new planar blockage or new planar unblockage.
+           if (nfuelr.gt.1) then
+             newplb = nswcer.eq.0 .and. nplblk(i,k).eq.0 .and.
+     &       avol(l)/aflwto(i).le.0.10
+           else
+             depdb1 = depdeb
+c  Represent last channel to be blocked as being harder to block due to
+c  concentration of flow into this channel.
+             if (i.eq.igp) depdb1 = 4.*depdeb
+c  If only grid spacer meltdown, require more material relocation for
+c  planar blockage.
+c  Do not impose plane blockage of some drops of relocated material on
+c  rod are still in motion.
+             if (wfrouo((icomp1-1)*ndax+k).lt.1.e-6) depdb1 = 3.*depdeb
+             newplb = nswcer.eq.0 .and. nplblk(i,k).eq.0 .and.
+     &        ldropm.eq.0 .and. aflwr1.le.1.e-6 .and.
+     &        dzfrcl((icomp1-1)*ndax+k).ge.tdrslp .and.igp.ge.2
+           endif
+           newplu = njunop.eq.1 .and. njundb.eq.0
+           if (newplb .or. newplu) then
+c  New planar blockage or new planar unblockage.
+c  Find bottom junction.
+             lmap = invfnd(l)
+             do jn = 1,invcnt(l)
+               ja = invj(lmap)%invvnx
+               if (iand(jc(ja),16384).eq.0 .and. ij2nx(ja).eq.l)
+     &         go to 320
+               lmap = lmap + 1
+             enddo
+c  Could not find bottom junction;  try upstream junction.
+             lmap = invfnd(l)
+             do jn=1,invcnt(l)
+               ja = invj(lmap)%invvnx
+               if (iand(jc(ja),16384).eq.0 .and. ij1nx(ja).eq.l)
+     &         go to 320
+               lmap = lmap + 1
+             enddo
+c  Error - could find neither bottom nor upstream junction.
+             write (output,9060) volno(l)
+ 9060  format ('0******** Error (scdad4): planar blockage in volume ',
+     &    i9,', but cannot identify bottom or upstream junction.')
+             fail = .true.
+             go to 340
+           endif
+  320      if (newplb) then
+c  Newly blocked junction, turn on planar blockage indicator.
+             nplblk(i,k) = 1
+c  Model planar blockage as closed valve.
+             jc(ja) = ior(jc(ja),2)
+             velfj(ja) = 0.0
+             velgj(ja) = 0.0
+             imdctl(1) = ior(imdctl(1),dmwrite)
+             write (inpout,"('0-------- Core degradation',es14.6,' s: Ju
+     &nction number',i9,' has been closed due to metallic meltdown, volu
+     &me ',i9,'.')") timehy,junno(ja),volno(l)
+c  Find cross-flow junctions and adjust flow areas for planar
+c  blockage.
+             lmap = invfnd(l)
+             do jn = 1,invcnt(l)
+               ja = invj(lmap)%invvnx
+               if (iand(jc(ja),16384).ne.0) ajun(ja) = ajun(ja)*
+     &         (1.0 - dzfrmx)
+               lmap = lmap + 1
+             enddo
+           elseif (newplu) then
+c  Junction newly unblocked.
+             nplblk(i,k) = 0
+             jc(ja) = iand(jc(ja),not(2))
+             imdctl(1) = ior(imdctl(1),dmwrite)
+             write (inpout,"('0-------- Core degradation',es14.6,' s: Ju
+     &nction',i10, ' previously blocked by metallic meltdown has been re
+     &opened (volume number',i11,').')") junno(ja),volno(l)
+           endif
+  340    continue
+  350  continue
+c  Make sure all locations flagged as having flow have proper flow area.
+       do i = 1,igp
+         do k = 1,naz
+           l = ngpv(i,k) + filndx(4)
+           if (nbublk(i,k).eq.2) then
+c  All material has been removed from this location.
+             nrods = 0
+             areard = 0.0
+             do k1 = 1,icp(i)
+               icm1 = ngpc(i,k1)
+               nrods = nrods + nsigl(icm1)
+               areard = areard + float(nsigl(icm1))*pitch(icm1)**2
+             enddo
+             avol(l) = areard
+             lmap = invfnd(l)
+             do jn = 1,invcnt(l)
+               ja = invj(lmap)%invvnx
+c  Flow in axial direction.
+               ajun(ja) = avol(l)
+               if (iand(invj(lmap)%invjun,8) .ne. 0) then
+c  Cross flow direction. Estimate flow area in this direction.
+                 j = ngpc(i,1)
+                 ajun(ja) = sqrt(float(nrods))*pitch(j)*dzcond(k)
+               endif
+               lmap = lmap + 1
+             enddo
+           endif
+         enddo
+       enddo
+c  Find first axial node above node with blockage.
+       do j = 1,ncomp
+         do k = 1,naz
+           itopdb(k,j) = k
+           if ((nblkrd(k,j).eq.1 .or. lcrucb(k,j).ge.1) .and.
+     &     k.lt.naz) then
+             nsw = 0
+             do k1 = k,naz
+               if (nsw .ne. 1) then
+                 if (nblkrd(k,j).eq. 1.and. lcrucb(k,j).ge.1) then
+                   itopdb(k,j) = k1
+                   nsw = 1
+                 endif
+               endif
+             enddo
+           endif
+         enddo
+       enddo
+c  add BWR coding for molten pool case
+cstart closed volume
+      do j=1,ncomp
+        if(idcomp(j).ne.8)then
+        cycle
+        end if
+c  assume each BWR control blade component has fuel rod companion
+c  one component number less in number.
+          jm1 = j - 1
+            if(ndbg.eq.1)then
+            write(output,9011)j,idcomp(j),jm1
+9011        format(' SCDAD4 BWR close vol; j=',i5,' idcomp=',i5,
+     &      ' jm1=',i5)
+            end if
+          do k = 1,naz
+              if(ndbg.eq.1)then
+              write(output,9015)k,lcrucb(k,jm1)
+9015          format(' SCDAD4; k=',i5,' lcrucb=',i5)
+              end if
+ctest       if(lcrucb(k,jm1).eq.0)then
+            if(lcrucb(k,jm1).ge.0)then
+            cycle
+            end if
+c    component number one less is part of molten pool
+          nswcer = 1
+          l = nvad((j-1)*ndax + k) + filndx(4)
+              if(ndbg.eq.1)then
+              write(output,9017)volno(l)
+9017          format(' SCDAD4; volno=',i10)
+              end if
+          lmap = invfnd(l)
+            do jn = 1,invcnt(l)
+            ja = invj(lmap)%invvnx
+            lmap = lmap + 1
+            enddo
+          lmap = invfnd(l)
+          lclosj = 0
+            do jn = 1,invcnt(l)
+            ja = invj(lmap)%invvnx
+c  Model blockage as closed valve.
+              jc(ja) = ior(jc(ja),2)
+              velfj(ja) = 0.0
+              velgj(ja) = 0.0
+              lclosj = 1
+            lmap = lmap + 1
+            enddo
+c  blockage calculations for second channel of BWR control blade
+          nl2 = 0
+               if(ndbg.eq.1)then
+               write(output,9021)j,nsout(j)
+9021           format(' SCDAD4; j=',i5,' nsout=',i5)
+               end if
+            if(nsout(j).gt.0)nl2 = 1
+              if(nl2.eq.1)then
+              l = nvad((ndcomp+nsout(j)-1)*ndax + k) + filndx(4)
+                  if(ndbg.eq.1)then
+                  write(output,9025)volno(l)
+9025              format(' SCDAD4, second volume; volno=',i10)
+                  end if
+              lmap = invfnd(l)
+                do jn = 1,invcnt(l)
+                ja = invj(lmap)%invvnx
+                lmap = lmap + 1
+                enddo
+              lmap = invfnd(l)
+              lclosj = 0
+                do jn = 1,invcnt(l)
+                ja = invj(lmap)%invvnx
+                jc(ja) = ior(jc(ja),2)
+                velfj(ja) = 0.0
+                velgj(ja) = 0.0
+                lclosj = 1
+                lmap = lmap + 1
+                end do
+              end if
+c    end for second flow channel of BWR control blade.
+c   end do loop over axial nodes
+          end do
+c  end do loop over components
+      end do
+c end closed volume
+c  end BWR coding for molten pool case
+       return
+  420  i = 0
+       do jj = 1,ncomp
+         if (idcomp(jj) .eq. 2) i = i + 1
+         id1 = idfe(1,i)
+         id2 = idfe(1,i) + nfe(i) - 1
+         do j = id1,id2
+           if (idcomp(j).eq. 2.and. islbot(j).eq.1) then
+             do k = 1,naz
+               il1 = (j-1)*ndax + k
+               l1 = nvad(il1) + filndx(4)
+               avol(l1) = avol(l1) - dri(k,j)*slbwd(j)*nsigl(j)
+             enddo
+           else
+             do k = 1,naz
+               il1 = (j - 1)*ndax + k
+               il2 = (ndcomp+nsout(j) - 1)*ndax + k
+               l1 = nvad(il1) + filndx(4)
+               l2 = nvad(il2) + filndx(4)
+               avol(l1) = avol(l1) - dri(k,j)*slbwd(j)*nsigl(j)
+               avol(l2) = avol(l2) - dro(k,j)*slbwd(j)*nsigl(j)
+             enddo
+           endif
+         enddo
+         do j = id1,id2
+           do k = 1,naz
+             il1 = (j - 1)*ndax + k
+             l1 = nvad(il1) + filndx(4)
+             avol(l1) = max(1.0e-4,avol(l1))
+             v(l1) = avol(l1)*dl(l1)
+             recipv(l1) = 1.0/v(l1)
+             lmap = invfnd(l1)
+             do jn = 1,invcnt(l1)
+               ja = invj(lmap)%invvnx
+c  Statement removed that restricted setting junction flow area
+c  to volume flow area only for case of volume flow area being bigger.
+               ajun(ja) = avol(l1)
+               lmap = lmap + 1
+             enddo
+           enddo
+         enddo
+       enddo
+       return
+       end
+*endif

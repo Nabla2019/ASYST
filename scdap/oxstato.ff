@@ -1,0 +1,205 @@
+*mlist
+*if def,selap
+       subroutine oxstato (rcil,tclad0,oxlis0,oxdeo,oxdwc,alfao,rnoxd,
+     & rnalf,noxide,oxdwc0,fadrpa,wtgmax,effoxw)
+!  oxidation for outside surface of shroud component
+!  Computes steady state cladding oxidation.
+!
+!  Cognizant engineer: cma.
+!     calling subroutines:  oxidiz
+!     subroutines called:   coxthk,coxwtk,rcfunc
+!     engineer/programmer:  c. m. allison
+!
+!     input variables                  description
+!        oxlis0         oxidation steam starvation rate limit per
+!                         unit surface area for previous time step
+!                         (kg/m2-s)
+!        tclad0         average cladding temperature for previous time
+!                         step (k)
+!        wtlim          weight gain limit (kg/m2)
+!        fadrop    fraction of surface area of axial node that is
+!                  covered with drops of relaocated material and whose
+!                  oxidation is calculated in subroutine drpflo.
+!                  If there are no drops at this axial node, then
+!                  fadrop=0.0.
+!     i/o variables                    description
+!        alfao          cladding outer alpha thickness (m)
+!        noxide         cladding oxidation flag, if non zero cladding i
+!                         completely oxidized
+!        oxdeo          cladding outer oxide thickness (m)
+!        oxdwc          cladding oxide weight gain (kg/m2)
+!      wtgmax    weight gain of oxygen for total oxidation of
+!                cladding at axial node i of component j (kg O/m length)
+!      effoxw    weight gain in cladding since last shattering (kg/m2).
+!     output variables                 description
+!        rnalf          inner radius or leftmost coordinate of outer
+!                         alpha layer (m)
+!        rnoxd          inner radius or leftmost coordinate of outer
+!                         oxide layer (m)
+!        c        oxdwcl = start of time step weight gain adjusted to
+!                          account for spalling of oxide layer.
+! -----------------------oxstat outline--------------------------
+! :set dimensions
+! :set data
+! :compute 2 * d(oxide thickness)/dt * oxide thickness
+! :compute 2 * d(weight gain)/dt * weight gain
+! :compute 2 * d(alpha thickness)/dt * alpha thickness
+! :compute oxide thickness
+! :compute weight gain
+! :compute alpha thickness
+! :apply oxidation limits
+! :define current oxide coordinates
+! :if: inner oxide radius is .le. inner cladding radius .or.
+!      weight gain .gt. weight gain limit
+!     :then:
+!        :set inner oxide radius to inner cladding radius
+!        :set oxide thickness to be consistent with
+!         inner oxide radius
+!        :set weight gain to weight gain limit
+!        :set inner alpha radius to inner cladding radius
+!        :set alpha thickness to zero
+!        :set oxidation termination flag
+! :endif:
+! :if: inner alpha radius is .le. inner cladding radius
+!     :then:
+!        :set inner alpha radius to inner cladding radius
+!        :set alpha thickness consistent with inner
+!         alpha radius
+! :endif:
+! :return:
+! ----------------------------------------------------------------
+!
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+!
+       real(kr) rcil,tclad0,oxlis0,oxdeo,oxdwc,alfao,rnoxd,rnalf,oxdwc0,
+     & fadrpa,wtgmax,effoxw
+       integer noxide
+       integer ndbg
+!
+       include 'scddat.h'
+       include 'scdcom.h'
+       include 'scdout.h'
+       include 'buntim.h'
+       include 'cmatp.h'
+       include 'cons.h'
+       include 'miscon.h'
+       include 'fecom.h'
+       include 'ndxara.h'
+       include 'oxcom1.h'
+       include 'oxcom4.h'
+       include 'ufiles.h'
+       include 'fast.h'
+       include 'contrl.h'
+       include 'oxsrv2.h'
+!
+!  Local variables.
+       real(kr) atol(5),cden,fadrop,oxdwcl,oxlsdt,oxnolm,rhozr,wgleft,
+     * rmetot,treftm,ydot(5),yoxid(5)
+       real(kr) coxthk,coxthkr,coxwtk,coxwtkr,doxide,newoxd,rcfunc,
+     & oxdeol
+       real sqarg
+!
+       data atol/0.09,0.09,2.55e-7,1.52e-4,6.0e-7/
+!
+       ndbg=0
+       fadrop = 0.0         
+       thzta = 1.35 * zrden/zoxden
+       oxdeol = max(effoxdo(icomp,kaxndb),atol(3))
+       oxdeo = max(oxdeo,atol(3))
+       if(oxdeol.gt.oxdeo)oxdeol=oxdeo
+       oxdwcl = effoxw
+       oxdwcl = max(oxdwcl,atol(4))
+! 2 * d(oxide thickness)/dt * oxide thickness
+       if (tclad0.le.273. .or. tclad0.gt.4000.) then
+         write(output,'(a,e15.3)')'0tclad0 (out of range in oxstat) = ',
+     &   tclad0
+         write(output,9072)timehy,icomp,kaxndb
+9072     format(' OXSTAT, timehy=',e10.4,' component no. =',i5,
+     &   ' axial node =',i5)
+         write (output,'(a)') '0please reduce time step and resubmit'
+          fail = .true.
+          return
+      endif
+       if (chngno(70)) then
+         ydot(3) = coxthkr(tclad0,1)
+       else
+         ydot(3) = coxthk(tclad0,1)
+       endif
+!  2*d(weight gain)/dt * weight gain
+       if (chngno(70)) then
+         ydot(4) = coxwtkr(tclad0)
+       else
+         ydot(4) = coxwtk(tclad0)
+       endif
+!  2*d(alpha thickness)/dt * alpha thickness
+       if (chngno(70)) then
+         ydot(5) = coxthkr(tclad0,2)
+       else
+         ydot(5) = coxthk(tclad0,2)
+       endif
+!  Oxide thickness.
+      yoxid(3) = sqrt(oxdeol**2 + ydot(3) * dt*(1.-fadrop))
+!  Weight gain.
+      yoxid(4) = sqrt(oxdwcl**2 + ydot(4) * dt*(1.-fadrop))
+!  Alpha thickness.
+      yoxid(5) = sqrt(alfao**2 + ydot(5) * dt*(1.-fadrop))
+!  Apply oxidation limits.
+      oxnolm=(yoxid(4) - oxdwcl)/dt
+      nolmto(kaxndb,icomp)=(yoxid(4) - oxdwcl)/dt
+      if (yoxid(4) .le. atol(4)) then
+        yoxid(3) = atol(3)
+        yoxid(5) = atol(5)
+      else
+        if ((yoxid(4) - oxdwcl) .gt. (oxlis0*dt)) then
+          if ((yoxid(4)-oxdwcl) .le. atol(4)*0.01) then
+            yoxid(3) = oxdeol
+            yoxid(5) = alfao
+          else
+            yoxid(3)=(yoxid(3)-oxdeol)*oxlis0*dt/(yoxid(4)-oxdwcl)+
+     &      oxdeol
+            yoxid(5)=(yoxid(5)-alfao)*oxlis0*dt/(yoxid(4)-oxdwcl)+
+     &      alfao
+          endif
+          yoxid(4)=oxlis0*dt + oxdwcl
+        endif
+      endif
+!  Inner radius of oxide layer.
+      newoxd = yoxid(3) + (oxdeo - effoxdo(icomp,kaxndb))
+      rnoxd = rcfunc(ngeom(icomp),newoxd,rcoi2sh(kaxndb,icomp) )
+!   compute inner radius of oxide layer based on mass of Zr still to be
+!   oxidized.
+        if(wtgmax.ge.1.e-10)then
+          treftm=300.
+!   calculate density at same temperature as used in iscdap
+          rhozr=cden(treftm)
+            wgleft=max(0.,wtgmax-yoxid(4))
+            rmetot=rcil+(91.22/(32.0*rhozr))*wgleft
+          rnoxd=rmetot
+        end if
+!  Inner radius of alpha layer.
+      rnalf = rnoxd - yoxid(5)
+!  Make sure inner oxide radius is not less than inner cladding radius.
+      if(rnoxd.le.rcil.or.yoxid(4) .gt. wtlim) then
+        rnoxd = rcil
+          yoxid(3) = thzta * (rcoish(kaxndb,icomp) - rnoxd)
+        yoxid(4) = min(wtlim,oxlis0*dt + oxdwcl)
+        rnalf = rcil
+        yoxid(5) = 0.0
+        noxide = 1
+      endif
+      if(rnalf.le.rcil) then
+        rnalf = rcil
+        yoxid(5) = rnoxd - rcil
+      endif
+      doxide=yoxid(3)-oxdeol
+      effoxdo(icomp,kaxndb) = effoxdo(icomp,kaxndb)+doxide
+      effoxw=effoxw+yoxid(4)-oxdwcl
+      oxdeo=oxdeo+doxide
+      oxdwc = yoxid(4)-oxdwcl+oxdwc0
+      if(oxdwc.lt.oxdwc0)oxdwc=oxdwc0
+      alfao = yoxid(5)
+      rco2sh(kaxndb,icomp) = rnoxd + oxdeo
+      return
+      end
+*endif

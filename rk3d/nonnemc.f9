@@ -1,0 +1,631 @@
+      SUBROUTINE NONNEMC(
+     &  ADFSV,ADFSVRD,DCL,DLN,DCW,DLL,DLW,DCN,
+     &  TLX,TLY,TLZ,PLMX1,PLMX2,PLMY1,PLMY2,PLMZ1,
+     &  PLMZ2,DX,DY,DZ,SW,FRACT,NBC,NXSTART,
+     &  NXEND,NDNUM,NYSTART,NYEND,RL,RLP,RM1,RMP1,RM2,RMP2,DF,DFP,JNEM,
+     &  SEFVE )
+C     
+C     THIS SUBROUTINE SOLVES THE NEM EQUATIONS.
+C     ********** FOR CARTESIAN GEOMETRY **************
+C     THE NODAL METHOD USED HERE IS NON-LINEAR NEM.
+C     WE SOLVE A ONE OR TWO NODE PROBLEM FOR EVERY INTERFACE
+C     IN THE CORE TO UPDATE THE COUPLING COEFFICIENTS
+C     
+      include 'param.fcb'
+      include 'geom.fcb'
+      include 'cntl.fcb'
+      include 'adf.fcb'
+      include 'bcs.fcb'
+      include 'bcshex.fcb'
+      include 'varlen.fcb'
+      include 'array.fcb'
+      include 'phiavgc.fcb'
+C     
+C...  VARIABLE DESCRIPTION :
+C     
+C     RL    : TOTAL LEAKAGE FOR NODE L
+C     RLP   : TOTAL LEAKAGE FOR NODE L+1
+C     RM1   : FIRST QUADRATIC EXPANSION COEFFICIENT FOR LEAKAGE OF NODE
+C     RMP2  : SECOND QUADRATIC EXPANSION COEFFICIENT FOR LEAKAGE OF NODE
+C     DF    : DISCONTINUITY FACTOR
+C     JNEM  : NEM CURRENT (RETURNED FROM THE 2-NODE PROBLEM)
+C     
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+      
+      DIMENSION
+     &  RL(NG)                            ,RLP(NG)               ,
+     &  RM1(NG)                           ,RMP1(NG)              ,
+     &  RM2(NG)                           ,RMP2(NG)              ,
+     &  DF(NG)                            ,DFP(NG)               ,
+     &  NXSTART(*)                        ,NXEND(*)              ,
+     &  NDNUM(-1:NX+2,0:*)                ,NYSTART(*)            ,
+     &  NYEND(*)                          ,FRACT(NXYL,*)         ,
+     &  NBC(*)                            ,ADFSV(NXYL,NZ,NG,*)   ,
+     &  ADFSVRD(NXYL,NZ,NG,*)             ,DCL(NXYL,NZ+1,*)      ,
+     &  DLN(NXYT,NZ,*)                    ,DCW(NXYT,NZ,*)        ,
+     &  DLL(NXYL,NZ+1,*)                  ,DLW(NXYT,NZ,*)        ,
+     &  DCN(NXYT,NZ,*)                    ,
+     &  TLX(NXYL,NZ,*)                    ,TLY(NXYL,NZ,*)        ,
+     &  TLZ(NXYL,NZ,*)                    ,PLMX1(NXYL,NZ,*)      ,
+     &  PLMX2(NXYL,NZ,*)                  ,PLMY1(NXYL,NZ,*)      ,
+     &  PLMY2(NXYL,NZ,*)                  ,PLMZ1(NXYL,NZ,*)      ,
+     &  PLMZ2(NXYL,NZ,*)                  ,DX(0:*)               ,
+     &  DY(0:*)                           ,DZ(0:*)               ,
+     &  SW(NXYL,NZ,*)                     ,SEFVE(NXYL,NZ,*)
+      
+      REAL*8 JNEM(NG), OMEGANES
+	INTEGER*8 DIR1N !vmq
+	      
+C     INITIALIZE NET CURRENTS
+C-----------------------------
+      
+      OMEGANES=0.5
+      
+      CALL NONNETC(A(LCURNXN),A(LCURNYN),A(LCURNZN),A(LSWN),
+     &  A(LDCLN),A(LDLNN),A(LDCWN),A(LDLLN),
+     &  A(LDLWN),A(LDCNN),AINT(LNBCN),AINT(LNXSTARTN),
+     &  AINT(LNXENDN),AINT(LNDNUMN),AINT(LNYSTARTN),AINT(LNYENDN) )
+      
+      
+C     
+C     TRANSVERSE LEAKAGE AND QUADRATIC EXPANSION COEFFICIENTS
+C-------------------------------------------------------------
+      
+      
+      CALL NONPLMC(A(LDXN),A(LDYN),A(LDZN),A(LVOLUN),A(LFNSWTN),
+     &  A(LFNOLDTN),A(LBETATLAMN),A(LFILAMDT0N),
+     &  A(LFILAMDT1N),A(LCURNXN),A(LCURNYN),
+     &  A(LCURNZN),A(LTLXN),A(LTLYN),A(LTLZN),A(LPLMX1N),A(LPLMX2N),
+     &  A(LPLMY1N),A(LPLMY2N),A(LPLMZ1N),A(LPLMZ2N),A(LSWOLDN),
+     &  A(LRIVELON),A(LSEFVEN),
+     & A(LEXPLAMDTN),A(LSWN),AINT(LNBCN),AINT(LNXSTARTN),AINT(LNXENDN),
+     &  AINT(LNDNUMN),AINT(LNYSTARTN),AINT(LNYENDN),A(LTLN),A(LTLPN),
+     &  A(LTLMN)  )
+      
+      
+C=====================================================================
+C     SWEEP ALONG NODES IN RADIAL PLANE.
+C=====================================================================
+      
+      
+      DO 21 IZ = 1,NZ
+       
+C     
+C     SWEEP ALONG X-DIRECTION (WEST-EAST).
+C     
+       
+       DO 22 IY = 1,NY
+        DO 23 IX=NXSTART(IY),NXEND(IY)
+         IXY=NDNUM(IX,IY)
+         
+C     
+C     SOLVE ONE-NODE PROBLEM FOR WESTERN B.C. OF ROW IY IF J(EDGE)<>0 AND
+C     UPDATE DLW(EDGE) USING DCW(EDGE) WHICH EXISTS.
+C     
+         
+         IXYM=NDNUM(IX-1,IY)
+         IF(IXYM.GT.NXYL) THEN
+          IBC=NBC(IXYM-NXYL)
+          IF(IBC.EQ.0) THEN
+           DO 5 IG=1,NG
+            DLW(IXY,IZ,IG)=0.0
+ 5         CONTINUE
+          ELSEIF(IBC.EQ.1.OR.IBC.EQ.2) THEN
+           DIR1N=-1
+           DELTH=DX(IX)
+           DO 17 IG=1,NG
+            RL(IG)=TLY(IXY,IZ,IG)+TLZ(IXY,IZ,IG)
+     &        -SEFVE(IXY,IZ,IG)
+            RM1(IG)=PLMX1(IXY,IZ,IG)
+            RM2(IG)=PLMX2(IXY,IZ,IG)
+ 17        CONTINUE
+           CALL NONONEC(IXY,IZ,DELTH,RL,RM1,RM2,JNEM,DIR1N,IBC,
+     &       A(LTCDN),A(LTNFN),A(LTXTN),A(LSIGDSNN),A(LSWN),
+     &       A(LSEXTN),A(LVOLUN),A(LBETATN),A(LBETATLAMN),A(LSCATN),
+     &       A(LXHIPN),AINT(LLSEXTZN),AINT(LLSEXTRN),A(LALN),A(LTFN),
+     $      A(LTDN),A(LFL2N),A(LSXTN),A(LSSCATN),A(LAMAT1N),A(LAMAT2N),
+     &       A(LEXCN),A(LBRHS1N),A(LXOUT1N),A(LBRHS2N),A(LXOUT2N) )
+           DO 18 IG=1,NG
+            dlwold=DLW(IXY,IZ,IG)
+            DLW(IXY,IZ,IG)=-DCW(IXY,IZ,IG)-JNEM(IG)/SW(IXY,IZ,IG)
+            DLW(IXY,IZ,IG)=dlWold+OMEGANES*(DLW(IXY,IZ,IG)-dlWold)
+ 18        CONTINUE
+          ELSEIF(IBC.LT.0.AND.LIXW.EQ.3) THEN
+           DO 19 IG=1,NG
+            IXYM=NDNUM(IY,IX)
+            IXM=IY
+            IYM=IX
+            DXM=DY(IYM)
+            RLP(IG)  = TLY(IXY,IZ,IG)+TLZ(IXY,IZ,IG)
+     &        -SEFVE(IXY,IZ,IG)
+            RMP1(IG) = PLMX1(IXY,IZ,IG)
+            RMP2(IG) = PLMX2(IXY,IZ,IG)
+            FRACTION = FRACT(IXY,IZ)*ADFSVRD(IXY,IZ,IG,4) +
+     &        ( 1.00-FRACT(IXY,IZ) )*ADFSV(IXY,IZ,IG,4)
+            DFP(IG)  = FRACTION
+            RL(IG)   = TLX(IXYM,IZ,IG)+TLZ(IXYM,IZ,IG)
+     &        -SEFVE(IXYM,IZ,IG)
+            RM1(IG)  = -1.0*PLMY1(IXYM,IZ,IG)
+            RM2(IG)  = PLMY2(IXYM,IZ,IG)
+            FRACTION = FRACT(IXYM,IZ)*ADFSVRD(IXYM,IZ,IG,1) +
+     &        ( 1.00-FRACT(IXYM,IZ) )*ADFSV(IXYM,IZ,IG,1)
+            DF(IG)   = FRACTION
+            IFLAG=0
+ 19        CONTINUE
+           CALL NONTWOC ( IZ,IZ,IXYM,IXY,
+     &       RL,RLP,RM1,RMP1,RM2,RMP2,DF,DFP,DXM,DX(IX),
+     &       JNEM,IFLAG,A(LVOLUN),A(LSWN),A(LXHIPN),A(LTCDN),
+     &       A(LTNFN),A(LTXTN),A(LSIGDSNN),A(LSEXTN),A(LBETATN),
+     &       A(LBETATLAMN),A(LSCATN),
+     &       A(LPCN),AINT(LLSEXTZN),AINT(LLSEXTRN),A(LSXTN),A(LSXTPN),
+     &       A(LAMAT1N),A(LXOUT1N),A(LBRHS1N),A(LAMAT2N),
+     &       A(LXOUT2N),A(LBRHS2N),A(LAMAT3N),A(LXOUT3N),
+     &       A(LBRHS3N),A(LEXCN),A(LA1N),A(LA2N),
+     &       A(LA3N),A(LA4N),A(LALN),A(LALPN),A(LTFN),A(LTFPN),
+     &       A(LSSCATN),A(LSSCATPN),A(LTDN),A(LTDPN),A(LFL2N),
+     &       A(LFLPN) )
+           DO 20 IG = 1,NG
+            dlwold=DLW(IXY,IZ,IG)
+            DLW(IXY,IZ,IG) = - (1./(SW(IXY,IZ,IG)
+     &        +SW(IXYM,IZ,IG)))
+     &        *  ( DCW(IXY,IZ,IG)*(SW(IXY,IZ,IG)-SW(IXYM,IZ,IG))
+     &        +    JNEM(IG) )
+            DLW(IXY,IZ,IG)=dlWold+OMEGANES*(DLW(IXY,IZ,IG)-dlWold)
+
+ 20        CONTINUE
+          ENDIF
+         ELSEIF(IXY.LE.NXYL) THEN
+C     
+C     SOLVE FOR TWO-NODE PROBLEMS IN THE X-DIRECTION.
+C     
+          
+          DO 28 IG=1,NG
+           IXM=IX-1
+           IYM=IY
+           DXM=DX(IXM)
+           RLP(IG)  = TLY(IXY,IZ,IG)+TLZ(IXY,IZ,IG)
+     &       -SEFVE(IXY,IZ,IG)
+           RMP1(IG) = PLMX1(IXY,IZ,IG)
+           RMP2(IG) = PLMX2(IXY,IZ,IG)
+           FRACTION = FRACT(IXY,IZ)*ADFSVRD(IXY,IZ,IG,4) +
+     &       ( 1.00-FRACT(IXY,IZ) )*ADFSV(IXY,IZ,IG,4)
+           DFP(IG)  = FRACTION
+           RL(IG)   = TLY(IXYM,IZ,IG)+TLZ(IXYM,IZ,IG)
+     &       -SEFVE(IXYM,IZ,IG)
+           RM1(IG)  = PLMX1(IXYM,IZ,IG)
+           RM2(IG)  = PLMX2(IXYM,IZ,IG)
+           FRACTION = FRACT(IXYM,IZ)*ADFSVRD(IXYM,IZ,IG,2) +
+     &       ( 1.00-FRACT(IXYM,IZ) )*ADFSV(IXYM,IZ,IG,2)
+           DF(IG)   = FRACTION
+           IF(IXM.EQ.NXSTART(IY).AND.IBC.NE.3) THEN
+            IFLAG=0
+           ELSE
+            IFLAG=1
+           ENDIF
+           
+ 28       CONTINUE
+          
+          CALL NONTWOC ( IZ,IZ,IXYM,IXY,
+     &      RL,RLP,RM1,RMP1,RM2,RMP2,DF,DFP,DXM,DX(IX),
+     &      JNEM,IFLAG,A(LVOLUN),A(LSWN),A(LXHIPN),A(LTCDN),
+     &      A(LTNFN),A(LTXTN),A(LSIGDSNN),A(LSEXTN),A(LBETATN),
+     &      A(LBETATLAMN),A(LSCATN),
+     &      A(LPCN),AINT(LLSEXTZN),AINT(LLSEXTRN),A(LSXTN),A(LSXTPN),
+     &      A(LAMAT1N),A(LXOUT1N),A(LBRHS1N),A(LAMAT2N),
+     &      A(LXOUT2N),A(LBRHS2N),A(LAMAT3N),A(LXOUT3N),
+     &      A(LBRHS3N),A(LEXCN),A(LA1N),A(LA2N),
+     &      A(LA3N),A(LA4N),A(LALN),A(LALPN),A(LTFN),A(LTFPN),
+     &      A(LSSCATN),A(LSSCATPN),A(LTDN),A(LTDPN),A(LFL2N),
+     &      A(LFLPN) )
+          
+C     
+C     EVALUATE WESTERN COUPLING CORRECTIONS FOR NODE (IXY,IZ).
+C     
+          
+          DO 29 IG = 1,NG
+           dlwold=DLW(IXY,IZ,IG)
+           DLW(IXY,IZ,IG) = - (1./(SW(IXY,IZ,IG)+SW(IXYM,IZ,IG)))
+     &       *  ( DCW(IXY,IZ,IG)*(SW(IXY,IZ,IG)-SW(IXYM,IZ,IG))
+     &       +    JNEM(IG) )
+           DLW(IXY,IZ,IG)=dlWold+OMEGANES*(DLW(IXY,IZ,IG)-dlWold)
+ 29       CONTINUE
+          
+         ENDIF
+C     
+C     SOLVE ONE-NODE PROBLEM FOR EASTERN B.C. OF ROW IY IF J(EDGE)<>0 AND
+C     UPDATE DLW(EDGE) USING DCW(EDGE) WHICH EXISTS.
+C     
+         
+         IXYP=NDNUM(IX+1,IY)
+         IF(IXYP.GT.NXYL) THEN
+          IBC=NBC(IXYP-NXYL)
+          IF(IBC.EQ.0) THEN
+           DO 6 IG=1,NG
+            DLW(IXYP,IZ,IG)=0.0
+ 6         CONTINUE
+          ELSEIF(IBC.EQ.1.OR.IBC.EQ.2) THEN
+           DIR1N=+1
+           DELTH=DX(IX)
+           DO 16 IG=1,NG
+            RL(IG)=TLY(IXY,IZ,IG)+TLZ(IXY,IZ,IG)
+     &        -SEFVE(IXY,IZ,IG)
+            RM1(IG)=PLMX1(IXY,IZ,IG)
+            RM2(IG)=PLMX2(IXY,IZ,IG)
+ 16        CONTINUE
+           CALL NONONEC(IXY,IZ,DELTH,RL,RM1,RM2,JNEM,DIR1N,IBC,
+     &       A(LTCDN),A(LTNFN),A(LTXTN),A(LSIGDSNN),A(LSWN),
+     &       A(LSEXTN),A(LVOLUN),A(LBETATN),A(LBETATLAMN),A(LSCATN),
+     &       A(LXHIPN),AINT(LLSEXTZN),AINT(LLSEXTRN),A(LALN),A(LTFN),
+     &      A(LTDN),A(LFL2N),A(LSXTN),A(LSSCATN),A(LAMAT1N),A(LAMAT2N),
+     &       A(LEXCN),A(LBRHS1N),A(LXOUT1N),A(LBRHS2N),A(LXOUT2N) )
+           DO 181 IG=1,NG
+            dlwold=DLW(IXY,IZ,IG)
+            DLW(IXYP,IZ,IG)=+DCW(IXYP,IZ,IG)
+     &        -JNEM(IG)/SW(IXY,IZ,IG)
+            DLW(IXY,IZ,IG)=dlWold+OMEGANES*(DLW(IXY,IZ,IG)-dlWold)
+ 181       CONTINUE
+          ENDIF
+         ENDIF
+ 23     CONTINUE
+ 22    CONTINUE
+ 21   CONTINUE
+      
+      
+      DO 200 IZ = 1,NZ
+       
+C     
+C     SWEEP ALONG Y-DIRECTION (NORTH-SOUTH).
+C     
+       
+       DO 220 IX = 1,NX
+        DO 230 IY=NYSTART(IX),NYEND(IX)
+         IXY=NDNUM(IX,IY)
+         
+C     
+C     SOLVE ONE-NODE PROBLEM FOR NORTHERN B.C. OF ROW IX IF J(EDGE)<>0 AND
+C     UPDATE DLN(EDGE) USING DCN(EDGE) WHICH EXISTS.
+C     
+         IXYM=NDNUM(IX,IY-1)
+         IF(IXYM.GT.NXYL) THEN
+          IBC=NBC(IXYM-NXYL)
+          IF(IBC.EQ.0) THEN
+           DO 7 IG=1,NG
+            DLN(IXY,IZ,IG)=0.0
+ 7         CONTINUE
+          ELSEIF(IBC.EQ.1.OR.IBC.EQ.2) THEN
+           DIR1N=-1
+           DELTH=DY(IY)
+           DO 15 IG=1,NG
+            RL(IG)=TLX(IXY,IZ,IG)+TLZ(IXY,IZ,IG)
+     &        -SEFVE(IXY,IZ,IG)
+            RM1(IG)=PLMY1(IXY,IZ,IG)
+            RM2(IG)=PLMY2(IXY,IZ,IG)
+ 15        CONTINUE
+           CALL NONONEC(IXY,IZ,DELTH,RL,RM1,RM2,JNEM,DIR1N,IBC,
+     &       A(LTCDN),A(LTNFN),A(LTXTN),A(LSIGDSNN),A(LSWN),
+     &       A(LSEXTN),A(LVOLUN),A(LBETATN),A(LBETATLAMN),A(LSCATN),
+     &       A(LXHIPN),AINT(LLSEXTZN),AINT(LLSEXTRN),A(LALN),A(LTFN),
+     &      A(LTDN),A(LFL2N),A(LSXTN),A(LSSCATN),A(LAMAT1N),A(LAMAT2N),
+     &       A(LEXCN),A(LBRHS1N),A(LXOUT1N),A(LBRHS2N),A(LXOUT2N) )
+           DO 14 IG=1,NG
+            dlNold=DLN(IXY,IZ,IG)
+            DLN(IXY,IZ,IG)=-DCN(IXY,IZ,IG)-JNEM(IG)/SW(IXY,IZ,IG)
+            DLN(IXY,IZ,IG)=dlNold+OMEGANES*(DLN(IXY,IZ,IG)-dlNold)
+ 14        CONTINUE
+          ELSEIF(IBC.LT.0.AND.LIYN.EQ.3) THEN
+           DO 244 IG=1,NG
+            RLP(IG)  = TLX(IXY,IZ,IG)+TLZ(IXY,IZ,IG)
+     &        -SEFVE(IXY,IZ,IG)
+            RMP1(IG) = PLMY1(IXY,IZ,IG)
+            RMP2(IG) = PLMY2(IXY,IZ,IG)
+            FRACTION = FRACT(IXY,IZ)*ADFSVRD(IXY,IZ,IG,1) +
+     &        ( 1.00-FRACT(IXY,IZ) )*ADFSV(IXY,IZ,IG,1)
+            DFP(IG)  = FRACTION
+            IFLAG=0
+            IF(IDRUN.EQ.'HCORE') THEN
+             IXWEST=IX-NXSTART(IY)
+             IXEAST=NXEND(IY)-IX
+             IF(IXWEST.LE.IXEAST) THEN
+              IXYM=NDNUM(NXEND(IY)-IXWEST,IY)
+              IXM=NXEND(IY)-IXWEST
+              IYM=IY
+              DYM=DY(IYM)
+             ELSE
+              IXYM=NDNUM(NXSTART(IY)+IXEAST,IY)
+              IXM=NXSTART(IY)+IXEAST
+              IYM=IY
+              DYM=DY(IYM)
+             ENDIF
+             RL(IG)   = TLX(IXYM,IZ,IG)+TLZ(IXYM,IZ,IG)
+     &         -SEFVE(IXYM,IZ,IG)
+             RM1(IG)  = -1.0*PLMY1(IXYM,IZ,IG)
+             RM2(IG)  = PLMY2(IXYM,IZ,IG)
+             FRACTION = FRACT(IXYM,IZ)*ADFSVRD(IXYM,IZ,IG,1) +
+     &         ( 1.00-FRACT(IXYM,IZ) )*ADFSV(IXYM,IZ,IG,1)
+             DF(IG)   = FRACTION
+            ELSEIF(IDRUN.EQ.'QCORE') THEN
+             IXYM=NDNUM(IY,IX)
+             IXM=IY
+             IYM=IX
+             DYM=DX(IXM)
+             RL(IG)   = TLY(IXYM,IZ,IG)+TLZ(IXYM,IZ,IG)
+     &         -SEFVE(IXYM,IZ,IG)
+             RM1(IG)  = -1.0*PLMX1(IXYM,IZ,IG)
+             RM2(IG)  = PLMX2(IXYM,IZ,IG)
+             FRACTION = FRACT(IXYM,IZ)*ADFSVRD(IXYM,IZ,IG,4) +
+     &         ( 1.00-FRACT(IXYM,IZ) )*ADFSV(IXYM,IZ,IG,4)
+             DF(IG)   = FRACTION
+            ENDIF
+ 244       CONTINUE
+           CALL NONTWOC ( IZ,IZ,IXYM,IXY,
+     &       RL,RLP,RM1,RMP1,RM2,RMP2,DF,DFP,DYM,DY(IY),
+     &       JNEM,IFLAG,A(LVOLUN),A(LSWN),A(LXHIPN),A(LTCDN),
+     &       A(LTNFN),A(LTXTN),A(LSIGDSNN),A(LSEXTN),A(LBETATN),
+     &       A(LBETATLAMN),A(LSCATN),
+     &       A(LPCN),AINT(LLSEXTZN),AINT(LLSEXTRN),A(LSXTN),A(LSXTPN),
+     &       A(LAMAT1N),A(LXOUT1N),A(LBRHS1N),A(LAMAT2N),
+     &       A(LXOUT2N),A(LBRHS2N),A(LAMAT3N),A(LXOUT3N),
+     &       A(LBRHS3N),A(LEXCN),A(LA1N),A(LA2N),
+     &       A(LA3N),A(LA4N),A(LALN),A(LALPN),A(LTFN),A(LTFPN),
+     &       A(LSSCATN),A(LSSCATPN),A(LTDN),A(LTDPN),A(LFL2N),
+     &       A(LFLPN) )
+           DO 305 IG=1,NG
+            dlNold=DLN(IXY,IZ,IG)
+            DLN(IXY,IZ,IG)=-(1./(SW(IXY,IZ,IG)+SW(IXYM,IZ,IG)))
+     &        * ( DCN(IXY,IZ,IG)*(SW(IXY,IZ,IG)-SW(IXYM,IZ,IG))
+     &        +   JNEM(IG) )
+            DLN(IXY,IZ,IG)=dlNold+OMEGANES*(DLN(IXY,IZ,IG)-dlNold)
+ 305       CONTINUE
+          ENDIF
+         ELSEIF(IXY.LE.NXYL) THEN
+C     
+C     SOLVE FOR TWO-NODE PROBLEMS IN THE Y-DIRECTION.
+C     
+          
+          
+          DO 300 IG=1,NG
+           IXM=IX
+           IYM=IY-1
+           DYM=DY(IYM)
+           RLP(IG)  = TLX(IXY,IZ,IG)+TLZ(IXY,IZ,IG)
+     &       -SEFVE(IXY,IZ,IG)
+           RMP1(IG) = PLMY1(IXY,IZ,IG)
+           RMP2(IG) = PLMY2(IXY,IZ,IG)
+           FRACTION = FRACT(IXY,IZ)*ADFSVRD(IXY,IZ,IG,1) +
+     &       ( 1.00-FRACT(IXY,IZ) )*ADFSV(IXY,IZ,IG,1)
+           DFP(IG)  = FRACTION
+           RL(IG)   = TLX(IXYM,IZ,IG)+TLZ(IXYM,IZ,IG)
+     &       -SEFVE(IXYM,IZ,IG)
+           RM1(IG)  = PLMY1(IXYM,IZ,IG)
+           RM2(IG)  = PLMY2(IXYM,IZ,IG)
+           FRACTION = FRACT(IXYM,IZ)*ADFSVRD(IXYM,IZ,IG,3) +
+     &       ( 1.00-FRACT(IXYM,IZ) )*ADFSV(IXYM,IZ,IG,3)
+           DF(IG)   = FRACTION
+           IF(IYM.EQ.NYSTART(IX).AND.IBC.NE.3) THEN
+            IFLAG=0
+           ELSE
+            IFLAG=1
+           ENDIF
+ 300      CONTINUE
+          
+          CALL NONTWOC ( IZ,IZ,IXYM,IXY,RL,RLP,RM1,
+     &      RMP1,RM2,RMP2,DF,DFP,DYM,DY(IY),
+     &      JNEM,IFLAG,A(LVOLUN),A(LSWN),A(LXHIPN),A(LTCDN),
+     &      A(LTNFN),A(LTXTN),A(LSIGDSNN),A(LSEXTN),A(LBETATN),
+     &      A(LBETATLAMN),A(LSCATN),
+     &      A(LPCN),AINT(LLSEXTZN),AINT(LLSEXTRN),A(LSXTN),A(LSXTPN),
+     &      A(LAMAT1N),A(LXOUT1N),A(LBRHS1N),A(LAMAT2N),
+     &      A(LXOUT2N),A(LBRHS2N),A(LAMAT3N),A(LXOUT3N),
+     &      A(LBRHS3N),A(LEXCN),A(LA1N),A(LA2N),
+     &      A(LA3N),A(LA4N),A(LALN),A(LALPN),A(LTFN),A(LTFPN),
+     &      A(LSSCATN),A(LSSCATPN),A(LTDN),A(LTDPN),A(LFL2N),
+     &      A(LFLPN) )
+          
+          
+C     EVALUATE SOUTHERN COUPLING CORRECTIONS FOR NODE (IXY,IZ)
+C     AND NORTHERN COUPLING CORRECTIONS FOR NODE (IXYP,IZP) (SAME)
+C--------------------------------------------------------------------
+          
+          DO 310 IG=1,NG
+           dlNold=DLN(IXY,IZ,IG)
+           DLN(IXY,IZ,IG) = - (1./(SW(IXY,IZ,IG)+SW(IXYM,IZ,IG)))
+     &       *   ( DCN(IXY,IZ,IG)*(SW(IXY,IZ,IG)-SW(IXYM,IZ,IG))
+     &       +   JNEM(IG) )
+           DLN(IXY,IZ,IG)=dlNold+OMEGANES*(DLN(IXY,IZ,IG)-dlNold)
+ 310      CONTINUE
+         ENDIF
+         
+C     
+C     SOLVE ONE-NODE PROBLEM FOR WESTERN B.C. OF ROW IY IF J(EDGE)<>0 AND
+C     UPDATE DLW(EDGE) USING DCW(EDGE) WHICH EXISTS.
+C     
+         
+         IXYP=NDNUM(IX,IY+1)
+         IF(IXYP.GT.NXYL) THEN
+          IBC=NBC(IXYP-NXYL)
+          IF(IBC.EQ.0) THEN
+           DO 3 IG=1,NG
+            DLN(IXYP,IZ,IG)=0.0
+ 3         CONTINUE
+          ELSEIF(IBC.EQ.1.OR.IBC.EQ.2) THEN
+           DIR1N=+1
+           DELTH=DY(IY)
+           DO 13 IG=1,NG
+            RL(IG)=TLX(IXY,IZ,IG)+TLZ(IXY,IZ,IG)
+     &        -SEFVE(IXY,IZ,IG)
+            RM1(IG)=PLMY1(IXY,IZ,IG)
+            RM2(IG)=PLMY2(IXY,IZ,IG)
+ 13        CONTINUE
+           CALL NONONEC(IXY,IZ,DELTH,RL,RM1,RM2,JNEM,DIR1N,IBC,
+     &       A(LTCDN),A(LTNFN),A(LTXTN),A(LSIGDSNN),A(LSWN),
+     &       A(LSEXTN),A(LVOLUN),A(LBETATN),A(LBETATLAMN),A(LSCATN),
+     &       A(LXHIPN),AINT(LLSEXTZN),AINT(LLSEXTRN),A(LALN),A(LTFN),
+     &      A(LTDN),A(LFL2N),A(LSXTN),A(LSSCATN),A(LAMAT1N),A(LAMAT2N),
+     &       A(LEXCN),A(LBRHS1N),A(LXOUT1N),A(LBRHS2N),A(LXOUT2N) )
+           DO 12 IG=1,NG
+            dlNold=DLN(IXYP,IZ,IG)
+            DLN(IXYP,IZ,IG)=-JNEM(IG)/SW(IXY,IZ,IG)+DCN(IXYP,IZ,IG)
+            DLN(IXYP,IZ,IG)=dlNold+OMEGANES*(DLN(IXYP,IZ,IG)-dlNold)
+ 12        CONTINUE
+          ENDIF
+         ENDIF
+ 230    CONTINUE
+ 220   CONTINUE
+ 200  CONTINUE
+      
+C     
+C=====================================================================
+C     SWEEP ALONG NODES IN AXIAL PLANE.
+C=====================================================================
+C     
+      
+      DO 30 IY=1,NY
+       DO 32 IX=NXSTART(IY),NXEND(IY)
+        IXY=NDNUM(IX,IY)
+        
+C     
+C     SOLVE ONE-NODE PROBLEM FOR BOTTOM B.C. (IZ=1) IF J(EDGE)<>0
+C     AND UPDATE DLL(EDGE) USING DCL(EDGE) WHICH EXISTS.
+C     
+        
+        IF(LIZD.EQ.0) THEN
+         DO 2 IG=1,NG
+          DLL(IXY,1,IG)=0.0
+ 2       CONTINUE
+        ELSEIF (LIZD.EQ.1.OR.LIZD.EQ.2) THEN
+         DIR1N=-1
+         DELTH=DZ(1)
+         IZ=1
+         IBZ=LIZD
+         DO 11 IG=1,NG
+          RL(IG)=TLX(IXY,IZ,IG)+TLY(IXY,IZ,IG)
+     &      -SEFVE(IXY,IZ,IG)
+          RM1(IG)=PLMZ1(IXY,IZ,IG)
+          RM2(IG)=PLMZ2(IXY,IZ,IG)
+ 11      CONTINUE
+         CALL NONONEC(IXY,IZ,DELTH,RL,RM1,RM2,JNEM,DIR1N,IBZ,
+     &     A(LTCDN),A(LTNFN),A(LTXTN),A(LSIGDSNN),A(LSWN),
+     &     A(LSEXTN),A(LVOLUN),A(LBETATN),A(LBETATLAMN),A(LSCATN),
+     &     A(LXHIPN),AINT(LLSEXTZN),AINT(LLSEXTRN),A(LALN),A(LTFN),
+     &     A(LTDN),A(LFL2N),A(LSXTN),A(LSSCATN),A(LAMAT1N),A(LAMAT2N),
+     &     A(LEXCN),A(LBRHS1N),A(LXOUT1N),A(LBRHS2N),A(LXOUT2N) )
+         DO 10 IG=1,NG
+          dllold=DLL(IXY,1,IG)
+          DLL(IXY,1,IG)=-DCL(IXY,1,IG)-JNEM(IG)/SW(IXY,1,IG)
+          DLL(IXY,1,IG)=dllold+OMEGANES*(DLL(IXY,1,IG)-dllold)
+ 10      CONTINUE
+        ENDIF
+        
+C     NOW WE SOLVE FOR THE (NZ-1) TWO-NODE PROBLEMS IN THE Z-DIRECTION
+C------------------------------------------------------------------
+        
+        DO 34 IZ = 1,NZ-1
+         KL=IZ
+         KLP=IZ+1
+         IF(KL.EQ.1) THEN
+          IFLAG=0
+         ELSE
+          IFLAG=1
+         ENDIF
+         DO 400 IG=1,NG
+          
+          RL(IG)   = TLX(IXY,KL,IG)+TLY(IXY,KL,IG)
+     &      -SEFVE(IXY,KL,IG)
+          RLP(IG)  = TLX(IXY,KLP,IG)+TLY(IXY,KLP,IG)
+     &      -SEFVE(IXY,KLP,IG)
+          RM1(IG)  = PLMZ1(IXY,KL,IG)
+          RMP1(IG) = PLMZ1(IXY,KLP,IG)
+          RM2(IG)  = PLMZ2(IXY,KL,IG)
+          RMP2(IG) = PLMZ2(IXY,KLP,IG)
+          IF(FRACT(IXY,KL).GT.0.0) THEN
+           DF(IG)=ADFSVRD(IXY,KL,IG,5)
+           DFP(IG)=ADFSVRD(IXY,KLP,IG,6)
+          ELSE
+           DF(IG)=ADFSV(IXY,KL,IG,5)
+           DFP(IG)=ADFSV(IXY,KLP,IG,6)
+          ENDIF
+          
+ 400     CONTINUE
+         
+         CALL NONTWOC (KL,KLP,IXY,IXY,RL,RLP,RM1,RMP1,
+     &     RM2,RMP2,DF,DFP,DZ(KL),DZ(KLP),
+     &     JNEM,IFLAG,A(LVOLUN),A(LSWN),A(LXHIPN),A(LTCDN),
+     &     A(LTNFN),A(LTXTN),A(LSIGDSNN),A(LSEXTN),A(LBETATN),
+     &     A(LBETATLAMN),A(LSCATN),
+     &     A(LPCN),AINT(LLSEXTZN),AINT(LLSEXTRN),A(LSXTN),A(LSXTPN),
+     &     A(LAMAT1N),A(LXOUT1N),A(LBRHS1N),A(LAMAT2N),
+     &     A(LXOUT2N),A(LBRHS2N),A(LAMAT3N),A(LXOUT3N),
+     &     A(LBRHS3N),A(LEXCN),A(LA1N),A(LA2N),
+     &     A(LA3N),A(LA4N),A(LALN),A(LALPN),A(LTFN),A(LTFPN),
+     &     A(LSSCATN),A(LSSCATPN),A(LTDN),A(LTDPN),A(LFL2N),
+     &     A(LFLPN) )
+C     
+C     EVALUATE LOWER COUPLING CORRECTIONS FOR NODE (IXY,KLP).
+C     
+         
+         DO 410 IG=1,NG
+          dllold=DLL(IXY,KLP,IG)
+          DLL(IXY,KLP,IG) = - (1./(SW(IXY,KLP,IG)+SW(IXY,KL,IG)))
+     &      *  ( DCL(IXY,KLP,IG)*(SW(IXY,KLP,IG)-SW(IXY,KL,IG))
+     &      +   JNEM(IG) )
+          DLL(IXY,KLP,IG)=dllold+OMEGANES*(DLL(IXY,KLP,IG)-dllold)
+ 410     CONTINUE
+         
+ 34     CONTINUE
+        
+C     HERE WE SOLVE FOR THE ONE-NODE PROBLEM FOR IZ=NZ ONLY IF J(EDGE)<>0
+C     AND WE UPDATE DLU(EDGE) USING DCU(EDGE) WHICH EXISTS
+C----------------------------------------------------------
+        
+        IZP=NZ+1
+        IF(LIZU.EQ.0) THEN
+         DO 4 IG=1,NG
+          DLL(IXY,IZP,IG)=0.0
+ 4       CONTINUE
+        ELSEIF (LIZU.EQ.1.OR.LIZU.EQ.2) THEN
+         IBZ=LIZU
+         DIR1N=+1
+         DELTH=DZ(NZ)
+         DO 9 IG=1,NG
+          RL(IG)=TLX(IXY,NZ,IG)+TLY(IXY,NZ,IG)
+     &      -SEFVE(IXY,NZ,IG)
+          RM1(IG)=PLMZ1(IXY,NZ,IG)
+          RM2(IG)=PLMZ2(IXY,NZ,IG)
+ 9       CONTINUE
+         CALL NONONEC(IXY,NZ,DELTH,RL,RM1,RM2,JNEM,DIR1N,IBZ,
+     &     A(LTCDN),A(LTNFN),A(LTXTN),A(LSIGDSNN),A(LSWN),
+     &     A(LSEXTN),A(LVOLUN),A(LBETATN),A(LBETATLAMN),A(LSCATN),
+     &     A(LXHIPN),AINT(LLSEXTZN),AINT(LLSEXTRN),A(LALN),A(LTFN),
+     &     A(LTDN),A(LFL2N),A(LSXTN),A(LSSCATN),A(LAMAT1N),A(LAMAT2N),
+     &     A(LEXCN),A(LBRHS1N),A(LXOUT1N),A(LBRHS2N),A(LXOUT2N) )
+         DO 8 IG=1,NG
+          dllold=DLL(IXY,IZP,IG)
+          DLL(IXY,IZP,IG)=-JNEM(IG)/SW(IXY,NZ,IG)+DCL(IXY,IZP,IG)
+          DLL(IXY,IZP,IG)=dllold+OMEGANES*(DLL(IXY,IZP,IG)-dllold)
+ 8       CONTINUE
+        ENDIF
+ 32    CONTINUE
+ 30   CONTINUE
+      epsflux=1.0E-03
+      do ig=1,ng
+       do iz=1,nz
+        do iy=1,ny
+         do ix=nxstart(iy),nxend(iy)
+          IXY=NDNUM(IX,IY)
+          if(abs(sw(ixy,iz,ig)/PHIAVG(ig)).le.epsflux) then
+           IXYE=NDNUM(IX+1,IY)
+           IXYS=NDNUM(IX,IY+1)
+           DLW(IXY,IZ,IG)=0.0	  
+           DLN(IXY,IZ,IG)=0.0
+           DLL(IXY,IZ,IG)=0.0
+           DLW(IXYE,IZ,IG)=0.0	  
+           DLN(IXYS,IZ,IG)=0.0
+           DLL(IXY,IZ+1,IG)=0.0
+          endif
+         enddo
+        enddo
+       enddo
+      enddo
+      
+      RETURN
+      END

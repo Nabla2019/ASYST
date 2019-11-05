@@ -1,0 +1,839 @@
+*mlist
+       subroutine ht1inp (hindex,lindex,length,lenreq,kardid,errsw)
+c
+c  Processes input for the Relap heat structures.
+c
+c  Cognizant engineer: rjw.
+c
+*in32 itm
+*in32 irmw
+*in32 isc7
+*in32end
+c
+       implicit none
+c
+       integer hindex,lindex,length,lenreq,kardid,errsw
+c  hindex  Index in array-iarray where heat1 may store data.
+c  lindex  Beginning of storage block.
+c  length  Amount of storage available in array for use by heat1.
+c  lenreq  Amount of storage required for this problem.
+c  kardid  First card number for this heat1 problem.
+c  errsw   Error switch (0 => no error, 1 => input error).
+       include 'comctl.h'
+       include 'cons.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'htsrcm.h'
+       include 'ufiles.h'
+c
+       integer cardno,cols,i,ial,ic,icsxx,id,idx,iicl,il,
+     & ics(20),igeom,ijk,imwt,index,indscr,inp10,ipl,irmw(5),isc7(3),
+     & itm(10),j,jj,k,kloson,ktem(6),kx,locx,mesh,ncols,next,
+     & nn,nomesh,nreg,num,probid
+       real cpntc,coef,conv(3),degf1,degf2,deltax,dx,fourpi,ft,ox,
+     & qabs,qdin,qdout,qxm,radc,rmw(5),sc7(3),src,temp(10),vol,
+     & xlam,xmesh,xn,xnode(100),xo,xpnt
+       equivalence (temp(1),itm(1)),(ktem(1),ics(14)),
+     & (irmw(1),rmw(1)),(isc7(1),sc7(1))
+       logical geoerr,terr,flgmwr
+       character chwrd*8,geotyp(3)*11,imwtyp*14,isty(2)*3,labm(2)*4,
+     & lab1(2)*10,labt(2)*6
+c
+       data ft/0.3048/, degf1/0.5555555555555/, degf2/255.3722222222/
+       data geotyp/'rectangular','cylindrical','spherical'/,
+     & isty/'no','yes'/, labm/'(m)','(ft)'/, labt/'(K)','(degF)'/
+       data lab1/' (Pa)',' (lbf/in2)'/
+       data conv/9.290304e-2,0.3048,1.0/
+c
+       il = 1
+       if (.not.unito) il = 2
+       errsw=0
+       ics(1:20) = 0
+c  Set imw to 1 as the minimum number so that the inside clad node
+c  will at least be 1 when the code gets the average temp in HT1TDP
+c  before the call to MADATA.
+       imw(hindex) = 1
+       geoerr = .false.
+       probid = (kardid - 10000000)/1000
+       cols = htnmpt(hindex)
+       if (cols .lt. 2) then
+         write (output,2008)
+ 2008  format ('0******** Number of mesh points is incorrect, being set
+     &to 2 which will probably cause other diagnostics.')
+         errsw = 1
+         cols = 2
+         htnmpt(hindex) = 2
+       endif
+       nn = cols - 1
+       igeom = ishft(htopt(hindex),-24)
+       if (igeom.le.0 .or. igeom.gt.3) then
+         write (output,2009)
+ 2009  format ('0******** Geometry flag is incorrect, being set to 1 for
+     & slab geometry.')
+         errsw = 1
+         igeom = 1
+       endif
+       i = iand(htopt(hindex),1)
+       if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     & write (output,2010) htnusr(hindex),cols,geotyp(igeom),isty(i+1)
+ 2010  format (' Number of heat structures with this geometry:',i3/
+     & ' number of mesh points:',i3/
+     & ' geometry type: ',a/
+     & ' steady state initialization: ',a)
+c  Store geometry index.
+       index = hindex + htfixa
+       htgom(hindex) = index - lindex
+       areao(index) = 1.0
+       arean(index) = 1.0
+       if (igeom.ne.1 .and. httots(hindex).eq.0.0) areao(index) = 0.0
+       gpintp(index) = 0.0
+       if(length.lt.5) go to 96
+c  Read gap initial pressure if the card is present.
+       ics(1) = kardid + 1
+       ics(4) = 2
+       ics(6) = 1
+       ics(7) = 1
+       ics(8) = 0
+       call inp2 (fa(filndx(1)),temp,ics)
+       if (ics(6) .gt. 0) go to 60
+       if (ics(6) .lt. 0) geoerr = .true.
+   55  gpintp(index) = 0.0
+       htgap(hindex) = 0
+       htgap(hindex+1) = 0
+       go to 69
+   60  gpintp(index) = temp(1)
+       if (.not.uniti) gpintp(index) = gpintp(index)*6.894757e3
+       if (uniti .neqv. unito) temp(1) = gpintp(index)/6.894757e3
+       htgap(hindex) = itm(2)
+       htgap(hindex+1) = 0
+       if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     & write (output,2030) temp(1),lab1(il),itm(2)
+ 2030  format ('0Gap deformation model being used, initial pressure =',
+     & 1p,g15.6,a8,', reference volume =',i10)
+       ics(6) = 0
+       if (gpintp(index) .le. 0.0) then
+         ics(6) = 1
+         write (output,2032)
+ 2032  format ('0******** Initial presssure for gas deformation model is
+     & zero or negative.')
+       endif
+       if (htgap(hindex).le.0 .or. htgap(hindex).ge.1000000000) then
+         ics(6) = 1
+         write (output,2029)
+ 2029  format ('0******** Gap deformation model reference volume number
+     &is incorrect.')
+       endif
+       if (igeom .ne. 2) then
+       ics(6) = 1
+       write (output,2031)
+ 2031  format ('0******** Cylindrical geometry not specified when gap de
+     &formation model used.')
+       endif
+       if (ics(6) .ne. 0) then
+         geoerr = .true.
+         go to 55
+       endif
+   69  continue
+c  Read in the clad balooning and rupture card.
+       kloson  = 0
+c  Zero out the gapwd and cladex values.
+       gapwd (hindex) = 0.0
+       cladex(hindex) = 0.0
+       hetrat(hindex) = 0.0
+       strnpl(hindex) = 0.0
+       ics(1)  = kardid + 4
+       ics(4)  = 1
+       ics(6)  = 1
+       ics(7)  = 0
+       ics(8)  = 1
+       ics(9)  = 1
+       call inp2 (fa(filndx(1)),isc7,ics)
+       if (ics(6) - 1) 410, 401, 402
+  401  kloson = isc7(1)
+c  Initialize plastic strain calc flag => 1 and loss coeff calc
+c  flag => kloson.
+         imw(hindex) = ior(imw(hindex),2048)
+         if (kloson.ne.0) imw(hindex) = ior(imw(hindex),4096)
+         go to 400
+c  Error on 1cccg004 card.
+  402    geoerr = .true.
+         write (output,850)
+  850  format ('0******** Too many words on balloon card 1cccg004.')
+  400  continue
+c  Tell the world about the model.
+       ipl = ishft(iand(imw(hindex),2048),-11 ) + 1
+       ial = ishft( iand(imw(hindex),4096) ,-12 ) + 1
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output,851) isty(ipl)
+       write (output,852) isty(ial)
+  851  format (' Clad swelling and balooning model% ',a10)
+  852  format (' With additional loss coefficients% ',a10)
+       endif
+c
+  410   continue
+c  Process metal water reaction data.
+  300  kx = hindex
+       oxti(kx) = 0.0
+       oxtio(kx) = 0.0
+       oxto(kx) = 0.0
+       oxtoo(kx) = 0.0
+       h2gen(kx) = 0.0
+       h2geno(kx) = 0.0
+       irmw(1:5) = 0
+       ics(1) = kardid + 3
+       ics(4) = 1
+       ics(6) = 1
+       ics(7) = 1
+       ics(8) = 1
+       ics(9) = 1
+       ics(10) = 1
+       ics(11) = 0
+       flgmwr = .false.
+      call inp2 (fa(filndx(1)), irmw, ics)
+       if (ics(6) - 1) 70,320,321
+  321  continue
+       geoerr = .true.
+       write (output,3021) ics(1)
+ 3021  format ('0******** Too many words on card ',i10)
+       go to 70
+  320  continue
+       flgmwr = .true.
+       oxtoo(kx) = rmw(1)
+       oxto(kx)  = oxtoo(kx)
+c  Initialize metal-water flag.
+       imw(kx) = ior(imw(kx),16384)
+c  Set correlation flag.
+       imwtyp = 'cathcart/pawel'
+       if (.not.uniti) then
+         oxto(kx) = oxto(kx)*conv(2)
+         oxtoo(kx) = oxtoo(kx)*conv(2)
+       endif
+       if (unito) then
+         imwt = 1
+         ox = oxtoo(hindex)
+       else
+         imwt = 2
+         ox = oxtoo(hindex)/ft
+       endif
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,3024)  imwtyp,ox, labm(imwt)
+ 3024   format (' Metal water reaction (',a  ,       ') will be calculat
+     &ed'/    ' Initial oxide thickness      :',1p,g13.5,1x,a10)
+c
+c  Read geometry locator or format type.
+c  Geometry problem id first datum, cards assumed if zero.
+c  Format type second datum, optional if id specified.
+   70  ics(7)=0
+       cardno = kardid + 100
+       ics(1)=cardno
+       ics(3)=1
+       ics(4)=2
+       ics(6)=1
+       ics(8) = 0
+       call inp2 (fa(filndx(1)),fa(index+3),ics)
+       if (ics(6) .eq. -1) go to 100
+       id = ia(index+3)
+       if (id.eq.0) go to 103
+       if(gpintp(index).gt.0.0) go to 80
+       if (id.lt.0 .or. id.ge.9999) go to 102
+       htopt(hindex) = ior(htopt(hindex),8)
+       htgmr(hindex) = id
+       htgom(hindex) = 0
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2012) id
+ 2012  format ('0Geometry data to be taken from heat structure-geometry'
+     & ,i5,'.')
+       go to 128
+   80  geoerr = .true.
+       write (output,2033)
+ 2033  format('0******** Geometry information can not be taken from othe
+     &r geometry when the gap deformation model is used.')
+       gpintp (index) = 0.0
+       go to 128
+  102  geoerr = .true.
+       write (output,2013)
+ 2013  format ('0******** Heat structure-geometry number for geometry is
+     & incorrect.')
+       go to 128
+c  Get geometry for cards.
+  103  if (ics(6) .ne. 2) go to 101
+       id = ia(index+4)
+       indscr=index +htgskp*nn + 6
+       lenreq = htfixa + (htgskp+2)*cols
+       if (lenreq .le. length) go to 97
+   96  write (output,2011)
+ 2011  format ('0******** Insufficient space to process this heat struct
+     &ure-geometry data.')
+       errsw = 1
+       return
+   97  ics(1) = ics(1) + 1
+       ics(2) = -ics(1) - 98
+       if (id .eq. 1) go to 104
+       if (id. eq. 2) go to 108
+  101  write (output,2014)
+ 2014  format ('0******** Mesh point spacing type missing or incorrect.'
+     & )
+  100  geoerr = .true.
+       k = inp10(fa(filndx(1)),ics(1),ics(1)+99)
+       go to 116
+c  Format type 1 -> intervals, coordinate of right boundary.
+  104  ics(3) = 2
+       ics(4)=2*nn
+       ics(6)=1
+       ics(7)=2
+       ics(9)=1
+       call inp2 (fa(filndx(1)),fa(indscr),ics)
+       if (ics(6) .eq. -1) then
+         geoerr = .true.
+         go to 116
+       endif
+       xo = httots(hindex)
+       if (mod(ics(6),2) .eq. 0) go to 119
+       write (output,2015) ics(1),ics(2)
+ 2015  format ('0******** Number of words on mesh point spacing cards ('
+     & ,i8,'-',i8,') is not a multiple of 2.')
+       geoerr = .true.
+       go to 116
+  119  nreg = ics(6)/2
+       idx=index
+       mesh = indscr
+       ncols = 0
+       do k = 1,nreg
+         nomesh = ia(mesh)
+         ncols = ncols + nomesh
+         if (ncols .gt. nn) go to 105
+         xn = fa(mesh+1)
+         if (.not.uniti) xn = xn*ft
+         deltax = (xn - xo)/real(nomesh)
+         do i = 1,nomesh
+           htsrc(idx) = deltax
+           idx = idx + htgskp
+         enddo
+         mesh = mesh + 2
+         xo=xn
+       enddo
+       if (ncols .eq. nn) go to 109
+  105  geoerr=.true.
+       write (output,2016)
+ 2016  format ('0******** Number of mesh spacings inconsistent with numb
+     &er of mesh points.')
+       go to 116
+c  Format type 2 -> mesh increment, up to mesh no.
+  108  ics(7)=2
+       ics(8)=1
+       ics(9)=0
+       j=1
+       call inp5 (ics(1),ics(2),0,1,0,nn,htgskp,1,0,j,fa(filndx(1)),
+     & htsrc(index), ics(7), fa(indscr), 2*nn)
+       if (j .ne. -1) go to 124
+       geoerr = .true.
+       go to 116
+  124  if (uniti) go to 109
+       idx = index
+       do i = 1,nn
+         htsrc(idx) = htsrc(idx)*ft
+         idx = idx + htgskp
+       enddo
+  109  idx = index
+       terr = .false.
+       do i = 1,nn
+         if (htsrc(idx) .le. 0.0) then
+           htsrc(idx) = 0.001
+           terr = .true.
+         endif
+         idx = idx + htgskp
+  132  enddo
+c  Calculate outer radius.  Save inner and outer radii.
+       htrado(hindex) = httots(hindex)
+       htradn(hindex) = htrado(hindex)
+       idx = index
+       do i=1,nn
+         htradn(hindex) = htradn(hindex) + htsrc(idx)
+         idx = idx + htgskp
+       enddo
+       if (.not.terr) go to 129
+       write (output,2025)
+ 2025  format ('0******** Mesh increments less than or equal to zero, se
+     &t to default values.')
+       fail = .true.
+c  Build surface and volume weights.
+  129  mesh = index
+       if (igeom.gt.1) go to 111
+c  Rectangular geometry heat slab.
+       areao(index) = 1.0
+       arean(index) = 1.0
+       do i = 1,nn
+         xmesh = htsrc(mesh)*0.5
+         htsrwt(mesh) = 0.5/xmesh
+         htrvwt(mesh) = xmesh
+         htlvwt(mesh) = xmesh
+         mesh = mesh + htgskp
+       enddo
+       go to 115
+c  Cylindrical heat slab geometry.
+  111  xo = httots(hindex)
+       if (xo .ge. 0.0) go to 167
+       write (output,2017)
+ 2017  format ('0******** Left coordinate negative in cylindrical or sph
+     &erical geometry, set to 0.0 for continued checking.')
+       errsw = 1
+       xo = 0.0
+       httots(hindex) = 0.0
+  167  if (igeom .eq. 3) go to 113
+       areao(index) = twopi*xo
+       do i = 1,nn
+         xmesh = htsrc(mesh)
+         qxm = xmesh*0.25
+         xpnt= xo + qxm
+         coef = pi*xmesh
+         htrvwt(mesh) = coef*xpnt
+         xpnt = xpnt + qxm
+         htsrwt(mesh) = twopi*xpnt/xmesh
+         xpnt=xpnt + qxm
+         htlvwt(mesh) = coef*xpnt
+         xo = xo + xmesh
+         mesh = mesh + htgskp
+       enddo
+       arean(index) = twopi*xo
+       go to 115
+c  Spherical geometry.
+  113  fourpi = 2.0*twopi
+       vol = fourpi/3.0
+       radc = xo*xo
+       areao(index) = fourpi*radc
+       radc = radc*xo
+       do i=1,nn
+         xmesh = htsrc(mesh)*0.5
+         xpnt = xo + xmesh
+         cpntc = xpnt*xpnt
+         htsrwt(mesh) = twopi*cpntc/xmesh
+         cpntc = cpntc*xpnt
+         htrvwt(mesh) = vol*(cpntc - radc)
+         xo = xpnt + xmesh
+         radc = xo*xo*xo
+         htlvwt(mesh) = vol*(radc - cpntc)
+         mesh = mesh + htgskp
+       enddo
+       arean(index) = fourpi*xo*xo
+c  Edit mesh spacings and cumulative mesh coordinates.
+  115  if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,172) labm(il)
+  172  format ('0Mesh point number, mesh interval ',a4,'  (mesh interval
+     & constant between indicated mesh points)')
+       idx = index
+       dx = htsrc(idx)
+       jj = 1
+       idx = idx + htgskp
+       do i= 2,cols
+         if (i.eq.cols) go to 138
+         if (dx.eq.htsrc(idx)) go to 141
+  138    temp(jj) = dx
+         if (.not.unito) temp(jj) = temp(jj)/ft
+         ktem(jj) = i
+         dx = htsrc(idx)
+         if (jj.ne.6 .and. i.ne.cols) go to 140
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,173) (ktem(k),temp(k),k=1,jj)
+  173  format (1p,6(i7,',',e14.6))
+         jj=0
+  140    jj = jj + 1
+  141    idx = idx + htgskp
+       enddo
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,175) labm(il)
+  175  format ('0Mesh point number, mesh point coordinate ',a4)
+       jj = 2
+       idx = index
+       xo = httots(hindex)
+       temp(1) = xo
+       xnode(1)=xo
+       if (.not.unito) temp(1) = temp(1)/ft
+       ktem(1) = 1
+       do i= 2,cols
+         xo = xo + htsrc(idx)
+         temp(jj) = xo
+         xnode(i)=xo
+         if (.not.unito) temp(jj) = temp(jj)/ft
+         ktem(jj) = i
+         if (jj.ne.6 .and. i.ne.cols) go to 144
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,173) (ktem(k),temp(k),k=1,jj)
+         jj = 0
+  144    jj = jj + 1
+         idx = idx + htgskp
+       enddo
+c  Read composition overlay.
+  116  cardno = kardid + 200
+       ics(7)=2
+       ics(8)=0
+       ics(9)=0
+       j=1
+       call inp5 (cardno+1,-cardno-99,0,1,0,nn,htgskp,1,0,j,
+     & fa(filndx(1)),htcmpf(index),ics(7),fa(indscr),2*nn)
+       if (j .gt. 0) go to 146
+       geoerr = .true.
+       go to 121
+c  Edit composition data.
+  146  terr = .false.
+       idx = index
+       do i = 1,nn
+         if (abs(htcmp(idx)) .ge. 1000) then
+           htcmp(idx) = 0
+           terr = .true.
+         endif
+         idx = idx + htgskp
+       enddo
+       if (.not.terr) go to 190
+       write (output,2026)
+ 2026  format ('0******** Composition number incorrect, set to default v
+     &alue.')
+       fail = .true.
+  190  if  (gpintp(index).le.0.0 .and. .not. flgmwr) go to 182
+c  Store interval information for gap conductance model.
+       idx = index
+       jj = 1
+       ics(jj) = abs(htcmp(idx))
+       ics(jj+3) = 1
+       do i = 1,nn
+         if (abs(htcmp(idx)) .ne. ics(jj)) then
+           jj = jj + 1
+           if (jj .gt. 3) go to 195
+           ics(jj) = abs(htcmp(idx))
+           ics(jj+3) = i
+         endif
+         idx = idx + htgskp
+       enddo
+       if(jj.eq.3 .or. flgmwr) go to 196
+  195  geoerr = .true.
+       gpintp(index) = 0.0
+       write (output,2034)
+ 2034  format('0******** Incorrect compositions for gap conductance mode
+     &l.')
+       go to 182
+  196  idx=index
+       if (ics(5) .eq. 0) then
+         gprinc(idx) = htrado(hindex)
+         gprinc(idx+htgskp) = htradn(hindex)
+       elseif (htgap(hindex) .eq. 0) then
+         do j = nn,2,-1
+           i = idx + (j-1)*htgskp
+           id = i - htgskp
+           if (abs(htcmp(i)) .ne. abs(htcmp(id))) then
+             ics(5) = j
+             exit
+           else
+             ics(5) = j-1
+           endif
+         enddo
+         xn=httots(hindex)
+         do i = 1,nn
+           if (i - ics(5) .ge. 0) exit
+           gprinc(idx) = htsrc(idx)
+           xn = xn + htsrc(idx)
+           idx = idx + htgskp
+         enddo
+         gprinc(idx)=xn
+         gprinc(idx+htgskp)=htradn(hindex)
+       else
+         xn=httots(hindex)
+         do i=1,nn
+           xn=xn+htsrc(idx)
+           if(i-ics(5)) 198,197,200
+  197      jj=idx+htgskp
+           gprinc(jj)=xn
+  198      gprinc(idx)=htsrc(idx)
+  200      idx=idx+htgskp
+         enddo
+         gprinc(jj+htgskp)=xn
+       endif
+  182  if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,176)
+  176  format ('0Mesh point number, composition number  (composition num
+     &ber constant between indicated mesh points)')
+       id = abs(htcmp(index))
+       idx = index + htgskp
+       jj = 2
+       do i= 2,cols
+         if (i.eq.cols) go to 147
+         if (id .eq. abs(htcmp(idx))) go to 150
+  147    ics(jj-1) = i
+         ics(jj) = id
+         id = abs(htcmp(idx))
+         if (jj.ne.20 .and. i.ne.cols) go to 149
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,177) (ics(k),k= 1,jj)
+  177  format (10(i7,',',i4))
+         jj = 0
+  149    jj = jj + 2
+  150    idx = idx + htgskp
+       enddo
+       icsxx  = index + htgskp * (nn - 2)
+       ic     = abs(htcmp(icsxx))
+crex   jcoun  = 0
+crex       do 350 j = 1, nn
+crex     jcoun  = jcoun + 1
+crex     icx    = htcmp(icsxx)
+crex     if (icx .ne. ic) go to 351
+crex     icsxx  = icsxx - htgskp
+       idx = index
+c  Set iicl to 1 to protect against a case where nn=2 and onetrip
+c  is not set. nn is the outer node number.
+         iicl = 1
+       do j = nn,2,-1
+         i = idx + (j-1)*htgskp
+         id = i - htgskp
+         if (abs(htcmp(i)) .ne. abs(htcmp(id))) then
+           iicl = j
+           exit
+         else
+           iicl = j-1
+         endif
+       enddo
+  351  continue
+crex  351  iicl   = nn - jcoun + 1
+c  Initialize mw inside clad node number.
+c  Use the left 9 bits.
+       imw(hindex) = ior( iand(imw(hindex),not(511)) , iicl )
+c  Read source distribution.
+  121  cardno = kardid + 300
+       ics(1)=cardno
+       ics(2)=0
+       ics(3)=0
+       ics(4)=1
+       ics(5)=0
+       ics(6)=1
+       ics(7)=-1
+       call inp2 (fa(filndx(1)),temp,ics)
+       htsrt(hindex) = 0
+       if (ics(6) .eq. 0) go to 122
+       htsrt(hindex) = 1
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write(output,2037)
+ 2037  format ('0Decay heat flag set.')
+       write (chwrd,'(a8)') temp(1)
+       if (chwrd .eq. 'dkheat') go to 122
+       write (output,2035) temp(1)
+ 2035  format('0******** ',a8,' is not a valid entry.  Decay heat option
+     & assumed.')
+       fail=.true.
+  122  ics(7)=2
+       ics(8)=1
+       ics(9)=0
+       j=1
+       call inp5 (cardno+1,-cardno-99,0,1,0,nn,htgskp,1,0,j,
+     & fa(filndx(1)),htsrc(index+htgskp),ics(7),fa(indscr),2*nn)
+       if (j.gt.0) go to 126
+       geoerr=.true.
+       go to 128
+c  Edit source distribution.
+  126  terr = .false.
+       idx = index
+       do i = 1,nn
+         if (htsrc(idx+htgskp) .lt. 0.0) terr = .true.
+         idx = idx + htgskp
+       enddo
+       if (.not.terr) go to 184
+       write (output,2027)
+ 2027  format ('0******** Negative source distribution values entered.')
+       fail = .true.
+  184  if (htsrt(hindex) .eq. 1) goto 187
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,178)
+  178  format ('0Mesh point number, source factor  (source factor consta
+     &nt between indicated mesh points)')
+       goto 187
+  187  idx=index + htgskp
+       src = htsrc(idx)
+       jj = 1
+       do i = 2,cols
+         if (i .eq. cols) go to 153
+         if (src .eq. htsrc(idx+htgskp)) go to 156
+  153    temp(jj) = src
+         ktem(jj) = i
+         src = htsrc(idx+htgskp)
+         if (jj.ne.6 .and. i.ne.cols) go to 155
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,173) (ktem(k),temp(k),k=1,jj)
+         jj = 0
+  155    jj = jj + 1
+  156    idx = idx + htgskp
+       enddo
+       if (geoerr) go to 50
+c  Convert source to volume weighted source.
+       if (htsrt(hindex) .eq. 1) goto 40
+   39  idx = index
+       htsrc(idx) = htsrc(idx+htgskp)*htrvwt(idx)
+       httots(hindex) = htsrc(idx)
+       i=1
+       idx = idx + htgskp
+       if (nn .eq. 1) go to 32
+       do i = 2,nn
+       htsrc(idx)=htsrc(idx)*htlvwt(idx-htgskp)+htsrc(idx+htgskp)*
+     &   htrvwt(idx)
+         httots(hindex) = httots(hindex) + htsrc(idx)
+         idx = idx + htgskp
+       enddo
+   32  htsrc(idx) = htsrc(idx)*htlvwt(idx-htgskp)
+       httots(hindex) = httots(hindex) + htsrc(idx)
+      if (htsrt(hindex) .eq. 1) then
+         if (httots(hindex) .eq. 0.) then
+            fail = .true.
+            write (output,2048)
+ 2048  format('0******** Attenuation coefficients of zero encountered.')
+         endif
+       endif
+       i=nn+1
+       goto 49
+c  Calculate decay heat source weights.
+   40  idx = index
+       if(igeom.lt.3)goto 41
+      igeom=2
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2006)
+ 2006  format ('0$$$$$$$$ Fission product heating model not implemented
+     &for spherical geometry, using cylindrical for now.')
+c  Energy absorption.
+   41  qdout=1.
+       do i=2,cols
+         qdin=qdout
+         xlam=htsrc(idx+htgskp)
+         qdout=qdin*exp(-htsrc(idx+htgskp)*(xnode(i)-xnode(i-1)))
+         qabs=qdin-qdout
+         htsrc(idx+htgskp)=qabs/((xnode(i)**2-xnode(i-1)**2)*pi)
+         idx=idx+htgskp
+       enddo
+       if (igeom .eq. 2) go to 39
+c  Convert cylindrical volume sources to rectangular values.
+       idx=index
+       do i = 2,cols
+         htsrc(idx+htgskp)=htsrc(idx+htgskp)*(xnode(i)+xnode(i-1))*pi
+         idx=idx+htgskp
+       enddo
+       go to 39
+c  Get volume average temperature weights.
+   49  idx = index
+       htavwt(idx) = 0.0
+       do i = 1,nn
+         htavwt(idx+htgskp) = 0.0
+         if (htcmp(idx) .ge. 0) then
+           htavwt(idx) = htavwt(idx) + htrvwt(idx)
+           htavwt(idx+htgskp) = htavwt(idx+htgskp) + htlvwt(idx)
+         endif
+         htcmp(idx) = abs(htcmp(idx))
+         idx = idx + htgskp
+       enddo
+       htvatp(hindex) = 0.0
+       idx = index
+       do i = 1,cols
+         htvatp(hindex) = htvatp(hindex) + htavwt(idx)
+         idx = idx + htgskp
+       enddo
+       if (htvatp(hindex) .ne. 0.0) go to 36
+       htvatp(hindex) = 1.0
+       write (output,2007)
+ 2007  format ('0******** Integral for volume averaged temperature calcu
+     &lation is zero.')
+       fail = .true.
+       go to 50
+   36  idx = index
+       src = 1.0/htvatp(hindex)
+       do i = 1,cols
+         htavwt(idx) = htavwt(idx)*src
+         idx = idx + htgskp
+       enddo
+c  Get initial temperature distribution.
+   50  index = indscr
+  128  htxft(hindex) = index - lindex
+       cardno = kardid + 400
+       call inplnk (cardno,next,locx,num,fa(filndx(1)))
+       if (num.eq.0) go to 133
+       ics(1) = cardno
+       ics(2) = 0
+       ics(3) = 1
+       ics(4) = 1
+       ics(5) = 0
+       ics(6) = 1
+       ics(7) = 0
+       call inp2 (fa(filndx(1)),fa(index),ics)
+       if (ics(6) .eq. -1) go to 130
+       id = ia(index)
+       if (id.eq.0) go to 133
+       if (id.gt.0.and.id.le.9999) go to 131
+       if (id .ne. -1) go to 125
+       htopt(hindex) = ior(htopt(hindex),64)
+       go to 135
+  125  write (output,2023)
+ 2023  format ('0******** Heat structure-geometry number for initial tem
+     &peratures is incorrect.')
+  130  geoerr = .true.
+       k = inp10(fa(filndx(1)),ics(1),ics(1)+99)
+       go to 135
+  131  htopt(hindex) = ior(htopt(hindex),32)
+       htsrt(hindex+1) = id
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2024) id
+ 2024  format ('0Initial temperatures taken from heat structure-geometry
+     &',i5,'.')
+       go to 135
+c  Read the initial temperatures.
+  133  indscr = index + cols
+       lenreq = index - hindex + 3*cols
+       if (lenreq.gt.length) go to 96
+       cardno = cardno + 1
+       ics(7) = 2
+       ics(8) = 1
+       ics(9) = 0
+       j = 1
+       call inp5 (cardno,-cardno-98,0,1,0,cols,1,1,0,j,
+     & fa(filndx(1)),httmp(index),ics(7),fa(indscr),2*cols)
+       if (j .gt. 0) go to 136
+       geoerr = .true.
+       go to 135
+  136  terr = .false.
+       idx = index
+       do i = 1,cols
+         if (.not.uniti) httmp(idx) = httmp(idx)*degf1 + degf2
+         if (httmp(idx) .lt. 0.0) then
+           httmp(idx) = 293.0
+           terr = .true.
+         endif
+         idx = idx + 1
+       enddo
+       if (.not.terr) go to 134
+       write (output,2028)
+ 2028  format ('0******** Initial temperatures incorrect, set to default
+     & values.')
+       fail = .true.
+c  Edit initial temperatures.
+  134  if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     & write (output,179) labt(il)
+  179  format ('0Mesh point number, initial temperature ',a6,'  (initial
+     & temperature constant between indicated mesh points)')
+       jj = 1
+       src = httmp(index)
+       idx = index + 1
+       num = cols + 1
+       do i = 2,num
+         if (i .eq. num) go to 159
+         if (src .eq. httmp(idx)) go to 162
+  159    ktem(jj) = i - 1
+         temp(jj) = src
+         if (.not.unito) temp(jj) = (temp(jj)-degf2)*1.8
+         src = httmp(idx)
+         if (jj.eq.6 .or. i.eq.num) then
+           if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &     write (output,173) (ktem(k),temp(k),k=1,jj)
+           jj = 0
+         endif
+         jj = jj + 1
+  162    idx = idx + 1
+       enddo
+c  Set and store index for output temperature array.
+  135  index = index + cols
+       htxit(hindex) = index - lindex
+       index = index + cols
+       lenreq = index - hindex
+       if (lenreq.gt.length) go to 96
+       if (geoerr) errsw = 1
+       return
+       end

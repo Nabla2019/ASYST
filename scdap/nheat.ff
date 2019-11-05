@@ -1,0 +1,246 @@
+*mlist
+*if def,selap
+       subroutine nheat(xarea,ibcrst,kfrel)
+c
+c  Supplies nuclear heat to an intact component.
+c
+c     calling subroutines:  fuelan,cylin ,slabc
+c     subroutines called:   fdecay
+c
+c     input variables                  description
+c        xarea           area of the fuel (m*m)
+c        kfrel
+c
+c     output variables                 description
+c        unuc(j)        value of linear nuclear heat
+c                         generation at axial node j (W/m)
+c        unucd          decay heat generation
+c
+c     local variables                  description
+c        apfd           axial power factor delayed
+c        apfp           axial power factor prompt
+c        df             disrupted decay power fraction /fdkpwr:fdecay/
+c        nest           starting search location of interpolating
+c                         routines
+c        pptim          prompt power  (w/m3)
+c
+$if def,rk3d,1
+       use scdpwrkin
+      implicit none
+       include 'contrl.h'
+       include 'ufiles.h'
+       include 'scddat.h'
+       include 'buntim.h'
+       include 'fpdkht.h'
+       include 'tblsp.h'
+       include 'cora.h'
+       include 'miscon.h'
+       include 'ndxara.h'
+       include 'nhtara.h'
+       include 'scdads.h'
+       include 'scdcom.h'
+       include 'scdpow.h'
+       include 'scdout.h'
+c
+      real xarea(ndax),kfrel
+      integer ibcrst
+c  Local variables.
+      integer j, krap
+      integer ndbg
+      real apfd, apfp, df, dfprm, frcrel, pptim, tfail
+      real ggsum,powdba
+      external fdecay,wolfhe
+c
+      ndbg=0
+cljs    if(timehy.ge.1998.0.and.timehy.le.2001.0)ndbg=1
+        if(ndbg.eq.1)then
+        write(output,9005)icomp,timehy,tshtdn(icomp),nspowi
+9005    format(' NHEAT; icomp=',i5,' timehy=',e10.4,
+     &  ' tshtdn=',e10.4,' nspowi=',i5)
+        end if
+      kfrel=0.
+      df = 1.0
+c  Skip call to fdecay if not a fuel rod component.
+      if (idcomp(icomp) .eq. 0) then
+        dktime = timehy - tshtdn(icomp)
+        tfail = tshtdn(icomp) + dtfail
+        if (timehy.gt.tfail)call fdecay(ndkset,dtfail,dktime,df,krap)
+      endif
+c  Check current time versus current profile time limit.
+c  Skip if simulator component and original heater rod model is to be
+c  used.
+      if (idcomp(icomp).ne.6 .or. icrmod.eq.-1) then
+        if (timehy .gt. paxtim(kshapz(icomp),icomp)) then
+          if (kshapz(icomp).lt.nshapz(icomp)) then
+            kshapz(icomp) = kshapz(icomp) + 1
+          else
+            paxtim(kshapz(icomp),icomp) = 1.0e+99
+          endif
+        endif
+      endif
+c  Initialize heat generation to 0.
+      do j = 1,naz
+        unuc(j)  = 0.0
+        unucd(j) = unuc(j)
+      enddo
+c  Total power is from Relap5 general table or control variable.
+$if -def,rk3d
+      if (nspowi.eq.1 .or. nspowi.eq.2) then
+$endif
+$if def,rk3d
+      if (nspowi.eq.1 .or. nspowi.eq.2 .or. nspowi.eq.4) then
+$endif
+        if (idcomp(icomp) .ne. 6) then
+!  Non-simulator component.
+          do j = 1,naz
+            if (irubpp(j,icomp) .ne. 1) then
+cljs  store fractional release of volatile fission products 
+                  if(ndbg.eq.1)then
+                  write(output,9105)j,icomp,fgstot0(j,icomp),
+     &            fgstot(j,icomp)
+9105              format(' NHEAT; j=',i5,' icomp=',i5,
+     &            ' fgstot0=',e10.4,' fgstot=',e10.4)
+                  end if
+                if(fgstot0(j,icomp).gt.1.e-20)then
+                frdkvl(j,icomp)=1.0-fgstot(j,icomp)/fgstot0(j,icomp)
+                  if(frdkvl(j,icomp).lt.0.0)frdkvl(j,icomp)=0.0
+                end if
+$if -def,rk3d
+              unuc(j) = powtot(icomp)*paxpz2(1,j,kshapz(icomp),icomp)*
+     &        xarea(j)
+$endif
+$if def,rk3d
+              if (nspowi.eq.4) then
+                unuc(j) = scdpwr(icomp)%scdax(j)%cmppowr/(nsigl(icomp
+     &          )*dzcnd2(j,icomp))
+              else
+                unuc(j) = powtot(icomp)*paxpz2(1,j,kshapz(icomp),icomp
+     &          )*xarea(j)
+              endif
+$endif
+c  Add on heat generation in material that slumped to this location.
+              unuc(j) = unuc(j) + powadd(j,icomp)/dzcnd2(j,icomp)
+              if (unuc(j) .lt. 0.0) unuc(j) = 0.0
+            endif
+            unucd(j) = unuc(j)
+          enddo
+        elseif (idcomp(icomp) .eq. 6) then
+c  Simulator component
+          pptim = pfrtot(icomp)*pwrtot/nsigl(icomp)
+          if (icrmod .eq. 0.and.modidx(1).ne.1)                
+     &    call wolfhe(unuc,unucd,pptim)
+          if (icrmod .gt. 0.or. modidx(1).eq.1) then                
+            if (modidx(6).ge.1 .or. rmflg) then
+              call wolfhn2(unuc,unucd,pptim)
+            else
+              call wolfhn(unuc,unucd,pptim)
+            endif
+          endif
+	endif        
+      else
+c  Power is from Relap5 reactor kinetics.
+        pptim = powtot(icomp) - powfdk(icomp)
+        if (idcomp(icomp) .ne. 0) pptim = powtot(icomp)
+        if (idcomp(icomp) .eq. 0) then
+c  For fuel component.
+          if  (timehy .gt. tshtdn(icomp)) then
+c  For post shut down time period.
+            do j = 1,naz
+              if (irubpp(j,icomp) .ne. 1) then
+cljs   calculate reduction in decay heat due to volatile fission
+cljs   product release based on release at each axial node.
+                if(fgstot0(j,icomp).gt.1.0e-20)then
+                frcrel = 1.0 - fgstot(j,icomp)/fgstot0(j,icomp)
+                else
+                frcrel = 0.0
+                end if
+                frdkvl(j,icomp) = frcrel
+                  if(frdkvl(j,icomp).lt.0.0)frdkvl(j,icomp)=0.0
+                frdknv(j,icomp) =df
+                dfprm = 1.0 - frcrel*(1.0 - df)
+                frdkpw(j,icomp) = 1.0 - dfprm
+                apfp = paxpz2(1,j,kshapz(icomp),icomp )
+                apfd = paxpz2(1,j,1,icomp)
+                if(ibcrst.gt.0)apfd=paxpz2(1,j,ibcrst,icomp)
+                unuc(j)=((dfprm*powfdk(icomp))*apfd+pptim*apfp)*xarea(j)
+c  Add on nuclear heat generation rate in relocated material.
+                  if(ndbg.eq.1)then
+                  write(output,9061)j,icomp,dfprm,df,fgstot(j,icomp),
+     &            fgstot0(j,icomp)
+9061              format(' NHEAT; j=',i5,' icomp=',i5,' dfprm=',
+     &            e10.4,' df=',e10.4,' fgstot=',e10.4,' fgstot0=',
+     &            e10.4)
+                  end if
+                powdba=powadd(j,icomp)
+                if(nspowi.eq.3)then
+                  if(powtot(1).gt.0.)powdba=powtot(1)*powdba
+                endif
+                unuc(j)=unuc(j)+powdba/dzcnd2(j,icomp)
+                if(unuc(j).lt.0.0)unuc(j)=0.0
+                unucd(j)=((df*powfdk(icomp))*apfd+pptim*apfp)*xarea(j)
+                unucd(j)=unucd(j)+powdba/dzcnd2(j,icomp)
+                if(unucd(j).lt.0.0)unucd(j)=0.0
+                kfrel = (1. - dfprm)*powfdk(icomp)*apfd*
+     &          xarea(j)*dzcnd2(j,icomp) + kfrel
+              endif
+            enddo
+          else
+c  For pre shut down time period.
+              if(ndbg.eq.1)then
+              write(output,9071)powtot(icomp),powfdk(icomp),pptim
+9071          format(' NHEAT; powtot(icomp)=',e10.4,
+     &        ' powfdk(icomp)=',e10.4,' pptim=',e10.4)
+              end if
+            do j = 1,naz
+              if (irubpp(j,icomp) .ne. 1) then
+                apfp = paxpz2(1,j,kshapz(icomp),icomp )
+                unuc( j ) = (pptim + powfdk(icomp))*apfp*xarea(j)
+                powdba = powadd(j,icomp)
+                if (nspowi .eq. 3) then
+                  if (powtot(1) .gt. 0.) powdba = powdba*powtot(1)
+                endif
+                unuc(j)=unuc(j)+powdba/dzcnd2(j,icomp)
+                if(unuc(j).lt.0.0)unuc(j)=0.0
+                unucd(j) = unuc(j)
+              endif
+            enddo
+          endif
+        elseif (idcomp(icomp).eq.6 .and. icrmod.ge.0) then
+ccma
+c  Use original model if icrmod is 0).
+          pptim = pfrtot(icomp)*pwrtot/nsigl(icomp)
+          if (icrmod .eq. 0.and.modidx(1).eq.0)                 
+     &    call wolfhe(unuc,unucd,pptim)
+          if (icrmod .gt. 0.or.modidx(1).eq.1) then
+            if (modidx(6).ge.1 .or. rmflg) then
+              call wolfhn2(unuc,unucd,pptim)
+            else
+              call wolfhn(unuc,unucd,pptim)
+            endif
+          endif
+c  Following coding changed since electrical heat should not depend on
+c  slumping or fuel to be present.
+c          do j=1,naz
+c            if(xarea(j).eq.0.0.or.irubpp(j,icomp).eq.1) then
+c              unuc(j) = 0.
+c              unucd(j) = 0.
+c            endif
+c          enddo
+ccmaend
+        else
+c for non fuel components
+          do j = 1, naz
+            if (irubpp(j,icomp) .eq. 1) then
+              unuc(j) = 0.0
+              unucd(j) = 0.0
+            else
+              apfp = paxpz2(1,j,kshapz(icomp),icomp )
+              unuc( j ) = pptim*apfp * xarea(j)
+              unucd( j ) = unuc( j )
+            endif
+          enddo
+        endif
+      endif
+      return
+      end
+*endif

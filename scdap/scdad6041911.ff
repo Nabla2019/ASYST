@@ -1,0 +1,938 @@
+*mlist
+*if def,selap
+       subroutine scdad6
+!
+!  This subroutine calculates radiative heat transfer between SCDAP
+!  components and between SCDAP components and fluid that resides
+!  between the components.
+!
+!  Cognizant engineer: ljs.
+!
+       use scdmod
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'htrcom.h'
+       include 'jundat.h'
+       include 'scddat.h'
+       include 'cpmdat.h'
+       include 'debcom.h'
+       include 'statec.h'
+       include 'slumpv.h'
+       include 'hardpn.h'
+       include 'radata.h'
+       include 'solcom.h'
+       include 'buntim.h'
+       include 'cora.h'
+       include 'miscon.h'
+       include 'voldat.h'
+       include 'scdout.h'
+       include 'ndxara.h'
+       include 'tblsp.h'
+       include 'thplot.h'
+       include 'cons.h'
+       include 'nhtara.h'
+       include 'scdcom.h'
+       include 'trnot1.h'
+       include 'trnot2.h'
+       include 'ufiles.h'
+       include 'fpfast.h'
+       include 'fparm2.h'
+       include 'fpdkht.h'
+       include 'bconds.h'
+       include 'nrcom.h'
+       include 'uoxcom.h'
+       include 'fecom.h'
+       include 'bwgeom.h'
+       include 'intcom.h'
+       include 'debout.h'
+       include 'blageo.h'
+       include 'blinit.h'
+       include 'scdads.h'
+       include 'scdpow.h'
+       include 'bwtrns.h'
+       include 'dbacct.h'
+c  Local variables.
+       real here1,here2,ribl1,ribl2,parstm(ndax)
+       integer i,ibp,ic,icm,icm1,icm2,ik,il,il1,il2,ist,j,jb,js,
+     & k,kdy,kdyng,kdyng1,kdynj,kk,kn,l,lkk,m,n,nj
+       integer ichan,jj
+       integer nn,ij,i2,nl,jjj,jloc,j1
+       real dttemp,hrad,qscdmx,qscdm2,csbpgu,twloc,tw0,dtmx
+       real tgard1,pclrd1,pathrd,alprd1,eplrd1,abvrd1,abvrd2,ablrd1
+       real ddrop,epsrd1,epsrd2,absrd1,absrd2,tw1,voidra
+       real fcntr3
+cc
+       real atotrd(ndax),apfc(ndcomp)
+       real rthksh,ratvod
+       integer nonshr
+       integer nsw,nswax,kx,icomp1
+       integer ndbg
+       data voidra/0.5/
+         ndbg = 0
+           if(timehy.ge.18746.0.and.timehy.lt.18750.0)ndbg=1
+           if(ndbg.eq.1)then
+           write(output,9005)timehy
+9005       format(' SCDAD6 entered; timehy=',e10.4)
+           end if
+c
+c  fcntr3=minimum time step imposed by check for stability of radiation
+c  heat transfer.
+       fcntr3 = 10.
+       hrad = 1.e-6
+       do j = 1,ncomp
+         do k = 1,naz
+           il = (j - 1)*ndax + k
+           l = nvad(il) + filndx(4)
+           pcl(il) = p(l)
+         enddo
+       enddo
+       if (nvirn.ne.3.and. nvirn.ne.4.and. nvirn.ne.6) then
+         ncxnaz = ndax*ndcomp
+         do i = 1,numenc
+         nonshr = 0
+           do k = 1,naz
+             idisrp(k) = 0
+c  Identify relap5 volume connected with first flow channel in enclosure
+c  at axial node k.
+             ichan = nrepfc(i,1)
+             l = ngpv(ichan,k) + filndx(4)
+             if (voidf(l) .gt. voidra) idisrp(k) = 1
+             do nj = 1,snc1(i)%ncompe
+               j = ngroup(i,nj,2)
+c        idcomp(j) = 2 = shroud
+                 if(k.eq.1.and.idcomp(j).ne.2)nonshr=nonshr+1
+               l = nvad((j-1)*ndax+k) + filndx(4)
+               if (dzfrcq(k,j) .ge. 0.99 .and. aflwr1 .lt. 1.0e-6)
+     &         idisrp(k) = 1
+               if (irubpp(k,j) .eq. 1) idisrp(k) = 1
+               if (nblkrd(k,j) .eq. 1) idisrp(k) = 1
+             enddo
+           enddo
+           slbwde = 0.0
+           do nj = 1,snc1(i)%ncompe
+             j = ngroup(i,nj,2)
+             idcmpl(nj) = idcomp(j)
+             nsigll(nj) = nsigl(j)
+             ijcml(nj) = j
+             if (idcomp(j).eq.2.and. ishrd(i).ne.j) then
+               icrad(j) = j
+               slbwdl(nj) = slbwd(j)
+               do k = 1,naz
+                 kdyng = (j-1)*ndax + k
+                 kdyng1 = (nsout(j) - 1)*ndax + k
+                 tsur1(kdyng) = tcond3(1,k,j)
+                 scd2(k,nj)%tsur1l = tsur1(kdyng)
+                 scd2(k,nj)%hcnvcl = hout(kdyng1)
+               enddo
+             else
+               do k = 1,naz
+                 kdyng = (j - 1)*ndax + k
+                 tsur1(kdyng) = tcond3(nrods2(k,j),k,j)
+                 if (idcomp(j) .eq. 2) then
+                   slbwde = slbwd(j)
+                   scd2(k,nj)%tsur1l = tsur1(kdyng)
+                 elseif (idcomp(j) .eq. 8) then
+                   if (scd1(j)%ngrupe .eq. i) then
+                     if (nj.ge. 2.and. j.eq.ngroup(i,nj-1,2)) then
+c  Segment 2 calculations. slbwdl=0 when the segment is missing
+c  so that qradab is calculated correctly in subroutine radcc2.
+                       scd2(k,nj)%tsur1l = tcond3(13,k,j)
+                       ribl2 = float(iblkcb(k,2,iblabx(j))-1)
+                       here2 = max(scn(k,2,iblabx(j)),ribl2)
+                       slbwdl(nj) = (slbwd(j) - blawd(j))*here2
+                     else
+c  Segment 1 calculations. slbwdl=0 when the segment is missing.
+c  so that qradab is calculated correctly in subroutine radcc2.
+                       scd2(k,nj)%tsur1l = tcond3(7,k,j)
+                       ribl1 = float(iblkcb(k,1,iblabx(j))-1)
+                       here1 = max(scn(k,1,iblabx(j)),ribl1)
+                       slbwdl(nj) = blawd(j) * here1
+                     endif
+                   else
+c  Interstitial calculations.
+                     scd2(k,nj)%tsur1l = tcond3(12,k,j)
+                     ribl2 = float(iblkcb(k,2,iblabx(j))-1)
+                     here2 = max(scn(k,2,iblabx(j)),ribl2)
+                     slbwdl(nj) = (slbwd(j) - blawd(j))*here2
+                     idisrp(k) = 1
+                   endif
+                 else
+c  Case of idcomp.ne.2 and idcomp.ne.8.
+                   scd2(k,nj)%tsur1l = tsur1(kdyng)
+                   if (idcomp(j).ne.3) then
+                     rcrs2l(k,nj) = rcos(j)
+                   else
+                     rcrs2l(k,nj) = rcrsto((j-1)*ndax+k)
+                   endif
+                 endif
+                 scd2(k,nj)%hcnvcl = hcnvec(kdyng)
+               enddo
+             endif
+c
+c  Set gas temperature array for radiation so that each surface is
+c  associated with a hydrodynamic volume.
+             do k = 1,naz
+               if (idcomp(ngroup(i,nj,2)) .eq. 2) then
+                 if (i .eq. scd1(ngroup(i,nj,2))%ngrupe) then
+                   kdynj = (ngroup(i,nj,2)-1)*ndax + k
+                 else
+                   if (i.eq.scd1(ngroup(i,nj,2))%ngrupi) then
+c  Outer surface of shroud.
+                     kdynj = (ndcomp + nsout(ngroup(i,nj,2)) - 1)*ndax +
+     &               k
+                   else
+                     write (output,9000) i,ngroup(i,nj,2)
+ 9000  format('0********* Error in layout for radiation heat transfer'
+     & /' enclosure #',i3, ' component. #',i2,/,' program stopped.')
+                     stop 'scdad6-1'
+                   endif
+                 endif
+               else
+c Non-shroud component.
+                 kdynj = (ngroup(i,nj,2) - 1)*ndax + k
+               endif
+               scd2(k,nj)%tgradl = tempg(nvad(kdynj) + filndx(4))
+             enddo
+             if (nvirn.eq.2) then
+               if (idcomp(j).eq.3) then
+                 do k = 1,naz
+                   if (mbcs((ibwrc(j)-1)*ndax+k).lt.1.e-6) idisrp(k) = 1
+                 enddo
+                 ibp = ibwrc(j)
+                 kn = min0(nazs(ibp),nazb(ibp)) + 1
+                 do k = kn,naz
+                   idisrp(k) = 1
+                 enddo
+               endif
+             else
+               do k = 1,naz
+c  idcomp(j) = 1 = control rod
+                 if (idcomp(j) .ne. 1) then
+                   if (irubpp(k,j).eq.1 .or. nblkrd(k,j).eq.1)
+     &             idisrp(k) = 1
+                 endif
+               enddo
+             endif
+           enddo
+c  Note. All components are assumed to have same axial nodalization.
+           do k = 1,naz
+             modrad = 0
+             mrdbwr = 0
+             do m = 1,snc1(i)%ncompe
+               do n = 1,snc1(i)%ncompe
+                 fviewz(k,m,n) = fviewg(i,m,n)
+c  If control rod material removed from location, set view factors for
+c  control rod component to zero.
+cljs  jmloc and jnloc are global component numbers
+                 jmloc = ngroup(i,m,2)
+                 jnloc = ngroup(i,n,2)
+                 kdymlo = (jmloc - 1)*ndax + k
+                 kdynlo = (jnloc - 1)*ndax + k
+                 pathll(k,m,n) = pathlg(i,m,n)
+c  When bwr blade/box node is missing, remove it from radiation
+c  calculations.
+                 if (idcomp(jmloc).eq.8 .and.
+     &           scd1(jmloc)%ngrupe.eq.i .and. m.ge.2 .and.
+     &           jmloc.eq.ngroup(i,m-1,2)) then
+c  Segment 2 calculations.
+                   if (scn(k,2,iblabx(jmloc)).le.0.000001 .and.
+     &             iblkcb(k,2,iblabx(jmloc)) .le. 1) then
+                     mrdbwr = 1
+                     pathll(k,m,n) = 0.0
+                     if (m .eq. n) then
+                       fviewz(k,m,n) = 1.0
+                     else
+                       fviewz(k,m,n) = 0.0
+                     endif
+                   endif
+                 elseif (idcomp(jnloc).eq.8 .and.
+     &           scd1(jnloc)%ngrupe.eq.i .and. n.ge.2 .and.
+     &           jnloc.eq.ngroup(i,n-1,2)) then
+                   if(scn(k,2,iblabx(jnloc)).le.0.000001.and.
+     &             iblkcb(k,2,iblabx(jnloc)) .le. 1) then
+                     mrdbwr = 1
+                     pathll(k,m,n) = 0.0
+                     fviewz(k,m,n) = 0.0
+                   endif
+                 endif
+                 if ((idcomp(jmloc).eq.8 .and.
+     &           scd1(jmloc)%ngrupe.eq.i .and. m.eq.1) .or.
+     &           (idcomp(jmloc).eq.8 .and. scd1(jmloc)%ngrupe.eq.i .and.
+     &           m.ge.2 .and. jmloc.ne.ngroup(i,m-1,2))) then
+c  Segment 1 calculations.
+                   if(scn(k,1,iblabx(jmloc)).le.0.000001.and.
+     &               iblkcb(k,1,iblabx(jmloc)) .le. 1) then
+                     mrdbwr = 1
+                     pathll(k,m,n) = 0.0
+                     if (m .eq. n) then
+                       fviewz(k,m,n) = 1.0
+                     else
+                       fviewz(k,m,n) = 0.0
+                     endif
+                   endif
+                 elseif ((idcomp(jnloc).eq.8 .and.
+     &           scd1(jnloc)%ngrupe.eq.i .and. n.eq.1) .or.
+     &           (idcomp(jnloc).eq.8 .and. scd1(jnloc)%ngrupe.eq.i .and.
+     &           n.ge.2 .and. jnloc.ne.ngroup(i,n-1,2))) then
+                   if (scn(k,1,iblabx(jnloc)).le.0.000001 .and.
+     &             iblkcb(k,1,iblabx(jnloc)) .le. 1) then
+                     mrdbwr = 1
+                     pathll(k,m,n) = 0.0
+                     fviewz(k,m,n) = 0.0
+                   endif
+                 endif
+                 if (idcomp(jmloc).eq.8 .and. scd1(jmloc)%ngrupe.ne.i)
+     &           then
+c  Interstitial calculations.
+                   if (scn(k,2,iblabx(jmloc)).le.0.000001 .and.
+     &             iblkcb(k,2,iblabx(jmloc)) .le. 1) then
+                     mrdbwr = 1
+                     pathll(k,m,n) = 0.0
+                     if (m .eq. n) then
+                       fviewz(k,m,n) = 1.0
+                     else
+                       fviewz(k,m,n) = 0.0
+                     endif
+                   endif
+                 elseif (idcomp(jnloc).eq. 8.and.
+     &           scd1(jnloc)%ngrupe.ne.i) then
+                   if (scn(k,2,iblabx(jnloc)).le.0.000001.and.
+     &             iblkcb(k,2,iblabx(jnloc)) .le. 1) then
+                     mrdbwr = 1
+                     pathll(k,m,n) = 0.0
+                     fviewz(k,m,n) = 0.0
+                   endif
+                 endif
+               enddo
+             enddo
+             if (modrad .eq. 1) then
+c  Normalize view factors.
+               do m = 1,snc1(i)%ncompe
+                 sumvw = 0.0
+                 do n = 1,snc1(i)%ncompe
+                   sumvw = sumvw + fviewz(k,m,n)
+                 enddo
+                 sumvw = 1./sumvw
+                 do n = 1,snc1(i)%ncompe
+                   fviewz(k,m,n) = fviewz(k,m,n)*sumvw
+                 enddo
+               enddo
+             endif
+             if (mrdbwr .eq. 1) then
+c  Normalize view factors for bwr blade/box component.  This is done by
+c  modifying the diagonal elements of the view factor array so that
+c  reciprocity relationships are preserved.  The diagonal elements of
+c  the path length array are also modified so that the additional
+c  radiation occurs with a path length of zero.
+               do m = 1,snc1(i)%ncompe
+                 sumvw = 0.0
+                 do n = 1,snc1(i)%ncompe
+                   sumvw = sumvw + fviewz(k,m,n)
+                 enddo
+                 if (sumvw .le. 0.999999) pathll(k,m,m) = pathlg(i,m,m)*
+     &           fviewz(k,m,m)/(fviewz(k,m,m) + 1.0 - sumvw)
+                 fviewz(k,m,m) = fviewz(k,m,m) +1.0 - sumvw
+               enddo
+             endif
+           enddo
+           do k = 1,naz
+             ichan = nrepfc(i,1)
+             l = ngpv(ichan,k) + filndx(4)
+c  pcool used in radcc2.
+             pcool = p(l)
+c  parstm(k) = partial pressure of steam in axial node k.
+             parstm(k) = pps(l)
+           enddo
+           kdyng = (ngroup(i,nj,2) - 1)*ndax + 1
+           ncomp1 = snc1(i)%ncompe
+           iencl = i
+           do k = 1,naz
+             qradab(i,k) = 0.0
+           enddo
+           call radcc2 (naz,parstm)
+cljs  assume calculation of heat being drawn out of gas is due to
+cljs  residual error in radiation calculations
+           do k =1,naz
+cljs  nonshr = 0 = first component in enclosure is a shroud component
+             l = ngpv(ichan,k) + filndx(4)
+               if(ndbg.eq.1.and.k.eq.1)then
+               write(output,9031)k,volno(l),i,qradab(i,k),tempg(l),
+     &         nonshr
+9031           format(' SCDAD6 after RADCC2; k=',i5,' volno=',i10,
+     &         ' i=',i5,' qradab(i,k)=',e10.4,' tempg=',e10.4,
+     &         ' nonshr=',i5)
+               end if
+             if(nonshr.eq.0)then
+cljs           if(qradab(i,k).lt.0.0.and.tempg(l).lt.1500.0)then
+cljs           qradab(i,k) = 0.0
+cljs           end if
+               qradab(i,k) = 0.0
+             else
+cljs  assume absorbed radiation heat transfer at gas temperature
+cljs  is negligible to avoid overshoot of gas temperature.
+cljs           if(quala(l).ge.0.02.and.tempg(l).gt.2000.0)then
+               if(tempg(l).gt.2000.0)then
+               qradab(i,k) = 0.0
+               end if
+             end if
+           end do
+cljs  if high fraction noncondensible, consider heat absorbed in
+cljs  gas by radiation to be negligble.
+           do k= 1,naz
+           l = ngpv(ichan,k) + filndx(4)
+               if(ndbg.eq.1.and.k.eq.1)then
+               write(output,9011)l,volno(l),quala(l),tempg(l)
+9011           format(' SCDAD6 after RADCC2; l=',i8,' volno=',i10,
+     &         ' quala=',e10.4,' tempg=',e10.4)
+               end if
+             if(quala(l).ge.0.5)then
+             qradab(i,k) = 0.0
+             end if
+           end do
+           do k = 1,naz
+             if (idisrp(k).eq.1) qradab(i,k) = 0.0
+c  Use cutoff to avoid inputing energies of order 1.e-100 W/m.
+             if (abs(qradab(i,k)).lt.1.0) qradab(i,k) = 0.0
+           enddo
+           scd22(:,:,:,1)%hgrad = 0.0
+           do nj = 1,ncomp1
+             j = ngroup(i,nj,2)
+             do k = 1,naz
+               kdynj = (nj - 1)*ndax + k
+               lkk = nvad(kdynj) + filndx(4)
+c              if (chngno(30)) then
+                 if (voidf(lkk) .gt. 0.0001) scd2(k,nj)%hradgx = 0.0
+c              else
+c                scd2(k,nj)%hradgx = 0.0
+c              endif
+             enddo
+             if (idcomp(j).eq. 2.and. ishrd(i).ne.j) then
+               do k = 1,naz
+                 kdyng = (nsout(j) - 1)*ndax + k
+                 qouts(kdyng) = scd2(k,nj)%qoutl
+                 scd22(k,nsout(j),2,1)%qrdsur = scd2(k,nj)%qrdsrl
+                 scd22(k,nsout(j),2,1)%hgrad = scd2(k,nj)%hradgx
+               enddo
+             else
+               do k = 1,naz
+                 kdyng = (j - 1)*ndax + k
+                 if (idcomp(j) .eq. 8) then
+                   if (scd1(j)%ngrupe.eq.i) then
+                     if (nj.ge. 2.and. j.eq.ngroup(i,nj-1,2)) then
+c  Segment 2 calculations.
+                       qout2(k,j,1) = qout2(k,j,1) + scd2(k,nj)%qoutl
+                       qrseg2(kdyng) = scd2(k,nj)%qrdsrl
+                     else
+c  Segment 1 calculations.
+                       qout2(k,j,1) = scd2(k,nj)%qoutl
+                       scd22(k,j,1,1)%qrdsur = scd2(k,nj)%qrdsrl
+                       scd22(k,j,1,1)%hgrad = scd2(k,nj)%hradgx
+                     endif
+                   else
+c  Interstitial calculations.
+                     qouts((nsout(j)-1)*ndax+k) = scd2(k,nj)%qoutl
+                     scd22(k,nsout(j),2,1)%qrdsur = scd2(k,nj)%qrdsrl
+                     scd22(k,nsout(j),2,1)%hgrad = scd2(k,nj)%hradgx
+                   endif
+                 else
+                   qout2(k,j,1) = scd2(k,nj)%qoutl
+                   scd22(k,j,1,1)%qrdsur = scd2(k,nj)%qrdsrl
+                   scd22(k,j,1,1)%hgrad = scd2(k,nj)%hradgx
+                 endif
+               enddo
+             endif
+           enddo
+           do k = 1,naz
+             qrdsrt(k) = 0.
+             wtot(k) = 0.
+             do nj = 1,ncomp1
+               j = ngroup(i,nj,2)
+               il = (j - 1)*ndax + k
+               if (idcomp(j).eq.2 .or. idcomp(j).eq.4 .or.
+     &           idcomp(j).eq.5 .or. idcomp(j).eq.7) then
+                 htper = slbwd(j)*nsigl(j)
+               elseif (idcomp(j) .eq. 8) then
+                 if (scd1(j)%ngrupe.eq.i) then
+                   if (nj.ge. 2.and. j.eq.ngroup(i,nj-1,2)) then
+c  Segment 2 calculations.
+                     ribl2 = float(iblkcb(k,2,iblabx(j))-1)
+                     here2 = max(scn(k,2,iblabx(j)),ribl2)
+                     htper = (slbwd(j) - blawd(j))*here2*nsigl(j)
+                   else
+c  Segment 1 calculations.
+                     ribl1 = float(iblkcb(k,1,iblabx(j))-1)
+                     here1 = max(scn(k,1,iblabx(j)),ribl1)
+                     htper = blawd(j)*here1*nsigl(j)
+                   endif
+                 else
+c  Interstitial calculations.
+                   ribl2 = float(iblkcb(k,2,iblabx(j))-1)
+                   here2 = max(scn(k,2,iblabx(j)),ribl2)
+                   htper = (slbwd(j) - blawd(j))*here2*nsigl(j)
+                 endif
+               else
+                 if(idcomp(j).ne.3)then
+                   htper = 2.0*pi*rcos(j)*nsigl(j)
+                 else
+                   htper = 2.0*pi*rcrsto((j-1)*ndax+k)*nsigl(j)
+                 endif
+               endif
+               if (idcomp(j).eq. 2.and. ishrd(i).ne.j) then
+                 kdy = 2
+                 kdyng = (ndcomp + nsout(j)-1)*ndax + k
+                 tsur1(kdyng) = tcond3(1,k,j)
+               elseif (idcomp(j) .eq. 8) then
+                 if (scd1(j)%ngrupe.eq.i) then
+                   if (nj.ge. 2.and. j.eq.ngroup(i,nj-1,2)) then
+c  Segment 2 calculations.
+                     kdy = 1
+                     kdyng = (j-1)*ndax + k
+                     if (scn(k,2,iblabx(j)).ge.0.999999 .or.
+     &               iblkcb(k,2,iblabx(j)).eq.2) then
+                       tsur1(kdyng) = tcond3(13,k,j)
+                     else
+                       tsur1(kdyng) = tempg(lkk)
+                     endif
+                   else
+c  Segment 1 calculations.
+                     kdy = 1
+                     kdyng = (j-1)*ndax + k
+                     if (scn(k,1,iblabx(j)).ge.0.999999 .or.
+     &               iblkcb(k,1,iblabx(j)).eq.2) then
+                       tsur1(kdyng) = tcond3(7,k,j)
+                     else
+                       tsur1(kdyng) = tempg(lkk)
+                     endif
+                   endif
+                 else
+c  Interstitial calculations.
+                   kdy = 2
+                   kdyng = (ndcomp + nsout(j)-1)*ndax + k
+                   if (scn(k,2,iblabx(j)).ge.0.999999 .or.
+     &             iblkcb(k,2,iblabx(j)) .eq. 2) then
+                     tsur1(kdyng) = tcond3(12,k,j)
+                   else
+                     tsur1(kdyng) = tempg(lkk)
+                   endif
+                 endif
+               else
+                 kdy = 1
+                 kdyng = (j - 1)*ndax + k
+                 tsur1(kdyng) = tcond3(nrods2(k,j),k,j)
+               endif
+               wtot(k) = wtot(k) +
+     &         htper*abs((tsur1(kdyng)**4 - tempg(lkk)**4))
+               if (idcomp(j).eq.8 .and. scd1(j)%ngrupe.eq.i .and.
+     &         nj.ge.2 .and. j.eq.ngroup(i,nj-1,2)) then
+c  Segment 2 calculations.
+                 qrdsrt(k) = qrdsrt(k) + qrseg2(kdyng)*htper
+               else
+                 qrdsrt(k) = qrdsrt(k) + scd22(k,j,kdy,1)%qrdsur*htper
+               endif
+             enddo
+           enddo
+           do k = 1,naz
+             qres(k) = qrdsrt(k) - qradab(i,k)
+             if (wtot(k) .le. 0.0) cycle
+             qrdsrt(k) = 0.
+             do nj = 1,ncomp1
+               j = ngroup(i,nj,2)
+               if (idcomp(j).eq.2 .or. idcomp(j).eq.4 .or.
+     &           idcomp(j).eq.5 .or. idcomp(j).eq.7) then
+                 htper = slbwd(j)*nsigl(j)
+               elseif (idcomp(j).eq.8) then
+                 if (scd1(j)%ngrupe.eq.i) then
+                   if (nj.ge. 2.and. j.eq.ngroup(i,nj-1,2)) then
+c  Segment 2 calculations.
+                     ribl2 = float(iblkcb(k,2,iblabx(j))-1)
+                     here2 = max(scn(k,2,iblabx(j)),ribl2)
+                     htper = (slbwd(j) - blawd(j))*here2*nsigl(j)
+                   else
+c  Segment 1 calculations.
+                     ribl1 = float(iblkcb(k,1,iblabx(j))-1)
+                     here1 = max(scn(k,1,iblabx(j)),ribl1)
+                     htper = blawd(j) * here1 * nsigl(j)
+                   endif
+                 else
+c  Interstitial calculations.
+                   ribl2 = float(iblkcb(k,2,iblabx(j))-1)
+                   here2 = max(scn(k,2,iblabx(j)),ribl2)
+                   htper = (slbwd(j) - blawd(j))*here2*nsigl(j)
+                 endif
+               else
+                 if (idcomp(j).ne.3) then
+                   htper = 2.0*pi*rcos(j)*nsigl(j)
+                 else
+                   htper=2.*pi*rcrsto((j-1)*ndax+k)*nsigl(j)
+                 endif
+               endif
+               kdynj = (j - 1)*ndax + k
+               lkk = nvad(kdynj) + filndx(4)
+c  3.969e-8 = 0.7*5.67e-8
+               hrad=1.e-6
+               tw1=tcond3(nrods2(k,j),k,j)
+               if (voidg(lkk) .gt. 0.99) then
+                 hrad = 3.969e-08*(tw1*tw1 + tempg(lkk)*tempg(lkk))*
+     &           (tw1 + tempg(lkk))
+c  Estimate amount of radiation absorbed by fluid.
+c  Ratio hrad by value of absorption coefficient at pressure of 16 MPa
+c  to that at current presure.
+                 tgard1 = tempg(lkk)
+                 pclrd1 = 16.e+6
+                 pathrd = pitch(j)
+                 alprd1 = 0.0
+                 ddrop = 1.e-4
+                 call emissv (epsrd1,absrd1,tgard1,pclrd1,pathrd,tw1,
+     &           1,ddrop,alprd1,eplrd1,abvrd1,ablrd1)
+                 call emissv (epsrd2,absrd2,tgard1,p(lkk),pathrd,tw1,
+     &           1,ddrop,alprd1,eplrd1,abvrd2,ablrd1)
+                 hrad = (abvrd2/abvrd1)*hrad*dzcond(kdynj)*htper/
+     &           (csubpg(lkk)*hyarg(lkk)*v(lkk))
+c  Note.  For nearly implicit solution hrad should include mass that
+c         fluxes through node during time step.  To do this, replace
+c         v(lkk) with (v(lkk)+avol(lkk)*velg(lkk)*dt)
+               endif
+c  Impose dttemp only for case of hot intact rods and no formation yet
+c  of molten pool.
+               if (hrad .gt. 1.e-3 .and. irubpp(k,j).eq.0) then
+c  Impose dttemp only for case of intact rods.
+                 dttemp = 2.0/hrad
+               else
+                 dttemp = 10.0
+               endif
+               if (dttemp .lt. fcntr3) then
+                 fcntr3 = dttemp
+               endif
+c  Impose scdap radiation stability criterion.
+c              if (.not.chngno(30)) then
+               if (iand(print,64) .ne. 0) then
+                 if (dttemp .lt. deltb) then
+                   succes = 8
+                   return
+                 endif
+               endif
+c  End of time step control based on radiation heat transfer.
+               if (idcomp(j).eq. 2.and. ishrd(i).ne.j) then
+                 kdy = 2
+                 kdyng = (ndcomp + nsout(j) - 1)*ndax + k
+                 tsur1(kdyng) = tcond3(1,k,j)
+               elseif (idcomp(j).eq.8) then
+                 if (scd1(j)%ngrupe.eq.i) then
+                   if (nj.ge. 2.and. j.eq.ngroup(i,nj-1,2)) then
+c  Segment 2 calculations.
+                     kdy = 1
+                     kdyng = (j - 1)*ndax + k
+                     if (scn(k,2,iblabx(j)).ge.0.999999 .or.
+     &               iblkcb(k,2,iblabx(j)) .eq. 2) then
+                       tsur1(kdyng) = tcond3(13,k,j)
+                     else
+                       tsur1(kdyng) = tempg(lkk)
+                     endif
+                   else
+c  Segment 1 calculations.
+                     kdy = 1
+                     kdyng = (j-1)*ndax + k
+                     if (scn(k,1,iblabx(j)).ge.0.999999 .or.
+     &               iblkcb(k,1,iblabx(j)) .eq. 2) then
+                       tsur1(kdyng) = tcond3(7,k,j)
+                     else
+                       tsur1(kdyng) = tempg(lkk)
+                     endif
+                   endif
+                 else
+c  Interstitial calculations.
+                   kdy = 2
+                   kdyng = (ndcomp + nsout(j) - 1)*ndax + k
+                   if(scn(k,2,iblabx(j)).ge.0.999999 .or.
+     &             iblkcb(k,2,iblabx(j)) .eq. 2) then
+                     tsur1(kdyng) = tcond3(12,k,j)
+                   else
+                     tsur1(kdyng) = tempg(lkk)
+                   endif
+                 endif
+               else
+                   kdy = 1
+                 kdyng = (j-1)*ndax + k
+                 tsur1(kdyng) = tcond3(nrods2(k,j),k,j)
+               endif
+cc The following is being commented out for testing.
+c              if (idcomp(j).eq.8 .and. scd1(j)%ngrupe.eq.i .and.
+c    &         nj.ge.2 .and. j.eq.ngroup(i,nj-1,2)) then
+c  Segment 2 calculations.
+c                qrseg2(kdyng) = qrseg2(kdyng) - abs((tsur1(kdyng)**4 -
+c    &           tempg(lkk)**4))*qres(k)/wtot(k)
+c                qrdsrt(k) = qrdsrt(k) + qrseg2(kdyng)*htper
+c              else
+c                scd22(k,j,kdy,1)%qrdsur = scd22(k,j,kdy,1)%qrdsur -
+c    &           abs((tsur1(kdyng)**4 - tempg(lkk)**4))*qres(k)/wtot(k)
+c                if (help) write (12,"('scdad6b5',4i5,2es13.5)")
+c    &           nj,j,k,kdyng,scd22(k,j,kdy,1)%qrdsur,
+c    &           -abs((tsur1(kdyng)**4 - tempg(lkk)**4))*qres(k)/wtot(k)
+c                qrdsrt(k) = qrdsrt(k) + scd22(k,j,kdy,1)%qrdsur*htper
+c              endif
+cc
+             enddo
+           enddo
+c
+c  Now partition total absorbed radiant energy (by vapor) into
+c  radiant energy absorbed per flow channel by area weighting.
+           do k = 1,naz
+cx
+             atotrd(k) = 0.0
+             do ik = 1,snc1(i)%ncpenc
+               apfc(ik) = 0.0
+c  Find all components in this flow channel.
+c  ichan = global channel number of all channels in enclosure i.
+               ichan = nrepfc(i,ik)
+               do jj = 1,icp(ichan)
+c  j = identification number of component in this flow channel.
+                 j = ngpc(ichan,jj)
+c  Working on component that is in flow channel ik, which is enclosed in
+c  radiation enclosure 'i'.
+                 if (idcomp(j) .ne. 2) then
+                   if (idcomp(j).eq.8) then
+                     ribl1 = float(iblkcb(k,1,iblabx(j))-1)
+                     here1 = max(scn(k,1,iblabx(j)),ribl1)
+                     ribl2 = float(iblkcb(k,2,iblabx(j))-1)
+                     here2 = max(scn(k,2,iblabx(j)),ribl2)
+                     if (scd1(j)%ngrupe.eq.i) then
+                       area = ((slbwd(j) - blawd(j))*here2 + blawd(j)*
+     &                 here1)*float(nsigl(j))
+                     else
+                       area = (slbwd(j) -
+     &                 blawd(j))*here2*float(nsigl(j))
+                     endif
+                     if (area .lt. 1.0e-10*slbwd(j)*float(nsigl(j)))
+     &               area = 1.0e-10*slbwd(j)*float(nsigl(j))
+                   else
+                     if (idcomp(j).ne.3) then
+                       kdyn = (j - 1)*ndax + k
+                       area = 2.0*pi*rcos(j)*float(nsigl(j))
+                     else
+                       area = 2.*pi*rcrsto((j-1)*ndax+k)*float(nsigl(j))
+                     endif
+                   endif
+                 elseif (j .ne. ishrd(i)) then
+                   area = float(nsigl(j))*slbwd(j)
+                 else
+c  Note.  Inner and outer surface areas of code are the same for shroud
+c  component.
+                   area = float(nsigl(j))*slbwd(j)
+                 endif
+                 apfc(ik) = apfc(ik) + area
+               enddo
+               atotrd(k) = atotrd(k) + apfc(ik)
+             enddo
+cx
+             do ic = 1,snc1(i)%ncpenc
+c  ist = flow channel # for ic-th local flow channel in enclosure i.
+               ist = nrepfc(i,ic)
+               qradpv(i,k,ist) = apfc(ic)/atotrd(k)*qradab(i,k)
+               if (qradab(i,k) .eq. 0) qradpvx(i,k,ist) = 0.0
+             enddo
+           enddo
+         enddo
+         if (nvirn.ne.3 .and. nvirn.ne.4 .and. nvirn.ne.6) then
+           qor = 0.0
+           qoc = 0.0
+           qot = 0.0
+c  Perform loop over enclosures.
+           do kk = 1,numenc
+c  Perform loop over flow channels within enclosure.
+             do nn = 1,snc1(kk)%ncpenc
+               j = nrepfc(kk,nn)
+               swc1(j)%qtdt = 0.0
+               swc1(j)%qrdt = 0.0
+               swc1(j)%qcdt = 0.0
+               do i = 1,naz
+                 nswqdt = 0
+c  Perform loop over components in flow channel j.
+                 do ik = 1,icp(j)
+                   i2 = (ngpc(j,ik) - 1)*ndax + i
+                   nl = ngpv(j,i) + filndx(4)
+                   js = ngps(j,ik) + 1
+                   if (ngps(j,ik) .eq. 0) then
+                     ij = ngpc(j,ik)
+                   else
+                     ij = nsout(ngpc(j,ik))
+                   endif
+                   if (lcrucb(i,ij) .ge. 1) nswqdt = 1
+                   if (idcomp(ij).eq. 0.and. lcrucb(i,ij).eq.0) then
+                     qgamma = float(nsigl(ij))*unucgm(i,ij)
+                   else
+                     qgamma = 0.0
+                   endif
+                   if (nswqdt .ne. 1) then
+c  case for no slumping from molten pool
+c  Add gamma heating from component ij.
+c                    term1 = qgamma*dzcond(i2)
+                     term1 = qgamma*dzcond(i2)*(1.0 - quals(nl))
+                     swc1(j)%qcdt = swc1(j)%qcdt + scd21(i,ij,js)%qscd
+                     swc1(j)%qtdt = swc1(j)%qtdt + scd21(i,ij,js)%qscd +
+     &               term1
+                     scd21(i,ij,js)%qscd = scd21(i,ij,js)%qscd + term1
+c                    scd21(i,ij,js)%qwgscd = scd21(i,ij,js)%qwgscd +
+c    &               quals(nl)*term1
+                     scd21(i,ij,js)%qwgscd = scd21(i,ij,js)%qwgscd +
+     &               term1
+c  Add on heat transfer from drops of relocated material to fluid
+c  (sum of heat transfer by convection and radiation).
+                     term1 = qsdrps(i,ngpc(j,ik))*float(isgl) +
+     &               qsdrgs(i,ngpc(j,ik))*float(isgl)
+                     scd21(i,ij,js)%qscd =
+     &               scd21(i,ij,js)%qscd + term1
+                     if (voidf(nl).gt.0.01 .and.
+     &               (tempg(nl) - satt(nl)).ge.300.) then
+                       scd21(i,ij,js)%qwgscd =
+     &                 scd21(i,ij,js)%qwgscd + term1*voidg(nl)
+                       scd21(i,ij,js)%gamscd =
+     &                 scd21(i,ij,js)%gamscd +
+     &                 term1*(1.0 - voidg(nl))*recipv(nl)/sathg(nl)
+                     else
+                       scd21(i,ij,js)%qwgscd =
+     &                 scd21(i,ij,js)%qwgscd + term1
+                     endif
+                     if (ik .eq. 1) then
+c  Add on radiative heat transfer; this needs to be done only once per
+c  flow channel, so do only for first component in flow channel.
+cljs i = axial node, ij = component number, js = surface (inner or outer?,
+cljs j = flow channel number 
+                       term1 = qradpv(kk,i,j)*dzcond(i2)
+                         if(ndbg.eq.1.and.i.eq.1)then
+                         write(output,9035)kk,i,j,qradpv(kk,i,j),ij,js
+9035                     format(' SCDAD6 for qscd; kk=',i5,' i=',i5,
+     &                   ' j=',i5,' qradpv=',e10.4,' ij=',i5,' js=',i5)
+                         end if
+                       swc1(j)%qrdt = swc1(j)%qrdt + term1
+                       swc1(j)%qtdt = swc1(j)%qtdt + term1
+                       scd21(i,ij,js)%qscd =
+     &                 scd21(i,ij,js)%qscd + term1
+cljs   i=axial node, ij=inner or outer surface, js=component number
+cljs   j=j-th flow channel in enclosure kk
+cljs preclude radiation heat absorbed in fluid from vaporizing drops
+cljs in fluid; this precluding eliminates a possible water property
+cljs failure due to overshooting of vapor generation.
+cljs heat absorbed in radiation all goes to gas phase.
+cljs heat absorbed to gas phase will vaporize according to RELAP5
+cljs interphase heat transfer modeling.
+                         scd21(i,ij,js)%qwgscd =
+     &                   scd21(i,ij,js)%qwgscd + term1
+                     endif
+                   endif
+                 enddo
+               enddo
+               qor = qor + swc1(j)%qrdt
+               qoc = qoc + swc1(j)%qcdt
+               qot = qot + swc1(j)%qtdt
+             enddo
+           enddo
+         endif
+       endif
+       if (qos .ge. 1.0e-20) qpr = (qot + qst - qos)/qos*100.0
+cljs  For RELAP5 control volumes modeling flow inside BWR control
+cljs  blade box, zero out heat transfer to fluid when fuel rods
+cljs  around blade box at any axial node at any axial node are no
+cljs  longer intact.
+          do icomp = 2,ncomp
+            if(idcomp(icomp).ne.8)then
+            cycle
+            end if 
+            if(idcomp(icomp-1).ne.0)then
+            cycle
+            end if
+          j = icomp
+          nsw = 0
+          nswax = 0
+            do kx = 1,naz
+                if(ndbg.eq.9)then
+                write(output,9073)icomp,kx,irubpp(kx,icomp),nswax
+9073            format(' SCDAD6 at end; icomp=',i5,' kx=',i5,
+     &          ' irubpp=',i5,' nswax=',i5)
+                end if
+              if(lcrucb(kx,icomp-1).ge.1)nsw = 1
+              if(irubpp(kx,icomp-1).ge.1)nsw = 1
+                if(irubpp(kx,icomp-1).ge.1.and.nswax.eq.0)then
+                nswax = kx
+                end if
+                if(ndbg.eq.9)then
+                icomp1 = icomp - 1
+                write(output,9071)kx,icomp1,lcrucb(kx,icomp1),
+     &          irubpp(kx,icomp1)
+9071            format(' SCDAD6; kx=',i5,' icomp1=',i5,
+     &          ' lcrucb=',i5,' irubpp=',i5)
+                end if
+            end do
+cljs          if(nswax.ge.1)then
+cljs            do kx = nswax,naz
+              if(nsw.ge.1)then
+                do kx = 1,naz
+                  if(ndbg.eq.9)then
+                  write(output,9081)kx,icomp
+9081              format(' SCDAD6 for control blade zero q',
+     &            ' kx=',i5,' icomp=',i5)
+                  end if
+cljs  third index indicates either inside surface (1) or outside
+cljs  surface (2) (see subroutine scdad6 using qradpv in term1 
+cljs  calculation.
+                scd21(kx,icomp,1)%qscd = 0.0
+                scd21(kx,icomp,1)%qwgscd = 0.0
+                scd21(kx,icomp,1)%gamscd = 0.0
+                scd21(kx,icomp,1)%gamccd = 0.0
+                scd21(kx,icomp,2)%qscd = 0.0
+                scd21(kx,icomp,2)%qwgscd = 0.0
+                scd21(kx,icomp,2)%gamscd = 0.0
+                scd21(kx,icomp,2)%gamccd = 0.0
+                end do
+              end if
+          end do
+cljs  coding for RELAP5 flow channels with fuel rods.
+cljs  if any axial node in flow channel has molten pool at that
+cljs  location, then assume flow in channel is stagnant and heat
+cljs  transfer to fluid in channel is negligible.
+          do icomp = 1,ncomp
+            if(idcomp(icomp).ne.0)then
+            cycle
+            end if 
+          j = icomp
+          nsw = 0
+          nswax = 0
+            do kx = 1,naz
+                if(ndbg.eq.9)then
+                write(output,9193)icomp,kx,irubpp(kx,icomp),nswax
+9193            format(' SCDAD6 at end; icomp=',i5,' kx=',i5,
+     &          ' irubpp=',i5,' nswax=',i5)
+                end if
+              if(lcrucb(kx,icomp).ge.1)nsw = 1
+                if(ndbg.eq.9)then
+                write(output,9091)kx,icomp1,lcrucb(kx,icomp),
+     &          irubpp(kx,icomp)
+9091            format(' SCDAD6; kx=',i5,' icomp=',i5,
+     &          ' lcrucb=',i5,' irubpp=',i5)
+                end if
+            end do
+              if(nsw.ge.1)then
+                do kx = 1,naz
+                  if(ndbg.eq.9)then
+                  write(output,9093)kx,icomp
+9093              format(' SCDAD6 for fuel rod channel q',
+     &            ' kx=',i5,' icomp=',i5)
+                  end if
+cljs  third index indicates either inside surface (1) or outside
+cljs  surface (2) (see subroutine scdad6 using qradpv in term1 
+cljs  calculation.
+                scd21(kx,icomp,1)%qscd = 0.0
+                scd21(kx,icomp,1)%qwgscd = 0.0
+                scd21(kx,icomp,1)%gamscd = 0.0
+                scd21(kx,icomp,1)%gamccd = 0.0
+                scd21(kx,icomp,2)%qscd = 0.0
+                scd21(kx,icomp,2)%qwgscd = 0.0
+                scd21(kx,icomp,2)%gamscd = 0.0
+                scd21(kx,icomp,2)%gamccd = 0.0
+                end do
+              end if
+          end do
+       return
+       end
+*endif

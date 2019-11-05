@@ -1,0 +1,122 @@
+*mlist
+*if def,selap
+       subroutine volrad (dz,naz,ro,wfrouo,wfrozr,rocrst,volcrs,rocrmx,
+     & avoidl,afracl,dzfrcl,ifrag,slglen,woxsol,winfro,
+     & vladeb)
+c
+c  Calculates the volume and the outer radius of the frozen in each
+c  axial zone.
+c
+c  Cognizant engineer: ljs (wjs).
+c
+c#    calling routine:     liqsol
+c#    subroutines called:  zufrdn
+c#    engineer/programmer: l.j.siefken/w.j.suitt
+c#    last date modified:  10/ 9/81
+c#    input variables:        description
+c#    dz                  height of each axial zone.
+c#    naz                 number of axial nodes.
+c#    ro(z)               outside radius of cladding at elevation z.
+c#    wfrouo              mass of uo2 which has dripped into axial zone
+c#    wfrozr              mass of zr which has dripped into axial zone k
+c#    winfro              mass of inconel frozen at axial node k
+c#      avoidl = flow area around fuel rod. (m**2)(input)
+c#        dzfrcl(k) = fractional height of axial zone k
+c#                    which is completely filled with zr-u-o.
+c#     woxsol(k) = mass of oxygen absobed by solidi-
+c#                 fied zr-u-o in axial zone k (kg)
+c#                 (input)
+c#    output variables:       description
+c#    rocrst              average outer radius of frozen zry-uo2 on outs
+c#    volcrs              volume of the crust.
+c#      afracl = reduction in flow area due to crust
+c#               formation. if afracl=1.0 , then com-
+c#               plete flow blockage. (output)
+c#    wfrozi  = (local variable) the sum of the frozen zr and frozen
+c#              inconel used as an argument to atomf
+c
+       implicit none
+*call cons
+*call scddat
+*call ufiles
+c
+       integer naz,ifrag
+       real dz,ro,wfrouo,wfrozr,rocrst,volcrs,rocrmx,avoidl,afracl,
+     * dzfrcl,slglen,woxsol,winfro,vladeb
+       dimension dz(naz), ro(naz), wfrouo(naz), wfrozr(naz),
+     *           winfro(naz), rocrst(naz), volcrs(naz), rocrmx(naz)
+       dimension avoidl(ndax), afracl(ndax), vladeb(ndax)
+       dimension dzfrcl(naz), ifrag(naz), slglen(ndax)
+       dimension woxsol(naz)
+c
+c  Local variables.
+       integer k
+       real acrust,afraco,afracu,afracz,dencrs,tmelt,tmltme,wexcs,
+     * weuo,wezr,wfrozi,wein
+       real pliq,zuden
+       external pliq,zuden
+       external atomfr
+c
+        do400k=naz,1,-1
+        if(ifrag(k).ne.0)go to 400
+       if((wfrozr(k)+wfrouo(k)+winfro(k)).le.1.e-8)then
+c     no frozen material in the zone.
+                volcrs(k) = 0.0
+                rocrst(k) = ro(k)
+         rocrmx(k)=ro(k)
+       dzfrcl(k)=0.0
+           else
+c               frozen material in the zone. first call matpro function
+c               to find the density of the crust.
+c  vladeb(k) > 0.0 means that material has slumped into node k after
+c  blockage has developed at node. So do not update thickness of
+c  bottom crust in response to material slumping during this time step.
+       if(vladeb(k).gt.1.e-10)go to 400
+       wfrozi = wfrozr(k) + winfro(k)
+       call atomfr(wfrouo(k), wfrozi,
+     #  woxsol(k), afracu, afracz, afraco)
+       tmelt=pliq(afraco, afracu, afracz)
+       tmltme=tmelt-50.
+       dencrs=zuden(afracu, afracz, tmltme)
+       volcrs(k) = (wfrozr(k) + wfrouo(k)+winfro(k)) / dencrs
+                rocrst(k) = sqrt(ro(k)**2 + volcrs(k) / (pi * dz(k)))
+         rocrmx(k)=rocrst(k)
+c
+c        check to see if channel plugged.
+        acrust=pi*(rocrst(k)**2-ro(k)**2)
+c       relocated material is assumed to be stratified, it fills in
+c       all space between rods and above this horizontal layer the
+c       rods are not coated with relocated material.
+c       Nevertheless, since power in relocated material is not
+c       considered in intact rods unless crust radius is calculated,
+c       calculate crust radius as if relocated material coated
+c       throughout length of axial node over rod outer surface.
+        if(acrust.le.avoidl(k))go to 100
+c***   eliminate option to pile excess material into node above. This
+c*** will cause infinite cycling of material between two adjacent nodes.
+c***   if(k.eq.naz)go to 100
+        if(k.ge.1)go to 100
+c       calculate excess mass in zone
+        wexcs=(acrust-avoidl(k))*dz(k)*dencrs
+        weuo=(wfrouo(k)/(wfrouo(k)+wfrozr(k)+winfro(k)))*wexcs
+        wezr=(wfrozr(k)/(wfrouo(k)+wfrozr(k)+winfro(k)))*wexcs
+        wein=(winfro(k)/(wfrouo(k)+wfrozr(k)+winfro(k)))*wexcs
+c     move excess zr-u-o up one zone.
+        wfrouo(k)=wfrouo(k)-weuo
+       wfrouo(k+1)=wfrouo(k+1)+weuo
+        wfrozr(k)=wfrozr(k)-wezr
+       wfrozr(k+1)=wfrozr(k+1)+wezr
+       write(output,904)k,wfrozr(k),wfrozr(k+1)
+904    format(' in VOLRAD, case of axial node filled exercised',
+     # ' k=',i3,' wfrozr(k)=',e10.4,' wfrozr(k+1)=',e10.4)
+       winfro(k)=winfro(k)-wein
+       winfro(k+1)=winfro(k+1)+wein
+  100   continue
+       dzfrcl(k)=volcrs(k)/(dz(k)*avoidl(k))
+        afracl(k)=acrust/avoidl(k)
+        if(afracl(k).lt.0.0)afracl(k)=0.0
+           end if
+  400 continue
+      return
+      end
+*endif

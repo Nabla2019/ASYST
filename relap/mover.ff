@@ -1,0 +1,385 @@
+*mlist
+       subroutine mover (mtyp)
+c
+c  Moves hydrodynamic variables from new to old (old to new) time
+c  values if a time advancement is successful (unsuccessful).
+c  Moves variables for all systems if mtyp is true and only for the
+c  current system if mtyp is false.
+c
+c  Cognizant engineer: rjw.
+c
+       use lpdatc
+       implicit none
+       logical mtyp
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'levtbl.h'
+       include 'lvectr.h'
+       include 'statec.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'scntl.h'
+c
+c  Local variables.
+       integer i,i1,in,is,issysv,ixjffv,ixvffv,lm,m,succea,lk
+c
+       issysv = issys
+       ixvffv = ixvff
+       ixjffv = ixjff
+       if (mtyp) then
+         succea = succes
+         issys = 1
+         lm = nloops
+       else
+         succea = lpdat(issys)%lsuces
+         lm = 1
+       endif
+       if (succea .ne. 0) then
+c  Advancement failed, copy old data into new data positions.
+         do is = 1,lm
+           lpdat(issys)%systmc = lpdat(issys)%systmo
+c  Backup level location in level stack tables.
+           lk = lpdat(issys)%levstk
+           if (levskn(lk) .gt. 0) then
+             do m = 1,levskn(lk)
+               levskl(lk) = levsko(lk)
+               lk = lk + levskp
+             enddo
+           endif
+           i = lpdat(issys)%liv
+           do m = 1,lpdat(issys)%livn
+c
+c  Don't backup time dependent volumes on repeat for metal or air
+c  appearance.
+             if (iand(vctrl(i),1).eq.0 .or. succea.le.3) then
+               p(i) = po(i)
+               uf(i) = ufo(i)
+               ug(i) = ugo(i)
+               voidg(i) = voidgo(i)
+               quala(i) = qualao(i)
+c
+c  Turn off bit 7 for backup except for air appearance.
+               if (succea .ne. 5) then
+                 imap(i) = iand( imap(i),not(64))
+               endif
+               boron(i) = borono(i)
+               vapgen(i) = vapgno(i)
+               hifo(i) = hifos(i)
+               hif(i) = hifo(i)
+               higo(i) = higos(i)
+               hig(i) = higo(i)
+               hgfo(i) = hgfos(i)
+               hgf(i) = hgfo(i)
+               v(i) = vo(i)
+               if (iand(vctrl(i),1).eq.0) recipv(i) = 1.0/v(i)
+               rhof(i) = rhofo(i)
+               rhog(i) = rhogo(i)
+               pps(i) = ppso(i)
+               ustm(i) = ustmo(i)
+               velfo(i) = velfoo(i)
+               velgo(i) = velgoo(i)
+               voidla(i) = voidao(i)
+               voidlb(i) = voidbo(i)
+               dlev(i) = dlevo(i)
+               vlev(i) = vlevo(i)
+               vctrlx(i) = ior(iand(vctrlx(i),not(484)),
+     &         ishft(iand(vctrlx(i),ishft(3,9)),-2))
+               if(iand(ishft(vctrlx(i),-7),1).eq.1) vollev(i)=dlev(i)
+             endif
+             dfront(i) = dfrnto(i)
+             ufla(i) = ufao(i)
+             uflb(i) = ufbo(i)
+             i = i + ivskp
+           enddo
+$if def,selap
+           if (scntrl(1)) then
+             i = lpdat(issys)%liv
+cdir$ ivdep
+             do m = 1,lpdat(issys)%livn
+               avol(i) = avolo(i)
+               avol(i+1) = avolo(i+1)
+               avol(i+2) = avolo(i+2)
+               diamv(i) = diamvo(i)
+               diamv(i+1) = diamvo(i+1)
+               diamv(i+2) = diamvo(i+2)
+               i = i + ivskp
+             enddo
+           endif
+$endif
+           if (lpdat(issys)%lnoncn .ne. 0) then
+             i1 = lpdat(issys)%liv
+             do in = 1,lpdat(issys)%lnoncn
+               i = i1
+cdir$ ivdep
+               do m = 1,lpdat(issys)%livn
+                 qualan(i) = qualno(i)
+                 i = i + ivskp
+               enddo
+               i1 = i1 + 1
+             enddo
+           endif
+$if def,mmfld
+           if (lnonmf(issys) .ne. 0) then
+             i = lpdat(issys)%liv
+cdir$ ivdep
+             do m = 1,lpdat(issys)%livn
+               um(i) = umo(i)
+               voidm(i) = voidmo(i)
+               i = i + ivskp
+             enddo
+             i1 = lpdat(issys)%liv
+             do in = 1,lnonmf(issys)
+               i = i1
+cdir$ ivdep
+               do m = 1,lpdat(issys)%livn
+                 qualm(i) = qualmo(i)
+                 i = i + ivskp
+               enddo
+               i1 = i1 + 1
+             enddo
+           endif
+$endif
+           if (succea .ne. 4) then
+             ixvff = vctrls(lpdat(issys)%liv)
+             call state (0)
+           endif
+           i = lpdat(issys)%lij
+cdir$ ivdep
+           do m = 1,lpdat(issys)%lijn
+c
+c  Don't backup time dependent junctions on repeat for appearance of
+c  metal or air.
+             if (iand(jc(i),ishft(1,1)).eq.0 .or. succea.le.3) then
+               velfjo(i) = vlfjos(i)
+               velfj(i) = velfjo(i)
+               velgjo(i) = vlgjos(i)
+               velgj(i) = velgjo(i)
+               fijo(i) = fijos(i)
+               fij(i) = fijo(i)
+               fxjo(i) = fxjos(i)
+               fxj(i) = fxjo(i)
+               c0jo(i) = c0jos(i)
+               c0j(i) = c0jo(i)
+               jcatn(i) = jcato(i)
+               mflowj(i) = mflwjo(i)
+               vodfjo(i) = vdfjoo(i)
+               vodgjo(i) = vdgjoo(i)
+               sonicj(i) = soncjo(i)
+             endif
+             i = i + ijskp
+           enddo
+$if def,selap
+           if (scntrl(1)) then
+             i = lpdat(issys)%lij
+cdir$ ivdep
+             do m = 1,lpdat(issys)%lijn
+               ajun(i) = ajuno(i)
+               diamj(i) = diamjo(i)
+               i = i + ijskp
+             enddo
+           endif
+$endif
+$if def,mmfld
+           if (lnonmf(issys) .ne. 0) then
+             i = lpdat(issys)%lij
+cdir$ ivdep
+             do m = 1,lpdat(issys)%lijn
+               velmj(i) = velmjo(i)
+               mmflwj(i) = voidmj(i)*rhomj(i)*velmj(i)*ajun(i)
+               i = i + ijskp
+             enddo
+           endif
+$endif
+           i = lpdat(issys)%lij
+cdir$ ivdep
+           do m = 1,lpdat(issys)%lijn
+             jc(i) = ior(iand(jc(i),not(1)),iand(ishft(jc(i),-5),1))
+             if (succea .lt. 4) then
+               jc(i) = ior(iand(jc(i),not(2)),iand(ishft(jc(i),-29),2))
+             endif
+             i = i + ijskp
+           enddo
+           if (succea .lt. 4) then
+             ixjff = jcnxs(lpdat(issys)%lij)
+             call jprop(0)
+             if (lvvalv(lpdat(issys)%llvect) .ne. 0) call valve (.true.)
+             call vlvela
+             i = lpdat(issys)%lij
+             do m = 1,lpdat(issys)%lijn
+               vodfjo(i) = voidfj(i)
+               vodgjo(i) = voidgj(i)
+               i = i + ijskp
+             enddo
+           endif
+           if (succea .ne. 4) then
+             i = lpdat(issys)%liv
+             do m = 1,lpdat(issys)%livn
+               velfo(i) = velf(i)
+               velgo(i) = velg(i)
+               i = i + ivskp
+             enddo
+           endif
+           issys = issys + 1
+         enddo
+       else
+c
+c  Successful time step, copy new data into old positions.
+         if (mtyp) emasso = emass
+         do is = 1,lm
+           lpdat(issys)%systmo = lpdat(issys)%systmc
+c  Copy new level positions in stack tables into old array.
+           lk = lpdat(issys)%levstk
+           if( levskn(lk).gt.0 ) then
+             do m = 1,levskn(lk)
+               levsko(lk) = levskl(lk)
+               lk = lk + levskp
+             enddo
+           endif
+           i = lpdat(issys)%liv
+cdir$ ivdep
+           do m = 1,lpdat(issys)%livn
+             if (voidgo(i).gt.0.0 .and. voidg(i).eq.0.0) then
+               vctrl(i) = ior(vctrl(i),16)
+             else
+               vctrl(i) = iand(vctrl(i),not(16))
+             endif
+             hyarg(i) = voidg(i)*rhog(i)
+             hyarug(i) = voidg(i)*ug(i)*rhog(i)
+             hyarf(i) = voidf(i)*rhof(i)
+             hyaruf(i) = voidf(i)*uf(i)*rhof(i)
+             po(i) = p(i)
+             ufo(i) = uf(i)
+             ugo(i) = ug(i)
+             vodgoo(i) = voidgo(i)
+             voidgo(i) = voidg(i)
+             qualao(i) = quala(i)
+             borono(i) = boron(i)
+             vapgno(i) = vapgen(i)
+             hifo(i) = hif(i)
+             hifos(i) = hifo(i)
+             higo(i) = hig(i)
+             higos(i) = higo(i)
+             hgfo(i) = hgf(i)
+             hgfos(i) = hgfo(i)
+             vo(i) = v(i)
+             rhofo(i) = rhof(i)
+             rhogo(i) = rhog(i)
+             ppso(i) = pps(i)
+             ustmo(i) = ustm(i)
+             velfoo(i) = velfo(i)
+             velgoo(i) = velgo(i)
+             velfo(i) = velf(i)
+             velgo(i) = velg(i)
+             voidao(i) = voidla(i)
+             voidbo(i) = voidlb(i)
+             dlevo(i) = dlev(i)
+             vlevo(i) = vlev(i)
+             vctrlx(i) = ior(iand(vctrlx(i),not(1536)),
+     &       ishft(iand(vctrlx(i),ishft(3,7)),2))
+             dfrnto(i) = dfront(i)
+             ufao(i) = ufla(i)
+             ufbo(i) = uflb(i)
+             i = i + ivskp
+           enddo
+$if def,selap
+           if (scntrl(1)) then
+             i = lpdat(issys)%liv
+             do m = 1,lpdat(issys)%livn
+               avolo(i) = avol(i)
+               avolo(i+1) = avol(i+1)
+               avolo(i+2) = avol(i+2)
+               diamvo(i) = diamv(i)
+               diamvo(i+1) = diamv(i+1)
+               diamvo(i+2) = diamv(i+2)
+               i = i + ivskp
+             enddo
+           endif
+$endif
+           if (lpdat(issys)%lnoncn .ne. 0) then
+             i1 = lpdat(issys)%liv
+             do in = 1,lpdat(issys)%lnoncn
+               i = i1
+               do m = 1,lpdat(issys)%livn
+                 qualno(i) = qualan(i)
+                 i = i + ivskp
+               enddo
+               i1 = i1 + 1
+             enddo
+           endif
+$if def,mmfld
+           if (lnonmf(issys) .ne. 0) then
+             i = lpdat(issys)%liv
+             do m = 1,lpdat(issys)%livn
+               umo(i) = um(i)
+               voidmo(i) = voidm(i)
+               i = i + ivskp
+             enddo
+             i1 = lpdat(issys)%liv
+             do in = 1,lnonmf(issys)
+               i = i1
+               do m = 1,lpdat(issys)%livn
+                 qualmo(i) = qualm(i)
+                 i = i + ivskp
+               enddo
+               i1 = i1 + 1
+             enddo
+           endif
+$endif
+           i = lpdat(issys)%lij
+cdir$ ivdep
+           do m = 1,lpdat(issys)%lijn
+             velfjo(i) = velfj(i)
+             vlfjos(i) = velfjo(i)
+             velgjo(i) = velgj(i)
+             vlgjos(i) = velgjo(i)
+             fijo(i) = fij(i)
+             fijos(i) = fijo(i)
+             fxjo(i) = fxj(i)
+             fxjos(i) = fxjo(i)
+             c0jo(i) = c0j(i)
+             c0jos(i) = c0jo(i)
+             jcato(i) = jcatn(i)
+             mflwjo(i) = mflowj(i)
+             vdfjoo(i) = vodfjo(i)
+             vodfjo(i) = voidfj(i)
+             vdgjoo(i) = vodgjo(i)
+             vodgjo(i) = voidgj(i)
+             soncjo(i) = sonicj(i)
+             i = i + ijskp
+           enddo
+$if def,selap
+           if (scntrl(1)) then
+             i = lpdat(issys)%lij
+cdir$ ivdep
+             do m = 1,lpdat(issys)%lijn
+               ajuno(i) = ajun(i)
+               diamjo(i) = diamj(i)
+               i = i + ijskp
+             enddo
+           endif
+$endif
+$if def,mmfld
+           if (lnonmf(issys) .ne. 0) then
+             i = lpdat(issys)%lij
+             do m = 1,lpdat(issys)%lijn
+               velmjo(i) = velmj(i)
+               i = i + ijskp
+             enddo
+           endif
+$endif
+           i = lpdat(issys)%lij
+           do m = 1,lpdat(issys)%lijn
+             jc(i) = ior(ior(iand(iand(jc(i),not(32)),not(ishft(1,30))),
+     &       ishft(iand(jc(i),1),5)),ishft(iand(jc(i),2),29))
+             i = i + ijskp
+           enddo
+           issys = issys + 1
+         enddo
+       endif
+       issys = issysv
+       ixvff = ixvffv
+       ixjff = ixjffv
+       return
+       end

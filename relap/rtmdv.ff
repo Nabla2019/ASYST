@@ -1,0 +1,913 @@
+*mlist
+       subroutine rtmdv
+*in32 init
+*in32end
+c  Process time dependent volume input data.
+c
+c  Cognizant engineer: rjw.
+c
+       use cmpdat
+       use jundat
+       use voldat
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'cons.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'rcompc.h'
+       include 'statec.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer lens
+       parameter (lens=21)
+       integer l3a(15),l3c(10),l3d(9),l3e(9),init(9),pckcod(2)
+       real angl(3),blnk,cs(3),fr(3),rpi180,si(3),sumx,xinit(9)
+       equivalence (init(1),xinit(1))
+       logical tfail,ovl
+       character labl*64,chwrd*8
+       integer i,ibor,idans,ie,ihb,ihf,ihff,ihl,ihp,iht,ihv,ii,ij,imat,
+     & inp10,iv,ix,k,k1,k2,kk,kk1,ks,l,lcntgs,n3,n4,nc,nc1,nj1,nj1o,nnv,
+     & nv1,nv1o
+       real conv,degf1,degf2,eng,ft,ft2,ft3,psia
+c
+c  Data statements
+       data l3a/2*0,2*9,0,1,8*1,0/
+       data l3c/2*0,1,4,0,1,2*0,-1,0/
+       data l3d/2*0,3,0,0,1,2,2*1/
+       data l3e/2*0,0,5,0,1,2,2*1/
+       data ft/0.3048/, ft2/9.290304e-2/, ft3/2.831685e-2/,
+     & eng/2.326e3/, psia/6.894757e3/, degf1/0.5555555555555/,
+     & degf2/255.3722222222/
+       data rpi180/1.745329252e-2/
+c
+       chwrd = ' '
+       read (chwrd,'(a8)') blnk
+c  Get component number.
+       ovl = .false.
+       i = ncmps(filndx(3)) + filndx(3)
+       nc = cmpnum(i)
+c  Extend component block.
+       filsiz(3) = filsiz(3) + lens
+       if (lcntgs(filid(3),1) .ge. filsiz(3)) go to 10
+   15  write (output,2001) nc
+ 2001  format ('0******** Insufficient storage to process component',i4,
+     & '.')
+   12  l3c(1) = nc*10000
+       l3c(2) = l3c(1) + 9999
+       filsiz(1) = inp10(fa(filndx(1)),l3c(1),l3c(2))
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+  204  filsiz(3) = filsiz(3) - lens + 4
+       cmplen(i) = 4
+       cmptyp(i) = 0
+       call ftbsft (filid(3),filsiz(3),1,filndx(3))
+       ncmps(filndx(3)) = ncmps(filndx(3)) + 4
+       fail = .true.
+       return
+   10  call ftbsft (filid(3),filsiz(3),1,filndx(3))
+       i = ncmps(filndx(3)) + filndx(3)
+       cmplen(i) = lens
+       nvc(i) = 1
+       njc(i) = 0
+       cmpopt(i) = 0
+       nctble(i) = 0
+       nctblt(i) = 0
+       nctbtn(i) = 0
+       nctbtx(i) = 0
+c  Check if replacement or flag modification is possible.
+       ii = filndx(3)
+       if (cmpsrc) go to 401
+       nnv = ncomp - 1
+       if (nnv .eq. 0) go to 407
+       nv1 = 0
+       nj1 = 0
+       do 402 k = 1,nnv
+         nv1o = nvc(ii)
+         nj1o = njc(ii)
+         nc1 = cmplen(ii)
+         if (cmpnum(ii) - nc) 403,404,405
+  405    tfail = .true.
+  403    nv1 = nv1 + nv1o
+         nj1 = nj1 + nj1o
+         ii = ii + nc1
+  402  continue
+       if ( tfail )  go to  410
+  407  cmpsrc = .true.
+       tfail = .false.
+       go to 401
+  404  ncomp = nnv
+       if (cmptyp(ii) .ne. cmptyp(i)) go to 406
+       ovl = cmpflg
+       go to 14
+  410  nv1o = 0
+       nj1o = 0
+       nc1 = 0
+  406  if (.not.cmpflg) go to 14
+  409  write (output,2035) nc
+ 2035  format ('0******** Illegal use of component flag change option in
+     & component',i4,'.')
+       write (output,2004) nc
+ 2004  format ('0******** Data for component',i4,' cannot be processed.'
+     &)
+       go to 12
+c  Extend volume and junction blocks for this component.
+  401  if (cmpflg) go to 409
+   14  if (cmpsrc) nv1o = 0
+       k2 = 1 - nv1o
+       k = filsiz(4) + k2*ivskp
+       k1 = max(filsiz(4),k)
+       if (k1 .gt. lcntgs(filid(4),1)) go to 15
+       call ftbsft (filid(4),k1,1,filndx(4))
+       if (cmpsrc) nv1 = nvols(filndx(4))
+       iv = nv1*ivskp + filndx(4)
+       k1 = (nvols(filndx(4)) - nv1 - nv1o)*ivskp
+       if (k1 .ne. 0) then
+         n3 = iv + nv1o*ivskp
+         n4 = iv + ivskp
+         imat = n3 - n4
+         if (imat .ne. 0) then
+           if (imat .lt. 0) k1 = -k1
+           call ftbmov (fa(n3+1),fa(n4+1),k1)
+         endif
+       endif
+       nvols(filndx(4)) = nvols(filndx(4)) + k2
+       if (associated(cmphld(nc)%volp)) deallocate (cmphld(nc)%volp)
+       allocate (cmphld(nc)%volp(1))
+       if (associated(cmphld(nc)%junp)) deallocate (cmphld(nc)%junp)
+   16  filsiz(4) = k
+c  Set storage for new volumes.
+       if (.not.ovl) then
+         call setndf (fa(iv+1),ivskp)
+         vctrl(iv) = 8
+         vctrlx(iv) = 0
+         imap(iv) = 16384
+         imap(iv+1) = 0
+         imap(iv+2) = 0
+       endif
+c  Get junction block.
+       if (cmpsrc) nj1o = 0
+       k2 = -nj1o
+       k = filsiz(5) + k2*ijskp
+       k1 = max(filsiz(5),k)
+       if (k1 .gt. lcntgs(filid(5),1)) go to 15
+       call ftbsft (filid(5),k1,2,filndx(5))
+       if (cmpsrc) nj1 = njuns(filndx(5))
+       ij = nj1*ijskp + filndx(5)
+       k1 = (njuns(filndx(5)) - nj1 - nj1o)*ijskp
+       if (k1 .ne. 0) then
+         n3 = ij + nj1o*ijskp
+         n4 = ij
+         imat = n3 - n4
+         if (imat .ne. 0) then
+           if (imat .lt. 0) k1 = -k1
+           call ftbmov (fa(n3+1),fa(n4+1),k1)
+         endif
+       endif
+       njuns(filndx(5)) = njuns(filndx(5)) + k2
+       filsiz(5) = k
+       call ftbsft (filid(5),filsiz(5),2,filndx(5))
+       call ftbsft (filid(4),filsiz(4),2,filndx(4))
+       iv = nv1*ivskp + filndx(4)
+       ij = nj1*ijskp + filndx(5)
+c  Write output header for component.
+       if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     & write (output,2101) nc, cmpnam(i),cmpalf(cmptyp(i))
+ 2101  format ('0','================================================='
+     & ,'======================',/,
+     & 22x,'Input data for component',i4,',',2a9,
+     & ' having 1 volume and 0 junctions')
+c  Process volume geometry input.
+       if (.not.uniti) then
+         fr(1) = ft
+         fr(2) = ft2
+         fr(3) = ft3
+       else
+         fr(1) = 1.0
+         fr(2) = 1.0
+         fr(3) = 1.0
+       endif
+       l3a(1) = nc*10000 + 101
+       l3a(2) = -l3a(1) - 8
+       l3a(6) = 1
+       call inp2 (fa(filndx(1)),init,l3a)
+       if (l3a(6) .gt. 0) go to 22
+       write (output,2002)
+ 2002  format ('0******** Volume geometry conditions set to default valu
+     &es for continued checking.')
+       if (cmpflg) go to 453
+       avol(iv) = 1.0
+       dl(iv) = 1.0
+       v(iv) = 1.0
+       rhof(iv) = 0.0
+       rho(iv) = 0.0
+       hydzc(iv) = 0.0
+       roughv(iv) = 0.0
+       diamv(iv) = 2.0*sqrt(avol(iv)/pi)
+  453  fail = .true.
+       go to 115
+   22  if (cmpflg) go to 34
+       avol(iv) = xinit(1)*fr(2)
+       if (avol(iv) .ge. 0.0) go to 23
+       avol(iv) = 1.0
+       write (output,2005)
+ 2005  format ('0******** Volume area less than 0.0, set to 1.0 for cont
+     &inued checking.')
+       fail = .true.
+   23  dl(iv) = xinit(2)*fr(1)
+       if (dl(iv) .ge. 0.0) go to 24
+       dl(iv) = 1.0
+       write (output,2009)
+ 2009  format ('0******** Volume length less than 0.0, set to 1.0 for co
+     &ntinued checking.')
+       fail = .true.
+   24  v(iv) = xinit(3)*fr(3)
+       if (v(iv) .lt. 0.0) then
+         write (output,2011)
+ 2011  format ('0******** Volume volume less than 0.0, set to 1.0 for co
+     &ntinued checking.')
+         fail = .true.
+       endif
+c  Apply defaults to volume area, length, and volume.
+       tfail = .false.
+       if (v(iv) .ne. 0.0) go to 70
+       v(iv) = avol(iv)*dl(iv)
+       if (v(iv) .ne. 0.0) go to 27
+       tfail = .true.
+       v(iv) = 1.0
+   70  if (avol(iv) .ne. 0.0) go to 71
+       if (dl(iv) .eq. 0.0) go to 72
+       avol(iv) = v(iv)/dl(iv)
+       go to 75
+   72  tfail = .true.
+       avol(iv) = 1.0
+   71  if (dl(iv) .ne. 0.0) go to 73
+       dl(iv) = v(iv)/avol(iv)
+       go to 75
+   73  if (abs(avol(iv)*dl(iv)-v(iv))/v(iv) .le. 0.000001) go to 75
+       write (output,2031)
+ 2031  format ('0******** Volume is not equal to area times length.')
+       go to 74
+   75  if (.not.tfail) go to 27
+       write (output,2030)
+ 2030  format ('0******** Only one of the volume area, length, or volume
+     & may be 0.0, default values used.')
+   74  fail = .true.
+   27  rhof(iv) = xinit(4)
+       if (abs(rhof(iv)) .gt. 360.0) then
+         rhof(iv) = 0.0
+         write (output,2012)
+ 2012  format ('0******** Horizontal angle incorrect, set to 0.0 for con
+     &tinued checking.')
+         fail = .true.
+       endif
+       rho(iv) = xinit(5)
+       if (rho(iv).lt.-90.0 .or. rho(iv).gt.90.0) then
+         rho(iv) = 0.0
+         write (output,2013)
+ 2013  format ('0******** Vertical angle incorrect, set to 0.0 for conti
+     &nued checking.')
+         fail = .true.
+       endif
+       angl(1) = rhof(iv)*rpi180
+       angl(2) = rho(iv)*rpi180
+       cs(1) = cos(angl(1))
+       si(1) = sin(angl(1))
+       cs(2) = cos(angl(2))
+       si(2) = sin(angl(2))
+       cmphld(nc)%volp(1)%hyanpr(1,1) = cs(1)*cs(2)
+       cmphld(nc)%volp(1)%hyanpr(1,2) = -si(1)
+       cmphld(nc)%volp(1)%hyanpr(1,3) = -cs(1)*si(2)
+       cmphld(nc)%volp(1)%hyanpr(2,1) = si(1)*cs(2)
+       cmphld(nc)%volp(1)%hyanpr(2,2) = cs(1)
+       cmphld(nc)%volp(1)%hyanpr(2,3) = -si(1)*si(2)
+       cmphld(nc)%volp(1)%hyanpr(3,1) = si(2)
+       cmphld(nc)%volp(1)%hyanpr(3,2) = 0
+       cmphld(nc)%volp(1)%hyanpr(3,3) = cs(2)
+       hydzc(iv) = xinit(6)*fr(1)
+       if (rho(iv) .ne. 0.0) go to 551
+       if (hydzc(iv) .eq. 0.0) go to 552
+       go to 553
+  551  if (hydzc(iv) .eq. 0.0) go to 553
+       if (rho(iv)*hydzc(iv) .ge. 0.0) go to 552
+  553  write (output,2033)
+ 2033  format ('0******** Volume vertical angle inconsistent with vertic
+     &al incremental height.')
+       fail = .true.
+  552  if (abs(hydzc(iv)) .gt. dl(iv)) then
+         hydzc(iv) = 0.0
+         write (output,2015)
+ 2015  format ('0******** Volume incremental height greater than volume
+     &length, set to 0.0 for continued checking.')
+         fail = .true.
+       endif
+       roughv(iv) = xinit(7)*fr(1)
+       if (roughv(iv) .lt. 0.0) then
+         roughv(iv) = 0.0
+         write (output,2016)
+ 2016  format ('0******** Volume roughness less than 0.0, set to 0.0 for
+     & continued checking.')
+         fail = .true.
+       endif
+       diamv(iv) = xinit(8)*fr(1)
+       if (diamv(iv) .le. 0.0) then
+         if (diamv(iv) .lt. 0.0) then
+           write (output,2017)
+ 2017  format ('0******** Hydraulic diameter less than 0.0, set to defau
+     &lt value for continued checking.')
+           fail = .true.
+         endif
+         diamv(iv) = 2.0*sqrt(avol(iv)/pi)
+       endif
+       if (roughv(iv) .ge. 0.5*diamv(iv)) then
+       write (output,2034)
+ 2034  format ('0******** Volume roughness is not less than half the vol
+     &ume hydraulic diameter.')
+       endif
+   34  tfail = .false.
+       if (init(9) .lt. 0) then
+         init(9) = -init(9)
+         tfail = .true.
+       endif
+       iht = init(9)/1000000
+       init(9) = init(9) - 1000000*iht
+       if (iht .ne. 0) then
+         iht = 0
+         tfail = .true.
+       endif
+       ihl = init(9)/100000
+       init(9) = init(9) - 100000*ihl
+       if (ihl .ne. 0) then
+         ihl = 0
+         tfail = .true.
+       endif
+       ihp = init(9)/10000
+       init(9) = init(9) - 10000*ihp
+       if (ihp .gt. 1) then
+         ihp = 1
+         tfail = .true.
+       endif
+       ihp = 1
+       ihv = init(9)/1000
+       init(9) = init(9) - 1000*ihv
+       if (ihv .gt. 1) then
+         ihv = 1
+         tfail = .true.
+       endif
+       ihv = 1
+       ihb = init(9)/100
+       init(9) = init(9) - 100*ihb
+       if (ihb .gt. 1) then
+         ihb = 0
+         tfail = .true.
+       endif
+       idans = 0
+       ihf = init(9)/10
+       init(9) = init(9) - 10*ihf
+       if (ihf .gt. 2) then
+         ihf = 0
+         ihff = 0
+         tfail = .true.
+       else
+         ihff = ishft(ihf,-1)
+         ihf = iand(ihf,1)
+       endif
+       if (init(9) .gt. 1) then
+         init(9) = 0
+         tfail = .true.
+       endif
+       if (tfail) then
+         write (output,2021)
+ 2021  format ('0******** Volume control incorrect, set to zero for cont
+     &inued checking.')
+         fail = .true.
+       endif
+       vctrl(iv) = ior(ior(ior(ior(vctrl(iv),ishft(iht,2)),
+     & ishft(init(9),1)),ishft(ihb,30)),ishft(ihp,7))
+       imap(iv) = ior(ior(ior(ior(ior(ior(imap(iv),ishft(ihv,9)),
+     & ishft(ihb,16)),ishft(ihf,13)),ishft(idans,27)),ishft(ihff,26)),
+     & ishft(ihl,28))
+c  Edit component geometry input.
+  115  l3c(1) = nc*1000000 + 10000
+       volno(iv) = l3c(1)
+       cmphld(nc)%volp(1)%volno = l3c(1)
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output,2105)
+ 2105  format ('0  Vol no.',5x,'flow area',8x,'flow length',6x,'volume',
+     &11x     ,'horiz. angle',5x,'vert. angle',6x,'elev. chng.')
+       if (.not.unito) then
+         write (output,2106)
+ 2106  format (15x,'(ft2)',12x,'(ft)',13x,'(ft3)',12x,'(deg)',12x,
+     & '(deg)',12x,'(ft)')
+         xinit(2) = avol(iv)/ft2
+         xinit(3) = dl(iv)/ft
+         xinit(4) = v(iv)/ft3
+         xinit(5) = hydzc(iv)/ft
+         write (output,2102) l3c(1),(xinit(ihf),ihf=2,4),rhof(iv),
+     &   rho(iv),xinit(5)
+       else
+         write (output,2107)
+ 2107  format (15x,'(m2)',13x,'(m)',14x,'(m3)',13x,'(deg)',12x,'(deg)',1
+     &2x,'(m)')
+         write (output,2102) l3c(1),avol(iv),dl(iv),v(iv),rhof(iv),
+     &   rho(iv),hydzc(iv)
+ 2102  format (i10.9,1p,6g17.6)
+       endif
+       write (output,2108)
+ 2108  format ('0  Vol.no.',5x,'roughness',8x,'hydraulic diam.',3x
+     &     ,'vol-flag')
+       ihf = 1000000*iand(ishft(vctrl(iv),-2),1) +
+     & 100000*iand(ishft(imap(iv),-28),1) +
+     & 10000*iand(ishft(vctrl(iv),-7),1) +
+     & 1000*iand(ishft(imap(iv),-9),1) +
+     & 100*iand(ishft(vctrl(iv),-30),1) +
+     & 200*iand(ishft(imap(iv),-27),1) +
+     & 10*iand(ishft(imap(iv),-13),1) +
+     & iand(ishft(vctrl(iv),-1),1)
+       if (.not.unito) then
+         write (output,2109)
+ 2109  format (15x,'(ft)',13x,'(ft)',14x,'tlpvbfe')
+         xinit(2) = roughv(iv)/ft
+         xinit(3) = diamv(iv)/ft
+         write (output,2103) l3c(1),xinit(2),xinit(3),ihf
+       else
+         write (output,2110)
+ 2110  format (15x,'(m)',14x,'(m)',15x,'tlpvbfe')
+         write (output,2103) l3c(1),roughv(iv),diamv(iv),ihf
+ 2103  format (i10.9,1p,2g17.6,i13.7)
+       endif
+       endif
+c  Process table type.
+       l3c(1) = l3a(1) + 99
+       l3d(1) = l3c(1) + 1
+       l3d(2) = -l3d(1) - 98
+       l3c(6) = 1
+       labl = ' '
+       labl(1:4) = 'time'
+       labl(17:21) = '(sec)'
+       ncttrp(i) = 0
+       ncttrx(i) = 0
+       nctalf(i) = blnk
+       nctdpv(i) = 0
+       nctpc(i) = 0
+       nctpc(i+1) = 0
+       conv = 1.0
+       ovl = .false.
+       imat = 0
+       call inp2 (fa(filndx(1)),init,l3c)
+       if (l3c(6) .gt. 0) go to 52
+       write (output,2051)
+ 2051  format ('0******** Time dependent table cannot be further checked
+     &.')
+       l3d(2) = -l3d(2)
+       k = inp10(fa(filndx(1)),l3d(1),l3d(2))
+       init(1) = 3
+       ibor = 0
+       imat = 0
+       ix = 3
+       ovl = .true.
+       go to 53
+c  Process table type number.
+   52  if (init(1).lt.0 .or. init(1).gt.10000) then
+         write (output,2053)
+ 2053  format ('0******** Control word for table type is incorrect.')
+         ovl = .true.
+       else
+       imat = init(1)/100
+       endif
+c  Process trip number.
+       if (l3c(6) .lt. 2) go to 53
+       if (init(2).ge.0 .and. init(2).le.2000) go to 51
+       write (output,2210)
+ 2210  format ('0******** Table trip number is out of range, set to zero
+     &.')
+       fail = .true.
+       go to 40
+   51  ncttrp(i) = init(2)
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2211) init(2)
+ 2211  format ('0Table trip number is',i4,'.')
+   40  if (l3c(6) .lt. 3) go to 53
+       if (l3c(6) .eq. 3) init(4) = 0
+       nctalf(i) = xinit(3)
+       if (init(4) .gt. 1000000000) then
+         write (output,2006) l3c(1)
+ 2006  format ('0******** Parameter value in word 4 of card',i8,' is out
+     & of range.')
+         tfail = .true.
+         init(4) = 0
+       endif
+       nctdpv(i) = init(4)
+       write (chwrd,'(a8)') xinit(3)
+       if (chwrd .eq. 'mflowj') then
+         write (output,2010)
+ 2010  format ('0******** Variable code mflowj not allowed.')
+         fail = .true.
+       endif
+       call scnreq (l3c(1),chwrd,init(4),-1,pckcod,conv,labl,
+     & tfail)
+       if (.not.tfail) go to 53
+       write (output,2007)
+ 2007  format ('0******** Independent variable in table assumed to be ti
+     &me.')
+       nctalf(i) = blnk
+       fail = .true.
+   53  volmat(iv) = imat
+!  Process optional noncondensible mass fraction card.
+       l3e(1) = nc*10000 + 301
+       l3e(6) = 1
+       call inp2 (fa(filndx(1)),qualan(iv),l3e)
+       if (l3e(6) .ne. 0) then
+         if (noncn .eq. 0) then
+           fail = .true.
+           write (output,"('0******** Specifying noncondensible mass fra
+     &ctions incorrect since no noncondensible species were entered on c
+     &ard 110.')")
+         else
+           if (l3e(6) .lt. 0) then
+             tfail = .true.
+           elseif (l3e(6) .ne. noncn) then
+             tfail = .true.
+             write (output,"('0******** Incorrect number of noncondensib
+     &le mass fractions entered.')")
+           elseif (any(qualan(iv:iv+noncn-1) .lt. 0)) then
+             tfail = .true.
+             write (output,"('0******** One or more noncondensible mass
+     &fractions are negative.')")
+           else
+             sumx = sum(qualan(iv:iv+noncn-1))
+             if (sumx .eq. 0.0) then
+               tfail = .true.
+               write (output,"('0******** Noncondensible mass fractions
+     &are zero.')")
+             elseif (abs(sumx - 1.0) .gt. 1.0e-10) then
+               fail = .true.
+               write (output,"('0******** Sum of noncondensible mass fra
+     &ctions is not 1.0, normalized for further testing.')")
+               sumx = 1.0/sumx
+               qualan(iv:iv+noncn-1) = qualan(iv:iv+noncn-1)*sumx
+             endif
+           endif
+           if (tfail) then
+             fail = .true.
+             write (output,"('0******** Default values from card 115 wil
+     &l be used.')")
+           else
+             vctrlx(iv) = ior(vctrlx(iv),8192)
+             qualno(iv:iv+noncn-1) = qualan(iv:iv+noncn-1)
+           endif
+         endif
+       endif
+c  Process table.
+       if (ovl) go to 55
+       init(1) = init(1) - 100*imat
+       ibor = init(1)/10
+       init(1) = init(1) - 10*ibor
+       if (init(1) .gt. 7) then
+         ovl = .true.
+         write (output,2053)
+         go to 55
+       endif
+       vctrl(iv) = ior(vctrl(iv),ishft(init(1),8))
+       ix = 3
+       if(init(1).eq.4  .or. init(1).eq.5) ix = 4
+       if (init(1) .eq. 0) ix = 5
+       if (init(1) .eq. 6) ix = 6
+       if (init(1) .eq. 7) ix = 8
+       if (ibor .eq. 1) ix = ix + 1
+       l3d(4) = ix*5000
+       ks = filsiz(3) + l3d(4)
+       if (lcntgs(filid(3),1) .lt. ks) go to 15
+       call ftbsft (filid(3),ks,1,l)
+       filndx(3) = l
+       ii = ii - i
+       i = ncmps(l) + l
+       l3d(6) = 1
+       call inp2 (fa(filndx(1)),cmptbl(i),l3d)
+       if (l3d(6) .le. 0) go to 55
+       if (mod(l3d(6),ix) .eq. 0) go to 56
+       write (output,2052) ix
+ 2052  format ('0******** Number of entries for time dependent volume ta
+     &ble is not a multiple of',i2,'.')
+   55  l3d(6) = 3
+       init(1) = 1
+       ix = 3
+       cmptbl(i) = 0.0
+       cmptbl(i+1) = 300.0
+       cmptbl(i+2) = 0.0
+       write (output,2003)
+ 2003  format ('0******** Default table being entered.')
+       fail = .true.
+   56  ie = i + l3d(6) - 1
+       xinit(2) = cmptbl(i)
+       init(3) = 0
+       init(4) = 0
+       do 54 k = i,ie,ix
+         if (cmptbl(k) .lt. xinit(2)) init(3) = 1
+         xinit(2) = cmptbl(k)
+         if (init(1).ge.0 .and. init(1).lt.4) go to 57
+         if (init(1).gt.4) go to 81
+         if (cmptbl(k+3).ge.0.0 .and. cmptbl(k+3).le.1.0) go to 54
+         init(4) = 1
+         cmptbl(k+3) = 0.0
+         go to 54
+   81    if (init(1).gt.5) go to 82
+         if (cmptbl(k+2).lt.0.0 .or. cmptbl(k+2).gt.1.0) then
+           init(4) = 1
+           cmptbl(k+2) = 0.0
+         endif
+         if (cmptbl(k+3).lt.0.0 .or. cmptbl(k+3).gt.1.0) then
+           init(4) = 1
+           cmptbl(k+3) = 0.0
+         endif
+         go to 54
+   82    if (cmptbl(k+4).lt.0.0 .or. cmptbl(k+4).gt.1.0) then
+           init(4) = 1
+           cmptbl(k+4) = 0.0
+         endif
+         if (cmptbl(k+5).lt.0.0 .or. cmptbl(k+5).gt.1.0) then
+           init(4) = 1
+           cmptbl(k+5) = 0.0
+         endif
+         if (init(1) .ne. 7) go to 54
+         if (cmptbl(k+7).lt.0.0 .or. cmptbl(k+7).gt.1.0) then
+           init(4) = 1
+           cmptbl(k+5) = 0.0
+         endif
+         go to 54
+   57    if (init(1) .gt. 2) go to 54
+         if (init(1).eq.0) go to 49
+         if (cmptbl(k+2).ge.0.0 .and. cmptbl(k+2).le.1.0) go to 54
+         init(4) = 1
+         go to 54
+   49    if (cmptbl(k+4).lt.0.0 .or. cmptbl(k+4).gt. 1.0) init(4) = 1
+   54  continue
+       if (init(3) .ne. 0) then
+         write (output,2023)
+ 2023  format ('0******** Independent variable not in ascending order in
+     & table.')
+         fail = .true.
+       endif
+       if (init(4) .ne. 0) then
+         write (output,2024)
+ 2024  format ('0******** Void fraction or quality in time dependent vol
+     &lume data not correct, set to 0.0 for continued checking.')
+         fail = .true.
+       endif
+       cmplen(i) = l3d(6) + lens
+       cmptyp(i) = 2
+       init(1) = init(1) + 10*ibor
+       nctble(i) = ix
+       nctblt(i) = init(1)
+       nctbtn(i) = l3d(6)
+       nctbtx(i) = 1
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2200)
+ 2200  format ('0Tabular data')
+       kk = init(1) + 1 - 10*ibor
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       if (kk .le. 4) go to 119
+       kk1 = kk - 4
+$if -def,mmfld,1
+       if (kk1 - 2) 116,117,118
+$if def,mmfld,1
+       go to (116,117,118,83), kk1
+  116  if (.not.unito) then
+         write (output,2301) labl(1:16),labl(17:32),labl(33:48),
+     &   labl(49:64)
+ 2301  format(5x,a17,'pressure',8x,'temperature',5x,'equil.  qual.'/
+     & 5x,a17,'(lb/in2)',8x,'(degF)',2(/5x,a17))
+       else
+         write (output,2302) labl
+ 2302  format(5x,a17,'pressure',8x,'temperature',5x,'equil.  qual.'/
+     & 5x,a17,'(Pa)',17x,'(K)',2(/5x,a17))
+       endif
+       go to 125
+  117  if (.not.unito) then
+         write (output,2311) labl(1:16),labl(17:32),labl(33:48),
+     &   labl(49:64)
+ 2311  format(5x,a17,'temperature',5x,'equil. quality',4x,
+     & 'noncond qual.'/5x,a17,'(degF)',7x,(/5x,a17))
+       else
+         write (output,2312) labl(1:16),labl(17:32),labl(33:48),
+     &   labl(49:64)
+ 2312  format(5x,a17,'temperature',5x,'equil. quality',4x,
+     & 'noncond qual.'/5x,a17,'(K)',10x,(/5x,a17))
+       endif
+       go to 125
+  118  if (.not.unito) then
+         write (output,2321) labl(1:16),labl(17:32),labl(33:48),
+     &   labl(49:64)
+ 2321  format(5x,a17,'pressure',8x,'liquid energy',3x,'vapor energy',
+     & 4x,'vp.void fr.',5x,'noncond quality'/5x,a17,'(lb/in2)',8x,
+     & '(Btu/lb)',8x,'(Btu/lb)',2(/5x,a17))
+       else
+         write (output,2322) labl(1:16),labl(17:32),labl(33:48),
+     &   labl(49:64)
+ 2322  format(5x,a17,'pressure',8x,'liquid energy',3x,'vapor energy',
+     & 4x,'vp.void fr.',5x,'noncond quality'/5x,a17,'(Pa)',12x,
+     & '(J/kg)',10x,'(J/kg)',2(/5x,a17))
+       endif
+       go to 125
+$if def,mmfld
+   83  if (.not.unito) then
+         write (output,2323) labl(1:16),labl(17:32),labl(33:48),
+     &   labl(49:64)
+ 2323  format(5x,a17,'pressure',8x,'liquid energy',3x,'vapor energy',
+     & 4x,'vp.void fr.',5x,'noncond quality',1x,'metal energy',4x,
+     & 'mt.void fr.'/5x,a17,'(lb/in2)',8x,'(Btu/lb)',8x,'(Btu/lb)',40x,
+     & '(Btu/lb)',2(/5x,a17))
+       else
+         write (output,2324) labl(1:16),labl(17:32),labl(33:48),
+     &   labl(49:64)
+ 2324  format(5x,a17,'pressure',8x,'liquid energy',3x,'vapor energy',
+     & 4x,'vp.void fr.',5x,'noncond quality',1x,'metal energy',4x,
+     & 'mt.void fr.'/5x,a17,'(Pa)',12x,'(J/kg)',10x,'(J/kg)',42x,
+     & '(J/kg)',2(/5x,a17))
+       endif
+       go to 125
+$endif
+ 119   continue
+       if (unito) go to 120
+       go to (121,122,123,124), kk
+       call fabend
+  121  write (output,2201) labl(1:16),labl(17:32),labl(33:48),
+     & labl(49:64)
+ 2201  format (5x,a17,'pressure',8x,'liquid energy',3x,'vapor energy'
+     &,4x,'vp.void fr.'/5x,a17,'(lbf/in2)',7x,'(Btu/lb)',8x,'(Btu/lb)'/
+     & 5x,a17/5x,a17)
+       go to 125
+  122  write (output,2202) labl(1:16),labl(17:32),labl(33:48),
+     & labl(49:64)
+ 2202  format (5x,a17,'temperature',5x,'quality'/
+     & 5x,a17,'(degF)'/5x,a17/5x,a17)
+       go to 125
+  123  write (output,2203) labl(1:16),labl(17:32),labl(33:48),
+     & labl(49:64)
+ 2203  format (5x,a17,'pressure',8x,'quality'/
+     & 5x,a17,'(lbf/in2)'/5x,a17/5x,a17)
+       go to 125
+  124  write (output,2204) labl(1:16),labl(17:32),labl(33:48),
+     & labl(49:64)
+ 2204  format (5x,a17,'pressure',8x,'temperature'/
+     & 5x,a17,'(lbf/in2)',7x,'(degF)'/5x,a17/5x,a17)
+       go to 125
+  120  go to (126,127,128,129), kk
+       call fabend
+  126  write (output,2206) labl(1:16),labl(17:32),labl(33:48),
+     & labl(49:64)
+ 2206  format (5x,a17,'pressure',8x,'liquid energy',3x,'vapor energy'
+     &,4x,'vp.void fr.'/5x,a17,'(Pa)',12x,'(J/kg)',10x,'(J/kg)'/
+     & 5x,a17/5x,a17)
+       go to 125
+  127  write (output,2207) labl(1:16),labl(17:32),labl(33:48),
+     & labl(49:64)
+ 2207  format (5x,a17,'temperature',5x,'quality'/
+     & 5x,a17,'(K)'/5x,a17/5x,a17)
+       go to 125
+  128  write (output,2208) labl(1:16),labl(17:32),labl(33:48),
+     & labl(49:64)
+ 2208  format (5x,a17,'pressure',8x,'quality'/
+     & 5x,a17,'(Pa)'/5x,a17/5x,a17)
+       go to 125
+  129  write (output,2209) labl(1:16),labl(17:32),labl(33:48),
+     & labl(49:64)
+ 2209  format (5x,a17,'pressure',8x,'temperature'/
+     & 5x,a17,'(Pa)',12x,'(K)'/5x,a17/5x,a17)
+  125  continue
+       endif
+       tfail = (uniti.and.unito) .or. (.not.uniti.and..not.unito)
+       if (.not.tfail) go to 64
+       do 65 k = i,ie,ix
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2111) (cmptbl(k+l-1),l=1,ix)
+ 2111  format (1p,g17.6,7g16.6)
+   65  continue
+   64  continue
+       if (uniti) go to 61
+       conv = 1.0/conv
+       do 130 k = i,ie,ix
+         if (conv .lt. 0) go to 43
+         cmptbl(k) = cmptbl(k)*conv
+         go to 44
+   43    cmptbl(k) = cmptbl(k)*degf1 + degf2
+   44    if (kk .le. 4) go to 138
+         if (kk .gt. 5) go to 47
+         cmptbl(k+1) = cmptbl(k+1)*psia
+         cmptbl(k+2) = cmptbl(k+2)*degf1 + degf2
+         go to 130
+   47    if (kk .gt. 6) go to 48
+         cmptbl(k+1) = cmptbl(k+1)*degf1 + degf2
+         go to 130
+   48    cmptbl(k+1) = cmptbl(k+1)*psia
+         cmptbl(k+2) = cmptbl(k+2)*eng
+$if def,mmfld,1
+         if (kk .eq. 8) cmptbl(k+6) = cmptbl(k+6)*eng
+         cmptbl(k+3) = cmptbl(k+3) * eng
+         go to 130
+  138    go to (131,132,133,134), kk
+         call fabend
+  131    cmptbl(k+1) = cmptbl(k+1)*psia
+         cmptbl(k+2) = cmptbl(k+2)*eng
+         cmptbl(k+3) = cmptbl(k+3)*eng
+         go to 130
+  132    cmptbl(k+1) = cmptbl(k+1)*degf1 + degf2
+         go to 130
+  133    cmptbl(k+1) = cmptbl(k+1)*psia
+         go to 130
+  134    cmptbl(k+1) = cmptbl(k+1)*psia
+         cmptbl(k+2) = cmptbl(k+2)*degf1 + degf2
+  130  continue
+   61  if (tfail) go to 60
+       if (.not.unito) go to 62
+       do 66 k = i,ie,ix
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2111) (cmptbl(k+l-1),l=1,ix)
+   66  continue
+       go to 60
+   62  do 140 k = i,ie,ix
+         if (conv .lt. 0.0) go to 45
+         cmptbl(k) = cmptbl(k)*conv
+         go to 46
+   45    cmptbl(k) = (cmptbl(k)-degf2)/degf1
+   46    if (kk .le. 4) go to 139
+         if (kk.gt.5) go to 135
+         xinit(1) = cmptbl(k+1)/psia
+         xinit(2) = cmptbl(k+2)/degf1 - degf2
+         go to 145
+  135    if (kk.gt.6) go to 136
+         xinit(1) = cmptbl(k+1)/degf1 - degf2
+         go to 145
+  136    xinit(1) = cmptbl(k+1)/psia
+         xinit(3) = cmptbl(k+3)/eng
+         xinit(2) = cmptbl(k+2)/eng
+         go to 145
+  139    go to (141,142,143,144), kk
+         call fabend
+  141    xinit(1) = cmptbl(k+1)/psia
+         xinit(2) = cmptbl(k+2)/eng
+         xinit(3) = cmptbl(k+3)/eng
+         xinit(4) = cmptbl(k+4)
+         go to 145
+  142    xinit(1) = (cmptbl(k+1)-degf2)/degf1
+         xinit(2) = cmptbl(k+2)
+         go to 145
+  143    xinit(1) = cmptbl(k+1)/psia
+         xinit(2) = cmptbl(k+2)
+         go to 145
+  144    xinit(1) = cmptbl(k+1)/psia
+         xinit(2) = (cmptbl(k+2)-degf2)/degf1
+  145    if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     &   write (output,2111) (xinit(l),l=1,ix)
+  140  continue
+c  Insert new component in proper place in component block if necessary.
+   60  l3d(6) = l3d(6) + lens
+       if (.not.cmpsrc .and. nc1.ne.0) then
+         k2 = l3d(6) - nc1
+         if (k2 .gt. 0) then
+           k1 = filsiz(3) + k2 + l3d(6)
+           if (ks .lt. k1) then
+             call ftbsft (filid(3),k1,1,filndx(3))
+             i = ncmps(filndx(3)) + filndx(3)
+           endif
+         endif
+         ii = i + ii
+         n3 = ii + nc1
+         n4 = ii + l3d(6)
+         k1 = i + l3d(6) - n3
+         if (k2 .ne. 0) then
+           if (k2 .gt. 0) k1 = -k1
+           call ftbmov (fa(n3+1),fa(n4+1),k1)
+           i = i + k2
+         endif
+         call ftbmov (fa(i+1),fa(ii+1),l3d(6))
+         ncmps(filndx(3)) = ncmps(filndx(3)) + k2
+         filsiz(3) = filsiz(3) + k2 - lens
+       else
+         ncmps(filndx(3)) = ncmps(filndx(3)) + l3d(6)
+         filsiz(3) = filsiz(3) + l3d(6) - lens
+       endif
+       call ftbsft (filid(3),filsiz(3),1,filndx(3))
+c  Set hydxc, hydyc, and hydzc for use in remaining routines.
+       hydxc(iv) = 0.0
+       hydxc(iv+1) = 0.0
+       hydxc(iv+2) = 0.0
+       hydxc(iv+3) = 0.0
+       hydxc(iv+4) = 0.0
+       hydxc(iv+5) = 0.0
+       hydyc(iv) = 0.0
+       hydyc(iv+1) = 0.0
+       hydyc(iv+2) = 0.0
+       hydyc(iv+3) = 0.0
+       hydyc(iv+4) = 0.0
+       hydyc(iv+5) = 0.0
+       hydzc(iv) = 0.0
+       hydzc(iv+1) = 0.0
+       hydzc(iv+2) = 0.0
+       hydzc(iv+3) = 0.0
+       hydzc(iv+4) = 0.0
+       hydzc(iv+5) = 0.0
+       return
+       end

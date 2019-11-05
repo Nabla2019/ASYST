@@ -1,0 +1,939 @@
+#include <stdio.h>
+#include "compr.h"
+ /*
+     Data Compression
+ 
+     Reference -
+         1. LZW data compression alogrithm, Dr Dobbs Journal, Oct.
+            1989, pp29-36, 86-87.
+ 
+         2. The Data Compression Book, Mark Nelson, M&T Press, 1991,
+            pp 285-311.
+ */
+ 
+opencp_(char     *fileName,
+        int      *err)
+{
+ /*** opencp_ - Open for compression/expansion.
+ 
+     Dale Snider July 1992
+ 
+     This routine is intended as a Fortran call.
+     The file name from Fortran is put in a string and a 0
+     is added.
+ 
+     Entry -
+        fileName  :The compressed file name.
+ 
+     Exit -
+        err       :Error flag.
+                   0 = no error.
+                   1 = memory allocation error.
+                   2 = error opening file.
+ */
+     char   *str;
+     int    i;
+     int    nch = 41;
+ 
+     str= malloc((nch)*sizeof(char));
+     i=0;
+     while(fileName[i] > ' ')
+     {
+          str[i]=fileName[i];
+          i++;
+     }
+     str[i]=0;             /* Add a nul */
+ 
+     open_comprs(str,err); /* Open the compress  */
+     free(str);            /* Free the filename space */
+}
+ 
+ 
+closcp_()
+{
+ /*** closcp_ - close the compression/expansion.
+ 
+     Dale Snider July 1992
+ 
+     Close the compression.
+ 
+     Entry -
+        None
+ 
+     Exit -
+        None
+ */
+     if(expand_on == TRUE) clos_expand();
+     if(comprs_on == TRUE) clos_comprs();
+     fclose(lzw_file);
+}
+ 
+ 
+open_comprs(char      *fileName,
+            int       *err)
+{
+ /*** open_comprs - Open for compression or expansion.
+ 
+     Dale Snider July 1992
+ 
+     Open for compression or expansion.
+     See rwndcp.
+ 
+     Entry -
+        fileName  :The compressed file name.
+ 
+     Exit -
+        err       :Error flag.
+                   0 = no error.
+                   2 = error opening file.
+ */
+     int           i;
+ 
+     *err=0;
+ 
+     lzw_file = fopen(fileName,"r+b");
+     if (lzw_file == NULL)
+     {
+        lzw_file = fopen(fileName,"w+b");
+        if (lzw_file == NULL)
+        {
+           *err=2;
+           return;
+        }
+     }
+ /*
+ ** initially set compression or expansion flags to false
+ */
+     comprs_on=FALSE;
+     expand_on=FALSE;
+ /*
+ ** set the bit counter to zero and the buffer to zero
+ */
+     bit_count=0;
+     bit_buffer=0L;
+ 
+     end_of_file=FALSE;
+}
+ 
+ 
+init_comprs(int *err)
+{
+ /*** init_comprs - Initialize for compression.
+ 
+     Dale Snider July 1992
+ 
+     Initialize the compression routines for compression.
+     Compression start writing compressed code at the current
+     location in the file.  If called while currently
+     compressing, only a new dictionary is generated.
+ 
+     For a write (compression) following a read (expansion), the
+     end of the last code may not be on a byte boundary.
+     IF bit_count is not equal to 0, then a fractured byte.
+     That is, the first part of the last byte read was used
+     to complete the last code.  To start writing after an
+     expansion, the last bit_count number of bits from last_code
+     is used as the first bits in the next code to be output.
+     If bit_count=0, start writing at the next byte.
+     If bit_count!=0, start writing at the current byte location.
+ 
+     Entry -
+        None
+ 
+     Exit -
+        err       :0 = no error
+                   1 = memory allocation error.
+ */
+     int           i;
+     int          file_pos;
+ 
+     *err=0;
+ /*
+ ** If currently expanding, close expansion. Position to correct
+ ** position. It is assumed that the last expansion ended just before
+ ** a BREAK_CODE.  If the same length was used on both the compress
+ ** and the expand calls, this will be true.
+ */
+     if(expand_on == TRUE)
+     {
+       clos_expand();
+       file_pos = ftell(lzw_file);
+       if(bit_count > 0)
+       {
+          bit_buffer=(unsigned int)(last_code) <<
+                            (BITS_WORD - bit_count);
+          file_pos = file_pos - 1;
+       }
+       if(fseek(lzw_file,file_pos,SEEK_SET) == -1)
+       {
+           *err=4;
+           return;
+       }
+     }
+ /*
+ ** If not currently compressing, allocate buffers needed for the
+ ** compress.
+ */
+     if(comprs_on == FALSE)
+     {
+        code_value       = malloc((TABLE_SIZE+1)*sizeof(int));
+        prefix_code      = malloc((TABLE_SIZE+1)*sizeof(int));
+        append_character = malloc((TABLE_SIZE+1)*sizeof(unsigned char));
+        if (code_value        == NULL ||
+            prefix_code       == NULL ||
+            append_character  == NULL   )
+        {
+           *err=1;
+           return;
+        }
+     }
+ 
+     comprs_on=TRUE;             /* Make sure compress flag is on */
+ 
+     init_dictionary();          /* Initialize the dictionary */
+}
+ 
+ 
+init_expand(int  *err)
+{
+ /*** init_expand - Initialize for expansion.
+ 
+     Dale Snider July 1992
+ 
+     This starts a new expansion.  The file must be positioned to
+     a FLUSH_CODE.  Usually a rwndcp is made to position the
+     file.  A new dictionary is associated with the FLUSH_CODE.
+ 
+     Entry -
+        None
+ 
+     Exit -
+        err       :Error flag.
+                   0 = no error.
+                   1 = memory allocation error.
+                   3 = first byte in compressed file is incorrect.
+                   4 = an expand directly following a compression.
+                       A rewind is required.
+ */
+ 
+     int           i;
+     int           code;
+ 
+     *err=0;
+ /*
+ ** If currently compressing, close compression.  It is assumed that
+ ** if currently compressing, the file is not positioned properly
+ ** to start an expansion.
+ */
+     if(comprs_on == TRUE)
+     {
+         clos_comprs();
+         *err = 4;
+         return;
+     }
+ /*
+ ** If not allocated, allocate buffers needed for the expansion phase.
+ */
+     if(expand_on == FALSE)
+     {
+        prefix_code      = malloc((TABLE_SIZE+1)*sizeof(int));
+        append_character = malloc((TABLE_SIZE+1)*sizeof(unsigned char));
+        over_flow        = malloc((TABLE_SIZE+1)*sizeof(unsigned char));
+        if (prefix_code      == NULL ||
+            append_character == NULL ||
+            over_flow        == NULL   )
+        {
+           *err=1;
+           return;
+        }
+     }
+ 
+     len_over=0;       /* numb of bytes not stored but unpacked */
+     index_over=0;     /* curr pointer to next pos in over flow */
+ 
+     expand_on = TRUE;           /* Make sure compress flag is on */
+ 
+     init_dictionary();          /* Initialize the dictionary */
+ 
+}
+ 
+ 
+     init_dictionary()
+{
+ /*** init_dictionary - Initialize the dictionary.
+ 
+     Dale Snider July 1992
+ 
+     Initialize the dictionary.  Note that code_value does not
+     need to be initialized for expansion.
+ 
+     Entry -
+        None
+ 
+     Exit -
+        None
+ */
+     int    i;
+ 
+     if (comprs_on == TRUE)
+     {
+        for (i=0; i<TABLE_SIZE; i++)/* Clear out the string table */
+           code_value[i] = -1;      /* before starting            */
+     }
+ 
+     next_code = FIRST_CODE;     /* Next code is the next available */
+     dict_hits = 0;              /* Number of hits in the dict */
+}
+ 
+ 
+clos_comprs()
+{
+ /*** clos_comprs - Close the compression.
+ 
+     Dale Snider July 1992
+ 
+     Close the compression routines for compression.  This is
+     used by both C and Fortran.
+ 
+     Entry -
+        None
+ 
+     Exit -
+        None
+ */
+     if(comprs_on == TRUE)
+     {
+        output_code(lzw_file,string_code); /* Output the last code */
+        output_code(lzw_file,MAX_VALUE);/* Output the end of buf code */
+        output_code(lzw_file,0);       /* This code flushes the output*/
+ 
+        free    (code_value);
+        free    (prefix_code);
+        free    (append_character);
+     }
+     comprs_on = FALSE;
+}
+ 
+ 
+ 
+clos_expand()
+{
+ /*** clos_expand - Close the expansion.
+ 
+     Dale Snider July 1992
+ 
+     Close the expansion.
+ 
+     Entry -
+        None
+ 
+     Exit -
+        None
+ */
+     if(expand_on == TRUE)
+     {
+        free(prefix_code);
+        free(append_character);
+        free(over_flow);
+     }
+     expand_on = FALSE;
+}
+ 
+ 
+comprs_(int           *len,
+        unsigned char *str)
+{
+ /*** comprs_ - Compress data.
+ 
+     Dale Snider July 1992
+ 
+     This is the compression routine.  The code should be a
+     fairly close match to the algorithm accompanying the
+     Dr Dobbs article.
+ 
+     Entry -
+        len:      :The number of bytes to compress.  Actually
+                   works on characters.
+        str       :The starting address of the data array to
+                   compress.
+ 
+     Exit -
+        None
+ 
+     Reference -
+         1. LZW data compression alogrithm, Dr Dobbs Journal, Oct.
+            1989, pp29-36, 86-87.
+ 
+         2. The Data Compression Book, Mark Nelson, M&T Press, 1991,
+            pp 285-311.
+ */
+     int       character;
+     int       index;
+     int       i;
+     int       err;
+ 
+ 
+ /*
+ ** This is the main loop where it all happens.  This loop runs
+ ** until all of the input has been exhausted.  Note, that it
+ ** stops adding codes to the table after all of the possible
+ ** codes have been defined.  On each entry, dump the current
+ ** string_code.  Set the BREAK_CODE flag. The next byte will
+ ** not be compressed with the last string_code
+ */
+     if(comprs_on == FALSE)  /* Start a new dictionary */
+     {
+       init_comprs(&err);
+       output_code(lzw_file, FLUSH_CODE);
+       string_code = str[0];
+     }
+     else                    /* Else, start a new compression */
+     {
+       output_code(lzw_file, string_code);
+       output_code(lzw_file, BREAK_CODE);
+       string_code = str[0];
+     }
+     i=1;
+     while ( i < *len)
+     {
+       character = str[i];
+       i++;                                  /* See if the string is */
+       index = find_match(string_code,character);
+       if (code_value[index] != -1)          /* in the table.  If it */
+       {                                     /* is, get the code     */
+          dict_hits++;
+          if(dict_hits > 500) dict_hits = 500;
+          string_code = code_value[index];
+       }
+       else                                  /* Code not in table    */
+       {
+         dict_hits--;
+         if (next_code <= MAX_CODE)
+         {
+           code_value[index] = next_code++;  /* If string is not in */
+           prefix_code[index] = string_code; /* table & room avail- */
+           append_character[index] = character;/* able, add it        */
+           output_code(lzw_file, string_code);
+           string_code = character;
+         }
+         else                                /* Dictionary is full    */
+           if(dict_hits < DICT_HITS)
+           {                                 /* Lot of misses, make a */
+             output_code(lzw_file, string_code); /* new dictionary    */
+             output_code(lzw_file, FLUSH_CODE);
+             string_code = character;
+             init_dictionary();
+           }
+           else
+           {                                 /* If doing ok hitting   */
+             output_code(lzw_file, string_code); /* the dictionary    */
+             string_code = character;        /* don't make a new      */
+           }
+       }
+    }
+}
+ 
+ 
+int find_match(int hash_prefix,
+               int hash_character)
+ 
+ /*** find_match - Find match in hash table.
+ 
+     Dale Snider July 1992
+ 
+     This is the hashing routine.  It tries to find a match
+     for the prefix+char string in the string table.  It it
+     finds it, the index is returned.  If the string is not
+     found, the first available index in the string table is
+     returned instead.
+ 
+     Entry -
+        hash_prefix    :String code.
+        hash_character :Character to be compressed.
+ 
+     Exit -
+        index          :Index in the code_value table.
+ 
+     Reference -
+         1. LZW data compression alogrithm, Dr Dobbs Journal, Oct.
+            1989, pp29-36, 86-87.
+ 
+         2. The Data Compression Book, Mark Nelson, M&T Press, 1991,
+            pp 285-311.
+ */
+ 
+{
+ 
+     int              index;
+     int              offset;
+ 
+     index = (hash_character << HASHING_SHIFT) ^ hash_prefix;
+     if (index == 0)
+          offset = 1;
+     else
+          offset = TABLE_SIZE - index;
+     while (1)
+     {
+        if (code_value[index] == -1)
+           return(index);
+        if (prefix_code[index] == hash_prefix &&
+           append_character[index] == hash_character)
+              return(index);
+        index -= offset;
+        if (index < 0)
+           index += TABLE_SIZE;
+     }
+}
+ 
+ 
+expand_(int           *len,
+        unsigned char *str)
+{
+ 
+ /*** expand_ - Expand data.
+ 
+     Dale Snider July 1992
+ 
+     This is the expansion routine.  It takes an LZW format
+     file, and exapands it to a supplied buffer.  The code
+     here should be a fairly close to the algorithm in the
+     Dr Dobbs journal.
+ 
+     Entry -
+        len       :The number of bytes to uncompress.
+ 
+     Exit -
+        str       :The start address to recieve the expanded data.
+ 
+     Reference -
+         1. LZW data compression alogrithm, Dr Dobbs Journal, Oct.
+            1989, pp29-36, 86-87.
+ 
+         2. The Data Compression Book, Mark Nelson, M&T Press, 1991,
+            pp 285-311.
+ */
+ 
+     int             character;
+     int             num;
+     int             err;
+     int             break_code;
+     unsigned char   *decode_string(unsigned char *buffer, int code);
+ 
+     num = *len;
+     *len = 0;
+ /*
+ ** Check on the end-of-file flag. If true return immediately. Set
+ ** the end-of-file flag to true here.  If end-of-data is read
+ ** (as noted by the code MAX_VALUE), then the end-of-data flag
+ ** is set.  Reset to false if exit when the buffer is filled
+ ** and not an end-of-data.
+ */
+     if(end_of_file == TRUE) return;
+     end_of_file = TRUE;
+ /*
+ ** If the expand is not open, open for expansion.  The first byte must
+ ** be FLUSH_CODE.  If not, then an error.
+ */
+     if(expand_on == FALSE)
+     {
+        init_expand(&err);
+        if((new_code = input_code(lzw_file)) != FLUSH_CODE)
+        {
+            return;
+        }
+        if((old_code = input_code(lzw_file)) == MAX_VALUE) return;
+        character = old_code;
+        str[*len]=old_code;
+        *len = *len + 1;
+        if (*len >= num)
+        {
+          end_of_file = FALSE;
+          return;
+        }
+     }
+ /*
+ ** if there was an over flow from the last expans, empty from the
+ ** over flow buffer.  If enterred with expand_on = FALSE,
+ ** this section will always be not true
+ */
+     while ((index_over < len_over) && (*len < num))
+     {
+        str[*len] = over_flow[index_over];
+        *len = *len+1;
+        index_over++;
+     }
+ /*
+ ** If over_flow is not emptied, then str was completely filled ...
+ ** return.  If over flow emptied, str is partially or fully
+ ** filled.  Continue with normal expansion code.
+ */
+     if(index_over < len_over)
+     {
+       end_of_file = FALSE;
+       return;
+     }
+ 
+     len_over=0;     /* numb of bytes not stored in str but unpacked */
+     index_over=0;   /* current pointer to next position in over flow */
+ 
+ /*
+ ** This is the main expansion loop.  It reads in len characters from
+ ** the LZW file.  Exit from loop when len characters loaded.
+ */
+     while ((new_code = input_code(lzw_file)) != (MAX_VALUE))
+     {
+        if (new_code == FLUSH_CODE) /* A new dictionary */
+        {
+          init_dictionary();
+          if ((old_code = input_code(lzw_file)) == (MAX_VALUE)) return;
+          character = old_code;
+          str[*len] = old_code;
+          *len = *len + 1;
+        }
+        else
+        {
+          if (new_code == BREAK_CODE) /* A break in the code */
+          {
+            if((new_code = input_code(lzw_file)) == (MAX_VALUE)) return;
+            break_code = TRUE;
+          }
+          else
+          {
+            break_code = FALSE;
+          }
+ /*
+ ** Check for the special STRING+CHARACTER+STRING+CHARACTER+STRING
+ ** case which generates an undefined code.  It is handled by
+ ** decoding the last code, adding a single character to the
+ ** end of the decode string.
+ */
+          if (new_code >= next_code)
+          {
+             *decode_stack = character;
+             expn_str = decode_string(decode_stack+1, old_code);
+          }
+ /*
+ ** Otherwise we do a straight decode of the new code
+ */
+          else
+          {
+             expn_str = decode_string(decode_stack, new_code);
+          }
+ /*
+ ** Now we output the decoded string in reverse order. Fill str
+ */
+          character = *expn_str;
+          while (expn_str >= decode_stack)
+          {
+             if(*len < num)
+             {
+                 str[*len]= *expn_str--;
+                 *len = *len+1;
+ /*
+ ** If str has filled, expand the remainder into over_flow
+ */
+             } else
+             {
+                 over_flow[len_over]= *expn_str--;
+                 len_over++;
+             }
+          }
+ /*
+ ** Finally, if possible, add a new code to the string table.
+ ** If a break_code, do not add code to current string code
+ */
+          if (next_code <= MAX_CODE && break_code == FALSE)
+          {
+             prefix_code[next_code]          = old_code;
+             append_character[next_code]     = character;
+             next_code++;
+          }
+          old_code = new_code;
+       }
+ /*
+ ** If str has been filled, exit while loop and procedure ... return
+ */
+       if (*len >= num)
+       {
+         end_of_file = FALSE;
+         return;
+       }
+    }
+}
+ 
+ 
+unsigned char *decode_string(unsigned char *buffer,
+                             int           code)
+{
+ 
+ /*** decode_sring - Decodes a string from the string table.
+ 
+     Dale Snider July 1992
+ 
+     This routine decodes a string from the string table, storing
+     it in a buffer.  The buffer can then be output in reverse
+     order by the expansion program.
+ 
+     Entry -
+        code     :The old code.
+ 
+     Exit -
+        buffer   :The buffer to be loaded.
+ 
+     Reference -
+         1. LZW data compression alogrithm, Dr Dobbs Journal, Oct.
+            1989, pp29-36, 86-87.
+ 
+         2. The Data Compression Book, Mark Nelson, M&T Press, 1991,
+            pp 285-311.
+ */
+     int i;
+ 
+     i = 0;
+     while (code > 255)
+     {
+        *buffer++ = append_character[code];
+        code = prefix_code[code];
+        if (i++ >= 4000)
+        {
+           printf("Fatal error during code expansion.\n");
+           exit();
+        }
+     }
+     *buffer = code;
+     return(buffer);
+}
+ 
+ 
+input_code(FILE *input)
+{
+ 
+ /*** input_code - Input code from the compressed file.
+ 
+     Dale Snider July 1992
+ 
+     Input variable length codes.  This routine does not fill
+     the bit_buffer up completely.  It is easier to have only
+     part of the next code in the buffer if compression is to
+     start after expanding.
+ 
+     Entry -
+        input    :The pointer to the compressed file.
+ 
+     Exit -
+        The code.
+ 
+     Reference -
+         1. LZW data compression alogrithm, Dr Dobbs Journal, Oct.
+            1989, pp29-36, 86-87.
+ 
+         2. The Data Compression Book, Mark Nelson, M&T Press, 1991,
+            pp 285-311.
+ */
+ 
+     while (bit_count < BITS)
+     {
+        bit_buffer |= (unsigned int) getc(input) <<
+                                          (24 - bit_count);
+        bit_count += 8;
+     }
+     last_code = bit_buffer >> (BITS_WORD - BITS);
+     bit_buffer <<= BITS;
+     bit_count -= BITS;
+     return(last_code);
+}
+ 
+output_code(FILE *output, int code)
+{
+ 
+ /*** output_code - Output code from the compressed file.
+ 
+     Dale Snider July 1992
+ 
+     Output variable length codes.
+ 
+     Entry -
+        output    :The pointer to the compressed file.
+ 
+     Exit -
+        code      :The code.
+ 
+     Reference -
+         1. LZW data compression alogrithm, Dr Dobbs Journal, Oct.
+            1989, pp29-36, 86-87.
+ 
+         2. The Data Compression Book, Mark Nelson, M&T Press, 1991,
+            pp 285-311.
+ */
+     bit_buffer |= (unsigned int) code <<
+                                (BITS_WORD - BITS - bit_count);
+     bit_count += BITS;
+     while (bit_count >= 8)
+     {
+        putc(bit_buffer >> 24,output);
+        bit_buffer <<= 8;
+        bit_count -= 8;
+     }
+}
+ 
+rwndcp_()
+{
+ /*** rwndcp - Rewind the compress or expand file.
+ 
+     Dale Snider July 1992
+ 
+     Rewind the compress/expand file.  Initialize for an
+     expansion.
+ 
+     Entry -
+        None
+ 
+     Exit -
+        None
+ */
+     if(expand_on == TRUE) clos_expand();
+     if(comprs_on == TRUE) clos_comprs();
+     bit_count=0;
+     bit_buffer=0L;
+     rewind(lzw_file);
+     end_of_file=FALSE;
+}
+ 
+ 
+expndz_(int                *num,
+        unsigned char      *str,
+        int                *len)
+{
+ 
+ /*** expndz - Expand data to a break code.
+ 
+     Dale Snider July 1992
+ 
+     This is an expansion routine.  It takes an LZW format
+     file, and exapands it to a supplied buffer.  Data are
+     expanded to a break character.  If the number of data
+     to the break character is larger than the number of
+     data to be loaded (len), the data are trashed. The code
+     here should be a fairly close match to the algorithm
+     in the Dr Dobbs journal with obvious (hopefully)
+     modifications.
+ 
+     Entry -
+        num       :The length of the buffer str in bytes.
+ 
+     Exit -
+        str       :The start address to recieve the expanded data.
+        len       :The number of bytes uncompressed.
+ 
+     Reference -
+         1. LZW data compression alogrithm, Dr Dobbs Journal, Oct.
+            1989, pp29-36, 86-87.
+ 
+         2. The Data Compression Book, Mark Nelson, M&T Press, 1991,
+            pp 285-311.
+ */
+ 
+     int             character;
+     int             err;
+     int             break_code;
+     unsigned char   *decode_string(unsigned char *buffer, int code);
+ 
+     *len = 0;
+ /*
+ ** Check on the end-of-file flag. If true return immediately. Set
+ ** the end-of-file flag to true.  If exit on a MAX_VALUE, then it
+ ** is set.  Reset to false if exit when the buffer is filled
+ */
+     if(end_of_file == TRUE) return;
+     end_of_file = TRUE;
+ /*
+ ** This code is always entered after a break_code.  Set
+ ** break_code to TRUE so that the split is recognized between codes.
+ ** The exception is the first read which begins with FLUSH_CODE
+ */
+     break_code = TRUE;
+ /*
+ ** If the expand is not open, open for expansion.  The first byte must
+ ** be FLUSH_CODE.  If not, then an error.
+ */
+     if(expand_on == FALSE)
+     {
+        init_expand(&err);
+        if((new_code = input_code(lzw_file)) != FLUSH_CODE)
+        {
+            return;
+        }
+        if((old_code = input_code(lzw_file)) == MAX_VALUE) return;
+        character = old_code;
+        str[*len]=old_code;
+        *len = *len + 1;
+        break_code = FALSE;
+     }
+ 
+ /*
+ ** This is the main expansion loop.  It reads in len characters
+ ** (up to a BREAK_CODE) from the LZW file.  Exit from loop when
+ ** the BREAK_CODE is encountered.
+ */
+     while ((new_code = input_code(lzw_file)) != (MAX_VALUE))
+     {
+        if (new_code == FLUSH_CODE)
+        {
+          init_dictionary();
+          if ((old_code = input_code(lzw_file)) == (MAX_VALUE)) return;
+          character = old_code;
+          str[*len] = old_code;
+          *len = *len + 1;
+        }
+        else
+        {
+          if (new_code == BREAK_CODE)
+          {
+            end_of_file = FALSE;
+            return;
+          }
+ /*
+ ** Check for the special STRING+CHARACTER+STRING+CHARACTER+STRING
+ ** case which generates an undefined code.  It handles it by
+ ** decoding the last code, adding a single character to the
+ ** end of the decode string.
+ */
+          if (new_code >= next_code)
+          {
+             *decode_stack = character;
+             expn_str = decode_string(decode_stack+1, old_code);
+          }
+ /*
+ ** Otherwise we do a straight decode of the new code
+ */
+          else
+          {
+             expn_str = decode_string(decode_stack, new_code);
+          }
+ /*
+ ** Now we output the decoded string in reverse order. Fill str
+ ** If str is full, the remaining bytes are trashed.
+ */
+          character = *expn_str;
+          while (expn_str >= decode_stack)
+          {
+             if(*len < *num)
+             {
+                 str[*len]= *expn_str--;
+                 *len = *len+1;
+             }
+          }
+ /*
+ ** Finally, if possible, add a new code to the string table.
+ */
+          if (next_code <= MAX_CODE && break_code == FALSE)
+          {
+             prefix_code[next_code]          = old_code;
+             append_character[next_code]     = character;
+             next_code++;
+          }
+          old_code = new_code;
+          break_code = FALSE;
+       }
+    }
+}

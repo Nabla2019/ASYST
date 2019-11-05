@@ -1,0 +1,231 @@
+*mlist
+*if def,selap
+      subroutine fpfcn (madot, neq, mad, dt)
+c
+c  fpfcn defines the fission product derivative function.
+c
+c  Cognizant engineer: ewc (esm).
+c
+      implicit none
+c
+c     Earl S. Marwil
+c     Scientific Computing Unit
+c     EG&G Idaho, Inc.
+c     PO Box 1625
+c     Idaho Falls, ID 83415-2408
+*call fplim
+*call fpbin
+*call fpcoef
+*call fpctrl
+*call fpmdl
+c
+      integer neq
+      real dt
+      real mad(nst,nsp), madot(nst,nsp)
+      external isppin,fpconc,fpvbin
+      intrinsic max
+      real dvol(maxbin)
+      real cbin(maxbin,maxsp), caggl(maxbin,maxbin)
+      integer isrf,isp,ibin,ist,jbin,jst,kbin,kst
+      integer ice,ich,idp
+      real delta, total, f, temp, sum, coef
+      integer iloc
+c     Initialize condensation/evaporation rates to zero
+c     Initialize all derivatives to zero
+      do 30 isp = 1, nsp
+         do 10 ibin = 1, nbin
+            cbin(ibin,isp) = 0.0
+   10       continue
+         do 20 ist = 1, nst
+            madot(ist,isp) = 0.0
+   20       continue
+   30    continue
+      do 50 ibin = 1, nbin
+         do 40 jbin = ibin, nbin
+            caggl(ibin,jbin) = kaggl(ibin,jbin)
+            caggl(jbin,ibin) = kaggl(jbin,ibin)
+   40       continue
+   50    continue
+c     Calculate particle number concentration
+      call fpconc (mad)
+      if (mdlchm .and. nsrf .gt. 0) then
+         do 120 isrf = 1, nsrf
+            ich = nvolst + nsrf + isrf
+            do 110 isp = 1, nsp
+               madot(ich,isp) = mad(ivap,isp) * kchem(isp,isrf)
+  110          continue
+  120       continue
+      end if
+c     Calculate surface condensation/evaporation rates
+c     Evaporation is limited by amount available on surface
+      if (mdlce) then
+         if (nsrf .gt. 0) then
+            do 220 isrf = 1, nsrf
+               ice = nvolst + isrf
+               do 210 isp = 1, nsp
+                  delta = mad(ivap,isp) - eqsrf(isp,isrf)
+                  temp = ksurf(isp,isrf) * delta
+                  total = mad(ice,isp) / dt
+                  if (temp .lt. max(0.0,-total)) then
+c                    write (output, 'Evaporation limited by available ma
+c    &ss')
+                     temp = -total
+                  end if
+                  madot(ice,isp) = temp
+  210             continue
+  220          continue
+         end if
+c        Calculate particle condensation/evaporation rates
+c        Evaporation is limited by amount available on particle
+         do 240 isp = 1, nsp
+            delta = mad(ivap,isp) - eqvap(isp)
+            do 230 ibin = 1, nbin
+               temp = kpart(ibin,isp) * delta * pnum(ibin)
+               total = max (0.0, mad(ibin+ivap,isp)) / dt
+               if (temp .lt. -total) then
+c                 write(output,*)
+c    &              'Evaporation of species ', isp,
+c    &              ' limited by available mass in bin ', ibin
+                  temp = -total
+               end if
+               madot(ibin+ivap,isp) = temp
+               if (total .eq. 0.0) madot(ibin+ivap,isp) = 0.0
+  230          continue
+  240       continue
+      end if
+c     Calculate net condensation/evaporation
+c     Condensation is limited by mass in vapor
+      if (mdlce .or. mdlchm) then
+         do 270 isp = 1, nsp
+            sum = 0.0
+            do 250 ist = 1,nbin+2*nsrf
+               sum = sum + madot(ivap+ist,isp)
+  250          continue
+            total = mad(ivap,isp) / dt
+       total=max(0.0,total)
+            if (sum .gt. total) then
+c              write (output,*) 'Condensation limited by available mass'
+               f = total / sum
+               sum = f * sum
+               do 260 ist = 1,nbin+2*nsrf
+                  madot(ivap+ist,isp) = f * madot(ivap+ist,isp)
+  260             continue
+            end if
+            madot(ivap,isp) = - sum
+  270       continue
+c        Calculate net volume change for each bin
+c        Move mass accordingly
+         call fpvbin (madot, dvol)
+         do 300 ibin = 1, nbin
+c           Compute total volume change in particle bin
+            sum = dvol(ibin) * dt
+c           write (output,*) 'bin ', ibin, ' delta volume ', sum
+c           Compute net volume change per particle
+            if (pnum(ibin) .gt. 0.0) then
+               sum = sum / pnum(ibin)
+            else
+               sum = 0.0
+            end if
+c           write (output,*) 'bin ', ibin, ' delta volume ', sum
+c           Locate resultant particle size relative to bin distribution
+c           Compute the fraction to be distributed to the low bin and
+c           the high bin.  This is calculated by solving two equations
+c           in two unknowns to conserve mass and particle number.
+c           A single particle whose volume does not match exactly
+c           the volume of one of the existing bins is split into two
+c           pieces which are distributed to the low bin and high bin.
+            temp = pvol(ibin) + sum
+            call isppin (nbin, pvol, temp, kbin, iloc)
+            if (iloc .eq. 0) then
+               f = (pvol(kbin+1) - temp) / pdelv(kbin+1)
+               f = f * pvol(kbin) / temp
+            else
+               f = 1.0
+            end if
+c           write (output,*) 'bin ', kbin, ' f = ', f
+            do 290 isp = 1, nsp
+               total = mad(ibin+ivap,isp)/dt
+               temp = madot(ibin+ivap,isp) + total
+c              write (output,*) 'ibin,isp,total,temp', ibin,isp,total,
+c    &         temp
+c              Remove particles from current bin
+c              Distribute particle resulting from
+c              condensation/evaporation
+c              to low/high bins to conserve mass and particle number
+               cbin(ibin,isp) = cbin(ibin,isp) - total
+               cbin(kbin,isp) = cbin(kbin,isp) + f * temp
+               if (kbin .lt. nbin) then
+                  cbin(kbin+1,isp) = cbin(kbin+1,isp) + (1.0 - f) * temp
+               end if
+  290          continue
+  300       continue
+         do 330 ibin = 1, nbin
+            do 320 isp = 1, nsp
+               madot(ibin+ivap,isp) = cbin(ibin,isp)
+  320          continue
+  330       continue
+      end if
+      if (mdldep .and. nsrf .gt. 0) then
+c        Deposition Model
+c        Remove particles from each bin, by removing mass
+c        from particle bin and depositing it on each surface
+         do 430 isrf = 1, nsrf
+            idp = isrf + nvolst + 2*nsrf
+            do 420 ibin = 1, nbin
+               coef = kdep(ibin,isrf)
+               temp = 1.0 / dt
+               if (coef .gt. temp) then
+                  coef = temp
+               end if
+               ist = ivap + ibin
+               do 410 isp = 1, nsp
+                  temp = coef * mad(ist,isp)
+                  madot(ist,isp) = madot(ist,isp) - temp
+                  madot(idp,isp) = madot(idp,isp) + temp
+  410             continue
+  420          continue
+  430       continue
+       end if
+      if (mdlagg) then
+c        Agglomeration Model
+c        Remove particles from each bin due to agglomeration
+c        with each other bin and redistribute to low/high bins
+         do 530 ibin = 1, nbin
+            sum = kaggl(ibin,ibin) * pnum(ibin)
+            do 510 jbin = 1, nbin
+               sum = sum + kaggl(ibin,jbin) * pnum(jbin)
+  510          continue
+            total = sum * dt
+            if (total .gt. 1.0) then
+               do 520 jbin = 1, nbin
+                  temp = caggl(ibin,jbin) / total
+                  caggl(ibin,jbin) = min(caggl(ibin,jbin),temp)
+                  caggl(jbin,ibin) = caggl(ibin,jbin)
+  520             continue
+            end if
+  530       continue
+         do 560 ibin = 1, nbin
+            do 550 jbin = ibin, nbin
+               coef = caggl(ibin,jbin)
+               kbin = low(ibin,jbin)
+               f = fmass(ibin,jbin)
+               ist = ivap + ibin
+               jst = ivap + jbin
+               kst = ivap + kbin
+               do 540 isp = 1, nsp
+                  temp = coef * pnum(jbin)*mad(ivap+ibin,isp)
+                  madot(ist,isp) = madot(ist,isp) - temp
+                  sum = temp
+                  temp = coef * pnum(ibin)*mad(ivap+jbin,isp)
+                  madot(jst,isp) = madot(jst,isp) - temp
+                  sum = sum + temp
+                  madot(kst,isp) = madot(kst,isp) + f * sum
+                  if (kbin .lt. nbin) then
+                     madot(kst+1,isp) = madot(kst+1,isp) + (1.0-f)*sum
+                  end if
+  540             continue
+  550          continue
+  560       continue
+      end if
+      end
+*endif

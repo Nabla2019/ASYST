@@ -1,0 +1,325 @@
+*mlist
+*if def,selap
+      subroutine userh (n, i, bh, btf, vcoupl, area, t, ir5vec,
+     +qotcou, qolcou, qfocou, gmocou, qcoupl, qwgcou, gamcou, tsink,
+     +htctot,ix)
+c
+c  Descriptive sentence for userh goes here.
+c
+c  Cognizant engineer: ewc.
+c
+*in32 ir5vec
+*in32 ix
+*in32end
+c n=sequence number in convection set.
+c i=node number                               **do not change**
+c bh=heat transfer coefficient                you may alter
+c btf=convection temperature                  you may alter
+c vcoupl=fluid velocity from couple
+c area=convection area                        **do not change**
+c t=vector of node temperatures               **do not change**
+c ir5vec(n)=relap5 offset for n-th node.
+c qotcou(n)=current heat flux (w/m**2)
+c qolcou(n)=past time step heat flux (w/m**2)
+c qfocou(n)=past time step heat flux to vapor (w/m**2)
+c gmocou(n)=past time step volumetric vapor generation due to
+c                convection only (kg/m**3.s)
+c qcoupl(n)=total heat input to relap5 volume (convection +
+c                radiation) (w).
+c qwgcou(n)=total heat input to vapor phase of relap5 volume
+c                (convection + radiation) (w)
+c gamcou(n)=volumetric heat generation in relap5 volume (convection
+c                radiation) (kg/m**3.s)
+c tsink(n) = sink temperature used in couple bouple boundary
+c                 condition
+c htctot(n)=sum of convective and radiative heat transfer coeffici-
+c                ents for node n (w/m**2.k)
+       use gentblc
+       implicit none
+      integer n,i,ncorr
+      logical err
+      real bh,btf,vcoupl,area,thetad,dtsub
+      real eld,theta,qchfl,qfluxl
+      integer ir5vec(*)
+      integer ix(5,*)
+      real t(*),qotcou(*),qolcou(*),qfocou(*),gmocou(*), qcoupl(*),
+     +qwgcou(*),gamcou(*),tsink(*),htctot(*)
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'convarc.h'
+       include 'htrcom.h'
+       include 'voldat.h'
+       include 'cpmdat.h'
+       include 'scddat.h'
+       include 'alcm.h'
+       include 'coupl.h'
+       include 'iparm.h'
+       include 'parm.h'
+       include 'slumpv.h'
+       include 'cons.h'
+       include 'ufiles.h'
+c  Local variables.
+      integer id,l,nn,nnd
+      integer nprobl
+      integer ndbg
+      real tsklit,htclit
+      real htcrad,sigsb,tradth,m,tdiff,qfl,qfl0
+      real fit(3,5,2),elev,conlvl(1),break1,chfdif
+c
+      data sigsb /5.668e-8/
+      data tradth /250./
+      data fit/   0., 319.,-2.83,
+     #         4016., 430.,-4.113,
+     #            0., 337., 2.61,
+     #            0., 891.,-9.04,
+     #            0., 529., 0.08,
+     #         3840., 334.,-4.54,
+     #         5530., 380.,-5.63,
+     #          515.,1109.,-18.5,
+     #            0., 960.,-8.18,
+     #            0., 134.,13./
+c     nprobl = switch to fix boundary conditions for comparison
+c              of COUPLE results with literature solution.
+      data nprobl/ 0/, htclit/ 1.e+7/, tsklit/ 1239.0/
+c
+        ndbg=0
+cljs      if(timehy.ge.998.0.and.timehy.le.1002.0.and.   
+cljs &    i.le.11)then
+cljs      if(timehy.ge.28690.0.and.timehy.le.28700.0)ndbg=1
+            if(ndbg.eq.1)then
+            write(output,9005)timehy,nprobl,lhead,n,i
+9005        format(' USERH entered, timehy=',e12.6,
+     &      ' nprobl=',i5,' lhead=',i5,' n=',i5,' i=',i5)
+            end if
+      htcrad=0.0
+      tw=t(i)
+c calculate absolute value of relap5 volume index.
+      l=ir5vec(n)+filndx(4)
+      btf=voidg(l)*tempg(l)+voidf(l)*tempf(l)
+cljs  if(voidf(l).gt.0.0001)btf=tempf(l)
+          if(ndbg.eq.1)then
+          write(output,9007)volno(l),icnvol,voidf(l),btf,
+     &    tempg(l),tempf(l),i,tw
+9007      format(' USERH; volno=',i10,' icnvol=',i10,
+     &    ' voidf=',e10.4,' btf=',e10.4,' tempg=',e10.4,
+     &    ' tempf=',e10.4,' i=',i5,' tw=',e10.4)
+          write(output,9008)volno(l),v(l),icnvol
+9008      format(' USERH; volno=',i10,' v(l)=',e10.4,' icnvol=',
+     &    i10)
+          end if
+      if(volno(l).eq.icnvol)then
+c Ex-Vessel heat transfer
+        qfluxo=0.
+        htcf=0.
+        htcg=0.
+        qfgo=0.0
+        elev=a(i7+i-1)
+          if(ndbg.eq.1)then
+          write(output,9105)elev,icnlvl,volno(l)
+9105      format(' USERH; elev=',e10.4,' icnlvl=',i5,
+     &    ' volno=',i10)
+          end if
+        if (icnlvl .lt. 0) then
+c  Ex-vessel fluid level from Relap5 general table.
+          call gtpolat (gen(icnvar)%gtinfo,gtptr(icnvar)%gtbl,timehy,
+     &    conlvl(1:1),err)
+        else
+          conlvl(1)= cnvarn(filndx(27)+icnvar)
+        endif
+           if(ndbg.eq.1)then
+           write(output,9107)conlvl(1),elev
+9107       format(' USERH; conlvl(1)=',e10.4,' elev=',e10.4)
+           end if
+        if(elev.gt.conlvl(1))then
+          htcg=conhtc
+          qfluxo=conhtc*(tw-tempg(l))
+          qfgo=qfluxo
+          btf=tempg(l)
+        else
+          btf=tsatt(l)
+          tdiff=tw-btf
+            if(ndbg.eq.1)then
+            write(output,9121)btf,tw,tdiff,alhir,dh
+9121        format(' USERH; btf=',e10.4,' tw=',e10.4,' tdiff=',e10.4,
+     &      ' alhir=',e10.4,' dh=',e10.4)
+            end if
+          qfluxl=375.0*tdiff
+          if(tdiff.gt.0.)then
+            qfgo=0.0
+            qfgo=0.0
+            if(lhead.eq.1)then
+              if(elev.le.alhir+dh)then
+                theta=acos(((alhir+dh)-elev)/(alhir+dh))
+              else
+                theta=pi/2.
+              endif
+            else
+              theta=0.0
+            end if
+            eld=theta/(pi/2)
+            thetad=theta*(180./pi)
+            if(eld.le.0.1)then
+              ncorr=1
+            elseif(eld.le.0.275)then
+              ncorr=2
+            elseif(eld.le.0.425)then
+              ncorr=3
+            elseif(eld.le.0.625)then
+              ncorr=4
+            else
+              ncorr=5
+            endif
+            break1=4.
+            if(tdiff.lt.break1)then
+              qfluxo=fit(1,ncorr,icntmp)*break1 +
+     #               fit(2,ncorr,icntmp)*break1*break1 +
+     #               fit(3,ncorr,icntmp)*break1*break1*break1
+              qfluxo=qfluxo*tdiff/break1
+            else
+              dtsub=0.0
+              if(icntmp.eq.1)dtsub=10.
+              qchfl=(0.4*(1+0.021*thetad-(0.007*theta)*
+     #            (0.007*thetad)))*1.e6*(1.+0.036*dtsub)
+              chfdif=4.
+              qfl=0.
+   10         chfdif=chfdif+1
+              qfl0=qfl
+              qfl=fit(1,ncorr,icntmp)*chfdif + fit(2,ncorr,icntmp)
+     +        *chfdif*chfdif + fit(3,ncorr,icntmp)*chfdif*chfdif*chfdif
+              if(qfl.lt.qchfl.and.qfl.ge.qfl0)goto 10
+              if(tdiff.lt.chfdif)then
+                qfluxo=fit(1,ncorr,icntmp)*tdiff +
+     #                 fit(2,ncorr,icntmp)*tdiff*tdiff +
+     #                 fit(3,ncorr,icntmp)*tdiff*tdiff*tdiff
+              else
+                m=-5700.
+                qfluxo=m*tdiff-m*chfdif+qchfl
+              endif
+            endif
+            if(qfluxo.lt.qfluxl)qfluxo=qfluxl
+            htcf=qfluxo/tdiff
+          endif
+        endif
+        gamw=0.0
+        htcrad=0.0
+cljs  end ex-vessel heat transfer
+      else
+        if(npp.eq.0)then
+          htsa=area*2.*pi
+        else
+          htsa=area
+        end if
+        qfluxo=qotcou(n)
+        iv=l
+        iv1 = iv
+        iv2 = iv
+        htdiam=diamv(l)
+        id=n
+        htlen = 3.0
+        htlenc=htlen
+        if(htlenc.lt.1.e-3)htlenc=1.e-3
+        gridz = 0.0
+        gridk = 0.0
+        axpf = 1.0
+        hfg = sathg(iv) - sathf(iv)
+        ggasa = abs(ggas(iv))
+        gliqa = abs(gliq(iv))
+        gabs = max(ggasa + gliqa,0.001)
+        g = hydzc(iv2) + hydzc(iv2+1)
+        g = (ggas(iv1) + gliq(iv1))*sign(1.0,g)
+c              drod = outer diameter of rod
+        drod=0.01
+c              delgrv=(gravity constant)*(length of heat structure)
+        delgrv=g
+c              gcross = mass flux in direction perpindicular to rod
+        gcross=0.0
+c              gcrosf = (gravity constant)*(ratio of flow area to
+c                       gap area)
+        gcrosf=0.0
+c              pitdia = ratio of pitch to diameter
+        pitdia=1.0
+c              htopta = index that defines configuration of heat
+c                       structure
+        htopta=1
+c              ivindx = index of RELAP5 control volume at inlet of
+c                       bundle (used for Czech CHF correlation)
+        ivindx=iv
+        chf = 0.0
+        chfmul = 0.0
+c  If lower plenum volume filled with debris, then set heat transfer to
+c  this volume to zero.
+c  Threshold volume for cutting off heat transfer should be same as that
+c  used in subroutines TRAN and COUQOT.
+        if(l.eq.(inv+filndx(4)).and.v(l).lt.0.5)then
+          qfluxo=0.0
+          qfgo=0.0
+          gamw=0.0
+          htcf=0.0
+          htcg=0.0
+        else
+          call htrc1(id)
+        endif
+c determine whether structure is radiating to coolant or structure.
+        if(t(i).ge.tradth)then
+        htcrad = 0.0
+cljs      if(voidf(l).ge.0.0)then
+          if(voidf(l).ge.0.01)then
+c improve by performing calculation to
+c determine conditions when a debris node sees a core structure.
+c
+c calculate radiation heat transfer coefficient
+c configuration factors = 1,
+c emissivity = 0.7, as in RELAP5.
+c In long term, emissivity needs to be modeled as function of surface
+c temperature and thickness of oxide layer at surface, as is done for
+c Zr surfaces.
+            htcrad=0.7*sigsb*(t(i)**2+btf**2)*(t(i)+btf)
+          endif
+        endif
+          if(ndbg.eq.1)then
+          write(output,9051)i,t(i),btf,htcg,htcf,htcrad
+9051      format(' USERH; i=',i5,' t(i)=',e10.4,' btf=',e10.4,
+     &    ' htcg=',e10.4,' htcf=',e10.4,' htcrad=',e10.4)
+          write(output,9053)volno(l),v(l)
+9053      format(' USERH; volno=',i10,' v=',e10.4)
+          end if
+      endif
+      if(nprobl.eq.1)then
+c     impose fixed boundary condition for comparison with
+c     solution in literature.
+        htcf=htclit
+        htcg=0.0
+        htcrad=0.0
+        btf=tsklit
+      end if
+      qolcou(n)=qfluxo
+      qfocou(n)=qfgo
+      gmocou(n)=gamw
+      tsink(n)=btf
+      if(htcg.lt.0.0)htcg=0.0
+      if(htcf.lt.0.0)htcf=0.0
+      nnd=0
+      do20nn=1,numel
+        if(ix(5,nn).eq.1)then
+          if(ix(1,nn).eq.i) nnd=1
+          if(ix(2,nn).eq.i) nnd=1
+          if(ix(3,nn).eq.i) nnd=1
+          if(ix(4,nn).eq.1) nnd=1
+        end if
+   20 continue
+      bh=htcf+htcg+htcrad
+        if(ndbg.eq.1)then
+        write(output,9195)htcf,htcg,htcrad
+9195    format(' USERH at end; htcf=',e10.4,' htcg=',e10.4,
+     &  ' htcrad=',e10.4)
+        end if
+      htctot(n)=bh
+cljs  coding to preclude vapor in RELAP5 control volume interfacing
+cljs  top of debris bed from overshoot of it vapor temperature.
+cljs    if(voidf(l).lt.0.01.and.t(i).ge.2400.)then
+cljs    htctot(n) = 0.0
+cljs    end if
+      return
+      end
+*endif

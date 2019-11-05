@@ -1,0 +1,695 @@
+*mlist
+       subroutine icompn
+!  Controls cross checking of component input and completion of
+!  component initialization.
+!
+!  Cognizant engineer: rjw.
+!
+       use gentblc
+       use statcc
+       implicit none
+       include 'fast.h'
+       include 'cmpdac.h'
+       include 'cmpdat.h'
+       include 'cmpdtv.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'cons.h'
+       include 'jundat.h'
+       include 'przdat.h'
+       include 'pumpblk.h'
+       include 'stcblk.h'
+       include 'trpblk.h'
+       include 'turbin.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+!
+!  Local variables.
+       integer i,ijcnt,ir,irr,it,ivcnt,ix,j,jj,jv,jx,jy,k,kc,kk,l,lc,ll,
+     & pckcod(2)
+       logical err,first,partof,tfail
+       real abot,alift,alpha,apston,atnew(1),atop,avalve,conv,cvlv(2),
+     & fff,ftbnid,pex,radjun,radvl,ringap,thetax,xlift
+       character chwrd*8,lbl*64
+!
+!  Data statements
+       data cvlv/2*0.0/
+!
+       if (filid(3) .eq. 0.0) go to 950
+!  Set table and trip information for time dependent volume
+!  and time dependent junction components.
+       i = filndx(3)
+       do k = 1,ncmps(i)
+         if (cmptyp(i).eq.2 .or. cmptyp(i).eq.9) then
+           ir = 10000*cmpnum(i) + 200
+           if (ncttrp(i) .ne. 0) call itrscn (ir,ncttrp(i),ncttrp(i+1))
+           write (chwrd,'(a8)') nctalf(i)
+           if (chwrd .ne. ' ') then
+             call scnreq (ir,chwrd,nctdpv(i),0,pckcod,conv,lbl,tfail)
+             nctpc(i) = pckcod(1)
+             nctpc(i+1) = pckcod(2)
+             if (tfail) then
+               fail = .true.
+               nctpc(i) = 0
+               nctpc(i+1) = 0
+             endif
+           endif
+         endif
+         i = i + cmplen(i)
+       enddo
+!  Get initial thermodynamic conditions for volumes.
+       call istate
+!  Get initial velocities for junctions.
+       call ivelst
+!  Set table and trip information for other types of components.
+       i = filndx(3)
+       do 20 k = 1,ncmps(i)
+         if (cmptyp(i) .eq. 12) then
+           j = njco(i) + filndx(5)
+           if (iand(jc(j),128) .ne. 0) atlast(i) = athrot(j)
+           go to (303,310,300,330,320,340), vlvnm(i)
+           call fabend
+!  Check valves.
+  303      athrot(j) = atlast(i)
+           vlstm(i) = athrot(j)/atlast(i)
+           vlstmo(i) = vlstm(i)
+           jc(j) = iand(jc(j),not(2))
+!  Test for initially closed
+           if (iand(cmpopt(i),16) .eq. 0) go to 19
+           athrot(j) = aleak(i)
+           vlstm(i)  = athrot(j)/atlast(i)
+           vlstmo(i) = vlstm(i)
+           go to 311
+!  Inertial valve.
+  300      tfail = .false.
+           radjun = sqrt(0.318309886 * ajun(j) * atlast(i))
+           if (rdsvlv(i) .le. 0.0) rdsvlv(i) = radjun
+           radvl = radjun
+           if (ij2vn(j) .eq. 0) tfail = .true.
+           l = (ij2vn(j) - 1)*ivskp + filndx(4)
+           lc = l + iand(ishft(jcex(j),-10),3)
+           if (tfail) then
+             write (output,3000) junno(j)
+ 3000 format(' ******** Junction',i10,' has an undefined to volume, cann
+     &ot check inertial valve flapper radius.')
+           else
+             radvl = sqrt(0.318309886*avol(lc))
+           endif
+           fail = fail .or. tfail
+           tfail = .false.
+           if (((radjun - 0.001) .ge. rdsvlv(i)) .or.
+     &     (rdsvlv(i) .gt. (radvl + 0.001))) then
+             tfail = .true.
+             write (output, 3001) junno(j)
+ 3001 format(' ******** Junction',i10,' inertial valve flapper radius is
+     & incorrect, must be input such that'/9x,'(junction radius) .le. (f
+     &lapper radius) .le. (to volume radius).')
+           endif
+           fail = fail .or. tfail
+           tfail = .false.
+           if (lngvlv(i) .gt. 2.0*rdsvlv(i)) then
+             tfail = .true.
+             write (output, 3002) junno(j)
+ 3002 format(' ******** Junction',i10,' inertial valve moment length is
+     &incorrect, it cannot be input greater than twice the flapper radiu
+     &s.')
+           endif
+           fail = fail .or. tfail
+           tfail = .false.
+           if (lngvlv(i) .eq. 0.0) lngvlv(i) = rdsvlv(i)
+           rdsvlv(i) = max(radjun, min(rdsvlv(i), radvl))
+           athrot(j) = aleak(i)
+           vlstm(i)  = athrot(j)/atlast(i)
+           aflapr(i) = pi*rdsvlv(i)**2
+! Bit 5 of cmpopt=1 means the valve is initially closed.
+           if (iand(cmpopt(i),16) .ne. 0) go to 311
+           athrot(j) = max(aleak(i), min(atlast(i),
+     &     (twopi*rdsvlv(i)*rdsvlv(i)*
+     &     tan((theta(i)-mintht(i))*0.017453293)/ajun(j))))
+!  Store the torque due to hinge friction in the opening DP
+           pcv(i) = pcv(i)*aflapr(i)*lngvlv(i)
+           vlstm(i) = (theta(i)-mintht(i))/(maxtht(i)-mintht(i))
+           jc(j) = iand(jc(j),not(2))
+           go to 311
+!  Trip valve.
+  310      l = vlvtrp(i)
+           ir = 10000*cmpnum(i) + 301
+           call itrscn(ir,l,pckcod(1))
+           vlvtrp(i+1) = pckcod(1)
+           athrot(j) = atlast(i)
+           jc(j) = iand(jc(j),not(2))
+           if (trptm(vlvtrp(i+1)+filndx(18)) .lt. 0.0) athrot(j) = 0.0
+           vlstm(i) = athrot(j)/atlast(i)
+           vlstmo(i) = vlstm(i)
+  311      if (athrot(j) .ne. 0.0) go to 19
+           jc(j) = ior(jc(j),2)
+           velfj(j) = 0.0
+           velgj(j) = 0.0
+           go to 19
+!  Servo valve.
+  320      ir = 10000*cmpnum(i) + 301
+           chwrd = 'cntrlvar'
+           call scnreq(ir,chwrd,opntrp(i),0,pckcod,conv,lbl,tfail)
+           clstrp(i) = pckcod(1)
+           clstrp(i+1) = pckcod(2)
+           if (tfail) go to 135
+!  Initialize servo valve.
+  130      if (iand(jc(j),128) .eq. 0) go to 125
+           vlstm(i) =  1.0
+           vlstmo(i) = vlstm(i)
+           if (clstrp(i) .eq. 0) go to 125
+           kk = clstrp(i+1) + filndx(27)
+           vlstm(i) =  fa(kk)
+           vlstmo(i) = vlstm(i)
+           if (vlstm(i).ge.0.0 .and. vlstm(i).le.1.0) go to 125
+           vlstm(i) = 1.0
+           vlstmo(i) = vlstm(i)
+           fail = .true.
+           write(output,2007)
+ 2007  format ('0******** Valve stem position for servo valve out of ran
+     &ge, set to 1.0.')
+           go to 125
+  135      clstrp(i) = 0
+           clstrp(i+1) = 0
+           fail = .true.
+           go to  130
+!  Motor valve.
+  330      ir = 10000*cmpnum(i) + 301
+           l = opntrp(i)
+           call itrscn(ir,l,pckcod(1))
+           opntrp(i+1) = pckcod(1)
+           l = clstrp(i)
+           call itrscn(ir,l,pckcod(1))
+           clstrp(i+1) = pckcod(1)
+  125      if (tblnum(i) .eq. 0) go to 35
+           do jy =1,ngtbls
+             if (tblnum(i) .eq. gtnum(jy)) go to 122
+           enddo
+           fail = .true.
+           irr = ir - 301
+           write (output,
+     & "('0******** Component',i10,' references missing or erroneous tab
+     &le.')")
+     &     irr
+           go to  19
+  122      if (gen(jy)%gttyp .ne. 7) then
+             fail = .true.
+             irr = ir - 301
+             write (output,
+     & "('0******** Component',i10,' references wrong type of table.')")
+     &       irr
+             go to  19
+           endif
+           tblnum(i+1) = jy
+           if (iand(jc(j),128) .eq. 0) go to 19
+           call gtpolat (gen(jy)%gtinfo,gtptr(jy)%gtbl,vlstm(i),
+     &     atnew(1:1),err)
+           if (err) then
+             fail = .true.
+             go to 40
+           endif
+           if (atnew(1) .lt. 1.0e-10) then
+             athrot(j) =  0.0
+             jc(j) = ior(jc(j),2)
+             velfj(j) = 0.0
+             velgj(j) = 0.0
+           else
+             athrot(j) = atnew(1)*atlast(i)
+           endif
+           go to 19
+   35      athrot(j) = vlstm(i)*atlast(i)
+           if (vlstm(i) .lt. 1.0e-10) then
+             athrot(j) =  0.0
+             jc(j) = ior(jc(j),2)
+             velfj(j) = 0.0
+             velgj(j) = 0.0
+           endif
+!  Csubv valve table.
+           if (ncvtbl(i) .eq. 0 ) go to 19
+           call polat (cvtbl(i-3),cvtbl(i),vlstm(i),cvlv,err)
+           fff = 0.0
+           if (err) then
+             fail =  .true.
+           else
+             if (ij1vn(j) .gt. 0) then
+               kk = (ij1vn(j)-1)*ivskp + filndx(4)
+               kc = kk + iand(ishft(jcex(j),-13),3)
+               fff = fff + 0.5*dl(kc)*(voidf(kk)*rhof(kk)*velfj(j) +
+     &         voidg(kk)*rhog(kk)*velgj(j))
+             endif
+             if (ij2vn(j) .gt. 0) then
+               kk = (ij2vn(j)-1)*ivskp + filndx(4)
+               kc = kk + iand(ishft(jcex(j),-10),3)
+               fff = fff + 0.5*dl(kc)*(voidf(kk)*rhof(kk)*velfj(j) +
+     &         voidg(kk)*rhog(kk)*velgj(j))
+             endif
+           endif
+  40       fff = max(0.0,sign(cvlv(1),fff))-min(0.0,sign(cvlv(2),fff))
+           formfj(j) = min(vlvcon(i)/max(fff*fff,1.0e-30),1.0e30)
+           formgj(j) = formfj(j)
+           go to  19
+!  Relief valve.
+  340      tfail = .false.
+!  Check inlet diameter.
+           if (pbellw(i) .le. 0.0) pbellw(i) = 1.0132535e+05
+           tfail = ij2vn(j) .eq. 0
+           l = (ij2vn(j) - 1)*ivskp + filndx(4)
+           lc = l + iand(ishft(jcex(j),-9),7)
+           if (tfail) then
+             write(output, 3026) junno(j)
+ 3026 format('0******** Junction',i10,' has an undefined to volume,',
+     & ' cannot define the spring force for a closed relief valve.')
+             pex = pbellw(i)
+           else
+             pex = rho(l)
+             if (iand(jc(j),8) .ne. 0) pex = -pex
+             pex = p(l) + hydzc(lc)*pex
+           endif
+           if (iand(jc(j),128) .eq. 0) go to 311
+           if (adisk(i) .le. 0.0)
+     &     adisk(i) = sqrt(1.273239545*ajun(j)*atlast(i))
+           avalve = 0.785398164*adisk(i)*adisk(i)
+           tfail = abs((ajun(j)*athrot(j)) - avalve) .gt. 1.0e-5
+           fail = fail .or. tfail
+           if (tfail) write(output, 3017) junno(j)
+ 3017  format(' ******** Junction',i10,' input junction area does not ag
+     &ree with that calculated from the valve inlet'/29x,'diameter withi
+     &n 1.0e-5 meters (3.281e-5 ft)')
+!  Check seat diameter.
+           tfail = dseat(i) .lt. adisk(i)
+           fail = fail .or. tfail
+           if (tfail) write(output, 3011) junno(j)
+ 3011  format(' ******** Junction',i10,' has a seat diameter less than t
+     &he valve inlet diameter')
+!  Check piston diameter.
+           if (adann(i) .le. 0.0) adann(i) = dseat(i)
+           tfail = adann(i) .lt. dseat(i)
+           fail  = fail .or. tfail
+           if (tfail) write(output, 3012) junno(j)
+ 3012  format(' ******** Junction',i10,' has a valve piston diameter les
+     &s than the valve seat diameter')
+!  Check inner ring diameter.
+           if (drings(i) .le. 0.0) drings(i) = dseat(i)
+           tfail = drings(i) .lt. dseat(i)
+           fail  = fail .or. tfail
+           if (tfail) write(output, 3013) junno(j)
+ 3013  format(' ******** Junction',i10,' has an inner ring diameter less
+     & than the valve seat diameter')
+!  Check inner ring height.
+           tfail = hring1(i).ge.0.0 .and. drings(i).gt.dseat(i)
+           fail = fail .or. tfail
+           if (tfail) write(output, 3014) junno(j)
+ 3014  format(' ******** Junction',i10,' the inner ring height must be n
+     &egative and nonzero if the inner ring diameter'/29x,'is greater
+     &than the valve seat diameter')
+           tfail = hring1(i) .gt. 0.0
+           fail  = fail .or. tfail
+           if (tfail) write(output, 3010) junno(j)
+ 3010  format(' ******** Junction',i10,' inner ring height cannot be inp
+     &ut greater than 0.0')
+           tfail = hring1(i).lt.0.0 .and. drings(i).le.dseat(i)
+           fail  = fail .or. tfail
+           if (tfail) write(output, 3020) junno(j)
+ 3020  format(' ******** Junction',i10,' the inner ring height cannot be
+     & input nonzero if the inner ring diameter'/29x,'is equal to the va
+     &lve seat diameter')
+!  Check outer ring diameter.
+           if (arings(i) .le. 0.0) arings(i) = adann(i)
+           tfail = arings(i) .lt. dseat(i)
+           fail  = fail .or. tfail
+           if (tfail) write(output, 3015) junno(j)
+ 3015  format(' ******** Junction',i10,' the outer ring diameter cannot
+     &be input .lt. the valve seat diameter')
+!  Check outer ring height.
+           tfail = hring2(i).le.0.0 .and. arings(i).le.dseat(i)
+           fail  = fail .or. tfail
+           if (tfail) write(output,3018) junno(j)
+ 3018  format(' ******** Junction',i10,' the outer ring height cannot be
+     &input .lt. 0.0 if the outer ring'/29x,'diameter is equal to the va
+     &lve seat diameter')
+           tfail = drings(i).ge.arings(i) .and.
+     &   arings(i).ge.dseat(i) .and. hring2(i).le.hring1(i)
+           fail = fail .or. tfail
+           if (tfail) write(output,3023) junno(j)
+ 3023  format(' ******** Junction',i10,' the outer ring height cannot be
+     & input .le. the inner ring height if'/29x,'(inner ring dia) .ge. (
+     &outer ring dia) .ge. (valve seat dia)')
+           tfail = hring2(i).gt.0.0 .and. arings(i).lt.adann(i)
+           fail = fail .or. tfail
+           if (tfail) write(output,3024) junno(j)
+ 3024  format(' ******** Junction',i10,' the outer ring height cannot be
+     & input .gt. 0.0 if the outer ring'/29x,'diameter is .lt. the valve
+     & piston diameter')
+!  Check bellows diameter.
+           if (abelin(i) .le. 0.0) abelin(i) = adann(i)
+           tfail = abelin(i) .gt. adann(i)
+           fail  = fail .or. tfail
+           if (tfail) write(output, 3016) junno(j)
+ 3016  format(' ******** Junction',i10,' the bellows diameter must be le
+     &ss than or equal to the valve piston diameter')
+!  Check ring exit gap.
+           ringap = sqrt(max(0.0, ((hring2(i) - hring1(i))**2
+     &     + 0.5*(arings(i) - drings(i))**2)))
+           tfail = ringap .le. 0.0
+           fail = fail .or. tfail
+           if (tfail) write(output,3019) junno(j)
+ 3019  format(' ******** Junction',i10,' the ring diameters and heights
+     &result in a ring gap of zero')
+!  Get the angle of the normal to the exit.
+           thetax = -57.29577951*atan2((hring1(i) - hring2(i)),
+     &     0.5*(drings(i) - arings(i)))
+           areaxx(i) = 0.785398164*(arings(i) + drings(i))*
+     &     abs(arings(i) - drings(i))*sign(1.0, cos(0.017453293*thetax))
+!  Mean exit diameter and height.
+           drings(i) = 0.5*(arings(i) + drings(i))
+           hring2(i) = 0.5*(hring2(i) + hring1(i))
+!  Convert diameters to areas.
+           adisk(i) = 0.785398164*adisk(i)*adisk(i)
+           apston = 0.785398164*adann(i)*adann(i)
+           abelin(i) = 0.785398164*abelin(i)*abelin(i)
+           arings(i) =pi*drings(i)*ringap
+           abelan(i) = apston - abelin(i)
+           adann(i)  = apston - adisk(i)
+!  Compute the valve full open throat area.
+           alift = pi*dseat(i)*vlstmx(i)
+           avalve = min(adisk(i), alift, arings(i))
+           atlast(i) = avalve/ajun(j)
+!  Closed exhaust angle.
+           hring1(i) = 90.0 - 57.29577951*atan2(hring2(i),
+     &     0.5*max(0.0, (drings(i) - dseat(i))))
+!  Initial values.
+           vlsetp(i) = (vlsetp(i)*adisk(i) - pbellw(i)*abelin(i)
+     &     - gravcn*vlfmas(i) - pex*(abelan(i)
+     &     - adann(i)))/max(1.0e-15, sprcon(i))
+           xlift = vlstm(i)*vlstmx(i)
+           alift = pi*dseat(i)*xlift
+           athrot(j) = min(adisk(i), alift, arings(i))/ajun(j)
+           vlstmx(i) = vlsetp(i) + vlstmx(i)
+           alpha = 90.0 - 57.29577951*atan2((hring2(i) - xlift),
+     &     0.5*max(0.0, (drings(i) - dseat(i))))
+           theta(i) = 0.5*(hring1(i) + alpha)
+           thetao(i) = theta(i)
+!  Check valve i.c. with open/close condition.
+           tfail = (vlstm(i).le.0.0 .and. athrot(j).gt.0.0) .or.
+     &     (vlstm(i) .gt. 0.0 .and. athrot(j).le.0.0) .or.
+     &     velfj(j).ne.0.0 .or. velgj(j).ne.0.0 .or. velvl(i).ne.0.0
+           fail  = fail .or. tfail
+           if (tfail) write (output, 3025) junno(j)
+ 3025  format(' ******** Junction',i10,' either the valve stem position
+     & or the valve throat area indicates'/29x,'the valve is closed but
+     &the valve piston velocity or the junction phasic velocities'/
+     & 29x,'are nonzero')
+           tfail = .false.
+           go to 311
+!
+!  Set pump table and trip.
+         else if (cmptyp(i) .eq. 4) then
+           ir = 10000*cmpnum(i) + 301
+           l = iputrp(i)
+           if (l .ne. 0) then
+           call itrscn (ir,l,pckcod(1))
+           iputrp(i+1) = pckcod(1)
+           endif
+           ir = ir + 8
+           l = ipurvi(i)
+           if (l .ne. 0) then
+           chwrd = 'cntrlvar'
+           call scnreq (ir,chwrd,l,0,pckcod,conv,lbl,tfail)
+           fail = fail .or. tfail
+           endif
+           l = ipuctr(i)
+           if (l .ne. 0) then
+             call itrscn (ir,l,pckcod(1))
+             ipuctr(i+1) = pckcod(1)
+           endif
+           if (ipuspi(i).eq.0 .or. iand(cmpopt(i),16384).ne.0) go to 19
+           ir = ir + 5791
+           ix = ipuspi(i) + i
+           l = ipmvtr(ix)
+           if (l .ne. 0) then
+             call itrscn (ir,l,pckcod(1))
+             ipmvtr(ix+1) = pckcod(1)
+           endif
+           write (chwrd,'(a8)') ipmval(ix)
+           if (chwrd .eq. ' ') go to 19
+           call scnreq (ir,chwrd,ipmvnm(ix),0,pckcod,conv,lbl,
+     &     tfail)
+           ipmvpc(ix) = pckcod(1)
+           ipmvpc(ix+1) = pckcod(2)
+           if (.not.tfail) go to 19
+           fail = .true.
+           ipmvpc(ix) = 0
+           ipmvpc(ix+1) = 0
+!  Set accumulator junction flag.
+         else if (cmptyp(i) .eq. 13) then
+           j = njco(i) + filndx(5)
+           if (iand(jc(j),128) .ne. 0) jc(j) = ior(jc(j),2)
+!  Accumulator isolation trip.
+           l = acctrp(i)
+           ir = 10000*cmpnum(i) + 2200
+           if (l .ne. 0) then
+             call itrscn (ir,l,pckcod(1))
+             acctrp(i+1) = pckcod(1)
+           endif
+!  Set turbine terms.
+         else if (cmptyp(i) .eq. 14) then
+           ir = 10000*cmpnum(i) + 300
+           l = turctr(i)
+           if (l .eq. 0) go to 19
+           call itrscn (ir,l,pckcod(1))
+           turctr(i+1) = pckcod(1)
+         endif
+   19    i = i + cmplen(i)
+   20  continue
+       if (iand(iextra,1) .ne. 0) then
+         call flostj
+         call flostv
+!  Set up inverted junction table.
+         call invjt
+!  Set up mixture level tracking stack table
+         call levskt
+!  Set initial level positions
+         call ilevel
+!  Set donor properties.
+         call ijprop
+!  Call elevation checker.
+         call ielvtn
+!  Compute volume velocities.
+         call ivlvel
+!  Set initial horizontal stratification entrainment off-take model
+         if (.not.chngno(77)) then
+           call ihzflw(0)
+         else
+           call ihsefl(0)
+         endif
+!  Compute Peclet numbers for new volumes.
+         i = filndx(4)
+         do k = 1,nvols(i)
+           if (iand(vctrl(i),8) .ne. 0) then
+             pecltv(i) = max(abs(ggas(i)) + abs(gliq(i)),0.001)*
+     &       diamv(i)*csubpf(i)/thconf(i)
+           endif
+           i = i + ivskp
+         enddo
+!  Find and initialize pressurizer variables
+         i = filndx(3)
+         jv = filndx(4)
+         jj = filndx(5)
+         ijcnt = 0
+         ivcnt = 0
+         do 24 k = 1,ncmps(i)
+           if (cmptyp(i) .eq. 17) then
+!  Is the surge line junction part of this component?
+             it = srgjun(i)/1000000
+             partof = it.eq.cmpnum(i)
+             if (.not.partof) then
+!  No, so find it.
+               kk = filndx(5)
+!  Loop over all junctions.
+               do j=1,njuns(kk)
+                 if (junno(kk) .eq. srgjun(i)) go to 32
+                 kk = kk + ijskp
+               enddo
+               fail = .true.
+               write(output,2001) srgjun(i)
+ 2001  format(' ******** The surge line junction ',i10,' is not part of'
+     &        ' this problem.  Cannot determine liquid level, continue'
+     &        ' input processing.')
+               go to 34
+ 32            srgjun(i) = j
+               kc = filndx(4) + (ij1vn(kk) - 1)*ivskp
+               lc = filndx(4) + (ij2vn(kk) - 1)*ivskp
+               if (volno(kc)/1000000.ne.cmpnum(i) .and.
+     &         volno(lc)/1000000.ne.cmpnum(i)) then
+                 write(output,2002) srgjun(i)
+ 2002  format(' ******** The surge line junction ',i10,' not'
+     &        ' connected to pressurizer.  Cannot determine liquid'
+     &        ' level, continue input processing.')
+                 go to 34
+               endif
+             else
+!  Yes it is, so loop over junctions in component.
+               kk = jj
+               do j=1,njc(i)
+                 if (junno(kk) .eq. srgjun(i)) then
+                   srgjun(i) = j + ijcnt
+                   go to 221
+                 endif
+                 kk = kk + ijskp
+               enddo
+             endif
+!  Set junctions and volumes in przdat.
+!  Find top of pressurizer.
+  221        prznds(i) = nvc(i)
+             ll = filndx(5) + (srgjun(i)-1)*ijskp
+             kk = filndx(4) + (ij1vn(ll) - 1)*ivskp
+             kc = filndx(4) + (ij2vn(ll) - 1)*ivskp
+             if (partof) then
+               first = avol(kk) .gt. avol(kc)
+             else
+               if( volno(kk)/1000000 .eq. cmpnum(i) ) then
+                 first = volno(kk)/10000 .gt. cmpnum(i)*100 + 1
+               else
+                 first = volno(kc)/10000 .gt. cmpnum(i)*100 + 1
+               endif
+             endif
+             if (first) then
+!  First volume is top.
+               if (partof) then
+                 prznds(i) = srgjun(i) - ijcnt
+                 l = i
+                 do j=1,prznds(i)
+                   przvnx(l) = j + ivcnt
+                   przjnx(l) = j + ijcnt
+                   l = l + 2
+                 enddo
+               else
+                 l = i
+                 do j=1,prznds(i)
+                   przvnx(l) = j + ivcnt
+                   przjnx(l) = j + ijcnt
+                   l = l + 2
+                 enddo
+                 przjnx(i+2*(prznds(i)-1)) = srgjun(i)
+               endif
+             else
+!  Last volume endif top.
+               if (partof) then
+                 prznds(i) = srgjun(i) - ijcnt
+                 l = i
+                 do j=1,prznds(i)
+                   przvnx(l) = nvc(i) + 1 - j + ivcnt
+                   przjnx(l) = njc(i) + 1 - j + ijcnt
+                   l = l + 2
+                 enddo
+               else
+                 l = i
+                 do j=1,prznds(i)
+                   przvnx(l) = nvc(i) + 1 - j + ivcnt
+                   przjnx(l) = njc(i) + 1 - j + ijcnt
+                   l = l + 2
+                 enddo
+                 przjnx(i+2*(prznds(i)-1)) = srgjun(i)
+               endif
+             endif
+!  Find liquid level.
+             l = i
+             atop = 1.0
+             do j=1,prznds(i)
+               kk = filndx(4) + (przvnx(l)-1)*ivskp
+               if ( j .lt. prznds(i) ) then
+                 ll = filndx(4) + (przvnx(l+2)-1)*ivskp
+                 abot = voidg(ll)
+               else
+                 abot = 0.0
+               endif
+               if (voidg(kk) .le. 0.99) then
+                 if (atop.ge.0.85 .and. abot.le.0.65) then
+                   przlln(i) = przvnx(l)
+                   przlvl(i) = voidf(kk)*dl(kk)
+                   l = l + 2
+                   do jj=j+1,prznds(i)
+                     kk = filndx(4) + (przvnx(l)-1)*ivskp
+                     przlvl(i) = przlvl(i) + dl(kk)
+                     l = l + 2
+                   enddo
+                   ll = filndx(4) + (przlln(i)-1)*ivskp
+                   if (iand(ihlppr(2),ishft(1,22)).ne.0) then
+                     if (unito) then
+                       write (output,2003) cmpnum(i),przlvl(i),volno(ll)
+ 2003  format('0 Pressurizer component ',i5,', has a liquid level of',
+     & 1pg13.5,' m, located in volume ',0pi10,'.')
+                     else
+                       abot = przlvl(i)/0.3048
+                       write(output,2004) cmpnum(i),abot,volno(ll)
+ 2004  format('0 Pressurizer component ',i5,', has a liquid level of',
+     & 1pg13.5,' ft, located in volume ',0pi10,'.')
+                     endif
+                   endif
+                   go to 34
+                 endif
+               endif
+               atop = voidg(kk)
+               l = l + 2
+             enddo
+           endif
+!  Continue to next pressurizer component.
+   34      ijcnt = ijcnt + njc(i)
+           ivcnt = ivcnt + nvc(i)
+           jj = jj + njc(i)*ijskp
+           jv = jv + nvc(i)*ivskp
+           i = i + cmplen(i)
+   24    continue
+!  Initialize pumps.
+         call ipump
+!  Initialize turbines.
+         call iturbst
+!  Do final input edit of components.
+         call iedit
+       endif
+!  Create block to hold advancement statistics.
+       if (iand(iextra,1).ne.0 .or. ncount.eq.0) then
+         if (allocated(statv)) deallocate (statv)
+         allocate (statv(nvols(filndx(4))))
+         if (allocated(statj)) deallocate (statj)
+         allocate (statj(njuns(filndx(5))))
+         strdc1 = 0
+         strdc2 = 0
+         stsatp = 0
+         stsreq = 0
+         stscpu = 0.0
+         stsdtn = 0.0
+         stsdtx = 0.0
+         stsdta = 0.0
+         statv%stlte1 = 0
+         statv%stlte2 = 0
+         statv%strap1 = 0
+         statv%strap2 = 0
+         statv%strcl1 = 0
+         statv%strcl2 = 0
+         statv%strdp1 = 0
+         statv%strdp2 = 0
+         statv%strex1 = 0
+         statv%strex2 = 0
+         statv%strpe1 = 0
+         statv%strpe2 = 0
+         statv%strte1 = 0
+         statv%strte2 = 0
+         statv%strxl1 = 0
+         statv%strxl2 = 0
+         statv%stscl1 = 0
+         statv%stscl2 = 0
+         statv%stvpk1 = 0
+         statv%stvpk2 = 0
+!
+         statj%stccf1 = 0
+         statj%stccf2 = 0
+         statj%stjck1 = 0
+         statj%stjck2 = 0
+         statj%stjpk1 = 0
+         statj%stjpk2 = 0
+       endif
+  950  call fmvlwr
+       nfluid = 0
+       return
+       end

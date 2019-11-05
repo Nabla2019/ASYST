@@ -1,0 +1,314 @@
+*mlist
+*if def,selap
+       subroutine upsdrv
+c
+c
+c  this subroutine is the main driver for the upper plenum structure
+c  transient calculations that are performed every timestep and includes
+c  the following:
+c    (1) steam flow rate partitioning calculations
+c    (2) heat transfer coefficient and
+c        wall heat transfer calculations (old wall temperatures)
+c    (3) mass and energy equation solution (call upsolv)
+c    (4) wall heat transfer calculations (new wall temperatures)
+c
+c  cognizant engineer:  ljs, (fpg)
+c
+       implicit none
+c
+       include 'scddat.h'
+       include 'upccon.h'
+       include 'upcvar.h'
+       include 'fast.h'
+       include 'voldat.h'
+       include 'contrl.h'
+       include 'comctl.h'
+       include 'htrcom.h'
+c
+c  local variables (must be defined every call)
+c
+c  is      index that represents current upper plenum structure number
+c  iax     index that represents current upper plenum axial level number
+c  inul    complete index for the relap5 coolant condition arrays
+c          corresponding to the upper plenum left surface nodes.
+c          inul = nvadul(iax,is) + filndx(4)
+c  inur    complete index for the relap5 coolant condition arrays
+c          corresponding to the upper plenum right surface nodes.
+c          inur = nvadur(iax,is) + filndx(4)
+c  ivol    index that represents current upper plenum volume sequence
+c          number
+c  isur    index that represents current upper plenum local surface
+c          number within a volume
+c  fstm    total flow rate (kg/s) of steam for upper plenum volume
+c  satot   total surface area (m2) of upper plenum volume
+       integer is, iax
+       integer inul, inur, ivol, isur
+       real fstm, satot
+       integer id
+       real qfold,qgold,qfnew,qgnew,wfgam
+c
+c  partition total volume steam flow rate between upper plenum surface
+c  nodes (calculate fstmul and fstmur)
+c
+       if(ntuvol.ge.1) then
+         do 710 ivol=1,ntuvol
+c  calculate total volume steam flow rate
+           is =abs(icups(1,ivol))/1000
+           iax=abs(icups(1,ivol))-is*1000
+           if (icups(1,ivol).gt.0) then
+             inul=nvadul(iax,is)+filndx(4)
+           else
+             inul=nvadur(iax,is)+filndx(4)
+           endif
+           fstm=(1.0-quala(inul))*
+     &     hyarg(inul)*abs(velg(inul))*avol(inul)
+c  calculate total surface area of volume
+           satot=0.0
+           do 720 isur=1,ntsur(ivol)
+             is =abs(icups(isur,ivol))/1000
+             iax=abs(icups(isur,ivol))-is*1000
+             if(iupls(iax,is).gt.0) satot=satot+saups(iax,is)
+  720      continue
+c  calculate surface steam flow rates
+           do 730 isur=1,ntsur(ivol)
+             is =abs(icups(isur,ivol))/1000
+             iax=abs(icups(isur,ivol))-is*1000
+             if (icups(isur,ivol).gt.0) then
+               if(iupls(iax,is).gt.0) then
+                 fstmul(iax,is)=fstm*saups(iax,is)/satot
+               else
+                 fstmul(iax,is)=0.0
+               endif
+             else
+               if(iupls(iax,is).gt.0) then
+                 fstmur(iax,is)=fstm*saups(iax,is)/satot
+               else
+                 fstmur(iax,is)=0.0
+               endif
+             endif
+  730      continue
+  710    continue
+       endif
+c
+c  loop over all upper plenum structures
+c
+       if(ntups.ge.1) then
+         do 10 is=1,ntups
+c
+c  calculate heat transfer coefficients and
+c  wall heat transfer (old wall temperatures)
+c
+           do 110 iax=1,ntupax(is)
+             inul=nvadul(iax,is)+filndx(4)
+             inur=nvadur(iax,is)+filndx(4)
+             htcful(iax,is)=0.0
+             htcgul(iax,is)=0.0
+             htctul(iax,is)=0.0
+             tsnkul(iax,is)=(1.0-voidg(inul))*tempf(inul)+
+     &                           voidg(inul)* tempg(inul)
+             qwgupl(iax,is)=0.0
+             qupl(iax,is)=0.0
+             gamupl(iax,is)=0.0
+             htcfur(iax,is)=0.0
+             htcgur(iax,is)=0.0
+             htctur(iax,is)=0.0
+             tsnkur(iax,is)=(1.0-voidg(inur))*tempf(inur)+
+     &                           voidg(inur)* tempg(inur)
+             qwgupr(iax,is)=0.0
+             qupr(iax,is)=0.0
+             gamupr(iax,is)=0.0
+             if(iupls(iax,is).eq.0) goto 110
+c  left surface nodes
+c  initialize argument of subroutine htrc1
+             id=1000*is+iax
+c  initialize variables in common htrcom passed to subroutine htrc1
+             htsa=saups(iax,is)
+             tw=tups(iupls(iax,is),iax,is)
+             iv=nvadul(iax,is)+filndx(4)
+             iv1=iv
+             iv2=iv
+             htdiam=diamv(iv1)
+             htlen=hhups(iax,is)
+             gridz=0.0
+             gridk=0.0
+             axpf=1.0
+             hfg=sathg(iv)-sathf(iv)
+             ggasa=abs(ggas(iv))
+             gliqa=abs(gliq(iv))
+             gabs=max(ggasa+gliqa,0.001)
+             g=hydzc(iv2)+hydzc(iv2+1)
+             g=(ggas(iv1)+gliq(iv1))*sign(1.0,g)
+             chf=0.0
+             chfmul=0.0
+             if(isoups(iax,is).eq.0) then
+c  vertical surface
+               htlenc=max(hhtot(is),1.0e-3)
+               drod=(saups(iax,is)/hvups(iax,is))/3.14159
+               delgrv=(hydzc(iv2)+hydzc(iv2+1))*gravcn
+             else
+c  horizontal surface
+               htlenc=max(hhups(iax,is),1.0e-3)
+               drod=hhups(iax,is)/3.14159
+               delgrv=0.0
+             endif
+             gcross=0.0
+             gcrosf=0.0
+             pitdia=1.0
+             htopta=1
+             ivindx=iv
+c  /htrcom/ variables pgopta and pgflag can be left undefined when
+c  the Czech heat transfer package is not used
+c
+c  call convective heat transfer package for intact structures
+             call htrc1 (id)
+c  calculate heat transfer coefficients (old wall temperatures)
+             htcful(iax,is)=htcf
+             htcgul(iax,is)=htcg
+             htctul(iax,is)=htzht
+             if(htzht.ge.1.0e-20) then
+               tsnkul(iax,is)=tw-htqot/htzht
+             else
+               tsnkul(iax,is)=(1.0-voidg(inul))*tempf(inul)+
+     &                             voidg(inul)* tempg(inul)
+             endif
+c  calculate wall heat transfer returned to relap5 from conduction
+c  solution (old wall temperatures)
+             qfold=htcful(iax,is)*saups(iax,is)*
+     &       (tups(iupls(iax,is),iax,is)-tempf(inul))
+             qgold=htcgul(iax,is)*saups(iax,is)*
+     &       (tups(iupls(iax,is),iax,is)-tempg(inul))
+             qwgupl(iax,is)=qgold
+             qupl(iax,is)=qfold+qgold
+             gamupl(iax,is)=gamw
+c  right surface nodes
+c  initialize argument of subroutine htrc1
+             id=1000*is+iax
+c  initialize variables in common htrcom passed to subroutine htrc1
+             htsa=saups(iax,is)
+             tw=tups(iuprs(iax,is),iax,is)
+             iv=nvadur(iax,is)+filndx(4)
+             iv1=iv
+             iv2=iv
+             htdiam=diamv(iv1)
+             htlen=hhups(iax,is)
+             gridz=0.0
+             gridk=0.0
+             axpf=1.0
+             hfg=sathg(iv)-sathf(iv)
+             ggasa=abs(ggas(iv))
+             gliqa=abs(gliq(iv))
+             gabs=max(ggasa+gliqa,0.001)
+             g=hydzc(iv2)+hydzc(iv2+1)
+             g=(ggas(iv1)+gliq(iv1))*sign(1.0,g)
+             chf=0.0
+             chfmul=0.0
+             if(isoups(iax,is).eq.0) then
+c  vertical surface
+               htlenc=max(hhtot(is),1.0e-3)
+               drod=(saups(iax,is)/hvups(iax,is))/3.14159
+               delgrv=(hydzc(iv2)+hydzc(iv2+1))*gravcn
+             else
+c  horizontal surface
+               htlenc=max(hhups(iax,is),1.0e-3)
+               drod=hhups(iax,is)/3.14159
+               delgrv=0.0
+             endif
+             gcross=0.0
+             gcrosf=0.0
+             pitdia=1.0
+             htopta=1
+             ivindx=iv
+c  /htrcom/ variables pgopta and pgflag can be left undefined when
+c  the Czech heat transfer package is not used
+c
+c  call convective heat transfer package for intact structures
+             call htrc1 (id)
+c  calculate heat transfer coefficients (old wall temperatures)
+             htcfur(iax,is)=htcf
+             htcgur(iax,is)=htcg
+             htctur(iax,is)=htzht
+             if(htzht.ge.1.0e-20) then
+               tsnkur(iax,is)=tw-htqot/htzht
+             else
+               tsnkur(iax,is)=(1.0-voidg(inur))*tempf(inur)+
+     &                             voidg(inur)* tempg(inur)
+             endif
+c  calculate wall heat transfer returned to relap5 from conduction
+c  solution (old wall temperatures)
+             qfold=htcfur(iax,is)*saups(iax,is)*
+     &       (tups(iuprs(iax,is),iax,is)-tempf(inur))
+             qgold=htcgur(iax,is)*saups(iax,is)*
+     &       (tups(iuprs(iax,is),iax,is)-tempg(inur))
+             qwgupr(iax,is)=qgold
+             qupr(iax,is)=qfold+qgold
+             gamupr(iax,is)=gamw
+  110      continue
+c
+c  solve mass and energy equations
+c
+           call upsolv(is)
+c
+c  calculate wall heat transfer (new wall temperatures)
+c
+           do 210 iax=1,ntupax(is)
+             if(iupls(iax,is).eq.0) then
+               qwgupl(iax,is)=0.0
+               qupl(iax,is)=0.0
+               gamupl(iax,is)=0.0
+               qwgupr(iax,is)=0.0
+               qupr(iax,is)=0.0
+               gamupr(iax,is)=0.0
+               goto 210
+             endif
+c  left surface nodes
+c  calculate weighting factor (wfgam) for extrapolation of gamupl from
+c  old wall temperature to new wall temperature
+             qfold=qupl(iax,is)-qwgupl(iax,is)
+             qgold=qwgupl(iax,is)
+             inul=nvadul(iax,is)+filndx(4)
+             qfnew=htcful(iax,is)*saups(iax,is)*
+     &       (tups(iupls(iax,is),iax,is)-tempf(inul))
+             qgnew=htcgul(iax,is)*saups(iax,is)*
+     &       (tups(iupls(iax,is),iax,is)-tempg(inul))
+             wfgam=1.0
+             if(gamupl(iax,is).ge.0.0) then
+               if(abs(qfold).gt.1.0e-6*saups(iax,is))
+     &         wfgam=qfnew/qfold
+             else
+               if(abs(qgold).gt.1.0e-6*saups(iax,is))
+     &         wfgam=qgnew/qgold
+             endif
+c  calculate wall heat transfer returned to relap5 from conduction
+c  solution (new wall temperatures)
+             qwgupl(iax,is)=qgnew
+             qupl(iax,is)=qfnew+qgnew
+             gamupl(iax,is)=gamupl(iax,is)*wfgam
+c  right surface nodes
+c  calculate weighting factor (wfgam) for extrapolation of gamupr from
+c  old wall temperature to new wall temperature
+             qfold=qupr(iax,is)-qwgupr(iax,is)
+             qgold=qwgupr(iax,is)
+             inur=nvadur(iax,is)+filndx(4)
+             qfnew=htcfur(iax,is)*saups(iax,is)*
+     &       (tups(iuprs(iax,is),iax,is)-tempf(inur))
+             qgnew=htcgur(iax,is)*saups(iax,is)*
+     &       (tups(iuprs(iax,is),iax,is)-tempg(inur))
+             wfgam=1.0
+             if(gamupr(iax,is).ge.0.0) then
+               if(abs(qfold).gt.1.0e-6*saups(iax,is))
+     &         wfgam=qfnew/qfold
+             else
+               if(abs(qgold).gt.1.0e-6*saups(iax,is))
+     &         wfgam=qgnew/qgold
+             endif
+c  calculate wall heat transfer returned to relap5 from conduction
+c  solution (new wall temperatures)
+             qwgupr(iax,is)=qgnew
+             qupr(iax,is)=qfnew+qgnew
+             gamupr(iax,is)=gamupr(iax,is)*wfgam
+  210      continue
+   10    continue
+       endif
+       return
+       end
+*endif

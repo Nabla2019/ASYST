@@ -1,0 +1,507 @@
+*mlist
+*if def,selap
+      subroutine oxdcon2
+c  
+c
+c  Computes B4C control rod oxidation.
+c
+c 
+c  Calling subroutines:  cylin2
+c
+c  Local variables.
+c
+c  expan  thermal expansion strain of absorber cladding
+c  sflow   steam flow cross-section at inner side of guide tube (m2)
+c  surfra   ratio of cross-section inside guide tube to outside guide tube
+c  tsurf     guide tube outer surface temperaure (k)
+c  tclsur   abosrber cladding surface temperature (k)
+c
+c  oxlis0   oxidation steam starvation rate limit per unit surface area
+c           for previous time step (kg/m2-s).
+c  oxlim   oxidation steam starvation rate limit per sec (kg/s)
+c  ph2     hydrogen partial pressure (Pa)
+c  ph20    steam partial pressure (Pa)
+c  xss      thickness of stainless steel (m)
+c  xsoi     thickness of SS oxide layer thickness (m)
+c  xsoo    thickness of SS oxide layer thickness at the end of time step (m)
+c  routss  outer radius of absorber cladding (m)
+c  toxdwc  total oxide weight gain, inside and outside oxide layer (kg)
+c  oxrat0   oxidation rate limit ratio for previous time step.
+c  s        slope of time dependent coefficients used in function
+c           oxfunc.
+c  tclad0   average cladding temperature for previous time step (k).
+c  toxlim   minimum cladding surface temperature for oxidation
+c           calculation (k).
+c  wtlim    weight gain limit (kg/m2).
+c  flstm    steam flow rate(kg/s)
+c  wh2oin     steam available at the inner guide tube (kg)
+c  dh21  hydrogen generation by B4C oxidation (kg/s)
+c  dh2o  steam removal by SS oxidation (kg/s)
+c  dwscb steam removal by B4C oxidation (kg/s)
+      implicit none
+       include 'scddat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'statec.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'scntl.h'
+       include 'cmptim.h'
+       include 'debout.h'
+       include 'scdcom.h'
+       include 'scdout.h'
+       include 'cmatp.h'
+       include 'intcom.h'
+       include 'ndxara.h'
+       include 'oxcom1.h'
+       include 'oxcom2.h'
+       include 'ptscom.h'
+       include 'tblsp.h'
+       include 'buntim.h'
+       include 'conele.h'
+       include 'blageo.h'
+c  Local variables.
+       integer i,il,iln,im,in,noxss,noxzr,nshap,ic,jk,knt
+       real avfunc,co,coxwtk,do,oxlim0,oxlis0,oxrat0,tsurf,sden,wss,
+     & snfunc,soxwgn,ssheat,tclad0,toxlim,uo,vfunc,vsfunc,vss,wtlimt,
+     & wtgain,wtmol, ph2, ph2o,xsoi,xss,xsoo,qmw,dh2o,vso,avoidl,
+     & qab,wh2oin,wh2orate,dwscb,dh21,oxlisin,who,wso,waro,
+     & routss,toxdwc,surfra,expan,sthexp,sflow,pres,dco,dco2,dch4,
+     & presst
+       real dum1,dum2,dum3,dum4
+       real rcos1,rci1,pi,tclsur
+       external  sden,vsfunc,snfunc,oxcongt,oxconb4c,oxconss,avfunc,
+     # sthexp  
+       data toxlim,pi/1000.0, 3.1416/
+       data uo/1.827834e5/, co/10310.75/, do/0.52257/
+c
+c  Define non nodally dependent constants.
+       oxrat0 = 1.0
+       do i=1,naz
+         kaxndb = i
+         oxdhcc(i,icomp) = 0.0
+         oxdhfc(i,icomp) = 0.0
+         oxdhss(i,icomp)=0.0
+         oxdhab(i,icomp)=0.0
+         h2oxd2(i,icomp) = 0.0
+         cooxd2(i,icomp) = 0.0
+         co2oxd2(i,icomp) = 0.0
+         ch4oxd2(i,icomp) = 0.0
+         h2oxb4c(i,icomp) =0.0
+         sroxd(ndax*(icomp-1)+i) = 0.0
+         im = (icomp - 1)*ndax + i
+         il = nvad(im) + filndx(4)
+         expan=sthexp(tcond3(nrcldi2(i,icomp)-1,i,icomp),300.0)
+     &    *(rpel(im)-riss(im))
+         avoidl= pitch(1)**2 -pi*rco2(i,icomp)**2
+         sflow=(rci2(i,icomp)**2-(rpel(im)+expan)**2)
+     &    *pi*surirat(i,icomp)
+         surfra=sflow/(avoidl+sflow)
+         if(oxinblo(i,icomp).eq.1) surfra = 0.0
+         tsurf = tcond3(nrods2(i,icomp),i,icomp)
+         tclsur= tcond3(nrcond2(i,icomp)-1,i,icomp)
+         tclad0 = avfunc(ngeom(icomp),
+     &       xcond3(nrcldi2(i,icomp),i,icomp),
+     &       tcond3(nrcldi2(i,icomp), i,icomp),
+     &       nrods2(i,icomp)- nrcldi2(i,icomp) + 1)
+         if (tsurf.le.273. .or. tsurf.gt.4000.) then
+           write(output,11)
+   11      format(' Diagnostic message from subroutine oxdcon')
+           write (output,10)icomp
+   10 format('0********* Temperature out of range for oxidation, compone
+     &nt',i3)
+           call prntt2
+           fail = .true.
+         endif
+         if (tsurf .lt. toxlim) go to 750
+c Determine which layer will oxidize.
+c  noxide = 0 inside and outside of guide tube+absorber sheath
+c  noxide = 1 b4c absorber,  outer guide tube
+c                    inside and outside of guide tube
+c  noxide = 2 oxidze b4c absorber
+c  noxide = 3 oxidize zr frozen crust + inside of guide tube
+c                    + absorber sheath
+c  noxide = 4 oxidize zr frozen crust + inside of guide tube
+c                    + B4C absorber
+c  noxide = 5 oxidize absorber sheath
+c  noxide = 6 no oxidation
+         
+     
+        if(b4cox(i,icomp).eq.2) goto 750
+c  if weight gain limit minus oxide weight gain in frozen film 
+c  from previous time step is less than 1.e-5
+         if (32.0/91.22*wfrozr(ndax*(icomp-1)+i) - oxdwf0(i) .ge.
+     &   1.0e-05) then
+               if(b4cox(i,icomp) .ne. 1) then
+                   noxide2(i,icomp) = 3
+               else
+                   noxide2(i,icomp) = 4
+               endif      
+        elseif(rnoxd(ndax*(icomp-1)+i)-rci2(i,icomp).ge.1.0e-05 
+     &   .and. wremzr(ndax*(icomp-1)+i).lt.1.0e-5) then
+               if(b4cox(i,icomp) .ne. 1) then
+                   noxide2(i,icomp) = 0
+               else
+                   noxide2(i,icomp) = 1
+               endif
+        elseif( wremzr(ndax*(icomp-1)+i).gt.1.0e-5 .and.
+     &     b4cox(i,icomp).eq.0)then
+               noxide2(i,icomp) = 5                    
+        elseif( wremzr(ndax*(icomp-1)+i).gt.1.0e-5 .and.
+     &     (b4cox(i,icomp).eq.1.and.cwb4c(i,icomp).gt.0.))then
+               noxide2(i,icomp) = 2              
+        else
+               noxide2(i,icomp) = 6
+        endif
+                
+         if (noxide2(i,icomp).gt.5
+c   if the axia node is surrouded by absorber material set flag to nonoxidation
+c   &   .or. (rocrst(ndax*(icomp-1)+i) .ge. rco2(i,icomp) + 1.0e-10)
+     &   .or. ndisrp(ndax*(icomp-1)+i).gt.0) goto 750
+     
+c  Define oxidation limits.
+         nshap=0
+         call oxydef (oxlis0,i,nshap)
+         rcos1 = rcoi2(i,icomp)
+         rci1 =rci2(i,icomp)
+         oxlim0 = oxlis0*
+     &   snfunc(ngeom(icomp),rcos1,dzcnd2(i,icomp),1.0)
+c  Define partial pressure for SS oxidation
+         ph2=0.0
+         ph2o =pps(il)
+         do in =1, noncn
+             ph2=ph2+qualan(il+in-1)/wmolea(in)
+         enddo
+c  Define parameters for absorber sheath oxidation
+           xss  = rpel(im) - riss(im)
+           xsoi = oxdso(im)
+           routss =  rpel(im)
+           dh21=0.0
+           dh2o=0.0
+           dwscb=0.0
+c  set parameters for guide tube oxidation
+           dum1 = 0.0
+           dum2 = 0.0
+           dum3 = oxdwc2(i,icomp)
+           dum4 = oxdwci2(i,icomp)
+           wtlim = 0.351*zrden*
+     &       vsfunc(ngeom(icomp),rcos1,rci2(i,icomp))                        
+c  Oxidize outer and inner guide tube and absorber sheath
+         if (noxide2(i,icomp).eq.0) then
+c  Zr.
+           if (imatr3(nmater2(i,icomp),i,icomp) .eq. 1) then
+              if(gtox(i,icomp) .eq. 1) goto 50            
+             rnoxd0(i) = rnoxd(ndax*(icomp-1)+i)
+             oxlis0=oxlis0*(1.0-surfra)
+              call oxcongt(rci2(i,icomp), rco2(i,icomp),tclad0,
+     &       oxlis0, oxdeo2(i,icomp), oxdwc2(i,icomp),
+     &       alfao(ndax*(icomp-1)+i), rnoxd(ndax*(icomp-1)+i),
+     &       rnalf(ndax*(icomp-1)+i),noxide2(i,icomp), oxdwc0(i),
+     &       dum1,dum2,dum3,i,1)
+            h2oxd2(i,icomp) = ((oxdwc2(i,icomp)-oxdwc0(i))*
+     &       snfunc(ngeom(icomp),rcos1,
+     &       dzcnd2(i,icomp),1.0)/8.0)/dt
+            oxdhcc(i,icomp) = (91.22/32.0)*zrheat*
+     &       (oxdwc2(i,icomp) - oxdwc0(i))*
+     &       snfunc(ngeom(icomp),rcos1,1.0,slbwd)/dt    
+c           stainless steel
+           elseif (imatr3(nmater2(i,icomp),i,icomp) .eq. 17) then
+             wtgain = soxwgn(tsurf)
+             ssheat = (2.67e08 - 2.4182e08)/55.8
+             wss = wsrbng2(i,icomp)+wfrosr(ndax*(icomp-1)+i) -
+     &       wremsr(ndax*(icomp-1)+i)
+             wtlimt = (16.0/55.8)*wss
+             wtmol = 55.8/16.0
+             call oxmass(ngeom(icomp),dt,rcos1, wtmol,wtlimt,
+     &       oxrat0,oxlim0,dzcnd2(i,icomp),oxdws0(i),wtgain,ssheat,
+     &       noxss,oxdws(ndax*(icomp-1)+i))
+             h2oxd2(i,icomp) = ((oxdws(ndax*(icomp-1)+i) - oxdws0(i))/
+     &       8.0)/dt
+c            if (noxss .ge. 1) noxide2(i,icomp) = 5
+           else
+c  User-defined.
+             wtgain = 1
+           endif
+c Oxidize absorber sheath              
+c         ph2 method from: upsolv.ff
+   50    if(oxinblo(i,icomp).eq.1) goto 60                                        
+            if(ph2.gt.0.0)
+     &     ph2=(p(il)-pps(il))*qualan(il+nonhy-1)/wmolea(nonhy)/ph2
+c      Compute available steam weight          
+           wh2oin= flstm0(im)*dt*surfra
+           if(gtox(i,icomp) .ne. 1) wh2oin = wh2oin/2.0
+           call oxconss(ngeom(icomp), tsurf,xsoi,xss,ph2o, ph2,dt,dzcnd2
+     &    (i,icomp), routss,wh2oin,xsoo,dh2o,qmw,wsscon,i,icomp)
+           oxdso(im)=xsoo
+           oxdhss(i,icomp)=qmw/dt  
+           h2oxd2(i,icomp)=dh2o/9.0/dt+h2oxd2(i,icomp)
+           h2oxb4c(i,icomp)=dh2o/9.0/dt
+           
+           oxlisin = (2.0*wh2oin-dh2o)*8.0/9.0/snfunc(ngeom(icomp)
+     &       ,rci2(i,icomp),dzcnd2(i,icomp),1.0)                       
+           call oxcongt(rci2(i,icomp), rco2(i,icomp),tclad0,
+     &       oxlisin, oxdei(ndax*(icomp-1)+i), oxdwci2(i,icomp),
+     &       alfai(ndax*(icomp-1)+i), rnoxdi(ndax*(icomp-1)+i),
+     &       rnalfi(ndax*(icomp-1)+i),noxide2(i,icomp), oxdwci0(i),
+     &       dum1,dum2,dum4,i,2)
+           
+           toxdwc = oxdwc2(i,icomp)+oxdwci2(i,icomp)
+           if(toxdwc .ge. wtlim .or. rnoxdi(ndax*(icomp-1)+i)
+     &       .ge. rnoxd(ndax*(icomp-1)+i)) then
+                 alfai(ndax*(icomp-1)+i)=0.0
+                 alfao(ndax*(icomp-1)+i)=0.0 
+                 rnalfi(ndax*(icomp-1)+i)=0.0
+                 rnoxdi(ndax*(icomp-1)+i)=rnoxd(ndax*(icomp-1)+i)
+                 oxdwci2(i,icomp)=wtlim-oxdwc2(i,icomp)
+                 gtox(i,icomp)=1
+           endif      
+        
+           h2oxd2(i,icomp) = ((oxdwci2(i,icomp)-oxdwci0(i))*
+     &       snfunc(ngeom(icomp),rci2(i,icomp),
+     &       dzcnd2(i,icomp),1.0)/8.0)/dt+ h2oxd2(i,icomp)
+           oxdhcc(i,icomp) = (91.22/32.0)*zrheat*
+     &       (oxdwci2(i,icomp) - oxdwci0(i))*
+     &       snfunc(ngeom(icomp),rci2(i,icomp),1.0,slbwd)/dt
+     &       +oxdhcc(i,icomp)
+           
+   60  sroxd(ndax*(icomp-1)+i) = h2oxd2(i,icomp)*9.0
+                            
+c  B4C can oxidize (Before gt breach)
+         elseif (noxide2(i,icomp).eq.1) then
+c  Outer side of guide tube oxidation
+              if(gtox(i,icomp).eq. 1) goto 150            
+             rnoxd0(i) = rnoxd(ndax*(icomp-1)+i)
+             oxlis0=oxlis0*(1.0-surfra)
+              call oxcongt(rci2(i,icomp), rco2(i,icomp),tclad0,
+     &       oxlis0, oxdeo2(i,icomp), oxdwc2(i,icomp),
+     &       alfao(ndax*(icomp-1)+i), rnoxd(ndax*(icomp-1)+i),
+     &       rnalf(ndax*(icomp-1)+i),noxide2(i,icomp), oxdwc0(i),
+     &       dum1,dum2,dum3,i,1)
+             h2oxd2(i,icomp) = ((oxdwc2(i,icomp)-oxdwc0(i))*
+     &       snfunc(ngeom(icomp),rcos1,
+     &       dzcnd2(i,icomp),1.0)/8.0)/dt
+             oxdhcc(i,icomp) = (91.22/32.0)*zrheat*
+     &       (oxdwc2(i,icomp) - oxdwc0(i))*
+     &       snfunc(ngeom(icomp),rcos1,1.0,slbwd)/dt    
+             
+c  Inner side of guide tube oxidation
+c  Absrober oxidation
+  150  if(oxinblo(i,icomp).eq.1) goto 160  
+          who = flwh20(im)*surfra
+          wso = flstm0(im)*surfra
+          waro=flnrt(im)*surfra 
+           call oxconb4c(i,who,wso,waro,qab,dwscb,dh21,tclsur)
+           oxdhab(i,icomp)=qab/dt
+           h2oxb4c(i,icomp)=dh21
+           h2oxd2(i,icomp)=dh21+h2oxd2(i,icomp)
+           oxdhab(i,icomp)=qab/dt   
+
+c                            
+          if(wso-dwscb .ge. 1.0e-6) then
+c      Compute available steam weight
+c      Absorber sheath oxidation
+           wh2oin= (wso-dwscb)*dt               
+c           
+cc      Inner guide tube oxidation
+           if(gtox(i,icomp).eq.1) goto 160           
+           oxlisin = wh2oin*8.0/9.0/snfunc(ngeom(icomp)
+     &       ,rci2(i,icomp),dzcnd2(i,icomp),1.0)                          
+           call oxcongt(rci2(i,icomp), rco2(i,icomp),tclad0,
+     &       oxlisin, oxdei(ndax*(icomp-1)+i), oxdwci2(i,icomp),
+     &       alfai(ndax*(icomp-1)+i), rnoxdi(ndax*(icomp-1)+i),
+     &       rnalfi(ndax*(icomp-1)+i),noxide2(i,icomp), oxdwci0(i),
+     &       dum1,dum2,dum4,i,2)
+c           
+           toxdwc = oxdwc2(i,icomp)+oxdwci2(i,icomp)
+           if(toxdwc .ge. wtlim .or. rnoxdi(ndax*(icomp-1)+i)
+     &       .ge. rnoxd(ndax*(icomp-1)+i)) then
+                 alfai(ndax*(icomp-1)+i)=0.0
+                 alfao(ndax*(icomp-1)+i)=0.0
+                 rnalfi(ndax*(icomp-1)+i)=0.0
+                 rnoxdi(ndax*(icomp-1)+i)=rnoxd(ndax*(icomp-1)+i)
+                 oxdwci2(i,icomp)=wtlim-oxdwc2(i,icomp)
+                 gtox(i,icomp)=1
+           endif      
+c        
+           h2oxd2(i,icomp) = ((oxdwci2(i,icomp)-oxdwci0(i))*
+     &       snfunc(ngeom(icomp),rci2(i,icomp),
+     &       dzcnd2(i,icomp),1.0)/8.0)/dt+ h2oxd2(i,icomp)
+            oxdhcc(i,icomp) = (91.22/32.0)*zrheat*
+     &       (oxdwci2(i,icomp) - oxdwci0(i))*
+     &       snfunc(ngeom(icomp),rci2(i,icomp),1.0,slbwd)/dt
+     &       +oxdhcc(i,icomp)             
+         endif
+  160    sroxd(ndax*(icomp-1)+i) = (h2oxd2(i,icomp)-dh21)*9.0
+     &                                                         +dwscb
+c
+cc     Guide tube has failed    
+       elseif (noxide2(i,icomp).eq.2) then
+           who = flwh20(im)
+           wso = flstm0(im)
+           waro=flnrt(im)
+           call oxconb4c(i,who,wso,waro,qab,dwscb,dh21,tclsur)
+           oxdhab(i,icomp)=qab/dt
+           h2oxb4c(i,icomp)=dh21
+           h2oxd2(i,icomp)=dh21
+           sroxd(ndax*(icomp-1)+i)=dwscb
+c
+cc     Zr Frozen crust around guide tube, absorber sheath is not failed
+       elseif(noxide2(i,icomp).eq.3) then
+           wtgain = coxwtk(tsurf)
+           wtlimt = (32.0/91.22)*wfrozr(ndax*(icomp-1)+i)
+           wtmol = 91.22/32.0
+           oxlim0=oxlim0*(1.0-surfra)
+           call oxmass (ngeom(icomp),dt,rcos1, wtmol,wtlimt,oxrat0,
+     &     oxlim0,dzcnd2(i,icomp),oxdwf0(i),wtgain,zrheat,noxzr,
+     &     oxdwf(ndax*(icomp-1)+i))
+           wrbszo(i,icomp,9)=wrbszo(i,icomp,9)-(oxdwf(ndax*
+     &       (icomp-1)+i)- oxdwf0(i))*91.22/32.0
+           wrbszo(i,icomp,10)=wrbszo(i,icomp,10)+(oxdwf(ndax*
+     &       (icomp-1)+i) - oxdwf0(i))*123.22/32.0
+           oxdhfc(i,icomp)= (91.22/32.0)*zrheat*
+     &       (oxdwf(ndax*(icomp-1)+i) - oxdwf0(i))*
+     &       snfunc(ngeom(icomp),rcos1,1.0,slbwd)/dt    
+           h2oxd2(i,icomp) = ((oxdwf(ndax*(icomp-1)+i) - oxdwf0(i))/
+     &     8.0)/dt
+c           
+            if(oxinblo(i,icomp).eq.1) goto 360
+            if(ph2.gt.0.0)
+     &     ph2=(p(il)-pps(il))*qualan(il+nonhy-1)/wmolea(nonhy)/ph2
+cc      Compute available steam weight          
+           wh2oin= flstm0(im)*dt*surfra
+           if(gtox(i,icomp) .ne. 1) wh2oin = wh2oin/2.0
+           call oxconss(ngeom(icomp), tsurf,xsoi,xss,ph2o, ph2,dt,dzcnd2
+     &    (i,icomp), routss,wh2oin,xsoo,dh2o,qmw,wsscon,i,icomp)
+           oxdso(im)=xsoo
+           oxdhss(i,icomp)=qmw/dt
+           h2oxb4c(i,icomp)=dh2o/9.0/dt             
+           h2oxd2(i,icomp)=dh2o/9.0/dt+h2oxd2(i,icomp)
+c           
+           if(gtox(i,icomp).eq. 1) goto 360
+           oxlisin = (2.0*wh2oin-dh2o)*8.0/9.0/snfunc(ngeom(icomp)
+     &       ,rci2(i,icomp),dzcnd2(i,icomp),1.0)                   
+           call oxcongt(rci2(i,icomp), rco2(i,icomp),tclad0,
+     &       oxlisin, oxdei(ndax*(icomp-1)+i), oxdwci2(i,icomp),
+     &       alfai(ndax*(icomp-1)+i), rnoxdi(ndax*(icomp-1)+i),
+     &       rnalfi(ndax*(icomp-1)+i),noxide2(i,icomp), oxdwci0(i),
+     &       dum1,dum2,dum4,i,2)
+c            
+           toxdwc = oxdwc2(i,icomp)+oxdwci2(i,icomp)
+           if(toxdwc .ge. wtlim .or. rnoxdi(ndax*(icomp-1)+i)
+     &       .ge. rnoxd(ndax*(icomp-1)+i)) then
+                 alfai(ndax*(icomp-1)+i)=0.0
+                 alfao(ndax*(icomp-1)+i)=0.0
+                 rnalfi(ndax*(icomp-1)+i)=0.0
+                 rnoxdi(ndax*(icomp-1)+i)=rnoxd(ndax*(icomp-1)+i)
+                 oxdwci2(i,icomp)=wtlim-oxdwc2(i,icomp)
+                 gtox(i,icomp)=1
+           endif      
+           h2oxd2(i,icomp) = ((oxdwci2(i,icomp)-oxdwci0(i))*
+     &       snfunc(ngeom(icomp),rci2(i,icomp),
+     &       dzcnd2(i,icomp),1.0)/8.0)/dt+ h2oxd2(i,icomp)
+           oxdhcc(i,icomp) = (91.22/32.0)*zrheat*
+     &       (oxdwci2(i,icomp) - oxdwci0(i))*
+     &       snfunc(ngeom(icomp),rci2(i,icomp),1.0,slbwd)/dt
+     &       +oxdhcc(i,icomp)
+  360    sroxd(ndax*(icomp-1)+i) = h2oxd2(i,icomp)*9.0
+c    
+c      
+cc     Zr Frozen crust around guide tube, absorber sheath is failed
+       elseif(noxide2(i,icomp).eq.4) then
+cc     Oxidation out side of guide tube      
+           wtgain = coxwtk(tsurf)
+           wtlimt = (32.0/91.22)*wfrozr(ndax*(icomp-1)+i)
+           wtmol = 91.22/32.0
+           oxlim0=oxlim0*(1.0-surfra)
+           call oxmass (ngeom(icomp),dt,rcos1, wtmol,wtlimt,oxrat0,
+     &     oxlim0,dzcnd2(i,icomp),oxdwf0(i),wtgain,zrheat,noxzr,
+     &     oxdwf(ndax*(icomp-1)+i))
+           wrbszo(i,icomp,9)=wrbszo(i,icomp,9)-(oxdwf(ndax*
+     &       (icomp-1)+i)- oxdwf0(i))*91.22/32.0
+           wrbszo(i,icomp,10)=wrbszo(i,icomp,10)+(oxdwf(ndax*
+     &       (icomp-1)+i) - oxdwf0(i))*123.22/32.0
+           oxdhfc(i,icomp)= (91.22/32.0)*zrheat*
+     &       (oxdwf(ndax*(icomp-1)+i) - oxdwf0(i))*
+     &       snfunc(ngeom(icomp),rcos1,1.0,slbwd)/dt    
+           h2oxd2(i,icomp) = ((oxdwf(ndax*(icomp-1)+i) - oxdwf0(i))/
+     &     8.0)/dt
+     
+cc     Oxidation inside of guide tube
+cc     Oxidation of absorber
+           if(oxinblo(i,icomp).eq.1) goto 460    
+           who = flwh20(im)*surfra
+           wso = flstm0(im)*surfra
+           waro=flnrt(im)*surfra  
+           call oxconb4c(i,who,wso,waro,qab,dwscb,dh21,tclsur)
+           oxdhab(i,icomp)=qab/dt
+           h2oxb4c(i,icomp)=dh21
+           h2oxd2(i,icomp)=dh21+h2oxd2(i,icomp)
+c     
+          if(wso-dwscb .ge. 1.0e-6) then
+c      Compute available steam weight          
+           wh2oin= (who-dwscb)*dt
+           if(gtox(i,icomp) .eq. 1) goto 460
+c
+cc     Oxidation of inner GT           
+           oxlisin =wh2oin*8.0/9.0/snfunc(ngeom(icomp)
+     &       ,rci2(i,icomp),dzcnd2(i,icomp),1.0)                          
+           call oxcongt(rci2(i,icomp), rco2(i,icomp),tclad0,
+     &       oxlisin, oxdei(ndax*(icomp-1)+i), oxdwci2(i,icomp),
+     &       alfai(ndax*(icomp-1)+i), rnoxdi(ndax*(icomp-1)+i),
+     &       rnalfi(ndax*(icomp-1)+i),noxide2(i,icomp), oxdwci0(i),
+     &       dum1,dum2,dum4,i,2)
+c             
+           toxdwc = oxdwc2(i,icomp)+oxdwci2(i,icomp)
+           if(toxdwc .ge. wtlim .or. rnoxdi(ndax*(icomp-1)+i)
+     &       .ge. rnoxd(ndax*(icomp-1)+i)) then
+                 alfai(ndax*(icomp-1)+i)=0.0
+                 alfao(ndax*(icomp-1)+i)=0.0
+                 rnalfi(ndax*(icomp-1)+i)=0.0
+                 rnoxdi(ndax*(icomp-1)+i)=rnoxd(ndax*(icomp-1)+i)
+                 oxdwci2(i,icomp)=wtlim-oxdwc2(i,icomp)
+                 gtox(i,icomp)=1
+           endif      
+        
+           h2oxd2(i,icomp) = ((oxdwci2(i,icomp)-oxdwci0(i))*
+     &       snfunc(ngeom(icomp),rci2(i,icomp),
+     &       dzcnd2(i,icomp),1.0)/8.0)/dt+ h2oxd2(i,icomp)
+     &       +h2oxd2(i,icomp)
+            oxdhcc(i,icomp) = (91.22/32.0)*zrheat*
+     &       (oxdwci2(i,icomp) - oxdwci0(i))*
+     &       snfunc(ngeom(icomp),rci2(i,icomp),1.0,slbwd)/dt
+     &       +oxdhcc(i,icomp)             
+        endif
+  460   sroxd(ndax*(icomp-1)+i) = (h2oxd2(i,icomp)-dh21)*9.0
+     &                                                         +dwscb
+       
+       elseif(noxide2(i,icomp).eq.5)then
+            if(ph2.gt.0.0)
+     &     ph2=(p(il)-pps(il))*qualan(il+nonhy-1)/wmolea(nonhy)/ph2
+           wh2oin= flstm0(im)*dt
+           call oxconss(ngeom(icomp), tsurf,xsoi,xss,ph2o, ph2,dt,dzcnd2
+     &    (i,icomp), routss,wh2oin,xsoo,dh2o,qmw,wsscon,i,icomp)
+           oxdso(im)=xsoo
+           oxdhss(i,icomp)=qmw/dt  
+           h2oxd2(i,icomp)=dh2o/9.0/dt
+           h2oxb4c(i,icomp)=dh2o/9.0/dt             
+       endif 
+          
+c  Calculate noncondensible generation.
+         if (.not.scntrl(8)) then
+           im = (icmp - 1)*nx + i 
+           il = nvad(im) + filndx(4)
+           do in = 1,noncn
+             if (in .eq. nonhy) then
+               iln = il + in - 1
+               gaman(iln) = gaman(iln) + h2oxd2(i,icomp)*isgl*recipv(il)
+               enthn(iln) = uo+co*tsurf+do/2.0*(tsurf-tao)**2
+             endif
+           enddo
+         endif
+750      continue
+       enddo
+       return
+       end
+*endif
+ 

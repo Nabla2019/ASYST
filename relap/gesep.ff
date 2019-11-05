@@ -1,0 +1,156 @@
+*mlist
+       subroutine gesep (i1, n, i)
+c
+c  gesep computes the needed input to the GE mechanistic separator model
+c  and calls the GE subroutines.
+c
+c  Cognizant engineer: wlw.
+c
+c  Calls the GE subroutines.
+c
+       implicit none
+c
+       integer i1,n,i
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'przdat.h'
+       include 'separ.h'
+       include 'statec.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables declared here.
+      real wi, xi, pi, rovi, roli, visli, visvi
+      real vorn, dppa, wfcut, wfcot, wgcut
+      real tenm6
+      real alpi, wvi, wmi, vli, vvi, fai, wli, alp
+      real rmtop, rmdis, rmin, ptop, pdis
+      real wgcot, dpin, alpgj1, alpfj1, alpgj2, alpfj2
+      real hrhogs(3), vel
+      integer isoln, istage, k3, l3, k3f
+      integer i1j, i2j, i3j
+      integer k1, k2, l1, l2, l1f, l2f
+c
+       if (isepst(n).eq.2 .or. isepst(n).eq.5) istage = 2
+       if (isepst(n).eq.3 .or. isepst(n).eq.6) istage = 3
+c
+       i1j = i
+       i2j = i + ijskp
+       i3j = i + 2*ijskp
+       k3 = ij1nx(i3j)
+       l3 = ij2nx(i3j)
+       vorn = 0.5
+c  Get separator inlet properties.
+       tenm6 = .000001
+       alpi = voidgj(i3j)
+       roli = rhofj(i3j)
+       rovi = rhogj(i3j)
+       vli = velfj(i3j)
+       vvi = velgj(i3j)
+       fai = ajun(i3j)/nsep(n)
+       wli = fai*(1.0 - alpi)*roli*vli
+       wvi = fai*alpi*rovi*vvi
+       wmi = wli + wvi
+       alp = voidg(l3)
+       rmin = voidg(k3) * rhog(k3) + voidf(k3) * rhof(k3)
+       k3f = k3 + iand(ishft(jcex(i3j),-9),7)
+       pi = p(k3) - rmin * gravcn * hydzc(k3f)
+c  Determine whether to perform separator solution.
+       wi = wmi
+c      xi = wvi/wmi
+       xi = voidg(l3)*rovi*vvi/(voidg(l3)*rovi*vvi+voidf(l3)*roli*vli)
+       xim(n) = xi
+       xcu(n) = -1.0
+       xco(n) = -1.0
+       if (wi.lt.0.0 .or. xi.lt.0.0 .or. xim(n).lt.tenm6 .or.
+     &     alp.lt.0.05 .or. vvi*vli.lt.0.0 ) then
+         isoln = 0
+       else
+         isoln = 1
+       endif
+       if (isoln .ne. 0) then
+c
+c  Perform separator solution.
+c  Mechanistic separator.
+c  Compute liquid level on outside of separator.
+         k1 = ij1nx(i1j)
+         l1 = ij2nx(i1j)
+         l1f = l1 + iand(ishft(jcex(i1j),-9),7)
+         rmtop = voidg(l1)*rhog(l1) + voidf(l1)*rhof(l1)
+         ptop = p(l1) + rmtop*gravcn*hydzc(l1f)
+         k2 = ij1nx(i2j)
+         l2 = ij2nx(i2j)
+         l2f = l2 + iand(ishft(jcex(i2j),-9),7)
+         rmdis = voidg(l2)*rhog(l2) + voidf(l2)*rhof(l2)
+         pdis = p(l2) - rmdis*gravcn*hydzc(l2f)
+         hrhogs(1) = max(0.0, pdis - ptop )
+         hrhogs(2) = 0.
+         hrhogs(3) = 0.
+         visvi = viscg(k3)
+         visli = viscf(k3)
+         wfcut = 0.
+         wfcot = 0.
+         wgcut = 0.
+         wgcot = 0.
+c  Do separator solution.
+         call gesub (wi, xi, pi, rovi, roli, visli, visvi, istage,
+     &   gerr1(n), geai(n), gean(n), gerh(n), geang(n), gerws(n),
+     &   gerrss(n), geads(n), gedds(n), hrhogs, gehds(n), gehsks(n),
+     &   gecks(n), geefflds(n), geaas(n), gebbs(n), vorn,
+     &   cwfco(n), cwgcu(n),dppa, wfcut, wfcot, wgcut, wgcot, isoln,
+     &   gravcn)
+c
+         if (isoln .ne. 0) then
+           xco(n) = wfcot/wgcot
+           xcu(n) = wgcut/wfcut
+c  Load the volume fractions into arrays.
+           wgcot = abs(wgcot)
+           wgcut = abs(wgcut)
+           wfcot = abs(wfcot)
+           wfcut = abs(wfcut)
+           alpgj1 = wgcot/(wgcot + wfcot*abs(velgj(i1j))*rhogj(i1j)/
+     &     (max(1.0e-20,abs(velfj(i1j)))*rhofj(i1j)))
+           vel = max(velgj(i1j),1.0e-20)
+           alpgj1 = min(alpgj1, 0.9*voidg(k1)*v(k1)/(ajun(i1j)*vel*dt))
+           alpfj1 = 1.0 - alpgj1
+           alpfj2 = wfcut/(wfcut + wgcut*abs(velfj(i2j))*rhofj(i2j)/
+     &     (max(1.0e-20,abs(velgj(i2j)))*rhogj(i2j)))
+           vel = max(velfj(i2j),1.0e-20)
+           alpfj2 = min(alpfj2, 0.9*voidf(k2)*v(k2)/(ajun(i2j)*vel*dt))
+           alpgj2 = 1.0 - alpfj2
+c
+c     set additive loss for inlet junction
+c     partition loss based on junction void fraction
+c
+           dpin = p(k3) - p(l3)
+           formgj(i3j) = formgj(i3j) + 2.0*(dppa-dpin)/(rhogj(i3j)*
+     &     max(1.0e-20,abs(velgj(i3j)))**2)
+           formfj(i3j) = formfj(i3j) + 2.0*(dppa-dpin)/(rhofj(i3j)*
+     &     max(1.0e-20,abs(velfj(i3j)))**2)
+           formgj(i3j) = max( 0.0, formgj(i3j))
+           formfj(i3j) = max( 0.0, formfj(i3j))
+c
+           if( velgj(i1j).gt.0.0 ) then
+             voidgj(i1j) = alpgj1
+             vodgjr(i1j) = voidgj(i1j)/voidg(k1)
+           endif
+           if( velfj(i1j).gt.0.0 ) then
+             voidfj(i1j) = alpfj1
+             vodfjr(i1j) = voidfj(i1j)/voidf(k1)
+           endif
+           if( velfj(i2j).gt.0.0 ) then
+             voidgj(i2j) = alpgj2
+             vodgjr(i2j) = voidgj(i2j)/voidg(k2)
+           endif
+           if( velfj(i2j).gt.0.0 ) then
+             voidfj(i2j) = alpfj2
+             vodfjr(i2j) = voidfj(i2j)/voidf(k2)
+           endif
+         endif
+       endif
+       return
+       end

@@ -1,0 +1,474 @@
+*mlist
+*if def,selap
+       subroutine mupdat (afz,afu,afs,afa1,afa2,afux2,afzx2,afbulk,
+     & afalum,aflith,afcadm,afsoil,pore,evol,wsltot,porave,ws,tave,
+     & imme,ix,r,z,volme,volmve,dimpe,pdmave,genz,vole,powave,tlast,
+     & zcaprw,engnod,immt,rhg,cpg,temp,spideb,spidmx,layers,nelems,
+     & idsdeb,powrat)
+c
+c
+c  Accounts for the addition of slumping material to the COUPLE mesh.
+c
+c  Cognizant engineer: ljs.
+c
+c This is a COUPLE ROUTINE
+*in32 imme
+*in32 ix
+*in32 immt
+*in32 layers
+*in32 nelems
+*in32end
+c
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       include 'fast.h'
+       include 'cons.h'
+       include 'cpmdat.h'
+       include 'iparm.h'
+       include 'contrl.h'
+       include 'comctl.h'
+       include 'convarc.h'
+       include 'trpblk.h'
+       include 'ufiles.h'
+       include 'rkinc.h'
+       include 'parm.h'
+       include 'scddat.h'
+       include 'slumpv.h'
+       include 'cmptim.h'
+       include 'scdpow.h'
+       integer imme,ix,immt,layers,nelems
+       real afz,afu,afs,afa1,afa2,afux2,afzx2,afbulk,afalum,aflith,
+     & afcadm,pore,afsoil,evol,wsltot,porave,ws,tave,r,z,volme,volmve,
+     & dimpe,pdmave,genz,vole,powave,tlast,zcaprw,engnod,rhg,cpg,
+     & temp,spideb
+       real powrat
+       dimension  afz(*), afu(*), afs(*), afa1(*), afa2(*), afux2(*),
+     & afzx2(*), afbulk(*), afalum(*), aflith(*), afcadm(*), afsoil(*),
+     & spideb(numel,*)
+       dimension pore(*), evol(*), ws(maxcon), imme(*), ix(5,*)
+       dimension r(*),z(*),volme(*),volmve(*),dimpe(*)
+       dimension genz(4,*), vole(4,*), zcaprw(4,*), engnod(4,*),
+     & immt(*)
+       dimension powrat(*)
+       dimension tlast(*), temp(*), nelems(25), layers(25,*)
+       real spidmx(numel,*)
+c
+c  Local variables.
+       integer i,j,k,l,ii,kk,laychg,inlayr,mat,mcount,n
+       integer  ij, iii, jj, kj, num, idsdeb(*)
+       integer ndbg
+       real acvol,dhrelc,engm,engm1,engm2,engm3,engm4,fpvsum,frac,hiter,
+     & hrloc0,powde,powden,rcg,rftemp,rowbar,
+     & tvolme,vollh,volmet,volmvt,volno,vols,volslp,voltmp,
+     & vovpi,vv,xn,xn1,zi,zj,zk,zl,zmax,zmin,zz1
+       real frcfll,heigh0,hitcyl,rftden,zuden1,zunth1
+       real atrvol,rmax,rmin,rmid1,rmid2,sumrad,hitmax,zmaxel
+       real(kr), parameter :: pi2ov3=3.14159265359_kr*2.0_kr/3.0_kr
+       real fdecay1
+       logical ifhlp
+c
+         ndbg=0
+!        if(timehy.ge.7574.0.and.timehy.le.7578.0)ndbg=1
+           if(ndbg.eq.1)then
+           write(output,9005)timehy,height,lhead
+9005       format(' MUPDAT; timehy=',e10.4,' height=',e10.4,
+     &     ' lhead=',i5)
+           end if
+       rftemp = 300.0
+       rftden = 3120.0
+       heigh0 = height
+c  Calculate maximum possible height of debris that can be modeled by
+c  Couple mesh.
+       hitmax = 0.0
+       do n = 1,numel
+         engnod(1,n) = 0.0
+         engnod(2,n) = 0.0
+         engnod(3,n) = 0.0
+         engnod(4,n) = 0.0
+         if (ix(5,n) .ne. 1) cycle
+         zmaxel = max(z(ix(1,n)),z(ix(2,n)),z(ix(3,n)),z(ix(4,n)))
+         if (zmaxel .gt. hitmax) hitmax = zmaxel
+       enddo
+         if(ndbg.eq.1)then
+         write(output,9013)hitmax
+9013     format(' MUPDAT; hitmax=',e10.4)
+         end if
+c  Total mass of slumped debris cannot be limited in mupdat to maximum
+c  that mesh holds, so do not skip buildup of height of debris.
+c
+       rowbar = zuden1(ws(1), ws(2), ws(3), ws(4), ws(5), ws(6),
+     & ws(7), ws(8), ws(9), ws(10), ws(11), rftden)
+       engm = zunth1(ws(1),ws(2),ws(3),ws(4),ws(5),ws(6),ws(7),
+     & tave, ws(8), ws(9), ws(10), ws(11), rftemp)*rowbar
+c
+       vols = wsltot/rowbar
+         if(ndbg.eq.1)then
+         write(output,9205)wsltot,rowbar,rftden,porave
+9205     format(' MUPDAT 9205; wsltot=',e10.4,' rowbar=',e10.4,
+     &   ' rftden=',e10.4,' porave=',e10.4)
+         end if
+       volmvt = vols/(1.0 - porave)
+c  fpvsum = running fraction of slumped material that has been
+c  distributed into elements receiving slumped material during time
+c  step. At end of mupdat call, fpvsum should equal 1.
+       fpvsum = 0.0
+c  Store volume of material slumped per radian.
+       vovpi = volmvt/(2.0*pi)
+       powden = powave/volmvt
+         if(ndbg.eq.1)then
+         write(output,9206)powden,powave,volmvt
+9206     format(' MUPDAT 9206; powden=',e11.4,' powave=',e11.4,
+     &   ' volmvt=',e11.4)
+         write(output,9207)tvol,volmvt
+9207     format(' MUPDAT 9207; tvol=',e10.4,' volmvt=',e10.4)
+         end if
+       tvol = tvol + volmvt
+       if (lhead .eq. 1) then
+         vollh = pi2ov3*alhir**3
+         ifhlp = .true.
+         if (height .ge. alhir) then
+           if (tvol .ge. vollh) then
+c  Calculate height based on lower head being full and debris
+c  accumulating upward in cylinder.
+             hitcyl = (tvol - vollh)/(pi*alhir**2)
+             height = hitcyl + alhir
+             ifhlp = .false.
+           endif
+         endif
+c  Calculate height based on debris accumulating upward from bottom of
+c  hemisphere.
+         if (ifhlp) then
+            if(ndbg.eq.1)then
+            write(output,9105)vollh,tvol,alhir
+9105        format(' MUPDAT 9105; vollh=',e10.4,' tvol=',e10.4,
+     &      ' alhir=',e10.4)
+            end if
+           volno = vollh - tvol
+           n = 0
+           xn = 0.0
+           do
+             xn1 = xn - ((3.0*(alhir**2)*xn - xn**3 - (3.0*volno/pi))/
+     &       (3.0*alhir**2 - 3.0*xn**2))
+             zz1 = abs(xn1-xn)
+                if(ndbg.eq.1)then
+                write(output,9109)n,xn1,xn,zz1
+9109            format(' MUPDAT 9109; n=',i5,' xn1=',e10.4,
+     &          ' xn=',e10.4,' zz1=',e10.4)
+                end if
+             if (zz1 .lt. 0.001) exit
+             xn = xn1
+             n = n + 1
+             if (n .gt. 100) stop 'mupdat-1'
+           enddo
+           height = alhir - xn1
+         endif
+         height = height + dh
+            if(ndbg.eq.1)then
+            write(output,9111)height,alhir
+9111        format(' MUPDAT 9111; height=',e10.4,' alhir=',e10.4)
+            end if
+       else
+         if (npp .eq. 0) then
+c  Case of axisymmetric geometry.
+           height = tvol/(pi*(dradis**2 - dradin**2)) + dh
+         else
+c  Case of plane geometry, such as pipe with layer of relocated material
+c  on bottom surface.
+           if (dradis .gt. 1.e-5) then
+c  Case of cross section of pipe modeled in plane geometry; unit depth
+c  of plane assumed.
+             dhrelc = dradis/100.
+             if (tvol .lt. 1.e-5) then
+               height=0.0
+             else
+c  Iteration to find height of slumped material.
+               hiter = height
+               hrloc0 = height
+               mcount = 0
+               do
+                 hiter = hiter + dhrelc
+                 mcount = mcount + 1
+                 if (hiter .ge. (2.*dradis)) then
+                   height = 2.0*dradis
+                   exit
+                 endif
+                 volslp = ((dradis**2)*acos((dradis - hiter)/dradis) -
+     &           (dradis - hiter)*sqrt(2.*dradis*hiter - hiter**2))/
+     &           dradin
+                 if (volslp .ge. tvol) then
+                   height = hrloc0
+                   exit
+                 else
+                   hrloc0 = hiter
+                 endif
+               enddo
+             endif
+           else
+c  Case of plate being modeled. Plane is assumed to have depth of 1.0
+c  dradin=width of plane.
+             height = tvol/dradin
+           endif
+           write (output,901) tvol,height,dradis,dradin
+  901  format (' In mupdat, tvol=',e10.4,' height=',e10.4,
+     & ' dradis=',e10.4,' dradin=',e10.4)
+         endif
+       endif
+c
+         if(ndbg.eq.1)then
+         write(output,9021)height
+9021     format(' MUPDAT; height=',e10.4)
+         end if
+       rcg = rhg*cpg
+c
+c  For ATR configuration, initialize variables and calculate height.
+c  laychg is a flag to indicate a change in layers.
+c  atrvol and atrhgt are the volume and height of debris calculated
+c  for the current layer.
+       laychg = 1
+       atrvol = volmvt
+       do
+         if (natrop.eq.1 .and. laychg.eq.1) then
+c  Find the total volume, and recalculate the height.
+           sumrad = 0.0
+           do ii = 1,nelems(ncrlay)
+             kk = layers(ii,ncrlay)
+             i = ix(1,kk)
+             j = ix(2,kk)
+             k = ix(3,kk)
+             l = ix(4,kk)
+             rmid1 = 0.5*(r(i) + r(l))
+             rmid2 = 0.5*(r(j) + r(k))
+             rmax = max(rmid1,rmid2)
+             rmin = min(rmid1,rmid2)
+             sumrad = sumrad + (rmax**2 - rmin**2)
+           enddo
+           atrhgt = atrhgt + atrvol/(pi*sumrad)
+           height = atrhgt
+           laychg = 0
+         endif
+c
+c  Determine which element the top of the debris resides.
+         do n = 1,numel
+           mat = ix(5,n)
+           if (mat .ne. 1) cycle
+           if (imme(n) .eq. 2) cycle
+c  Do the following for ATR configuration only.
+           if (natrop .eq. 1) then
+c  Check if the element is in the current layer.
+             inlayr = 0
+             do i = 1,nelems(ncrlay)
+               if (n .eq. layers(i,ncrlay)) inlayr = 1
+             enddo
+             if (inlayr.ne.1) cycle
+           endif
+           i = ix(1,n)
+           j = ix(2,n)
+           k = ix(3,n)
+           l = ix(4,n)
+           if (k .eq. l) then
+             zi = z(i)
+             zj = z(j)
+             zk = z(k)
+             zmax = max(zi,zj,zk)
+             zmin = min(zi,zj,zk)
+           else
+             zi = z(i)
+             zj = z(j)
+             zk = z(k)
+             zl = z(l)
+             zmax = max(zi,zj,zk,zl)
+             zmin = min(zi,zj,zk,zl)
+           endif
+           if (zmin .ge. height) cycle
+           if (zmax .le. height) then
+c
+c  Element is now full.
+             if (imme(n) .eq. 0) then
+c  Element was empty last time step.
+               pore(n) = porave
+               dimpe(n) = pdmave
+               afz(n) = ws(1)
+               afu(n) = ws(2)
+               afs(n) = ws(3)
+               afa1(n) = ws(4)
+               afa2(n) = ws(5)
+               afux2(n) = ws(6)
+               afzx2(n) = ws(7)
+               afalum(n)=ws(8)
+               aflith(n)=ws(9)
+               afcadm(n)=ws(10)
+               afsoil(n)=ws(11)
+c  frac = fraction of slumped material that went into n-th element
+               frac = evol(n)/vovpi
+               fpvsum = fpvsum + frac
+c  Entire couple element filled in this time step.
+               volmve(n) = evol(n)
+               volme(n) = evol(n)*(1-pore(n))
+               powde = powden*volme(n)/evol(n)
+               vv = volme(n)
+               imme(n) = 2
+             else
+c  Element was partly full last time step.
+               voltmp = evol(n) - volmve(n)
+               tvolme = voltmp
+               volmet = volme(n)+tvolme
+               pore(n) = (voltmp*porave + volmve(n)*pore(n))/evol(n)
+               dimpe(n) = (voltmp*pdmave + volmve(n)*dimpe(n))/evol(n)
+               afz(n) = (tvolme*ws(1) + volme(n)*afz(n))/volmet
+               afu(n) = (tvolme*ws(2) + volme(n)*afu(n))/volmet
+               afs(n) = (tvolme*ws(3) + volme(n)*afs(n))/volmet
+               afa1(n) = (tvolme*ws(4) + volme(n)*afa1(n))/volmet
+               afa2(n) = (tvolme*ws(5) + volme(n)*afa2(n))/volmet
+               afux2(n) = (tvolme*ws(6) + volme(n)*afux2(n))/volmet
+               afzx2(n) = (tvolme*ws(7) + volme(n)*afzx2(n))/volmet
+               afalum(n)=(tvolme*ws(8)+volme(n)*afalum(n))/volmet
+               aflith(n)=(tvolme*ws(9)+volme(n)*aflith(n))/volmet
+               afcadm(n)=(tvolme*ws(10)+volme(n)*afcadm(n))/volmet
+               afsoil(n)=(tvolme*ws(11)+volme(n)*afsoil(n))/volmet
+c  Partially filled element is filled during this time step.
+               frac = voltmp/vovpi
+               fpvsum = fpvsum + frac
+               volme(n) = volmet
+               volmve(n) = evol(n)
+               powde = powden*tvolme/evol(n)
+               frcfll=tvolme/evol(n)
+               vv = tvolme*(1.0 - porave)
+               imme(n) = 2
+             endif
+c  For ATR configuration, set flag for change in layers.
+             laychg = 1
+c  Element is now partly full.
+           else
+c  Determine volume of material and volids in element.
+             call dvol(n,i,j,k,l,r,z,height,acvol,evol)
+             if (imme(n).eq.0 .or. acvol.lt.1.e-12) then
+c  Element was empty last time step.
+               pore(n) = porave
+               dimpe(n) = pdmave
+               afz(n) = ws(1)
+               afu(n) = ws(2)
+               afs(n) = ws(3)
+               afa1(n) = ws(4)
+               afa2(n) = ws(5)
+               afux2(n) = ws(6)
+               afzx2(n) = ws(7)
+               afalum(n)=ws(8)
+               aflith(n)=ws(9)
+               afcadm(n)=ws(10)
+               afsoil(n)=ws(11)
+c  Element is empty but partially filled during this time step.
+               frac = acvol/vovpi
+               fpvsum = fpvsum + frac
+               volme(n) = acvol*(1.-pore(n))
+               volmve(n) = acvol
+               powde = powden*volme(n)/evol(n)
+               vv = volme(n)
+               imme(n) = 1
+             else
+c  Element was partly full last time step.
+               voltmp = acvol - volmve(n)
+               tvolme = voltmp
+               volmet = volme(n) + tvolme
+               pore(n) = (pore(n)*volmve(n) + porave*voltmp)/acvol
+               dimpe(n) = (dimpe(n)*volmve(n) + pdmave*voltmp)/acvol
+               afz(n) = (tvolme*ws(1) + volme(n)*afz(n))/volmet
+               afu(n) = (tvolme*ws(2) + volme(n)*afu(n))/volmet
+               afs(n) = (tvolme*ws(3) + volme(n)*afs(n))/volmet
+               afa1(n) = (tvolme*ws(4) + volme(n)*afa1(n))/volmet
+               afa2(n) = (tvolme*ws(5) + volme(n)*afa2(n))/volmet
+               afux2(n) = (tvolme*ws(6) + volme(n)*afux2(n))/volmet
+               afzx2(n) = (tvolme*ws(7) + volme(n)*afzx2(n))/volmet
+               afalum(n)=(tvolme*ws(8)+volme(n)*afalum(n))/volmet
+               aflith(n)=(tvolme*ws(9)+volme(n)*aflith(n))/volmet
+               afcadm(n)=(tvolme*ws(10)+volme(n)*afcadm(n))/volmet
+               afsoil(n)=(tvolme*ws(11)+volme(n)*afsoil(n))/volmet
+c  Partially filled element that remains partially filled.
+               frac = voltmp/vovpi
+               fpvsum = fpvsum + frac
+               volme(n) = volmet
+               volmve(n) = acvol
+               powde = powden*tvolme/evol(n)
+                 if(ndbg.eq.1)then
+                 write(output,90041)powde,powden,tvolme
+90041            format(' MUPDAT 90041; powde=',e11.4,
+     &           ' powden=',e11.4,' tvolme=',e11.4)
+                 end if
+               vv = tvolme
+               imme(n) = 1
+             endif
+           endif
+c
+           if (nspdeb .gt. 0) then
+c  Add any fission products that just slumped into elements.
+             do ij = 1,ntpslp(mcp)
+               do jj = 1,nsptrk(mcp,ij)
+                 num = ifpdb(jj,mcp,ij)
+                 if ((ij - 1) .eq. 0) then
+                   kj = jj
+                 else
+                   do iii = 1,nspdeb
+                     if (num .eq. idsdeb(iii)) then
+                       kj = iii
+                       exit
+                     endif
+                   enddo
+                 endif
+                 spideb(n,kj) = spideb(n,kj) + frac*wslxdt(jj,mcp,ij)
+               enddo
+             enddo
+           endif
+c
+c  Determine value of afbulk.
+           afbulk(n) = 0.05
+           if (afalum(n) .gt. 0.5) afbulk(n) = 0.1
+           if (afa2(n) .gt. 0.5) afbulk(n) = 0.2
+           if (afa1(n) .gt. 0.5) afbulk(n) = 0.3
+           if (afs(n) .gt. 0.5) afbulk(n) = 0.4
+           if (afz(n) .gt. 0.5) afbulk(n) = 0.5
+           if (afzx2(n) .gt. 0.5) afbulk(n) = 0.6
+           if (afux2(n) .gt. 0.5) afbulk(n) = 0.7
+           if (afux2(n) .gt. 0.7) afbulk(n) = 1.0
+!   temporary fix for error in Laguna Verde analysis of slumping
+!   BWR control rod material having unrealistic internal heat
+!   generation.
+             fdecay1=1.0
+             if(ndbg.eq.1)then
+             write(output,90051)powde,pwrfdk
+90051        format(' MUPDAT 90051; powde=',e11.4,
+     &       '  pwrfdk=',e11.4)
+             end if
+           genz(1,n) = genz(1,n) + fdecay1*powde*vole(1,n)
+c  Note. Subroutine EGEN1 puts genz array in terms of actual power
+c  instead of actual power divided by reactor power. So need to divide
+c  genz array by reactor power here.
+           genz(2,n) = genz(2,n) + fdecay1*powde*vole(2,n)
+           genz(3,n) = genz(3,n) + fdecay1*powde*vole(3,n)
+           genz(4,n) = genz(4,n) + fdecay1*powde*vole(4,n)
+c  powrat = total reactor power due to fission product and actinide
+c  decay at start of slumping (W).
+           powrat(n) = pwrfdk
+           vv = vv/evol(n)
+c  Intial temperature of element being filled with debris now set in
+c  subroutine tgpset, so no need to raise internal heat generation to
+c  set the initial temperature.
+           engm1 = 0.0
+           engm2 = 0.0
+           engm3 = 0.0
+           engm4 = 0.0
+         enddo
+c  For ATR configuration, repeat if the layer has changed and the next
+c  layer is not empty
+         if (natrop.ne.1 .or. laychg.ne.1) exit
+         ncrlay = ncrlay + 1
+         if (nelems(ncrlay) .le. 0) exit
+         n = layers(1,ncrlay)
+         i = ix(1,n)
+         j = ix(2,n)
+         k = ix(3,n)
+         l = ix(4,n)
+         atrhgt = min(z(i),z(j),z(k),z(l))
+         atrvol = atrvol - (fpvsum*volmvt)
+       enddo
+       return
+       end
+*endif

@@ -1,0 +1,165 @@
+*mlist
+$if def,selap
+       subroutine ispowr
+c  Complete checking of Scdap power input, and set pointers.
+c
+c  Cognizant engineer: G. A. Jayne          March, 1990
+c
+       use gentblc
+$if def,rk3d,2
+       use scdpwrkin
+       use rkinc
+       implicit none
+       include 'fast.h'
+       include 'scddat.h'
+       include 'scdpow.h'
+       include 'scdcom.h'
+       include 'scdout.h'
+       include 'ndxara.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'convarc.h'
+       include 'htsrcm.h'
+       include 'ufiles.h'
+       include 'oxairv.h'
+c
+       external avfunc
+       real avfunc
+c  Local variables.
+       integer j, jx, k, l, m, nfstrt, nfwide
+$if def,rk3d,2
+       integer ir,its,nh
+       logical lphlp
+       integer ndbg
+       ndbg = 0
+c
+c  Check power table and conrol variable references and set pointers.
+       if (ncmths .ge. 1) then
+         if (ngtbls .eq. 0) then
+           write (output,304)'table', ntbths
+  304  format ('0********* Non-existent ',a,i4,
+     & ' specified as source for temperaure history for',              
+     & ' component no.',i5)
+           fail = .true.
+         else
+           do k = 1,ngtbls
+             if (ntbths .eq. gtnum(k)) go to 340
+           enddo
+           write (output,310) 'table',ntbths
+           fail = .true.
+           go to 1000
+  340      if (gen(k)%gttyp .eq. 1) then
+           ntbths = k
+           else
+           fail = .true.
+           if (gen(k)%gttyp .ne. 0) then
+           write (output,342) ntbths
+  342 format ('0******** SCDAP power history refer table',i4,
+     #     ', which is not a power table.')
+           endif
+          endif
+         end if
+       endif
+       do icomp = 1,ncomp
+         if (idcomp(icomp).ne.3 .and. idcomp(icomp).ne.8)
+     &   rcpvfi(icomp) = 1.0/(float(nsigl(icomp))*vfueli(icomp))
+       enddo
+c  Check power table and conrol variable references and set pointers.
+       if (nspowi .eq. 1) then
+         if (ngtbls .eq. 0) then
+           write (output,310)'table', nstcno
+  310  format ('0********* Non-existent ',a,i4,
+     & ' specified as source for power data for SCDAP components.')
+           fail = .true.
+         else
+           do k = 1,ngtbls
+             if (nstcno .eq. gtnum(k)) go to 350
+           enddo
+           write (output,310) 'table',nstcno
+           fail = .true.
+           go to 1000
+  350      if (gen(k)%gttyp .eq. 1) then
+             nstcof = k
+          else
+            fail = .true.
+            if (gen(k)%gttyp .ne. 0) then
+              write (output,360) nstcno
+  360 format ('0******** SCDAP power input references table',i4,
+     #     ', which is not a power table.')
+            endif
+          endif
+        endif
+      else if (nspowi .eq. 2) then
+        if (filid(27) .eq. 0.0) then
+          write (output,310) 'control variable',nstcno
+          fail = .true.
+        else
+          jx = filndx(27)
+          do k = 1, cnvnum(jx)
+            if (nstcno .eq. cnvpnm(jx)) then
+              nstcof = jx - filndx(27)
+              go to 1000
+            endif
+            jx = jx + cnvlen(jx)
+          enddo
+          write (output,310) 'control variable',nstcno
+          fail = .true.
+        endif
+      elseif (nspowi .eq. 3) then
+        if (filid(21) .eq. 0.0) then
+          write (output,
+     & "('0******** SCDAP references reactor kinetics but no kinetics we
+     &re input.')")
+          fail = .true.
+        endif
+        do icomp = 1,ncomp
+c  Initialize average temps. for Relap5 reactivity feedback.
+          m = ndax*(icomp-1) + 1
+          do j = 1,naz
+            nfstrt = nrcon1(m)
+            nfwide = nrcond(m) - nfstrt + 1
+       write (12,"('ispowr00',5i5,2es13.5)") icomp,j,nfstrt,nfwide,
+     & ngeom(icomp),xcond3(nfstrt,j,icomp),tcond3(nfstrt,j,icomp)
+            stemav(j,icomp) = avfunc(ngeom(icomp),
+     &      xcond3(nfstrt,j,icomp),tcond3(nfstrt,j,icomp),nfwide)
+          enddo
+        enddo
+!  Check for multi-dimensional reactor kinetics.
+$if def,rk3d
+      elseif (nspowi .eq. 4) then
+        if (allocated(scdpwr)) deallocate (scdpwr)
+        allocate (scdpwr(ncomp))
+        do k=1,ncomp
+          allocate (scdpwr(k)%scdax(naz))
+        enddo
+        if (.not.allocated(rk4)) then
+          write (output,"('0******** SCDAP components refer to
+     & reactor power from multi-dimensional reactor kinetics but no such
+     &data entered, changed to no source.')")
+          fail = .true.
+          go to 1000
+        endif
+        lphlp = .false.
+        do nh = 1,ncomp
+          do its = 1,naz
+            ir = nh + its*100
+            do k = 1,size(rk4o)
+              if (rk4o(k)%htsno .eq. ir) then
+                lphlp = .true.
+                exit
+              endif
+            enddo
+            if (lphlp) then
+              scdpwr(nh)%scdax(its)%cmppowr => rk4o(k)%htpow
+            else
+              write (output,"('Programming error or input error--ispowr
+     &',i10)") ir
+            endif
+            go to 1000
+          enddo
+        enddo
+$endif
+      endif
+ 1000 return
+      end
+$endif

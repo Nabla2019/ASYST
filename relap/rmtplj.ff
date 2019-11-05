@@ -1,0 +1,881 @@
+*mlist
+       subroutine rmtplj
+*in32 init
+*in32end
+c  Process multiple junction component input data.
+c
+c  Cognizant engineer: rjw.
+c
+       use cmpdat
+       use jundat
+       use voldat
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'cons.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'rcompc.h'
+       include 'statec.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer l3a(9),l3b(18),l3c(10),l3d(11),init(13)
+       real xinit(13)
+       equivalence (init(1),xinit(1))
+       logical tfail,ovl,first,metl
+       character labl1(2)*5,labl2(2)*9,labl3(2)*8
+       integer i,icc,ick,ief,ihf,ii,ij,ije,ink,inp10,ijs,in,irf,isf,
+     & ist,iv,ix,ixp,k,k1,k2,lcntgs,lens,lj,m,met,n3,n4,nc,nc1,ncs,
+     & nj,nj1,nj1o,njs,nn,nnv,nv1,nv1o
+       real fr,ft,ft2,xlbsec
+c
+c  Data statements.
+       parameter(lens=11)
+       data l3a/2*0,1,3,0,1,0,0,0/
+       data l3b/2*0,13,13,0,1,0,0,1,1,1,0,1,1,1,2,0,0/
+       data l3c/2*0,3,3,0,1,1,1,0,0/
+       data l3d/2*0,0,5,0,1,1,1,1,1,0/
+       data ft/0.3048/, ft2/9.290304e-2/, xlbsec/0.45359237/
+       data labl1/' vel.',' flow'/, labl2/'(ft/sec)','(lbm/sec)'/,
+     * labl3/'(m/sec)','(kg/sec)'/
+c
+c  Get component number.
+       ovl = .false.
+       i = ncmps(filndx(3)) + filndx(3)
+       nc = cmpnum(i)
+c  Extend component block.
+       filsiz(3) = filsiz(3) + lens
+       l3a(1) = filsiz(3)
+       if (.not.cmpsrc) l3a(1) = l3a(1) + lens
+       if (lcntgs(filid(3),1) .ge. l3a(1)) go to 10
+   15  write (output,2001) nc
+ 2001  format ('0******** Insufficient storage to process component',i4,
+     * '.')
+   12  l3c(1) = nc*10000
+       l3c(2) = l3c(1) + 9999
+       filsiz(1) = inp10(fa(filndx(1)),l3c(1),l3c(2))
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+       filsiz(3) = filsiz(3) - lens + 4
+       cmplen(i) = 4
+       cmptyp(i) = 0
+       call ftbsft (filid(3),filsiz(3),1,filndx(3))
+       ncmps(filndx(3)) = ncmps(filndx(3)) + 4
+       fail = .true.
+       go to 1000
+   10  call ftbsft (filid(3),l3a(1),1,filndx(3))
+       i = ncmps(filndx(3)) + filndx(3)
+       cmplen(i) = lens
+c  Get number of junctions in component.
+       l3a(1) = nc*10000 + 1
+       l3a(6) = 1
+       call inp2 (fa(filndx(1)),init,l3a)
+       if (l3a(6) .gt. 0) go to 69
+  408  write (output,2002) nc
+ 2002  format ('0******** Data for component',i4,' cannot be processed.'
+     +)
+       go to 12
+   69  ixp = 0
+       if (l3a(6) .gt. 1) then
+         ixp = init(2)
+         if (ixp.ne.0 .and. ixp.ne.1) then
+           write (output,2027)
+ 2027  format ('0******** Control for junction initial conditions incorr
+     *ect, set to 0 for continued checking.')
+           fail = .true.
+           ixp = 0
+         endif
+       endif
+       nj = init(1)
+       if (nj.le.0 .or. nj.gt.99) then
+         write (output,2003) l3a(1)
+ 2003  format ('0******** Number of junctions specified on card',i8,
+     * ' is out of range.')
+         go to 12
+       endif
+$if def,mmfld
+       if (l3a(6) .ne. 3) then
+         init(3) = 0
+       else
+         if (init(3).ne.0 .and. init(3).ne.1) then
+           write (output,3036) l3a(1)
+ 3036  format ('0******** Control for moltem metal initial velocity on c
+     *ard',i8,' is out of range, assuming 1 intended.')
+           init(3) = 1
+         endif
+       endif
+       if (init(3) .eq. 0) then
+$endif
+         metl = .false.
+         l3c(4) = 3
+         l3c(9) = 0
+$if def,mmfld,6
+       else
+         metl = .true.
+         l3c(4) = 4
+         l3c(9) = 1
+         l3c(10) = 0
+       endif
+       nvc(i) = 0
+       njc(i) = nj
+       cmpopt(i) = ixp
+c  Check if replacement or flag modification is possible.
+       if (cmpsrc) go to 401
+       ii = filndx(3)
+       nnv = ncomp - 1
+       if (nnv .eq. 0) go to 407
+       nv1 = 0
+       nj1 = 0
+       tfail = .false.
+       do k = 1,nnv
+         nv1o = nvc(ii)
+         nj1o = njc(ii)
+         nc1 = cmplen(ii)
+         if (cmpnum(ii) - nc) 403,404,405
+  405    tfail = .true.
+  403    nv1 = nv1 + nv1o
+         nj1 = nj1 + nj1o
+         ii = ii + nc1
+       enddo
+       if ( tfail )  go to  410
+  407  cmpsrc = .true.
+       go to 401
+  404  ncomp = nnv
+       if (cmptyp(ii) .ne. cmptyp(i)) go to 406
+       if (njc(ii) .ne. njc(i)) go to 406
+       ovl = cmpflg
+       go to 14
+  410  nv1o = 0
+       nj1o = 0
+       nc1 = 0
+  406  if (.not.cmpflg) go to 14
+  409  write (output,2035) nc
+ 2035  format ('0******** Illegal use of component flag change option in
+     * component',i4,'.')
+       write (output,2007) nc
+ 2007  format ('0******** Data for component',i4,' cannot be processed.'
+     +)
+       go to 12
+c  Extend volume and junction blocks for this component.
+  401  if (cmpflg) go to 409
+   14  if (cmpsrc) nv1o = 0
+       k2 = -nv1o
+       k = filsiz(4) + k2*ivskp
+       k1 = max(filsiz(4),k)
+       if (k1 .gt. lcntgs(filid(4),1)) go to 15
+       call ftbsft (filid(4),k1,1,filndx(4))
+       if (cmpsrc) nv1 = nvols(filndx(4))
+       iv = nv1*ivskp + filndx(4)
+       k1 = (nvols(filndx(4)) - nv1 - nv1o)*ivskp
+       if (k1 .ne. 0) then
+         n3 = iv + nv1o*ivskp
+         n4 = iv
+         ink = n3 - n4
+         if (ink .ne. 0) then
+           if (ink .lt. 0) k1 = -k1
+           call ftbmov (nvols[n3+1),nvols[n4+1),k1)
+         endif
+       endif
+       nvols(filndx(4)) = nvols(filndx(4)) + k2
+       if (associated(cmphld(nc)%volp)) deallocate (cmphld(nc)%volp)
+       if (associated(cmphld(nc)%junp)) deallocate (cmphld(nc)%junp)
+       allocate (cmphld(nc)%junp(nj))
+   16  filsiz(4) = k
+c  Get junction block.
+       njs = nj*ijskp
+   18  if (cmpsrc) nj1o = 0
+       k2 = nj - nj1o
+       k = filsiz(5) + k2*ijskp
+       k1 = max(filsiz(5),k)
+       if (k1 .gt. lcntgs(filid(5),1)) go to 15
+       call ftbsft (filid(5),k1,2,filndx(5))
+       if (cmpsrc) nj1 = njuns(filndx(5))
+       ij = nj1*ijskp + filndx(5)
+       k1 = (njuns(filndx(5)) - nj1 - nj1o)*ijskp
+       if (k1 .eq. 0) go to 421
+       n3 = ij + nj1o*ijskp
+       n4 = ij + njs
+       if (n3 - n4) 422,421,423
+  422  k1 = -k1
+$if -def,in32,1
+  423  call ftbmov (njuns(n3+1),njuns(n4+1),k1)
+$if def,in32,1
+  423  call ftbmov (njuns[n3+1),njuns[n4+1),k1)
+  421  njuns(filndx(5)) = njuns(filndx(5)) + k2
+   19  filsiz(5) = k
+       if (nj .eq. 0) go to 430
+       ije = ij + njs - 1
+       if (ovl) go to 430
+       call setndf (njuns(ij+1),njs)
+       do k = ij,ije,ijskp
+         jc(k) = 128
+         jcex(k) = 0
+         ijflg(k) = 0
+         athrot(k) = 1.0
+         guinval(k:k+1) = 0.0
+         guinang(k:k+1) = 0.0
+       enddo
+  430  call ftbsft (filid(5),filsiz(5),2,filndx(5))
+       call ftbsft (filid(4),filsiz(4),2,filndx(4))
+       iv = nv1*ivskp + filndx(4)
+       ij = nj1*ijskp + filndx(5)
+       in = 1
+c  Insert new component in proper place in component block if necessary.
+       if (cmpsrc .or. nc1.eq.0) go to 431
+       k2 = lens - nc1
+       n3 = ii + nc1
+       n4 = ii + lens
+       k1 = i + lens - n3
+       if (k2) 433,432,434
+  434  k1 = -k1
+$if -def,in32,1
+  433  call ftbmov (cmpnum(n3),cmpnum(n4),k1)
+$if def,in32,1
+  433  call ftbmov (cmpnum[n3),cmpnum[n4),k1)
+       i = i + k2
+$if -def,in32,1
+  432  call ftbmov (cmpnum(i),cmpnum(ii),lens)
+$if def,in32,1
+  432  call ftbmov (cmpnum[i),cmpnum[ii),lens)
+       i = ii
+       ncmps(filndx(3)) = ncmps(filndx(3)) + k2
+       filsiz(3) = filsiz(3) + k2 - lens
+       call ftbsft (filid(3),filsiz(3),3,filndx(3))
+       go to 17
+  431  filsiz(3) = filsiz(3) + lens - lens
+       ncmps(filndx(3)) = ncmps(filndx(3)) + lens
+c  Write output header for component.
+   17  if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2101) nc,cmpnam(i),cmpalf(cmptyp(i)),nj
+ 2101  format ('0====================================================='
+     & '==================',/,
+     & 22x,'Input data for component',i4,',',2a9,', having
+     * 0 volumes and',i3,' junctions')
+c  Process junction description data.
+       fr = 1.0
+       if (.not.uniti) fr = ft2
+       ijs = ij
+       nn = 1
+       lj = 0
+       ncs = nc*10000 + 1
+   50  l3b(1) = ncs + nn*10
+       call inplnk (l3b(1),ix,n3,n4,fa(filndx(1)))
+       if (n4 .ne. 0) go to 51
+       if (ix .eq. -1) go to 52
+       ix = (ix - ncs)/10
+       if (ix .ne. nn) go to 53
+   51  l3b(2) = -l3b(1) - 8
+       l3b(6) = 1
+       call inp2 (fa(filndx(1)),init,l3b)
+       l3b(2) = -l3b(2)
+       if (l3b(6) .le. 0) go to 54
+       junno(ij) = nc*1000000 + 10000 + nn*100
+       cmphld(nc)%junp(1)%junno = junno(ij)
+       tfail = .false.
+       if (init(1) .le. 0) then
+         init(1) = 0
+         tfail = .true.
+       endif
+       if (init(2) .le. 0) then
+         init(2) = 0
+         tfail = .true.
+       endif
+       if (tfail) then
+         write (output,2006) l3b(1),l3b(2)
+ 2006  format ('0******** Volume pointer on cards',i9,' -',i9,
+     * ' is less than or equal to zero, pointers set to zero.')
+         init(10) = 0
+         init(11) = 0
+         fail = .true.
+       endif
+       ij1(ij) = init(1)
+       ij2(ij) = init(2)
+       if (xinit(3) .lt. 0.0) then
+         write (output,2010)
+ 2010  format ('0******** Junction area less than 0.0, set to 0.0 for co
+     *ntinued checking.')
+         xinit(3) = 0.0
+         fail = .true.
+       endif
+       ajun(ij) = xinit(3)*fr
+       tfail = .false.
+       if (xinit(4) .lt. 0.0) then
+         xinit(4) = 0.0
+         tfail = .true.
+       endif
+       if (xinit(5) .lt. 0.0) then
+         xinit(5) = 0.0
+         tfail = .true.
+       endif
+       fjunf(ij) = xinit(4)
+       fjunr(ij) = xinit(5)
+       if (tfail) then
+         write (output,2004)
+ 2004  format ('0******** Form loss coefficients less than 0.0, set to 0
+     *.0 for continued checking.')
+         fail = .true.
+       endif
+       tfail = .false.
+       if (init(6) .lt. 0) then
+         init(6) = -init(6)
+         tfail = .true.
+       endif
+       ink = 0
+       ief = init(6)/1000000
+       init(6) = init(6) - 1000000*ief
+       icc = init(6)/100000
+       init(6) = init(6) - 100000*icc
+       ist = init(6)/10000
+       init(6) = init(6) - 10000*ist
+       ick = init(6)/1000
+       init(6) = init(6) - 1000*ick
+       irf = init(6)/100
+       init(6) = init(6) - 100*irf
+       ihf = init(6)/10
+       isf = init(6) - ihf*10
+       if (ief.ge.2) then
+         ief = 0
+         tfail = .true.
+       endif
+       if (icc .ge. 2) then
+         icc = 0
+         tfail = .true.
+       endif
+       if (ist .gt. 0) then
+         ist = 0
+         tfail = .true.
+       endif
+       if (ick .ge. 2) then
+         ick = 0
+         tfail = .true.
+       endif
+       if (irf .ge. 3) then
+         irf = 0
+         tfail = .true.
+       endif
+       if( irf .eq.2 ) then
+         irf = 1
+         ink = 1
+       endif
+       if (ihf .gt. 2) then
+         ihf = 0
+         tfail = .true.
+       endif
+       if (ihf .eq. 2) ihf = 1
+       if (isf .gt. 3) then
+         isf = 0
+         tfail = .true.
+       endif
+       jc(ij) = ior(ior(ior(ior(ior(jc(ij),ishft(irf,8)),
+     & ishft(ihf,9)),ishft(isf,12)),ishft(ick,4)),ishft(ist,17))
+       jcex(ij) = ior(ior(jcex(ij),ishft(icc,2)),ishft(ief,15))
+       jcex(ij) = ior(jcex(ij),ishft(ink,29))
+       if (tfail) then
+         write (output,2031)
+ 2031  format ('0******** Junction controls incorrect, set to zero for c
+     *ontinued checking.')
+         fail = .true.
+       endif
+c  Discharge coefficients.
+       if (chngno(53)) then
+c  Set Discharge Coefficient & Non-Equilibrium Parameter
+c  for the Henry-Fauske Critical Flow Option.
+c  Check range of input value for discharge coeff.
+         if (xinit(7).gt.2.0 .or. xinit(7).le.0.0) then
+           write(output,2032)
+           fail = .true.
+           xinit(7) = 1.0
+         endif
+c  Store Discharge Coeff. in JDISSC.
+         jdissc(ij) = xinit(7)
+c  Check range of input value for non-equilibrium parameter.
+c  Because this value HAS to be read in, it cannot be
+c  defaulted to its standard value (= 0.14).
+         if (xinit(8).lt.0.01) then
+           write(output,2232)
+ 2232  format ('0****** Henry-Fauske Non-Equilibrium Factor',
+     & ' lt 0.01, the frozen option will be used.')
+           xinit(8) = 0.0
+         elseif (xinit(8) .gt. 1000.) then
+           write (output,2332)
+ 2332  format ('0****** Henry-Fauske Non-Equilibrium Factor',
+     & ' gt 1000, the equilibrium option will be used.')
+           xinit(8) = 1000.
+         endif
+c  Store Non-Equilibrium Parameter in JDISTP.
+         jdistp(ij) = xinit(8)
+c  The super-heated vapor discharge coeff is not used.
+         xinit(9) = 0.0
+         jdissh(ij) = xinit(9)
+       else
+c  Set Discharge Coefficients for Standard Critical Flow Model.
+         if (xinit(7).gt.2.0 .or. xinit(7).le.0.0) then
+           write(output,2032)
+ 2032  format ('0******** Improper discharge coefficient-- gt 2.0 or le
+     *0.0 -- set to 1.0 for continued checking.')
+           fail = .true.
+           xinit(7) = 1.0
+         endif
+         jdissc(ij) = xinit(7)
+         if (xinit(8).gt.2.0 .or. xinit(8).le.0.0) then
+           write(output,2032)
+           fail = .true.
+           xinit(8) = 1.0
+         endif
+         jdistp(ij) = xinit(8)
+         if (xinit(9).gt.2.0 .or. xinit(9).le.0.0) then
+           write(output,2032)
+           fail = .true.
+           xinit(9) = 1.0
+         endif
+         jdissh(ij) = xinit(9)
+       endif
+       if (init(13) .le. lj) go to 57
+       if (init(13) .gt. nj) go to 57
+       n3 = init(13) - lj - 1
+       lj = init(13)
+       n4 = ij
+       ij = ij + ijskp
+       in = in + 1
+       if (n3 .ne. 0) then
+         tfail = .false.
+         do m = 1,n3
+           junno(ij) = junno(ij-ijskp) + 10000
+           cmphld(nc)%junp(m+1)%junno = junno(ij)
+           ij1(ij) = ij1(ij-ijskp) + init(10)
+           if (ij1(ij).le.0 .or. ij1(ij).ge.1000000000) then
+             ij1(ij) = 0
+             tfail = .true.
+           endif
+           ij2(ij) = ij2(ij-ijskp) + init(11)
+           if (ij2(ij).le.0 .or. ij2(ij).ge.1000000000) then
+             ij2(ij) = 0
+             tfail = .true.
+           endif
+           ajun(ij) = ajun(n4)
+           fjunf(ij) = xinit(4)
+           fjunr(ij) = xinit(5)
+           jc(ij) = jc(n4)
+           jdissc(ij) = xinit(7)
+           jdistp(ij) = xinit(8)
+           jdissh(ij) = xinit(9)
+           ij = ij + ijskp
+           in = in + 1
+         enddo
+         if (tfail) then
+           fail = .true.
+           write (output,2006) l3b(1),l3b(2)
+         endif
+       endif
+       nn = nn + 1
+       go to 60
+   53  nn = ix
+   60  if (nn .lt. 100) go to 50
+   52  if (lj .eq. nj) go to 56
+   57  write (output,2005) l3b(1),l3b(2)
+ 2005  format ('0******** Error in junction end value on cards',i9,
+     * ' -',i9,'.')
+   54  write (output,2009)
+ 2009  format ('0******** Default data being used for remaining junction
+     *s in component.')
+       fail = .true.
+       l3b(2) = ncs + 999
+       filsiz(1) = inp10(fa(filndx(1)),l3b(1),l3b(2))
+       n3 = nj - lj
+       ncs = nc*1000000 + 10000
+       do m = 1,n3
+         junno(ij) = ncs
+         cmphld(nc)%junp(in)%junno = ncs
+         ncs = ncs + 10000
+         ij1(ij) = 0
+         ij2(ij) = 0
+         ajun(ij) = 0.0
+         fjunf(ij) = 0.0
+         fjunr(ij) = 0.0
+         jdissc(ij) = 0.0
+         jdistp(ij) = 0.0
+         jdissh(ij) = 0.0
+         ij = ij + ijskp
+         in = in + 1
+       enddo
+c  Process junction initial conditions.
+   56  ij = ijs
+       in = 1
+       nn = 1
+       lj = 0
+       ncs = nc*10000 + 1001
+   70  l3c(1) = ncs + nn*10
+       call inplnk (l3c(1),ix,n3,n4,fa(filndx(1)))
+       if (n4 .ne. 0) go to 71
+       if (ix .eq. -1) go to 72
+       ix = (ix - ncs)/10
+       if (ix .ne. nn) go to 73
+   71  l3c(2) = -l3c(1) - 8
+       l3c(6) = 1
+       call inp2 (fa(filndx(1)),init,l3c)
+       l3c(2) = -l3c(2)
+       if (l3c(6) .le. 0) go to 74
+$if def,mmfld,6
+       if (metl) then
+         xinit(5) = xinit(3)
+         init(3) = init(4)
+       else
+         xinit(5) = 0.0
+       endif
+       if (.not.uniti) then
+         if (ixp .eq. 0) then
+           fr = ft
+         else
+           fr = xlbsec
+         endif
+         xinit(1) = xinit(1)*fr
+         xinit(2) = xinit(2)*fr
+$if def,mmfld,1
+         if (metl) xinit(5) = xinit(5)*fr
+       endif
+       if (init(3) .le. lj) go to 77
+       if (init(3) .gt. nj) go to 77
+       n3 = init(3) - lj
+       lj = init(3)
+       do m = 1,n3
+         velfj(ij) = xinit(1)
+         velgj(ij) = xinit(2)
+$if def,mmfld,1
+         if (metl) velmj(ij) = xinit(5)
+         ij = ij + ijskp
+         in = in + 1
+       enddo
+       nn = nn + 1
+       go to 80
+   73  nn = ix
+   80  if (nn .lt. 100) go to 70
+   72  if (lj .eq. nj) go to 76
+   77  write (output,2005) l3c(1),l3c(2)
+   74  write (output,2008)
+ 2008  format ('0******** Velocities being set to zero for remaining jun
+     *ctions in component.')
+       fail = .true.
+       l3c(2) = ncs + 999
+       filsiz(1) = inp10(fa(filndx(1)),l3c(1),l3c(2))
+       n3 = nj - lj
+       do m = 1,n3
+         velfj(ij) = 0.0
+         velgj(ij) = 0.0
+$if def,mmfld,1
+         if (metl) velmj(ij) = 0.0
+         ij = ij + ijskp
+         in = in + 1
+       enddo
+c  Process junction input data card.
+   76  fr = 1.0
+       if (.not. uniti) fr = ft
+       ij = ijs
+       nn = 1
+       lj = 0
+       first = .true.
+       ncs = nc*10000 + 2001
+  170  l3d(1) = ncs + nn*10
+       call inplnk (l3d(1),ix,n3,n4,fa(filndx(1)))
+       if (first) then
+         first = .false.
+         if (n4 .ne. 0) go to 371
+         if (ix .eq. -1  .or.  ix .gt. ncs+998) go to 172
+       end if
+       if (n4 .ne. 0) go to 371
+       if (ix .eq. -1) go to 372
+       ix = (ix - ncs)/10
+       if (ix .ne. nn) go to 373
+  371  l3d(2) = -l3d(1) - 8
+       l3d(6) = 1
+       call inp2 (fa(filndx(1)),init,l3d)
+       l3d(2) = -l3d(2)
+       if (l3d(6) .lt. 0) go to 180
+       if (init(5) .le. lj) go to 179
+       if (init(5) .gt. nj) go to 179
+       n3 = init(5) - lj
+       lj = init(5)
+  173  if (l3d(6) .eq. 5) go to 174
+       write (output,2122)
+ 2122  format ('0******** Junction input data card contains less than 5
+     *words, input set to default.')
+       fail = .true.
+       ij = ijs
+  172  do m = 1,nj
+         diamj(ij) = 2.0*sqrt(ajun(ij)/pi)
+         betacc(ij) = 0.0
+         constc(ij) = 1.0
+         constm(ij) = 1.0
+         ij = ij + ijskp
+       enddo
+       go to 182
+  174  if (xinit(1) .ge. 0.0) go to 175
+       write (output,2123)
+ 2123  format ('0******** Junction diameter less then 0.0, set to 0.0 fo
+     *r continued checking.')
+       xinit(1) = 0.0
+       fail = .true.
+  175  if (xinit(2).ge.0.0 .and. xinit(2).le.1.0) go to 176
+       write (output,2124)
+ 2124  format ('0******** Beta factor less than 0.0 or greater than 1.0,
+     * set to 0.0 for continued checking.')
+       xinit(2) = 0.0
+       fail = .true.
+  176  if (xinit(3) .gt. 0.0) go to 177
+       write (output,2125)
+ 2125  format ('0******** Gas intercept less than or equal to 0.0, set t
+     *o 0.0 for continued checking.')
+       xinit(3) = 0.0
+       fail = .true.
+  177  if (xinit(4) .gt. 0.0) go to 178
+       write (output,2126)
+ 2126  format ('0******** Slope less than or equal to 0.0, set to 0.0 fo
+     *r continued checking.')
+       xinit(4) = 0.0
+       fail = .true.
+  178  do m = 1,n3
+         diamj(ij) = xinit(1)*fr
+         betacc(ij) = xinit(2)
+         constc(ij) = xinit(3)
+         constm(ij) = xinit(4)
+         ij = ij + ijskp
+       enddo
+  183  nn = nn + 1
+       go to 380
+  373  nn = ix
+  380  if (nn .lt. 100) go to 170
+  372  if (lj .eq. nj) go to 182
+  179  write (output,2005) l3d(1),l3d(2)
+  180  write (output,2120)
+ 2120  format ('0******** Junction input data set to default for continu
+     *ed checking.')
+       fail = .true.
+       l3d(2) = ncs + 999
+       filsiz(1) = inp10(fa(filndx(1)),l3d(1),l3d(2))
+       n3 = nj - lj
+       do m = 1,n3
+         diamj(ij) = 2.0*sqrt(ajun(ij)/pi)
+         betacc(ij) = 0.0
+         constc(ij) = 1.0
+         constm(ij) = 1.0
+         ij = ij + ijskp
+       enddo
+c  Process junction input data card.
+  182  fr = 1.0
+       ij = ijs
+       do m = 1,nj
+         fjunfb(ij) = 0.0
+         fjunfc(ij) = 0.0
+         fjunrb(ij) = 0.0
+         fjunrc(ij) = 0.0
+         ij = ij + ijskp
+       enddo
+       ij = ijs
+       nn = 1
+       lj = 0
+       first = .true.
+       ncs = nc*10000 + 3001
+  185  l3d(1) = ncs + nn*10
+       call inplnk (l3d(1),ix,n3,n4,fa(filndx(1)))
+       if (first) then
+         first = .false.
+         if (n4 .ne. 0) go to 1371
+         if (ix .eq. -1  .or.  ix .gt. ncs+998) go to 1172
+       end if
+       if (n4 .ne. 0) go to 1371
+       if (ix .eq. -1) go to 1372
+       ix = (ix - ncs)/10
+       if (ix .ne. nn) go to 1373
+ 1371  l3d(2) = -l3d(1) - 8
+       l3d(6) = 1
+       call inp2 (fa(filndx(1)),init,l3d)
+       l3d(2) = -l3d(2)
+       if (l3d(6) .lt. 0) go to 1180
+       if (init(5) .le. lj) go to 1179
+       if (init(5) .gt. nj) go to 1179
+       n3 = init(5) - lj
+       lj = init(5)
+ 1173  if (l3d(6) .eq. 5) go to 1174
+       write (output,2122)
+       fail = .true.
+       ij = ijs
+ 1172  do m = 1,nj
+         fjunfb(ij) = 0.0
+         fjunfc(ij) = 0.0
+         fjunrb(ij) = 0.0
+         fjunrc(ij) = 0.0
+         ij = ij + ijskp
+       enddo
+       go to 192
+ 1174  if (xinit(1) .ge. 0.0) go to 1175
+       write (output,3123)
+ 3123  format ('0******** Forward form loss coefficient less than 0.0, s
+     *et to 0.0 for continued checking.')
+       xinit(1) = 0.0
+       fail = .true.
+ 1175  if (xinit(2) .ge. 0.0) go to 1176
+       write (output,3124)
+ 3124  format ('0******** Forward form loss exponent less than 0.0, se
+     *t to 0.0 for continued checking.')
+       xinit(2) = 0.0
+       fail = .true.
+ 1176  if (xinit(3) .ge. 0.0) go to 1177
+       write (output,3125)
+ 3125  format ('0******** Reverse form loss coefficient less than 0.0, s
+     *et to 0.0 for continued checking.')
+       xinit(3) = 0.0
+       fail = .true.
+ 1177  if (xinit(4) .ge. 0.0) go to 1178
+       write (output,3126)
+ 3126  format ('0******** Reverse form loss exponent less than 0.0, se
+     *t to 0.0 for continued checking.')
+       xinit(4) = 0.0
+       fail = .true.
+ 1178  do m = 1,n3
+         fjunfb(ij) = xinit(1)
+         fjunfc(ij) = xinit(2)
+         fjunrb(ij) = xinit(3)
+         fjunrc(ij) = xinit(4)
+         ij = ij + ijskp
+       enddo
+ 1183  nn = nn + 1
+       go to 1380
+ 1373  nn = ix
+ 1380  if (nn .lt. 100) go to 185
+ 1372  if (lj .eq. nj) go to 192
+ 1179  write (output,2005) l3d(1),l3d(2)
+ 1180  write (output,3120)
+ 3120  format ('0******** Junction input data set to default for continu
+     *ed checking.')
+       fail = .true.
+       l3d(2) = ncs + 999
+       filsiz(1) = inp10(fa(filndx(1)),l3d(1),l3d(2))
+       n3 = nj - lj
+       do m = 1,n3
+         fjunfb(ij) = 0.0
+         fjunfc(ij) = 0.0
+         fjunrb(ij) = 0.0
+         fjunrc(ij) = 0.0
+         ij = ij + ijskp
+       enddo
+c  Edit component input.
+  192  if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output,2111)
+ 2111  format ('0  Jun.no. from vol.   to vol.',2x,'jun. area',
+     * 5x,'jun-flag',2x,'subcooled',5x,'two-phase',5x,'superheated')
+       if (unito) then
+         write (output,2113)
+ 2113  format (32x,'(m2)',10x,'efvcahs',3x,'dschg. coef.',2x,
+     * 'dschg. coef.',2x,'dschg. coef.')
+       else
+         write (output,2112)
+ 2112  format (32x,'(ft2)',9x,'efvcahs',3x,'dschg. coef.',2x,
+     * 'dschg. coef.',2x,'dschg. coef.')
+       endif
+       ij = ijs
+       do m = 1,nj
+         ihf =
+     *   1000000*iand(ishft(jcex(ij),-15),1) +
+     *   100000*iand(ishft(jcex(ij),-2),1) +
+     *   10000*iand(ishft(jc(ij),-17),3) +
+     *   1000*iand(ishft(jc(ij),-4),1) +
+     *   100*iand(ishft(jc(ij),-8),1) +
+     *   10*iand(ishft(jc(ij),-9),1) +
+     *   iand(ishft(jc(ij),-12),3)
+         if (unito) then
+           write (output,2102) junno(ij),ij1(ij),ij2(ij),ajun(ij),
+     *     ihf,jdissc(ij),jdistp(ij),jdissh(ij)
+ 2102    format (3i10,1p,e14.6,i9.7,3e14.6)
+         else
+           xinit(2) = ajun(ij)/ft2
+           write (output,2102) junno(ij),ij1(ij),ij2(ij),xinit(2),
+     *     ihf,jdissc(ij),jdistp(ij),jdissh(ij)
+         endif
+         ij = ij + ijskp
+       enddo
+       write (output,2130)
+ 2130  format ('0  Jun.no.',25x,'junction diam.',3x,'beta factor',6x,
+     * 'gas intercept',4x,'slope')
+       if (unito) then
+         write (output,2133)
+ 2133  format (35x,'(m)')
+       else
+         write (output,2131)
+ 2131  format (35x,'(ft)')
+       end if
+       ij = ijs
+       do m = 1,nj
+         if (unito) then
+           write (output,2132) junno(ij),diamj(ij),betacc(ij),
+     &     constc(ij),constm(ij)
+ 2132  format (i10,20x,1p,4e17.6)
+         else
+           xinit(2) = diamj(ij)/ft
+           write (output,2132) junno(ij),xinit(2),betacc(ij),
+     &     constc(ij),constm(ij)
+         end if
+         ij = ij + ijskp
+       enddo
+       write (output,2121)
+ 2121  format ('0  Jun.no.',5x,'forward loss ',4x,'forward loss',4x,'for
+     &ward loss',3x,'reverse loss ',3x,'reverse loss',4x,'reverse loss')
+       write (output,2127)
+ 2127  format (15x,'coefficient  ',4x,'multiplier  ',4x,'exponent   '
+     &  ,4x,'coefficient  ',3x,'multiplier  ',4x,'exponent ')
+       ij = ijs
+       do m = 1,nj
+         write (output,2128) junno(ij),fjunf(ij),fjunfb(ij),fjunfc(ij),
+     &   fjunr(ij),fjunrb(ij),fjunrc(ij)
+         ij = ij + ijskp
+       enddo
+ 2128  format(i10,1x,1p,6e16.6)
+$if def,mmfld,1
+       if (nonmf .eq. 0) then
+         met = 2
+         write (output,2114) (labl1(ixp+1),m=1,2)
+ 2114  format ('0  Jun.no.',25x,'init. liq.',a5,2x,'init. vap.',a5)
+$if def,mmfld
+       else
+         met = 3
+         write (output,2117) (labl1(ixp+1),m=1,3)
+ 2117  format ('0  Jun.no.',25x,'init. liq.',a5,2x,'init. vap.',a5,
+     * 2x,'init. met.',a5)
+       endif
+$endif
+       if (unito) then
+         write (output,2116) (labl3(ixp+1),m=1,met)
+ 2116  format (33x,a10,7x,a10,7x,a10)
+       else
+         write (output,2116) (labl2(ixp+1),m=1,met)
+       endif
+       ij = ijs
+       do m = 1,nj
+         if (unito) then
+$if def,mmfld,1
+           if (nonmf .eq. 0) then
+             write (output,2103) junno(ij),velfj(ij),velgj(ij)
+ 2103  format (i10,20x,1p,3e17.6)
+$if def,mmfld,3
+           else
+             write (output,2103) junno(ij),velfj(ij),velgj(ij),velmj(ij)
+           endif
+         else
+           if (ixp .eq. 0) then
+             xinit(1) = velfj(ij)/ft
+             xinit(2) = velgj(ij)/ft
+$if def,mmfld,1
+             if (nonmf .ne. 0) xinit(3) = velmj(ij)/ft
+           else
+             xinit(1) = velfj(ij)/xlbsec
+             xinit(2) = velgj(ij)/xlbsec
+$if def,mmfld,1
+             if (nonmf .ne. 0) xinit(3) = velmj(ij)/xlbsec
+           endif
+           write (output,2103) junno(ij),(xinit(n3),n3=1,met)
+         endif
+         ij = ij + ijskp
+       enddo
+       endif
+ 1000  return
+       end

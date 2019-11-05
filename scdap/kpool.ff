@@ -1,0 +1,1781 @@
+*mlist
+*if def,selap
+       subroutine kpool (n, r, z, ix, tz, afz, afu, afs, afa1,
+     # afa2, afux2, afzx2, afalup, aflith, afcadm, afsoil, keffz,
+     # keffr, tmltel, fracml, frcml0, pore,
+     # depth, rap, cnpool, tpool, imin, imax, ielem,
+     # jelem, elemij, imme, alhir, dh, rass, zptop, hnatcr, tmpdot,
+     # sr, sz, sigf, ncompt, ncslp)
+c
+c
+c  Calculates solid state thermal conductivity that produces the
+c  same rate of heat transfer as liquefied debris with natural
+c  convection.
+c
+c  Cognizant engineer: ljs.
+c
+c This is a COUPLE ROUTINE
+*in32 ix
+*in32 imin
+*in32 imax
+*in32 ielem
+*in32 jelem
+*in32 elemij
+*in32 imme
+*in32end
+c
+c  Calculation of element melting temperature (tmltel(n)) and
+c  characteristic length (depth) now done in subroutine dhcoef
+c  only one molten pool in the debris is now considered (as
+c  opposed to potentially multiple molten pools in debris) in
+c  prior versions.  rayleigh number, depth, pool conductivity,
+c  pool average temperature and power now computed in
+c  subroutine dhcoef  (change made dec 1991, krk,ljs).
+c
+c  Subroutine modified to update heat transfer correlations to be
+c  consistent with the Mayinger, Jahn, Reineke,and Steinbrenner
+c  data for downward heat transfer from a two-dimensional slice
+c  (INEL/94-0174). Note that only one pool is considered.  If
+c  a second pool exists above the main pool, the material's
+c  conductivity is assumed without any convective enhancements.
+c  Error corrections also made at this time
+c  (changes made feb 1995, jlr)
+c
+c      arguments pertaining to meshing and geometry:
+c      r(i)=radial coordinate of node i (m).
+c      z(i)=axial coordinate of node i (m).
+c      ix(1,n)=number of node in first corner of element n.
+c      ix(5,n)=material property number of element n.
+c      vole(1,n)=volume of first quadrant of element n(m**3).
+c      depth   = molten pool characteristic dimension
+c                based on idealized volume (m)
+c      zpbot   = minimum elevation of molten pool (m)
+c      zptop   = top elevation of molten pool (calculated in subroutine
+c                dhcoef) (m)
+c                (absolute elevation, includes thickness of lower head.)
+c      imin(j)=minimum value of i coordinate at j-th coordinate.
+c      imax(j)=maximum value of i coordinate at j-th coordinate.
+c      ielem(n)=value of i coordinate for lower left corner of
+c               element n.
+c      jelem(n)=value of j coordinate for lower left corner of
+c               element n.
+c      elemij((maxj-1)*i+j)=element whose lower left corner is
+c                           located in i-j space at i,j coordinates.
+c      imme=indicator of how full element is with debris:
+c              0=empty; 1=partially full; 2=completely full.
+c      theta = angle from bottom center of vessel
+c
+c  Arguments pertaining to heat transfer calculation:
+c      tz(i)=temperature of -th node (k).
+c      afz(n)=atomic fraction of zr in element n.
+c      afu(n)=metalic u.
+c      afs(n)=stainless steel.
+c      afa1(n)=silver-indium-cadmium.
+c      afa2(n)=boron carbide.
+c      afux2=uo2
+c      afzx2(n)=zro2.
+c      afalup(n)=aluminum.
+c      aflith(n)=lithium.
+c      afcadm(n)=cadmium.
+c      afsoil(n)=soil
+c      keffz(n)=effective thermal conductivity in axial direction
+c               (w/m.k) [output]
+c      keffr(n)=radial direction. [output].
+c      tmeltel(n)=melting temperature of element n (k).[input].
+c      fmltdt(n)=fractional rate of melting of element n :
+c      ((fraction melted at end of time step)-(fraction melted
+c       at start of time step))/(time step) {output].
+c      fracml(n)=end of time thickness of crust of element (m).
+c      frcml0(n) = start of time step thickness of crust in element.(m)
+c      hfusrl(n)=heat of fusion of element n(j/kg). {output].
+c      pore(n)=porosity of element n
+c      rap     = modified rayleigh number for molten pool (sr dhcoef)
+c              = (gravity)*(thermal expansion coefficient)*
+c                (length**3)*(delta temperature)/
+c                (thermal diffuivity)*(kinematic viscosity)
+c      cnpool  = thermal conductivity of molten pool (w/m.k)
+c      tpool   = molten pool average temperature (k)
+c      factor = factor indicating variation of downward heat transfer
+c               coefficient with theta (based on Mayinger data)
+c      alhir = radius of curvature of lower head (m)
+c      dh    = thickness of lower head (m)
+c      rass  = Rayleigh number used for calculating steady state
+c              natural convection in molten pool.
+c      hnatcr(n) = natural convection htc in radial direction for
+c                    element n (W/m2.K)
+c      tmpdot(i) = rate of change of temperature at node i (K/s).
+c     sigf = maximum error in temperature on solidified side of element
+c            with liquid-solid interface (K). If this value is greater
+c            than a defined tolerance, then another iteration is made.
+c            These values are computed n KPOOL and used in COUPLE.
+c     maxe = number of element with sigf.
+c      ncompt = indicator of whether s values computed for userh,
+c               0 = no, 1 = yes.
+c               if keffr or keffz are returned with values greater than
+c               0.0, then this subroutine has computed final thermal
+c               conductivities and the s values are not needed.
+c
+       implicit none
+c
+       integer imin,imax
+       integer imme(*),ix(5,*)
+       real r,z,tz,afz,afu,afs,afa1,afa2,afux2,afzx2,afalup,
+     * aflith,afcadm,afsoil,tmltel,fracml,frcml0,pore
+       real hnatcr(*),tmpdot(*)
+       dimension r(*), z(*), tz(*), keffz(*),
+     # keffr(*), afz(*), afu(*), afs(*), afa1(*), afa2(*),
+     # afux2(*), afzx2(*), afalup(*), aflith(*), afcadm(*),
+     # afsoil(*), tmltel(*), fracml(*),pore(*),frcml0(*),
+     # imin(*), imax(*)
+       real sr(5), sz(5)
+       real keffr, keffz, kbar, sigf
+       real depth, rap, cnpool, tpool, zptop
+       integer elemij(*), ielem(*), jelem(*)
+       include 'contrl.h'
+       include 'ufiles.h'
+       include 'scddat.h'
+       include 'hardpn.h'
+       include 'iparm.h'
+c  Local variables.
+       integer i,i1,idyn,j,j1,k,l, mtl,n,nn
+       real cnuss, htc, tbar, tmax, tmin, zutco1, thetas, theta, factor
+       real alhir,dh, rass,htcss,cnuss2,zmaxtp,zmintp,
+     # rdenom,sintht,costht,fack,rcntrd,zcntrd,zfrtop, fckp,dltmlt
+       real dml,rmid, tmpref,keffr1,
+     # keffz1,dml1,dml2,dms1,ksolid,ksold1,ksold2,
+     # tlft,trit,kmp,hfuspl,dnpool
+       real dtdr,dtdz,keffgr,keffgz,dxe1,dxe2,dms2, kefmax,rlft,rrit,
+     # kminsd,fcmn,fnorm,ftpcst,fbt,pwave, hflxpw, fmxeff,htclit,
+     # cpsol1,cpsol2,cpsold,rhosl1,rhosl2,rhosld,tdotav,
+     # term1,term2,term3,fackn,tminn,tmaxn,klit,rholit,cplit,epstmp,
+     # thkdot,coef1,term4, tsupmn,tsumrp
+       integer norent, ntotml,jm1, in,jn,kn,ln,ncompt,
+     # ndrcdt,nelpow,ntotmc, nprobl,nkeold,napply,nigrth,ncslp
+       integer iacnod(4)
+       real x,y,tp
+       dimension x(5),y(5),tp(5)
+       real zuden1,zucp1
+       external zutco1,zuden1,zucp1
+       external grad
+       external tmltmx
+       integer npfth,iufth
+       real polate
+       external polate
+       data npfth / 19/, iufth / 1/
+       real tabfth(38)
+       data tabfth / 0.150626, 0.0,      0.158157, 0.087266,
+     #               0.165689, 0.174533, 0.192048, 0.261799,
+     #               0.218408, 0.349066, 0.305018, 0.436332,
+     #               0.391628, 0.523599, 0.523426, 0.610865,
+     #               0.655224, 0.698132, 0.764428, 0.785398,
+     #               0.873632, 0.872665, 1.001664, 0.959931,
+     #               1.129696, 1.047198, 1.220072, 1.134464,
+     #               1.310448, 1.221730, 1.374464, 1.308997,
+     #               1.438480, 1.396263, 1.446011, 1.483530,
+     #               1.453543, 1.570796 /
+c    define table that computes angle factor for Nusselt number for
+c    for natural convection at boundary of hemisphere.  Table does
+c    area averaging of Jahn and Reineke data.
+c      fack = multiplication factor on liquid state thermal conduct-
+c             ivity to represent natural convection stirring of molten
+c             material and its effect on heat transport.
+c     fackn = multiplication factor on liquid state thermal conduct-
+c             ivity for all-liquid element next to element with
+c             melt front.
+c      fckp = multiplication factor for thermal conductivity in element
+c             with very thin crust (<1.e-6 m) or small temperature
+c             gradient.
+c             through in one direction.
+       data fack / 1.e+6/ fckp / 10./, fackn / 1.0  /
+c    set upper bound on calculated effective thermal conductivity
+c    for elements with liquid-solid interface.; fmxeff = multiplier
+c    on molten pool thermal conductivity to calculate upper bound
+c    on effective thermal conductivity.
+       data fmxeff / 1.e+4/
+c      dltmlt = difference between liquidus and solidus temperature (K).
+       data dltmlt / 43.0/, epstmp/ 0.1/
+c      tmpref=reference temperature for integral of (1/k)dt (K).
+       data tmpref / 300.0/
+c      ndrcdt = switch to calculate heat flux at right boundary of
+c               finite element with liquid-solid interface based
+c               on integral of heat conduction equation, which
+c               involves rate of change of thickness of layer of
+c               solidified material. Otherwise, heat flux at right
+c               boundary is calculated based on thickness of solidified
+c               layer and temperature at left and right boundaries of
+c               solidified layer.
+c               0 = no, 1 = yes.
+       data ndrcdt / 0/
+c      nelpow = switch to adjust effective conductivity in element to
+c               account for heat flux on cold side of element due to
+c               heat generation in element; 0 = no, 1 = yes.
+c      nprobl = switch to fix molten pool natural convection and
+c               pool temperature to fixed values for comparison with
+c               reults in literature; 0 = no, 1 = yes.
+c      nkeold = use old single term (only htc of molten pool) in
+c               calculating effective thermal conductivity.
+       data nelpow/ 1/
+       data nprobl / 0/, nkeold/ 0/, nigrth/ 1/
+c      fcmn = factor applied to solid state conductivity to
+c               set minimum effective thermal conductivity.
+       data fcmn / 0.10/
+       data tsupmn / 1./, tsumrp / 10./
+c
+       ncompt=0
+       if(nprobl.eq.1)then
+c  This analysis is to produce results for comparison with solution in
+c  literature, so fix tpool and htc to values in literature problem.
+       htclit=4000.
+       tpool=3073.
+c   fix thermal conductivity of solidified material to that of
+c   literature solution.
+       klit=3.0
+       cplit=503.
+       rholit=9.90e+3
+       end if
+c     pwave = power density in molten pool (W/m**3)
+c             It is computed in DHCOEF and stored in thkcer(9)
+       pwave=thkcer(9)
+       i=ix(1,n)
+       j=ix(2,n)
+       k=ix(3,n)
+       l=ix(4,n)
+c
+          keffz(n)=0.0
+          keffr(n)=0.0
+          fracml(n)=0.0
+          htc=0.0
+          hnatcr(n)=0.0
+          mtl=ix(5,n)
+          if(mtl.ne.1)go to 200
+            if(nprobl.eq.0)then
+            if(imme(n).le.1)go to 200
+            else
+            if(imme(n).le.1)go to 200
+            end if
+          if(depth.lt.0.001)go to 200
+c
+          i=ix(1,n)
+          j=ix(2,n)
+          k=ix(3,n)
+          l=ix(4,n)
+          tmax=max(tz(i),tz(j),tz(k),tz(l))
+          tmin=min(tz(i),tz(j),tz(k),tz(l))
+c   identify orientation of element and its relative position in
+c      obtain maximum and minimum temperature in element.
+c
+c   identify orientation of element and its relative position in
+c   mesh.
+c    four configurations of mesh are considered; norent =1 = crotch
+c    element at bottom of mesh, norent = 2 = all other crotch elements,
+c    norent = 3 = quadrilateral elements to left of crotch elements,
+c    norent = 4 = quadrilateral elements to right of crotch element.
+c      set default values; keffr(n)=0.0 = conductance of element is
+c      solid state conductance calculated in subroutine cnduct.
+       norent=0
+       zmintp=min(z(j),z(k),z(l))
+       zmaxtp=max(z(j),z(k),z(l))
+       if(abs(zmaxtp-zmintp).le.0.001)then
+c      "crotch element"
+       norent=2
+       if(r(i).lt.0.001)norent=1
+       endif
+       if(norent.ge.1)go to 150
+c      quadrilateral element.
+       zmintp=min(z(k),z(l))
+       zmaxtp=max(z(k),z(l))
+       if(abs(zmaxtp-zmintp).le.0.001)then
+       norent=3
+       else
+       norent=4
+       end if
+150    continue
+c   If all four corners of element are frozen, then consider entire
+c   element to be frozen.
+       ntotml=0
+       if(tz(i).ge.tmltel(n))ntotml=ntotml+1
+       if(tz(j).ge.tmltel(n))ntotml=ntotml+1
+       if(tz(k).ge.tmltel(n))ntotml=ntotml+1
+       if(tz(l).ge.tmltel(n))ntotml=ntotml+1
+c         if material is solid - go to 200
+          ntotmc=ntotml
+          if(norent.eq.2.and.tz(i).ge.tmltel(n))ntotmc=2
+          if(tmax.lt.(tmltel(n)+epstmp))then
+            tbar=0.25*(tz(i)+tz(j)+tz(k)+tz(l))
+            kbar=zutco1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #      afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #      afsoil(n), tbar)
+            keffr(n)=kbar
+            keffz(n)=kbar
+            ncompt=1
+              if(nprobl.eq.1)then
+              keffr(n)=klit
+              keffz(n)=klit
+              ncompt=1
+              end if
+c    If slumping is occurring rapidly, then element may fill up in one
+c    time step but its temperature is not yet updated, so to protect
+c    against identifying element as completely frozen for this case,
+c    bypass the update of thickness of frozen layer.
+            if(norent.eq.4)then
+            fracml(n)=0.5*(r(j)-r(k)+r(i)-r(l))
+            elseif (norent.eq.3)then
+              if(maxj.gt.5)then
+c    assume solidification front moving in vertical direction.
+              fracml(n)=0.5*(z(k)+z(l)-z(i)-z(j))
+              else
+              fracml(n)=0.5*(r(j)+r(k)-r(i)-r(l))
+              end if
+            elseif (norent.eq.1.or.norent.eq.2)then
+            fracml(n)=z(k)-z(i)
+            end if
+          go to 200
+c    end of case of element completely solidified.
+          end if
+c      calculate thermal conductivity using molten pool temperature.
+          tbar=tpool
+          kbar=zutco1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+c        if thermal conductivity for molten pool has been defined,
+c        use this value for kbar.
+          if(cnpool.gt.0.001)then
+          kbar=cnpool
+          kmp=fckp*cnpool
+          else
+          kmp=fckp*kbar
+          end if
+         dnpool=zuden1(afz(n),afu(n), afs(n), afa1(n), afa2(n),
+     #   afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #   afsoil(n), tbar)
+c   define value of heat of fusion of molten material that is
+c   consistent with that defined by MATPRO subroutine ZUNTH1.
+         hfuspl=2.74e+5
+       if(tmin.ge.(tmltel(n)+epstmp))go to 118
+c     compute position factors for computing constraints on upper
+c     and lower bounds of effective thermal conductivity.
+c      fnorm = factor on effective thermal conductivity limits for
+c              average downward postion on hemisphere.  Factor for
+c              other positions, such as downward facing crust at
+c              top of pool, relative to this postion.
+       fnorm=0.54*rass**0.18
+c      factor for downward facing crust at top of pool.
+       ftpcst=0.36*rass**0.23/fnorm
+c      factor for upward facing crust at bottom center of lower head.
+       fbt=0.150626
+       kefmax=fmxeff*cnpool
+c    define upper bound value of thermal conductivity for element on
+c    solidification side of liquid-solid interface.
+c    begin cases of elements that are partially melted.
+       if(norent.eq.4)then
+       ntotml=0
+       iacnod(1)=0
+       iacnod(2)=0
+       iacnod(3)=0
+       iacnod(4)=0
+       if(tz(i).gt.tmltel(n))then
+       ntotml=ntotml+1
+       iacnod(ntotml)=1
+       end if
+       if(tz(j).gt.tmltel(n))then
+       ntotml=ntotml+1
+       iacnod(ntotml)=2
+       end if
+       if(tz(k).gt.tmltel(n))then
+       ntotml=ntotml+1
+       iacnod(ntotml)=3
+       end if
+       if(tz(l).gt.tmltel(n))then
+       ntotml=ntotml+1
+       iacnod(ntotml)=4
+       end if
+         if((ntotml.eq.2.and.iacnod(1).eq.3.and.iacnod(2).eq.4)
+     #   .or.ntotml.eq.1.or.ntotml.eq.3)then
+         if(nigrth.eq.1)go to 1400
+c  use assumption of linear temperature gradient to compute thickness
+c  of crust.
+         dml1=((tz(k)-tmltel(n))/(tz(k)-tz(j)))*(r(j)-r(k))
+         dml2=((tz(l)-tmltel(n))/(tz(l)-tz(i)))*(r(i)-r(l))
+         dxe2=r(i)-r(l)
+         dxe1=r(j)-r(k)
+         dms1=dxe1-dml1
+         dms2=dxe2-dml2
+         if(dms1.lt.0.0)dms1=0.0
+         if(dms2.lt.0.0)dms2=0.0
+         dml=0.5*(dml1+dml2)
+         fracml(n)=0.5*(dms1+dms2)
+         if(fracml(n).lt.0.0)fracml(n)=0.0
+         thkdot=(fracml(n)-frcml0(n))/dt
+1400     continue
+c    calculate Maylinger heat transfer coefficient and then calculate
+c    effective thermal conductivity.
+c        hemisphere shape.
+c  Nusselt number correlation based on Mayinger, Jahn,
+c  Reineke, and Steinbrenner data for downward heat transfer
+c  from a two-dimensional slice (INEL/94-0174)
+c  calculate local orientation of element.
+         rdenom=r(j)-r(i)
+         if(rdenom.lt.1.e-6)rdenom=1.e-6
+         thetas=atan((z(j)-z(i))/rdenom)
+         sintht=sin(thetas)
+         costht=cos(thetas)
+c    now calculate angle with reference to where top of debris
+c    bed intersects lower head, this angle is defined to be 90 degrees,
+c    and angle along centerline is defined to be zero degrees.
+         zcntrd=0.25*(z(i)+z(j)+z(k)+z(l))
+         rcntrd=0.25*(r(i)+r(j)+r(k)+r(l))
+         zfrtop=zptop-zcntrd
+         if(zfrtop.lt.1.e-6)zfrtop=1.e-6
+         theta=atan(rcntrd/zfrtop)
+         factor=polate(tabfth,theta,npfth,iufth)
+c     Calculate Nusselt number for transient natural convection.
+c             steady state equation
+         cnuss2 = 0.54*rass**0.18*factor
+         htcss=cnuss2*cnpool/depth
+c     calculations for transient natural convection.
+         cnuss=0.472*factor*rap**0.220
+           if(chngno(3))then
+           htc=cnuss*cnpool/depth
+c***       if(htc.gt.htcss)htc=htcss
+           else
+           htc=htcss
+           end if
+           if(tpool.lt.(tmltel(n)+tsupmn+tsumrp))then
+           htc=((tpool-tmltel(n)-tsupmn)/tsumrp)*htc
+           if(tpool.lt.(tmltel(n)+tsupmn))htc=0.0
+           end if
+            x(1)=r(i)
+            x(2)=r(j)
+            x(3)=r(k)
+            x(4)=r(l)
+            y(1)=z(i)
+            y(2)=z(j)
+            y(3)=z(k)
+            y(4)=z(l)
+            tp(1)=tz(i)
+            tp(2)=tz(j)
+            tp(3)=tz(k)
+            tp(4)=tz(l)
+            call grad(k,l,dtdr,dtdz,x,y,tp)
+c     hflxpw = heat flux through element due to heat generation in
+c              element (W/m**2)
+            hflxpw=0.0
+            rlft=0.5*(r(k)+r(l))
+            rrit=0.5*(r(i)+r(j))
+            rmid=0.5*(rlft+rrit)
+            trit=0.5*(tz(i)+tz(j))
+            tlft=0.5*(tz(k)+tz(l))
+            if(rlft.lt.1.e-3)rlft=1.e-3
+            if(nelpow.eq.1)then
+            hflxpw=0.5*(rrit**2 - rlft**2)*pwave/rrit
+            end if
+         tbar=0.5*(tz(i)+tz(j))
+c    compute thermal properties of crust.
+         ksold1=zutco1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         cpsol1=zucp1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         rhosl1=zuden1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         tbar=tmltel(n)
+         ksold2=zutco1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         cpsol2=zucp1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         rhosl2=zuden1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         ksolid=0.5*(ksold1+ksold2)
+         cpsold=0.5*(cpsol1+cpsol2)
+         rhosld=0.5*(rhosl1+rhosl2)
+         rhosld=0.5*(rhosl1+rhosl2)
+         trit=0.5*(tz(j)+tz(i))
+         if(trit.gt.tmltel(n))trit=tmltel(n)
+         tlft=0.5*(tz(k)+tz(l))
+         tdotav=0.5*(tmpdot(i)+tmpdot(j))
+          if(nigrth.eq.1)then
+          coef1=2.*ksolid*(tmltel(n)-trit)/(rhosld*hfuspl)
+          if(coef1.lt.0.0)coef1=0.0
+c     Perform independent calculation of growth of crust.
+c     If crust size is less tha 0.1 mm, then differential equation
+c     simplifies to where parabolic kinetics equation is solution.
+           if(frcml0(n).lt.1.e-3.or.abs(tdotav).gt.100.0)then
+           fracml(n)=sqrt(frcml0(n)**2+coef1*dt)
+           thkdot=(fracml(n)-frcml0(n))/dt
+           else
+c       calculate rate of crust growth.
+           term1=0.5*coef1/frcml0(n)
+           term2=0.5*cpsold*tdotav*frcml0(n)/hfuspl
+           term3=htc*(tpool-tmltel(n))/(rhosld*hfuspl)
+           term4=pwave*frcml0(n)/(rhosld*hfuspl)
+           thkdot=term1+term2-term3-term4
+           fracml(n)=frcml0(n)+thkdot*dt
+           end if
+          end if
+         term1=htc*(tpool-tmltel(n))
+         term2=dnpool*hfuspl*thkdot
+         term3=0.5*rhosld*cpsold*tdotav*frcml0(n)
+           if(nkeold.eq.1)then
+           term2=0.0
+           term3=0.0
+           hflxpw=0.0
+           end if
+            if(ndrcdt.eq.1)then
+              if(abs(dtdr).gt.1.e+1)then
+              keffgr=(rrit/rmid)*sintht*(htc*(tpool-tmltel(n))
+     #        +term2-term3+hflxpw)/abs(dtdr)
+              else
+              keffgr=(rrit/rmid)*factor*sintht*kmp
+              end if
+            else
+              if(abs(dtdr).gt.1.e+1.and.fracml(n).gt.1.e-6)then
+              keffr1=(rrit/rmid)*sintht*(htc*(tpool-tmltel(n))
+     #        +term2-term3+hflxpw)/abs(dtdr)
+              keffgr=((rrit/rmid)*sintht*ksolid*(tmltel(n)-trit)
+     #        /fracml(n))/abs(dtdr)
+              else
+              keffgr=(rrit/rmid)*factor*sintht*kmp
+              end if
+            end if
+            if(ndrcdt.eq.1)then
+              if(abs(dtdz).gt.1.e+1)then
+              keffgz=(rrit/rmid)*costht*(htc*(tpool-tmltel(n))
+     #        +term2-term3+hflxpw)/abs(dtdz)
+              else
+              keffgz=factor*costht*kmp
+              end if
+            else
+              if(abs(dtdz).gt.1.e+1.and.fracml(n).ge.1.e-6)then
+              keffgz=(costht*ksolid*(tmltel(n)-trit)
+     #        /fracml(n))/abs(dtdz)
+              else
+              keffgz=factor*costht*kmp
+              end if
+            end if
+            if(keffgr.gt.(factor*kefmax))keffgr=factor*kefmax
+            if(keffgz.gt.(factor*kefmax))keffgz=factor*kefmax
+            kminsd=fcmn*ksolid
+            if(keffgr.lt.(factor*kminsd))keffgr=factor*kminsd
+            if(keffgz.lt.(factor*kminsd))keffgz=factor*kminsd
+         keffr(n)=keffgr
+         keffz(n)=keffgz
+         ncompt=1
+         hnatcr(n)=htc
+         go to 200
+         end if
+         if(ntotml.eq.2.and.iacnod(1).eq.1.and.iacnod(2).eq.4)then
+         if(nigrth.eq.1)go to 1450
+         dml1=((tz(i)-tmltel(n))/(tz(i)-tz(j)))*(z(j)-z(i))
+         dml2=((tz(l)-tmltel(n))/(tz(l)-tz(k)))*(z(k)-z(l))
+         dxe1=z(j)-z(i)
+         dxe2=z(k)-z(l)
+         dms1=dxe1-dml1
+         dms2=dxe2-dml2
+         if(dms1.lt.0.0)dms1=0.0
+         if(dms2.lt.0.0)dms2=0.0
+         dml=0.5*(dml1+dml2)
+         fracml(n)=0.5*(dms1+dms2)
+         if(fracml(n).lt.0.0)fracml(n)=0.0
+         thkdot=(fracml(n)-frcml0(n))/dt
+1450     continue
+c    calculate Nusselt number for heat flux on downward facing crust.
+         cnuss2=0.36*rass**0.23
+         htcss=cnuss2*cnpool/depth
+c     calculations for transient natural convection.
+         factor=1.0
+         cnuss=0.250*rap**0.304
+           if(chngno(3))then
+           htc=cnuss*cnpool/depth
+c***       if(htc.gt.htcss)htc=htcss
+           else
+           htc=htcss
+           end if
+           if(tpool.lt.(tmltel(n)+tsupmn+tsumrp))then
+           htc=((tpool-tmltel(n)-tsupmn)/tsumrp)*htc
+           if(tpool.lt.(tmltel(n)+tsupmn))htc=0.0
+           end if
+            x(1)=r(i)
+            x(2)=r(j)
+            x(3)=r(k)
+            x(4)=r(l)
+            y(1)=z(i)
+            y(2)=z(j)
+            y(3)=z(k)
+            y(4)=z(l)
+            tp(1)=tz(i)
+            tp(2)=tz(j)
+            tp(3)=tz(k)
+            tp(4)=tz(l)
+            call grad(k,l,dtdr,dtdz,x,y,tp)
+            rlft=0.5*(z(i)+z(l))
+            rrit=0.5*(z(k)+z(j))
+            hflxpw=0.0
+            if(nelpow.eq.1)then
+            hflxpw=(rrit-rlft)*pwave
+            end if
+c    compute thermal properties of crust.
+         tbar=0.5*(tz(j)+tz(k))
+         ksold1=zutco1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         cpsol1=zucp1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         rhosl1=zuden1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         tbar=tmltel(n)
+         ksold2=zutco1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         cpsol2=zucp1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         rhosl2=zuden1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         ksolid=0.5*(ksold1+ksold2)
+         cpsold=0.5*(cpsol1+cpsol2)
+         rhosld=0.5*(rhosl1+rhosl2)
+         trit=0.5*(tz(j)+tz(k))
+         tlft=0.5*(tz(i)+tz(l))
+         tdotav=0.5*(tmpdot(j)+tmpdot(k))
+          if(nigrth.eq.1)then
+          coef1=2.*ksolid*(tmltel(n)-trit)/(rhosld*hfuspl)
+          if(coef1.lt.0.0)coef1=0.0
+c     Perform independent calculation of growth of crust.
+c     If crust size is less tha 0.1 mm, then differential equation
+c     simplifies to where parabolic kinetics equation is solution.
+           if(frcml0(n).lt.1.e-3.or.abs(tdotav).gt.100.0)then
+           fracml(n)=sqrt(frcml0(n)**2+coef1*dt)
+           thkdot=(fracml(n)-frcml0(n))/dt
+           else
+c       calculate rate of crust growth.
+           term1=0.5*coef1/frcml0(n)
+           term2=0.5*cpsold*tdotav*frcml0(n)/hfuspl
+           term3=htc*(tpool-tmltel(n))/(rhosld*hfuspl)
+           term4=pwave*frcml0(n)/(rhosld*hfuspl)
+           thkdot=term1+term2-term3-term4
+           fracml(n)=frcml0(n)+thkdot*dt
+           end if
+          end if
+         term1=htc*(tpool-tmltel(n))
+         term2=dnpool*hfuspl*thkdot
+         term3=0.5*rhosld*cpsold*tdotav*fracml(n)
+           if(nkeold.eq.1)then
+           term2=0.0
+           term3=0.0
+           hflxpw=0.0
+           end if
+            if(ndrcdt.eq.1)then
+              if(abs(dtdz).gt.1.e+1)then
+              keffgz=(htc*(tpool-tmltel(n))
+     #        +term2-term3+hflxpw)/abs(dtdz)
+              else
+              keffgz=kmp
+              end if
+            else
+              if(abs(dtdz).gt.1.e+1.and.fracml(n).gt.1.e-6)then
+              keffgz=(ksolid*(tmltel(n)-trit)/fracml(n))/abs(dtdz)
+              keffz1=(htc*(tpool-tmltel(n))
+     #        +term2-term3+hflxpw)/abs(dtdz)
+              else
+              keffgz=kmp
+              end if
+            end if
+c    If crust at top of pool has completely melted, set thermal
+c    conductivity to that for molten pool. (Mayinger k is not
+c    applicable)
+            if(keffgz.gt.(ftpcst*kefmax))keffgz=ftpcst*kefmax
+            kminsd=fcmn*ksolid
+            if(keffgz.lt.(ftpcst*kminsd))keffgz=ftpcst*kminsd
+         keffr(n)=kbar
+         keffz(n)=keffgz
+         ncompt=1
+         hnatcr(n)=htc
+         go to 200
+         end if
+       elseif (norent.eq.3)then
+       ntotml=0
+       iacnod(1)=0
+       iacnod(2)=0
+       iacnod(3)=0
+       iacnod(4)=0
+       if(tz(i).gt.(tmltel(n)+epstmp))then
+       ntotml=ntotml+1
+       iacnod(ntotml)=1
+       end if
+       if(tz(j).gt.(tmltel(n)+epstmp))then
+       ntotml=ntotml+1
+       iacnod(ntotml)=2
+       end if
+       if(tz(k).gt.(tmltel(n)+epstmp))then
+       ntotml=ntotml+1
+       iacnod(ntotml)=3
+       end if
+       if(tz(l).gt.(tmltel(n)+epstmp))then
+       ntotml=ntotml+1
+       iacnod(ntotml)=4
+       end if
+         if((ntotml.eq.2.and.iacnod(1).eq.1.and.iacnod(2).eq.2)
+     #   .or.(ntotml.eq.3.and.iacnod(1).eq.1.and.iacnod(2).eq.2
+     #   .and.iacnod(3).eq.4))then
+         if(nigrth.eq.1)go to 1550
+c  use assumption of linear temperature gradient to compute thickness
+c  of crust.
+         if(abs(tz(j)-tz(k)).gt.0.1)then
+         dml1=((tz(j)-tmltel(n))/(tz(j)-tz(k)))*(z(k)-z(j))
+         else
+         dml1=z(k)-z(j)
+         end if
+         if(abs(tz(i)-tz(l)).gt.0.1)then
+         dml2=((tz(i)-tmltel(n))/(tz(i)-tz(l)))*(z(l)-z(i))
+         else
+         dml2=z(l)-z(i)
+         end if
+         if(dml1.lt.0.0)dml1=0.0
+         if(dml2.lt.0.0)dml2=0.0
+         dxe1=z(k)-z(j)
+         dxe2=z(l)-z(i)
+         dms1=dxe1-dml1
+         dms2=dxe2-dml2
+         if(dms1.lt.0.0)dms1=0.0
+         if(dms2.lt.0.0)dms2=0.0
+         dml=0.5*(dml1+dml2)
+         fracml(n)=0.5*(dms1+dms2)
+         if(fracml(n).lt.0.0)fracml(n)=0.0
+         thkdot=(fracml(n)-frcml0(n))/dt
+1550     continue
+c    calculate thermal conductivity of partially melted element.
+c    calculate Nusselt number for heat flux on downward facing crust
+              cnuss2=0.36*rass**0.23
+              htcss=cnuss2*cnpool/depth
+c     calculations for transient natural convection.
+              factor=1.0
+              cnuss=0.250*rap**0.304
+              if(chngno(3))then
+              htc=cnuss*cnpool/depth
+c***          if(htc.gt.htcss)htc=htcss
+              else
+              htc=htcss
+              end if
+           if(tpool.lt.(tmltel(n)+tsupmn+tsumrp))then
+           htc=((tpool-tmltel(n)-tsupmn)/tsumrp)*htc
+           if(tpool.lt.(tmltel(n)+tsupmn))htc=0.0
+           end if
+            x(1)=r(i)
+            x(2)=r(j)
+            x(3)=r(k)
+            x(4)=r(l)
+            y(1)=z(i)
+            y(2)=z(j)
+            y(3)=z(k)
+            y(4)=z(l)
+            tp(1)=tz(i)
+            tp(2)=tz(j)
+            tp(3)=tz(k)
+            tp(4)=tz(l)
+            call grad(k,l,dtdr,dtdz,x,y,tp)
+            rlft=0.5*(z(i)+z(j))
+            rrit=0.5*(z(k)+z(l))
+            hflxpw=0.0
+            if(nelpow.eq.1)then
+            hflxpw=(rrit-rlft)*pwave
+            end if
+c    compute thermal properties of crust.
+         tbar=0.5*(tz(k)+tz(l))
+         ksold1=zutco1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         cpsol1=zucp1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         rhosl1=zuden1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         tbar=tmltel(n)
+         ksold2=zutco1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         cpsol2=zucp1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         rhosl2=zuden1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         ksolid=0.5*(ksold1+ksold2)
+         cpsold=0.5*(cpsol1+cpsol2)
+         rhosld=0.5*(rhosl1+rhosl2)
+         trit=0.5*(tz(l)+tz(k))
+         tlft=0.5*(tz(i)+tz(j))
+         tdotav=0.5*(tmpdot(k)+tmpdot(l))
+          if(nigrth.eq.1)then
+          coef1=2.*ksolid*(tmltel(n)-trit)/(rhosld*hfuspl)
+          if(coef1.lt.0.0)coef1=0.0
+c     Perform independent calculation of growth of crust.
+c     If crust size is less tha 0.1 mm, then differential equation
+c     simplifies to where parabolic kinetics equation is solution.
+           if(frcml0(n).lt.1.e-3.or.abs(tdotav).gt.100.0)then
+           fracml(n)=sqrt(frcml0(n)**2+coef1*dt)
+           thkdot=(fracml(n)-frcml0(n))/dt
+           else
+c       calculate rate of crust growth.
+           term1=0.5*coef1/frcml0(n)
+           term2=0.5*cpsold*tdotav*frcml0(n)/hfuspl
+           term3=htc*(tpool-tmltel(n))/(rhosld*hfuspl)
+           term4=pwave*frcml0(n)/(rhosld*hfuspl)
+           thkdot=term1+term2-term3-term4
+           fracml(n)=frcml0(n)+thkdot*dt
+           end if
+          end if
+         term1=htc*(tpool-tmltel(n))
+         term2=dnpool*hfuspl*thkdot
+         term3=0.5*rhosld*cpsold*tdotav*fracml(n)
+           if(nkeold.eq.1)then
+           term2=0.0
+           term3=0.0
+           hflxpw=0.0
+           end if
+c    value of dtdr returned by subroutine grad is close to independent
+c    check of value of dtdz, should they be swapped?
+            if(ndrcdt.eq.1)then
+              if(abs(dtdz).gt.1.e+1)then
+              keffgz=(htc*(tpool-tmltel(n))
+     #        +term2-term3+hflxpw)/abs(dtdz)
+              else
+              keffgz=kmp
+              end if
+            else
+              if(abs(dtdz).gt.1.e+1.and.fracml(n).gt.1.e-6)then
+              keffgz=(ksolid*(tmltel(n)-trit)/fracml(n))/abs(dtdz)
+              keffz1=(htc*(tpool-tmltel(n))
+     #        +term2-term3+hflxpw)/abs(dtdz)
+              else
+              keffgz=kmp
+              end if
+            end if
+c     If no crust at top of molten pool, then Mayinger k is not
+c     applicable.
+            if(keffgz.gt.(ftpcst*kefmax))keffgz=ftpcst*kefmax
+            kminsd=fcmn*ksolid
+            if(keffgz.lt.(ftpcst*kminsd))keffgz=ftpcst*kminsd
+         keffr(n)=kbar
+         keffz(n)=keffgz
+         ncompt=1
+         hnatcr(n)=htc
+         go to 200
+         end if
+c   for case of ntotml=3, one of two corners on right hand is melted.
+         if(ntotml.eq.2.and.iacnod(1).eq.1.and.iacnod(2).eq.4)then
+c  use assumption of linear temperature gradient to compute thickness
+c  of crust.
+         if(nigrth.eq.1)go to 1600
+           if(abs(tz(i)-tz(j)).ge.0.01)then
+           dml1=((tz(i)-tmltel(n))/(tz(i)-tz(j)))*(r(j)-r(i))
+           else
+           dml1=r(j)-r(i)
+           end if
+           if(abs(tz(l)-tz(k)).gt.0.01)then
+           dml2=((tz(l)-tmltel(n))/(tz(l)-tz(k)))*(r(k)-r(l))
+           else
+           dml2=r(k)-r(l)
+           end if
+         if(dml1.gt.(r(j)-r(i)))dml1=r(j)-r(i)
+         if(dml2.gt.(r(k)-r(l)))dml2=r(k)-r(l)
+         if(dml1.lt.0.0)dml1=0.0
+         if(dml2.lt.0.0)dml2=0.0
+         dml=0.5*(dml1+dml2)
+         dxe1=r(j)-r(i)
+         dxe2=r(k)-r(l)
+         dms1=dxe1-dml1
+         dms2=dxe2-dml2
+         if(dms1.lt.0.0)dms1=0.0
+         if(dms2.lt.0.0)dms2=0.0
+         dml=0.5*(dml1+dml2)
+         fracml(n)=0.5*(dms1+dms2)
+         if(fracml(n).lt.0.0)fracml(n)=0.0
+         thkdot=(fracml(n)-frcml0(n))/dt
+1600     continue
+c    calculate htc for liquid-solid interface on vertical plane and
+c    melt front moving left to right.
+              factor=2.0
+              cnuss2 = 0.54*rass**0.18*factor
+              htcss=cnuss2*cnpool/depth
+              cnuss=0.472*factor*rap**0.220
+              if(chngno(3))then
+              htc=cnuss*cnpool/depth
+c***          if(htc.gt.htcss)htc=htcss
+              else
+              htc=htcss
+              end if
+           if(tpool.lt.(tmltel(n)+tsupmn+tsumrp))then
+           htc=((tpool-tmltel(n)-tsupmn)/tsumrp)*htc
+           if(tpool.lt.(tmltel(n)+tsupmn))htc=0.0
+           end if
+              if(nprobl.eq.1)htc=htclit
+            x(1)=r(i)
+            x(2)=r(j)
+            x(3)=r(k)
+            x(4)=r(l)
+            y(1)=z(i)
+            y(2)=z(j)
+            y(3)=z(k)
+            y(4)=z(l)
+            tp(1)=tz(i)
+            tp(2)=tz(j)
+            tp(3)=tz(k)
+            tp(4)=tz(l)
+            call grad(k,l,dtdr,dtdz,x,y,tp)
+            hflxpw=0.0
+            rlft=0.5*(r(i)+r(l))
+            rrit=0.5*(r(k)+r(j))
+            if(rlft.lt.1.e-3)rlft=1.e-3
+            if(nelpow.eq.1)then
+            hflxpw=0.5*(rrit**2 - rlft**2)*pwave/rrit
+            end if
+c    compute thermal properties of crust.
+         tbar=0.5*(tz(j)+tz(k))
+         ksold1=zutco1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         cpsol1=zucp1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         rhosl1=zuden1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         tbar=tmltel(n)
+         ksold2=zutco1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         cpsol2=zucp1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         rhosl2=zuden1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         ksolid=0.5*(ksold1+ksold2)
+         cpsold=0.5*(cpsol1+cpsol2)
+         rhosld=0.5*(rhosl1+rhosl2)
+         trit=0.5*(tz(j)+tz(k))
+         tlft=0.5*(tz(i)+tz(l))
+         if(trit.gt.tmltel(n))trit=tmltel(n)
+           if(nprobl.eq.1)then
+           ksolid=klit
+           cpsold=cplit
+           rhosld=rholit
+           end if
+         tdotav=0.5*(tmpdot(j)+tmpdot(k))
+          if(nigrth.eq.1)then
+          coef1=2.*ksolid*(tmltel(n)-trit)/(rhosld*hfuspl)
+          if(coef1.lt.0.0)coef1=0.0
+c     Perform independent calculation of growth of crust.
+c     If crust size is less tha 0.1 mm, then differential equation
+c     simplifies to where parabolic kinetics equation is solution.
+           if(frcml0(n).lt.1.e-3.or.abs(tdotav).gt.100.0)then
+           fracml(n)=sqrt(frcml0(n)**2+coef1*dt)
+           thkdot=(fracml(n)-frcml0(n))/dt
+           else
+c       calculate rate of crust growth.
+           term1=0.5*coef1/frcml0(n)
+           term2=0.5*cpsold*tdotav*frcml0(n)/hfuspl
+           term3=htc*(tpool-tmltel(n))/(rhosld*hfuspl)
+           term4=pwave*frcml0(n)/(rhosld*hfuspl)
+           thkdot=term1+term2-term3-term4
+           fracml(n)=frcml0(n)+thkdot*dt
+           end if
+          end if
+c     For crust size greater than 1 mm, all terms in equation for crust
+c     growth must be considered.
+         term1=htc*(tpool-tmltel(n))
+         term2=dnpool*hfuspl*thkdot
+         term3=0.5*rhosld*cpsold*tdotav*fracml(n)
+           if(nkeold.eq.1)then
+           term2=0.0
+           term3=0.0
+           hflxpw=0.0
+           end if
+            keffgz=ksolid
+            rmid=0.5*(rlft+rrit)
+            if(ndrcdt.eq.1)then
+              if(abs(dtdr).gt.1.e+1)then
+              keffgr=(rrit/rmid)*(htc*(tpool-tmltel(n))
+     #        +term2-term3+hflxpw)/abs(dtdr)
+              else
+              keffgr=kmp
+              end if
+            else
+              if(abs(dtdr).gt.1.e+1.and.fracml(n).gt.1.e-6)then
+              keffgr=((rrit/rmid)*ksolid*(tmltel(n)-trit)/fracml(n))
+     #        /abs(dtdr)
+              else
+              keffgr=kmp
+              end if
+            end if
+            if(keffgr.gt.kefmax)keffgr=kefmax
+            kminsd=fcmn*ksolid
+            if(keffgr.lt.kminsd)keffgr=kminsd
+            if(keffgz.lt.ksolid)keffgz=ksolid
+         keffr(n)=keffgr
+         keffz(n)=keffgz
+         ncompt=1
+         hnatcr(n)=htc
+         go to 200
+         end if
+         if((ntotml.eq.2.and.iacnod(1).eq.3.and.iacnod(2).eq.4)
+     #   .or.(ntotml.eq.1.and.iacnod(1).eq.3))then
+         if(nigrth.eq.1)go to 1650
+c  use assumption of linear temperature gradient to compute thickness
+c  of crust.
+         dml1=((tz(k)-tmltel(n))/(tz(k)-tz(j)))*(z(k)-z(j))
+         dml2=((tz(l)-tmltel(n))/(tz(l)-tz(i)))*(z(k)-z(i))
+         dml=0.5*(dml1+dml2)
+         dxe1=z(k)-z(j)
+         dxe2=z(k)-z(i)
+         dms1=dxe1-dml1
+         dms2=dxe2-dml2
+         if(dms1.lt.0.0)dms1=0.0
+         if(dms2.lt.0.0)dms2=0.0
+         dml=0.5*(dml1+dml2)
+         fracml(n)=0.5*(dms1+dms2)
+         if(fracml(n).lt.0.0)fracml(n)=0.0
+         thkdot=(fracml(n)-frcml0(n))/dt
+1650     continue
+              factor=0.150626
+              cnuss2 = 0.54*rass**0.18*factor
+              htcss=cnuss2*cnpool/depth
+              cnuss=0.472*factor*rap**0.220
+              if(chngno(3))then
+              htc=cnuss*cnpool/depth
+c***          if(htc.gt.htcss)htc=htcss
+              else
+              htc=htcss
+              end if
+           if(tpool.lt.(tmltel(n)+tsupmn+tsumrp))then
+           htc=((tpool-tmltel(n)-tsupmn)/tsumrp)*htc
+           if(tpool.lt.(tmltel(n)+tsupmn))htc=0.0
+           end if
+            x(1)=r(i)
+            x(2)=r(j)
+            x(3)=r(k)
+            x(4)=r(l)
+            y(1)=z(i)
+            y(2)=z(j)
+            y(3)=z(k)
+            y(4)=z(l)
+            tp(1)=tz(i)
+            tp(2)=tz(j)
+            tp(3)=tz(k)
+            tp(4)=tz(l)
+            call grad(k,l,dtdr,dtdz,x,y,tp)
+            rlft=0.5*(z(i)+z(j))
+            rrit=0.5*(z(k)+z(l))
+            hflxpw=0.0
+            if(nelpow.eq.1)then
+            hflxpw=(rrit-rlft)*pwave
+            end if
+c    compute thermal properties of crust.
+         tbar=0.5*(tz(i)+tz(j))
+         ksold1=zutco1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         cpsol1=zucp1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         rhosl1=zuden1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         tbar=tmltel(n)
+         ksold2=zutco1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         cpsol2=zucp1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         rhosl2=zuden1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         ksolid=0.5*(ksold1+ksold2)
+         cpsold=0.5*(cpsol1+cpsol2)
+         rhosld=0.5*(rhosl1+rhosl2)
+         trit=0.5*(tz(i)+tz(j))
+         tlft=0.5*(tz(k)+tz(l))
+         tdotav=0.5*(tmpdot(i)+tmpdot(j))
+          if(nigrth.eq.1)then
+          coef1=2.*ksolid*(tmltel(n)-trit)/(rhosld*hfuspl)
+          if(coef1.lt.0.0)coef1=0.0
+c     Perform independent calculation of growth of crust.
+c     If crust size is less tha 0.1 mm, then differential equation
+c     simplifies to where parabolic kinetics equation is solution.
+           if(frcml0(n).lt.1.e-3.or.abs(tdotav).gt.100.0)then
+           fracml(n)=sqrt(frcml0(n)**2+coef1*dt)
+           thkdot=(fracml(n)-frcml0(n))/dt
+           else
+c       calculate rate of crust growth.
+           term1=0.5*coef1/frcml0(n)
+           term2=0.5*cpsold*tdotav*frcml0(n)/hfuspl
+           term3=htc*(tpool-tmltel(n))/(rhosld*hfuspl)
+           term4=pwave*frcml0(n)/(rhosld*hfuspl)
+           thkdot=term1+term2-term3-term4
+           fracml(n)=frcml0(n)+thkdot*dt
+           end if
+          end if
+         term1=htc*(tpool-tmltel(n))
+         term2=dnpool*hfuspl*thkdot
+         term3=0.5*rhosld*cpsold*tdotav*fracml(n)
+           if(nkeold.eq.1)then
+           term2=0.0
+           term3=0.0
+           hflxpw=0.0
+           end if
+            keffgr=ksolid
+            if(ndrcdt.eq.1)then
+              if(abs(dtdz).gt.1.e+1)then
+              keffgz=(htc*(tpool-tmltel(n))
+     #        +term2-term3+hflxpw)/abs(dtdz)
+              else
+              keffgz=kmp
+              end if
+            else
+              if(abs(dtdz).gt.1.e+1.and.fracml(n).gt.1.e-6)then
+              keffgz=(ksolid*(tmltel(n)-trit)/fracml(n))/abs(dtdz)
+              else
+              keffgz=kmp
+              end if
+            end if
+            if(keffgz.gt.(fbt*kefmax))keffgz=fbt*kefmax
+            kminsd=fcmn*ksolid
+            if(keffgz.lt.(fbt*kminsd))keffgz=fbt*kminsd
+         keffr(n)=keffgr
+         keffz(n)=keffgz
+         ncompt=1
+         hnatcr(n)=htc
+         go to 200
+         end if
+       elseif (norent.eq.1.or.norent.eq.2)then
+       ntotml=0
+       iacnod(1)=0
+       iacnod(2)=0
+       iacnod(3)=0
+       iacnod(4)=0
+       if(tz(i).gt.tmltel(n))then
+       ntotml=ntotml+1
+       iacnod(ntotml)=1
+       end if
+       if(tz(j).gt.tmltel(n))then
+       ntotml=ntotml+1
+       iacnod(ntotml)=2
+       end if
+       if(tz(k).gt.tmltel(n))then
+       ntotml=ntotml+1
+       iacnod(ntotml)=3
+       end if
+       if(tz(l).gt.tmltel(n))then
+       ntotml=ntotml+1
+       iacnod(ntotml)=4
+       end if
+         if((ntotml.eq.2.and.iacnod(1).eq.3.and.iacnod(2).eq.4).or.
+     #   (ntotml.eq.1.and.iacnod(1).eq.4)
+     #   .or.(ntotml.eq.1.and.iacnod(1).eq.3))then
+         if(nigrth.eq.1)go to 1670
+c  use assumption of linear temperature gradient to compute thickness
+c  of crust.
+         dml1=((tz(l)-tmltel(n))/(tz(l)-tz(i)))*(z(l)-z(i))
+         fracml(n)=z(l)-z(i)-dml1
+         dxe1=z(l)-z(i)
+         dms1=dxe1-dml1
+         dms2=0.0
+         dml1=0.0
+         if(dms1.lt.0.0)dms1=0.0
+         dml=dml1
+         fracml(n)=0.5*(dms1+dms2)
+         if(fracml(n).lt.0.0)fracml(n)=0.0
+         thkdot=(fracml(n)-frcml0(n))/dt
+         if(fracml(n).lt.0.0)fracml(n)=0.0
+1670     continue
+             factor=0.150626
+              cnuss2 = 0.54*rass**0.18*factor
+              htcss=cnuss2*cnpool/depth
+              cnuss=0.472*factor*rap**0.220
+              if(chngno(3))then
+              htc=cnuss*cnpool/depth
+c***          if(htc.gt.htcss)htc=htcss
+              else
+              htc=htcss
+              end if
+           if(tpool.lt.(tmltel(n)+tsupmn+tsumrp))then
+           htc=((tpool-tmltel(n)-tsupmn)/tsumrp)*htc
+           if(tpool.lt.(tmltel(n)+tsupmn))htc=0.0
+           end if
+            x(1)=r(i)
+            x(2)=r(j)
+            x(3)=r(k)
+            x(4)=r(l)
+            y(1)=z(i)
+            y(2)=z(j)
+            y(3)=z(k)
+            y(4)=z(l)
+            tp(1)=tz(i)
+            tp(2)=tz(j)
+            tp(3)=tz(k)
+            tp(4)=tz(l)
+            call grad(k,l,dtdr,dtdz,x,y,tp)
+            rlft=r(k)
+            rrit=r(j)
+            if(rlft.lt.1.e-3)rlft=1.e-3
+            hflxpw=0.0
+            if(nelpow.eq.1)then
+            hflxpw=0.5*(rrit**2 - rlft**2)*pwave/rrit
+            end if
+         tbar=tz(i)
+         ksold1=zutco1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         cpsol1=zucp1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         rhosl1=zuden1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         tbar=tmltel(n)
+         ksold2=zutco1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         cpsol2=zucp1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         rhosl2=zuden1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         ksolid=0.5*(ksold1+ksold2)
+         cpsold=0.5*(cpsol1+cpsol2)
+         rhosld=0.5*(rhosl1+rhosl2)
+         trit=tz(i)
+         tlft=0.33333333*(tz(k)+tz(j)+tz(l))
+         tdotav=tmpdot(i)
+          if(nigrth.eq.1)then
+          coef1=2.*ksolid*(tmltel(n)-trit)/(rhosld*hfuspl)
+          if(coef1.lt.0.0)coef1=0.0
+c     Perform independent calculation of growth of crust.
+c     If crust size is less tha 0.1 mm, then differential equation
+c     simplifies to where parabolic kinetics equation is solution.
+           if(frcml0(n).lt.1.e-3.or.abs(tdotav).gt.100.0)then
+           fracml(n)=sqrt(frcml0(n)**2+coef1*dt)
+           thkdot=(fracml(n)-frcml0(n))/dt
+           else
+c       calculate rate of crust growth.
+           term1=0.5*coef1/frcml0(n)
+           term2=0.5*cpsold*tdotav*frcml0(n)/hfuspl
+           term3=htc*(tpool-tmltel(n))/(rhosld*hfuspl)
+           term4=pwave*frcml0(n)/(rhosld*hfuspl)
+           thkdot=term1+term2-term3-term4
+           fracml(n)=frcml0(n)+thkdot*dt
+           end if
+          end if
+         term1=htc*(tpool-tmltel(n))
+         term2=dnpool*hfuspl*thkdot
+         term3=0.5*rhosld*cpsold*tdotav*fracml(n)
+           if(nkeold.eq.1)then
+           term2=0.0
+           term3=0.0
+           hflxpw=0.0
+           end if
+              keffgr=kbar
+              rrit=0.33333333*(z(j)+z(k)+z(l))
+              rlft=z(i)
+              hflxpw=0.0
+              if(nelpow.eq.1)then
+              hflxpw=(rrit-rlft)*pwave
+              end if
+            if(ndrcdt.eq.1)then
+              if(abs(dtdz).gt.1.e+1)then
+              keffgz=(htc*(tpool-tmltel(n))
+     #        +term2-term3+hflxpw)/abs(dtdz)
+              else
+              keffgz=kmp
+              end if
+            else
+              if(abs(dtdz).gt.1.e+1.and.fracml(n).gt.1.e-6)then
+              keffgz=(ksolid*(tmltel(n)-trit)/fracml(n))/abs(dtdz)
+              else
+              keffgz=kmp
+              end if
+            end if
+            if(keffgz.gt.(fbt*kefmax))keffgz=fbt*kefmax
+            if(keffgr.gt.(fbt*kefmax))keffgr=fbt*kefmax
+            kminsd=fcmn*ksolid
+            if(keffgz.lt.(fbt*kminsd))keffgz=fbt*kminsd
+            if(keffgr.lt.(fbt*kminsd))keffgr=fbt*kminsd
+         keffz(n)=keffgz
+         keffr(n)=keffgr
+         ncompt=1
+         hnatcr(n)=htc
+         go to 200
+         end if
+         if(ntotml.eq.1.and.iacnod(1).eq.1)then
+         if(nigrth.eq.1)go to 1690
+c  use assumption of linear temperature gradient to compute thickness
+c  of crust.
+         dml1=((tz(i)-tmltel(n))/(tz(i)-tz(l)))*(z(l)-z(i))
+         dml2=((tz(i)-tmltel(n))/(tz(i)-tz(j)))*(z(j)-z(i))
+         dml=0.5*(dml1+dml2)
+         dxe1=z(l)-z(i)
+         dxe2=z(j)-z(i)
+         dms1=dxe1-dml1
+         dms2=dxe2-dml2
+         if(dms1.lt.0.0)dms1=0.0
+         if(dms2.lt.0.0)dms2=0.0
+         dml=0.5*(dml1+dml2)
+         fracml(n)=0.5*(dms1+dms2)
+         if(fracml(n).lt.0.0)fracml(n)=0.0
+         thkdot=(fracml(n)-frcml0(n))/dt
+1690     continue
+c    calculate Nusselt number for heat flux on downward facing crust
+              cnuss2=0.36*rass**0.23
+              htcss=cnuss2*cnpool/depth
+c     calculations for transient natural convection.
+              factor=1.0
+              cnuss=0.250*rap**0.304
+              if(chngno(3))then
+              htc=cnuss*cnpool/depth
+c***          if(htc.gt.htcss)htc=htcss
+              else
+              htc=htcss
+              end if
+           if(tpool.lt.(tmltel(n)+tsupmn+tsumrp))then
+           htc=((tpool-tmltel(n)-tsupmn)/tsumrp)*htc
+           if(tpool.lt.(tmltel(n)+tsupmn))htc=0.0
+           end if
+            x(1)=r(i)
+            x(2)=r(j)
+            x(3)=r(k)
+            x(4)=r(l)
+            y(1)=z(i)
+            y(2)=z(j)
+            y(3)=z(k)
+            y(4)=z(l)
+            tp(1)=tz(i)
+            tp(2)=tz(j)
+            tp(3)=tz(k)
+            tp(4)=tz(l)
+            call grad(k,l,dtdr,dtdz,x,y,tp)
+            rrit=0.33333333*(z(j)+z(k)+z(l))
+            rlft=z(i)
+            hflxpw=0.0
+            if(nelpow.eq.1)then
+            hflxpw=(rrit-rlft)*pwave
+            end if
+c    compute thermal properties of crust.
+         tbar=0.33333333*(tz(j)+tz(k)+tz(l))
+         trit=tbar
+         ksold1=zutco1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         cpsol1=zucp1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         rhosl1=zuden1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         tbar=tmltel(n)
+         ksold2=zutco1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         cpsol2=zucp1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         rhosl2=zuden1(afz(n), afu(n), afs(n), afa1(n), afa2(n),
+     #    afux2(n), afzx2(n), afalup(n), aflith(n), afcadm(n),
+     #    afsoil(n), tbar)
+         ksolid=0.5*(ksold1+ksold2)
+         cpsold=0.5*(cpsol1+cpsol2)
+         rhosld=0.5*(rhosl1+rhosl2)
+         tdotav=0.3333333*(tmpdot(j)+tmpdot(k)+tmpdot(l))
+          if(nigrth.eq.1)then
+          coef1=2.*ksolid*(tmltel(n)-trit)/(rhosld*hfuspl)
+          if(coef1.lt.0.0)coef1=0.0
+c     Perform independent calculation of growth of crust.
+c     If crust size is less tha 0.1 mm, then differential equation
+c     simplifies to where parabolic kinetics equation is solution.
+           if(frcml0(n).lt.1.e-3.or.abs(tdotav).gt.100.0)then
+           fracml(n)=sqrt(frcml0(n)**2+coef1*dt)
+           thkdot=(fracml(n)-frcml0(n))/dt
+           else
+c       calculate rate of crust growth.
+           term1=0.5*coef1/frcml0(n)
+           term2=0.5*cpsold*tdotav*frcml0(n)/hfuspl
+           term3=htc*(tpool-tmltel(n))/(rhosld*hfuspl)
+           term4=pwave*frcml0(n)/(rhosld*hfuspl)
+           thkdot=term1+term2-term3-term4
+           fracml(n)=frcml0(n)+thkdot*dt
+           end if
+          end if
+         term1=htc*(tpool-tmltel(n))
+         term2=dnpool*hfuspl*thkdot
+         term3=0.5*rhosld*cpsold*tdotav*fracml(n)
+           if(nkeold.eq.1)then
+           term2=0.0
+           term3=0.0
+           hflxpw=0.0
+           end if
+            if(ndrcdt.eq.1)then
+              if(abs(dtdz).gt.1.e+1)then
+              keffgz=(htc*(tpool-tmltel(n))
+     #        +term2-term3+hflxpw)/abs(dtdz)
+              else
+              keffgz=kbar
+              end if
+            else
+              if(abs(dtdz).gt.1.e+1.and.fracml(n).gt.1.e-6)then
+              keffgz=(ksolid*(tmltel(n)-trit)/fracml(n))/abs(dtdz)
+              else
+              keffgz=kmp
+              end if
+            end if
+            if(keffgz.gt.(ftpcst*kefmax))keffgz=ftpcst*kefmax
+            kminsd=fcmn*ksolid
+            if(keffgz.lt.(ftpcst*kminsd))keffgz=ftpcst*kminsd
+         keffr(n)=kbar
+         keffz(n)=keffgz
+         ncompt=1
+         hnatcr(n)=htc
+         go to 200
+         end if
+       end if
+       go to 200
+118    continue
+c    first calculate default thermal conductivity for completely
+c    liquefied element, then modify this thermal conductivity if
+c    element is next to element with liquid-solid interface.
+       keffr(n)=fack*cnpool
+       keffz(n)=fack*cnpool
+       ncompt=1
+c    compute htc for top surface of molten pool.
+c    calculate Nusselt number for heat flux on downward facing crust
+              cnuss2=0.36*rass**0.23
+              htcss=cnuss2*cnpool/depth
+c     calculations for transient natural convection.
+              factor=1.0
+              cnuss=0.250*rap**0.304
+              if(chngno(3))then
+              htc=cnuss*cnpool/depth
+c***          if(htc.gt.htcss)htc=htcss
+              else
+              htc=htcss
+              end if
+           if(tpool.lt.(tmltel(n)+tsupmn+tsumrp))then
+           htc=((tpool-tmltel(n)-tsupmn)/tsumrp)*htc
+           if(tpool.lt.(tmltel(n)+tsupmn))htc=0.0
+           end if
+            x(1)=r(i)
+            x(2)=r(j)
+            x(3)=r(k)
+            x(4)=r(l)
+            y(1)=z(i)
+            y(2)=z(j)
+            y(3)=z(k)
+            y(4)=z(l)
+            tp(1)=tz(i)
+            tp(2)=tz(j)
+            tp(3)=tz(k)
+            tp(4)=tz(l)
+c    If element is at top of molten pool and crust has melted away
+c    or not formed, then set k to that of molten material with nominal
+c    natural convection.
+       if(norent.eq.4.or.norent.eq.2)then
+c   check whether or not element is next to wall; if so apply
+c   Mayinger bases htc at this location even though element is
+c   completely melted.
+         j1=jelem(n)
+         if(j1.gt.1)then
+         jm1=j1-1
+         i1=ielem(n)
+         idyn=(maxj-1)*i1+jm1
+         nn=elemij(idyn)
+           if(ix(5,nn).eq.6)then
+           rdenom=r(j)-r(i)
+           if(rdenom.lt.1.e-6)rdenom=1.e-6
+           thetas=atan((z(j)-z(i))/rdenom)
+           sintht=sin(thetas)
+           costht=cos(thetas)
+c    now calculate angle with reference to where top of debris
+c    bed intersects lower head, this angle is defined to be 90 degrees,
+c    and angle along centerline is defined to be zero degrees.
+           zcntrd=0.25*(z(i)+z(j)+z(k)+z(l))
+           rcntrd=0.25*(r(i)+r(j)+r(k)+r(l))
+           zfrtop=zptop-zcntrd
+           if(zfrtop.lt.1.e-6)zfrtop=1.e-6
+           theta=atan(rcntrd/zfrtop)
+           factor=polate(tabfth,theta,npfth,iufth)
+c     Calculate Nusselt number for transient natural convection.
+c             steady state equation
+           cnuss2 = 0.54*rass**0.18*factor
+           htcss=cnuss2*cnpool/depth
+c     calculations for transient natural convection.
+           cnuss=0.472*factor*rap**0.220
+             if(chngno(3))then
+             htc=cnuss*cnpool/depth
+c***         if(htc.gt.htcss)htc=htcss
+             else
+             htc=htcss
+             end if
+           if(tpool.lt.(tmltel(n)+tsupmn+tsumrp))then
+           htc=((tpool-tmltel(n)-tsupmn)/tsumrp)*htc
+           if(tpool.lt.(tmltel(n)+tsupmn))htc=0.0
+           end if
+           call grad(k,l,dtdr,dtdz,x,y,tp)
+             rrit=0.5*(r(i)+r(j))
+             rlft=0.5*(r(k)+r(l))
+             rmid=0.5*(rrit+rlft)
+             if(abs(dtdr).gt.1.e+1.and.norent.eq.4)then
+             keffgr=(rrit/rmid)*sintht*htc*(tpool-tmltel(n))
+     #       /abs(dtdr)
+             else
+             keffgr=(rrit/rmid)*factor*sintht*kmp
+             end if
+             if(abs(dtdz).gt.1.e+1.and.norent.eq.4)then
+             keffgz=costht*htc*(tpool-tmltel(n))/abs(dtdz)
+             else
+             keffgz=factor*costht*kmp
+             end if
+           keffr(n)=keffgr
+           keffz(n)=keffgz
+           hnatcr(n)=htc
+           fracml(n)=0.0
+           go to 200
+           end if
+         end if
+c    element above is n+1
+         if(n.lt.numel)then
+         nn=n+1
+           if(imme(nn).le.1)then
+           call grad(k,l,dtdr,dtdz,x,y,tp)
+             if(abs(dtdz).gt.1.e+1)then
+             keffgz=htc*(tpool-tmltel(n))/abs(dtdz)
+             keffz(n)=keffgz
+             keffr(n)=kbar
+             else
+             keffz(n)=kmp
+             keffr(n)=kmp
+             end if
+           hnatcr(n)=htc
+           fracml(n)=0.0
+           go to 200
+           end if
+         end if
+       end if
+       if(norent.eq.3)then
+       i1=ielem(n)
+       j1=jelem(n)
+         if(j1.lt.(maxj-1))then
+         jm1=j1+1
+         idyn=(maxj-1)*i1+jm1
+         nn=elemij(idyn)
+c    element above has j coordinate j+1
+           if(imme(nn).le.1)then
+           call grad(k,l,dtdr,dtdz,x,y,tp)
+             if(abs(dtdz).gt.1.e+1)then
+             keffgz=htc*(tpool-tmltel(n))/abs(dtdz)
+             keffr(n)=kbar
+             keffz(n)=keffgz
+             else
+             keffz(n)=kmp
+             keffr(n)=kmp
+             end if
+           hnatcr(n)=htc
+           fracml(n)=0.0
+           go to 200
+           end if
+         end if
+       end if
+       if(norent.eq.1)then
+c      by definition of norent = 1, element below is structure, so
+c      apply Mayinger.
+         factor=0.150626
+         cnuss2 = 0.54*rass**0.18*factor
+         htcss=cnuss2*cnpool/depth
+         cnuss=0.472*factor*rap**0.220
+           if(chngno(3))then
+           htc=cnuss*cnpool/depth
+c***       if(htc.gt.htcss)htc=htcss
+           else
+           htc=htcss
+           end if
+           if(tpool.lt.(tmltel(n)+tsupmn+tsumrp))then
+           htc=((tpool-tmltel(n)-tsupmn)/tsumrp)*htc
+           if(tpool.lt.(tmltel(n)+tsupmn))htc=0.0
+           end if
+         call grad(k,l,dtdr,dtdz,x,y,tp)
+           if(abs(dtdr).gt.1.e-1)then
+           keffgr=htc*(tpool-tmltel(n))/abs(dtdr)
+           else
+           keffgr=kmp
+           end if
+           if(abs(dtdz).gt.1.e+1)then
+           keffgz=htc*(tpool-tmltel(n))/abs(dtdz)
+           else
+           keffgz=kmp
+           end if
+         keffr(n)=keffgr
+         keffz(n)=keffgz
+         hnatcr(n)=htc
+         fracml(n)=0.0
+         go to 200
+       end if
+       if(nigrth.eq.1)go to 200
+       if(nkeold.eq.1)go to 200
+c     apply effective thermal conductivity based on Mayinger
+c     correlation for all liquid elements adjacent to liquid-solid
+c     interface.
+c
+      if(norent.ne.4)go to 120
+      napply=0
+c  find element to right.
+      i1=ielem(n)
+      j1=jelem(n)
+      if(j1.le.1)go to 200
+      jm1=j1-1
+      idyn=(maxj-1)*i1+jm1
+      nn=elemij(idyn)
+      if(ix(5,nn).eq.6)then
+      napply=1
+      end if
+c    is melt front in element to right?
+         in=ix(1,nn)
+         jn=ix(2,nn)
+         kn=ix(3,nn)
+         ln=ix(4,nn)
+         tminn=min(tz(in),tz(jn),tz(kn),tz(ln))
+         tmaxn=max(tz(in),tz(jn),tz(kn),tz(ln))
+         if(tmaxn.gt.(tmltel(nn)+0.01).and.tminn.lt.tmltel(nn))napply=1
+         if(napply.eq.0)go to 200
+c        hemisphere shape.
+c  Nusselt number correlation based on Mayinger, Jahn,
+c  Reineke, and Steinbrenner data for downward heat transfer
+c  from a two-dimensional slice (INEL/94-0174)
+c  calculate local orientation of element.
+         rdenom=r(j)-r(i)
+         if(rdenom.lt.1.e-6)rdenom=1.e-6
+         thetas=atan((z(j)-z(i))/rdenom)
+         sintht=sin(thetas)
+         costht=cos(thetas)
+c  Now calculate angle with reference to where top of debris
+c  bed intersects lower head, this angle is defined to be 90 degrees,
+c  and angle along centerline is defined to be zero degrees.
+         zcntrd=0.25*(z(i)+z(j)+z(k)+z(l))
+         rcntrd=0.25*(r(i)+r(j)+r(k)+r(l))
+         zfrtop=zptop-zcntrd
+         if(zfrtop.lt.1.e-6)zfrtop=1.e-6
+         theta=atan(rcntrd/zfrtop)
+         factor=polate(tabfth,theta,npfth,iufth)
+c  Calculate Nusselt number for transient natural convection.
+c             steady state equation
+         cnuss2 = 0.54*rass**0.18*factor
+         htcss=cnuss2*cnpool/depth
+c  Calculations for transient natural convection.
+         cnuss=0.472*factor*rap**0.220
+           if(chngno(3))then
+           htc=cnuss*cnpool/depth
+c***       if(htc.gt.htcss)htc=htcss
+           else
+           htc=htcss
+           end if
+           if(tpool.lt.(tmltel(n)+tsupmn+tsumrp))then
+           htc=((tpool-tmltel(n)-tsupmn)/tsumrp)*htc
+           if(tpool.lt.(tmltel(n)+tsupmn))htc=0.0
+           end if
+            x(1)=r(i)
+            x(2)=r(j)
+            x(3)=r(k)
+            x(4)=r(l)
+            y(1)=z(i)
+            y(2)=z(j)
+            y(3)=z(k)
+            y(4)=z(l)
+            tp(1)=tz(i)
+            tp(2)=tz(j)
+            tp(3)=tz(k)
+            tp(4)=tz(l)
+            call grad(k,l,dtdr,dtdz,x,y,tp)
+              if(abs(dtdr).gt.0.1)then
+              keffr(n)=htc*(tpool-tmltel(n))/abs(dtdr)
+              keffz(n)=cnpool
+              else
+              keffr(n)=kmp
+              keffz(n)=cnpool
+             end if
+         if(keffr(n).lt.cnpool)keffr(n)=cnpool
+         if(keffz(n).lt.cnpool)keffz(n)=cnpool
+         ncompt=1
+         go to 200
+c  If fine mesh approach to be used for lower head, add here Mayinger
+c  based effective k for elements just below elements that have melt
+c  front and contain crust at surface of molten pool.
+120   continue
+      if(norent.ne.3)go to 140
+      if(n.eq.numel)go to 200
+         napply=0
+      nn=n+1
+         if(ix(5,nn).eq.6.or.ielem(n).eq.(maxi-1))then
+c  Element at boundary of debris.
+         napply=1
+         end if
+c  Is melt front in element to right?
+         in=ix(1,nn)
+         jn=ix(2,nn)
+         kn=ix(3,nn)
+         ln=ix(4,nn)
+         tminn=min(tz(in),tz(jn),tz(kn),tz(ln))
+         tmaxn=max(tz(in),tz(jn),tz(kn),tz(ln))
+         if(tmaxn.gt.(tmltel(nn)+0.01).and.tminn.lt.tmltel(nn))napply=1
+         if(napply.eq.1)then
+c  Add Mayinger htc calculation here.
+c  Melt front in adjacent element or at boundary of molten material.
+         if(nprobl.eq.1)htc=htclit
+            x(1)=r(i)
+            x(2)=r(j)
+            x(3)=r(k)
+            x(4)=r(l)
+            y(1)=z(i)
+            y(2)=z(j)
+            y(3)=z(k)
+            y(4)=z(l)
+            tp(1)=tz(i)
+            tp(2)=tz(j)
+            tp(3)=tz(k)
+            tp(4)=tz(l)
+            call grad(k,l,dtdr,dtdz,x,y,tp)
+              if(abs(dtdr).gt.0.1)then
+              keffr(n)=htc*(tpool-tmltel(n))/abs(dtdr)
+              keffz(n)=cnpool
+              else
+              keffr(n)=kmp
+              keffz(n)=cnpool
+             end if
+         ncompt=1
+         go to 200
+         end if
+c  If fine mesh approach is to be used for lower head, then add here
+c  Mayinger based effective conductivity for element one layer below
+c  elements with melt front. (Crust on top surface).
+140   continue
+      if(norent.ne.1)go to 160
+c  If fine mesh approach is used for lower head, add here Mayinger if
+c  element below has melt front.
+c  Find element below.
+      go to 200
+160   continue
+      if(norent.ne.2)go to 200
+c  If fine mesh approach is used, compute here the Mayinger htc for
+c  elements just below the elements with melt front and that contain
+c  crust at top surface of molten pool.
+170   continue
+200    continue
+       return
+       end
+*endif

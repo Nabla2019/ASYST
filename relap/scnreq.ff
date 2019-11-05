@@ -1,0 +1,2201 @@
+*mlist
+       subroutine scnreq (ir,alph,num,itypi,pckcod,conv,labl,error)
+c  Processes variable requests used in minor edit requests, plotting
+c  requests, trip specifications, control variables, and interactive
+c  variables.
+c
+c  Cognizant engineer: rjw.
+c
+c  ir is request number for error diagnostics.  alph and num are
+c  alphanumeric and integer portions of variable requests.  itypi is
+c  type of request, 0 means return variable code only; 1 means return
+c  variable code, conversion factors, and printing labels; 2 is the same
+c  as 1 except the labels are for plotting; -1 means no checking or
+c  processing of num but return conversion factors and printing labels.
+c  Variable index information is returned in scod.  scod(1) contains 0
+c  if variable is in a common block, contains the block number if in a
+c  dynamic block. scod(2) contains the offset relative to fa(1).
+c  conv contains conversion factors to British units and a
+c  negative quantity means that it is the additive quantity in a
+c  temperature conversion.  labl contains alphanumeric labels for
+c  printing or plotting.  error is returned false if request is ok and
+c  true otherwise.
+c
+       use gentblc
+       use intrac
+       use lpdatc
+       use scdmod
+       use statcc
+       use vreqsd
+       implicit none
+$if def,dll,1
+!dec$ attributes dllexport :: scnreq
+c
+       integer ir,scod(2),pckcod(2)
+$if def,selap,1
+       integer nnn
+       logical error
+       character alph*8,labl*64
+       include 'fast.h'
+       include 'cmpdac.h'
+       include 'cmpdat.h'
+       include 'cmpdtv.h'
+       include 'cnvtpa.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'convarc.h'
+       include 'scddat.h'
+       include 'scntl.h'
+       include 'scdcom.h'
+       include 'cpmdat.h'
+       include 'ndxara.h'
+       include 'debout.h'
+       include 'fpfast.h'
+       include 'hardpn.h'
+       include 'htrflb.h'
+       include 'htsrcm.h'
+       include 'intcom.h'
+       include 'jundat.h'
+       include 'machls.h'
+       include 'miscon.h'
+       include 'plndat.h'
+       include 'przdat.h'
+       include 'pumpblk.h'
+       include 'rkinc.h'
+       include 'k3all.h'
+       include 'k3point.h'
+       include 'rvoldt.h'
+       include 'scdout.h'
+       include 'separ.h'
+       include 'statec.h'
+       include 'tblsp.h'
+       include 'thplot.h'
+       include 'trnot1.h'
+       include 'turbin.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'alcm.h'
+       include 'iparm.h'
+       include 'coupl.h'
+       include 'rupt.h'
+       include 'buntim.h'
+       include 'slumpv.h'
+       include 'uoxcom.h'
+       include 'oxairv.h'
+       include 'bconds.h'
+       include 'parm.h'
+       include 'conele.h'
+       include 'cora.h'
+c
+c  Local variables.
+       real cmdt,conv,crsec,ctrq,cuna,cuncp,cundtp,cundtu,
+     & cunfij,cunfwg,cunhc,cunht,cunhtc,cunint,cunmf,cunnrt,cunp,cunpd,
+     & cunpowl,cunq,cunr,cunrdp,cunruf,cunsig,cunthc,cuntp,cunu,cunv,
+$if -def,hydrolod,1
+     & cunvis,cunvol
+$if def,hydrolod,1
+     & cunvis,cunvol,cunlc,cunlo,cunla,cunlb
+       integer i,igoto,ipx,iqfhb,ityp,itypi,j,j1,j2,j3,l,num,num1,
+     & num2
+$if def,selap
+       integer i34,isp,ispsk,ispd,ispvk,isrf,isrf1,isrfk,isrfn,isys,
+     & isys1,isysk,isysn,ivol,ivol1,ivolk,ivoln,kbin,ksp,nsrf
+       integer idxo
+       integer jrad,jaxn,jcmp
+       external fpspix,gpcoup
+$endif
+       logical esloop,testl
+       character sec*5,rsec*7,unr(2)*8,unu(2)*8,unp(2)*9,unq(2)*9,
+     & unt(2)*6,unv(2)*8,unmdt(2)*12,unms(2)*4,unmf(2)*8,unht(2)*13,
+     & unhc(2)*18,unrev(2)*9,untrq(2)*8,undolr*9,unvol(2)*5,una(2)*5
+       character unfij(2)*12,unnrt(2)*8,unrad*9,unradv*7,unrada*9,
+     & unint(2)*8,uncp(2)*13,unvis(2)*11,unsig(2)*9,unpowl(2)*10,
+     & unthc(2)*17,unhtc(2)*18,unrdp(2)*10,unruf(2)*11,undtp(2)*14,
+     & undtu(2)*15,unfwg(2)*12,undeg*9,und(2)*4,unac(2)*8,uneng(2)*5
+$if -def,hydrolod,1
+       character unpd(2)*13
+$if def,hydrolod,1
+       character unpd(2)*13,unlc(2)*5,unlo(2)*5,unla(2)*5,unlb(2)*5
+       character unkgm2(2)*13
+       character unqpom(2)*9
+       character unqnum(2)*9
+       character unohm(2)*8
+$if def,selap,1
+       integer nfindc
+       character unflx*11,unsiga*6,undif*4,unbk*6
+       character ch*8,fpvtyp(7)*2,lblscr*64,unqd*11
+       data unpd/'(Watt/m3)','(Btu/sec-ft3)'/
+       data unkgm2/'(kg/m2)','(kg/m2)'/
+       data sec/'(sec)'/, rsec/'(sec-1)'/
+       data unr/'(kg/m3)','(lb/ft3)'/, unu/'(J/kg)','(Btu/lb)'/,
+     & unp/'(Pa)','(lbf/in2)'/, unq/'(Watts)','(Btu/sec)'/,
+$if -def,hydrolod,1
+     & unt/'(K)','(degF)'/
+$if def,hydrolod
+     & unt/'(K)','(degF)'/,unlc/'(N)','(lbf)'/, unlo/'(N)','(lbf)'/,
+     & unla/'(N)','(lbf)'/, unlb/'(N)','(lbf)'/
+$endif
+       data unqpom/'(W/m)','(W/m)'/
+       data unqnum/'(W/m)','(W/m)'/
+       data unv/'(m/sec)','(ft/sec)'/,unac/'(m/s-s)','(ft/s-s)'/
+       data unmdt/'(kg/m3-sec)','(lb/ft3-sec)'/
+       data unms/'(kg)','(lb)'/,uneng/'(J)','(Btu)'/
+       data unmf/'(kg/sec)','(lb/sec)'/
+       data unht/'(Watt/m2)','(Btu/sec-ft2)'/,
+     & unhc/'(Watt/m2-k)','(Btu/sec-ft2-degF)'/
+       data unrev/'(rad/sec)','(rev/min)'/,
+     & untrq/'(N-m)','(lbf-ft)'/, undolr/'(dollars)'/
+       data  unvol /'(m3)','(ft3)'/
+       data unfij/'(N-s2/m5)','(lbf-s2/ft5)'/,
+     & unnrt/'(kg-m2)','(lb-ft2)'/,undeg/'(degrees)'/,
+     & unrad/'(radians)'/,unradv/'(rad/s)'/,unrada/'(rad/s-s)'/,
+     & unint/'(K-1)','(degF-1)'/, uncp/'(J/kg-k)','(Btu/lb-degF)'/,
+     & unvis/'(kg/m-sec)','(lb/ft-sec)'/,
+     & unsig/'(N/m)','(lbf/ft)'/
+     & unthc/'(Watt/m-K)','(Btu/sec-ft-degF)'/,
+     & unhtc/'(Watt/m3-K)','(Btu/sec-ft3-degF)'/,
+     & unrdp/'(sec2/m2)','(sec2/ft2)'/,
+     & unruf/'(kg-s2/m5)','(lb-s2/ft5)'/,
+     & undtp/'(K/Pa)','(in2-degF/lbf)'/,
+     & undtu/'(sec2-K/m2)','(sec2-degF/ft2)'/,
+     & unfwg/'(kg/m3-sec)','(lb/ft3-sec)'/,
+     & und/'(m)','(ft)'/, una/'(m2)','(ft2)'/,
+     & unpowl/'Watt/m','Btu/sec-ft'/
+       data unohm /'(ohms)','(ohms)'/
+       data fpvtyp/'sr','li','va','to','mc','ma','mp'/
+       data cunhc/4.891949546e-5/, cunht/8.805509186e-5/,
+     & cunp/1.4503774e-4/, cunq/9.478171200e-4/,
+     & cunr/6.242796396e-2/, cuntp/-255.37222222222222/,
+     & cunu/4.2992261e-4/, cunv/3.2808399/, cunmf/2.204622622/,
+$if -def,hydrolod,1
+     & cunpowl/2.88894658e-4/
+$if def,hydrolod
+     & cunpowl/2.88894658e-4/, cunlc/0.2248089/, cunlo/0.2248089/,
+     & cunla/0.2248089/, cunlb/0.2248089/
+$endif
+       data cmdt/6.242796057e-2/, cuna/10.7639104/
+       data crsec/9.549296584/, ctrq/0.7375621495/
+       data cunvol/35.31467/
+       data cunfij/0.5914096e-3/
+       data cunint/.555555556/,
+     & cunvis/6.71968974e-1/,cuncp/2.3884589e-4/,
+     & cunnrt/23.73036048/,cunsig/6.8520950e-2/,
+     & cunthc/1.6049703e-4/,cunhtc/1.4910662e-5/,
+     & cunrdp/9.290304e-2/,cunruf/5.7997472e-3/,
+     & cundtp/1.2410563e4/,cundtu/.167225472/,
+     & cunfwg/6.242796e-2/
+       data cunpd/2.6838e-5/
+       include 'machlf.h'
+c
+       conv = 0.0
+       scod(1) = 0
+       scod(2) = 0
+       error = .false.
+       ityp = abs(itypi)
+       if (ityp .ne. 0) labl = ' '
+       l = 1
+       if (.not.unito) l = 2
+c  Check if request is interactive variable.
+       igoto = 1
+       if (itypi .lt. 0) go to 40
+       if (num .ne. 1000000000) go to 50
+       if (intrno .eq. 0) go to 4430
+       esloop = .false.
+       do i = 1,intrno
+         if (alph .eq. intra(i)%intrla) then
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 4430
+       scod(1) = 0
+       scod(2) = locf(intra(i)%intrva) - locf(fa(1)) + 1
+       if (ityp .eq. 0) go to 4450
+       conv = 1.0
+       labl(1:16) = 'intract.var.'
+       labl(17:32) = alph
+       go to 4340
+c  Check if request is in fixed common.
+   40  igoto = 2
+       if (num .lt. 0) then
+         write (output,
+     & "('0********* Numeric part of variable request,',i10,
+     & ', is negative.')")
+     &   ir
+         error = .true.
+       endif
+   50  esloop = .false.
+       do i = 1,numt1
+         if (alph .eq. t1(i)) then
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 420
+       scod(1) = 0
+       j1 = locf(fa(1)) - 1
+       if (i .eq. 10) then
+         if (num.le.0.or. num.gt.20) go to 4420
+         write (labl(17:32),'(i10)') num
+       elseif (i.ge. 11.and. i.le.18) then
+         if (iand(print,16384) .eq. 0) go to 4350
+         if (num.le.0.or. num.gt.3) go to 4420
+         scod(1) = 25
+         write (labl(17:32),'(i10)') num
+         j1 = locf(fa(filndx(25)))
+       endif
+       if (itypi .ge. 0) then
+         select case (i)
+         case (1)
+           scod(2) = locf(timehy) - j1
+         case (2)
+           scod(1) = 0
+           scod(2) = locf(stscpu) - j1
+         case (3)
+           scod(2) = locf(emass) - j1
+         case (4)
+           scod(2) = locf(tmass) - j1
+         case (5)
+            scod(2) = locf(dt) - j1
+         case (6)
+           scod(2) = locf(stdtrn) - j1
+         case (7)
+           scod(2) = locf(dtn) - j1
+         case (8)
+           scod(2) = locf(countn) - j1
+         case (9)
+           scod(2) = locf(errmax) - j1
+         case (10)
+           scod(2) = locf(testda(num)) - j1
+         case (11:18)
+           go to 4350
+         case default
+           call fabend
+         end select
+         if (ityp .eq. 0) go to 4450
+       endif
+       select case (i)
+       case (1,2,5,7)
+         conv = 1.0
+         labl(1:16) = t1(i)
+         labl(33:48) = sec
+       case (3,4)
+         conv = cunmf
+         labl(1:16) = t1(i)
+         labl(33:48) = unms(l)
+       case (6,8,9,10)
+         conv = 1.0
+         labl(1:16) = t1(i)
+       case (11:18)
+         go to 4350
+       case default
+         call fabend
+       end select
+       go to 4340
+c  Check if request is in component block.
+  420  igoto = 3
+       esloop = .false.
+       do i = 1,numt5
+         if (alph .eq. t5(i)) then
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 1110
+       if (itypi .ge. 0) then
+         if (filid(3) .eq. 0) go to 4350
+         esloop = .false.
+         j1 = filndx(3)
+         do j = 1,ncmps(j1)
+           if (cmpnum(j1) .eq. num) then
+             esloop = .true.
+             exit
+           endif
+           j1 = j1 + cmplen(j1)
+         enddo
+         if (.not.esloop) go to 4360
+         scod(1) = 3
+         j2 = locf(fa(filndx(3)))
+         select case (i)
+         case (1)
+           if (cmptyp(j1) .ne. 4) go to 4420
+           scod(2) = locf(pmpold(j1)) - j2
+         case (2)
+           if (cmptyp(j1) .ne. 4) go to 4420
+           scod(2) = locf(pmpthd(j1)) - j2
+         case (3)
+           if (cmptyp(j1) .ne. 4) go to 4420
+           scod(2) = locf(pmpttk(j1)) - j2
+         case (4)
+           if (cmptyp(j1) .ne. 12) go to 4420
+           j3 = njco(j1) + filndx(5)
+           scod(1) = 5
+           scod(2) = locf(athrot(j3)) - locf(fa(filndx(5)))
+         case (5)
+           if (cmptyp(j1) .ne. 12) go to 4420
+           scod(2) = locf(vlstm(j1)) - j2
+         case (6)
+           if (cmptyp(j1) .ne. 13) go to 4420
+           scod(2) = locf(ttank(j1)) - j2
+         case (7)
+           if (cmptyp(j1) .ne. 13) go to 4420
+           scod(2) = locf(vliq(j1)) - j2
+         case (8)
+           if (cmptyp(j1) .ne. 13) go to 4420
+           scod(2) = locf(vdm(j1)) - j2
+         case (9)
+           if (cmptyp(j1) .ne. 13) go to 4420
+           scod(2) = locf(qtank(j1)) - j2
+         case (10)
+           if (cmptyp(j1) .ne. 13) go to 4420
+           scod(2) = locf(rhon(j1)) - j2
+         case (11)
+           if (cmptyp(j1) .ne. 14) go to 4420
+           scod(2) = locf(turpow(j1)) - j2
+         case (12)
+           if (cmptyp(j1) .ne. 14) go to 4420
+           scod(2) = locf(turtrq(j1)) - j2
+         case (13)
+           if (cmptyp(j1) .ne. 14) go to 4420
+           scod(2) = locf(turvel(j1)) - j2
+         case (14)
+           if (cmptyp(j1) .ne. 14) go to 4420
+           scod(2) = locf(tureff(j1)) - j2
+         case (15)
+           if (cmptyp(j1) .ne. 17) go to 4420
+           scod(2) = locf(przlvl(j1)) - j2
+         case (16)
+           if (cmptyp(j1) .ne. 4) go to 4420
+           scod(2) = locf(pmpmt(j1)) - j2
+         case (17)
+           if (cmptyp(j1) .ne. 4) go to 4420
+           scod(2) = locf(pmpnrt(j1)) - j2
+         case (18)
+          if (cmptyp(j1) .ne. 12) go to 4420
+          if (vlvnm(j1) .ne. 3) go to 4420
+          scod(2) = locf(theta(j1)) - j2
+         case (19)
+           if (cmptyp(j1) .ne. 12) go to 4420
+           if (vlvnm(j1) .ne. 3) go to 4420
+           scod(2) = locf(omega(j1)) - j2
+         case (20)
+           if (cmptyp(j1) .ne. 13) go to 4420
+           scod(2) = locf(betav(j1)) - j2
+         case (21)
+         if (cmptyp(j1) .ne. 13) go to 4420
+         scod(2) = locf(ahfgtf(j1)) - j2
+         case (22)
+           if (cmptyp(j1) .ne. 13) go to 4420
+           scod(2) = locf(ahfgtg(j1)) - j2
+         case (23)
+           if (cmptyp(j1) .ne. 13) go to 4420
+           scod(2) = locf(avgtg(j1)) - j2
+         case (24)
+           if (cmptyp(j1) .ne. 13) go to 4420
+           scod(2) = locf(ahftg(j1)) - j2
+         case (25)
+           if (cmptyp(j1) .ne. 13) go to 4420
+           scod(2) = locf(acpgtg(j1)) - j2
+         case (26)
+           if (cmptyp(j1) .ne. 13) go to 4420
+           scod(2) = locf(acvgtg(j1)) - j2
+         case (27)
+           if (cmptyp(j1) .ne. 13) go to 4420
+           scod(2) = locf(aviscn(j1)) - j2
+         case (28)
+           if (cmptyp(j1) .ne. 13) go to 4420
+           scod(2) = locf(acpnit(j1)) - j2
+         case (29)
+           if (cmptyp(j1) .ne. 13) go to 4420
+           scod(2) = locf(ahgtf(j1)) - j2
+         case (30)
+           if (cmptyp(j1) .ne. 13) go to 4420
+           scod(2) = locf(dmgdt(j1)) - j2
+         case (31,34)
+           if (cmptyp(j1).ne.8 .or. isepst(j1).lt.1) go to 4420
+           scod(2) = locf(xim(j1)) - j2
+         case (32,35)
+           if (cmptyp(j1).ne.8 .or. isepst(j1).lt.1) go to 4420
+           scod(2) = locf(xco(j1)) - j2
+         case (33,36)
+           if (cmptyp(j1).ne.8 .or. isepst(j1).lt.1) go to 4420
+           scod(2) = locf(xcu(j1)) - j2
+         end select
+         if (ityp .eq. 0) go to 4450
+       endif
+  470  select case (i)
+       case (1,13,19)
+         conv = crsec
+         labl(33:48) = unrev(l)
+       case (2)
+         conv = cunp
+         labl(33:48) = unp(l)
+       case (3,12,17)
+         conv = ctrq
+         labl(33:48) = untrq(l)
+       case (4,5,14,31:36)
+         conv = 1.0
+       case (6)
+         conv = cuntp
+         labl(33:48) = unt(l)
+       case (7,8)
+         conv = cunvol
+         labl(33:48) = unvol(l)
+       case (9,11)
+         conv = cunq
+         labl(33:48) = unq(l)
+       case (10,23)
+         conv = cunr
+         labl(33:48) = unr(l)
+       case (15)
+         conv = cunv
+         labl(33:48) = und(l)
+       case (16)
+         conv = cunnrt
+         labl(33:48)=unnrt(l)
+       case (18)
+         conv = 1.0
+         labl(33:48) = undeg
+       case (20)
+         conv = cunint
+         labl(33:48) = unint(l)
+       case (21,22,24,29)
+         conv = cunu
+         labl(33:48) = unu(l)
+       case (25,26,28)
+         conv = cuncp
+         labl(33:48) = uncp(l)
+       case (27)
+         conv = cunvis
+         labl(33:48) = unvis(l)
+       case (30)
+         conv = cunmf
+         labl(33:48) = unmf(l)
+       end select
+       labl(1:16) = t5(i)
+       write (labl(17:32),'(i4)') num
+       go to 4340
+c  Check if request is in volume block.
+ 1110  igoto = 4
+       esloop = .false.
+       do i = 1,numt2
+         if (alph .eq. t2(i)) then
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 2350
+       if (itypi .ge. 0) then
+         if (filid(4) .eq. 0) go to 4350
+         j1 = locf(fa(filndx(4)))
+         j = filndx(4)
+         num1 = (num/10)*10
+         num2 = num - num1
+         if (num2 .gt. 6) go to 4360
+         testl = (i.ge.8 .and. i.le.9) .or. i.eq.22 .or. (i.ge.54 .and.
+     &   i.le.56) .or. (i.ge.61 .and. i.le.62)
+         if (.not.testl .and. num2.ne.0) go to 4360
+         if (num2 .ne. 0) num2 = ishft(num2-1,-1)
+         testl = i.ge.62 .and. i.le.63
+         esloop = .false.
+         do j2 = 1,nvols(j)
+           if (num1 .eq. volno(j)) then
+             esloop = .true.
+             exit
+           endif
+           j = j + ivskp
+         enddo
+         if (.not.esloop) go to 4360
+         scod(1) = 4
+         if (.not.testl .and. iand(imap(j+num2),16384).eq.0) go to 4360
+         select case (i)
+         case (1)
+           scod(2) = locf(rho(j)) - j1
+         case (2)
+           scod(2) = locf(rhof(j)) - j1
+         case (3)
+           scod(2) = locf(rhog(j)) - j1
+         case (4)
+           scod(2) = locf(uf(j)) - j1
+         case (5)
+           scod(2) = locf(ug(j)) - j1
+         case (6)
+           scod(2) = locf(voidf(j)) - j1
+         case (7)
+           scod(2) = locf(voidg(j)) - j1
+         case (8)
+           scod(2) = locf(velf(j+num2)) - j1
+         case (9)
+           scod(2) = locf(velg(j+num2)) - j1
+         case (10)
+           scod(2) = locf(p(j)) - j1
+         case (11)
+           scod(2) = locf(quals(j)) - j1
+         case (12)
+           scod(2) = locf(quale(j)) - j1
+         case (13)
+           scod(2) = locf(q(j)) - j1
+         case (14)
+           scod(2) = locf(qwg(j)) - j1
+         case (15)
+           scod(2) = locf(tempf(j)) - j1
+         case (16)
+           scod(2) = locf(tempg(j)) - j1
+         case (17)
+           scod(2) = locf(sounde(j)) - j1
+         case (18)
+           scod(2) = locf(vapgen(j)) - j1
+         case (19)
+           scod(2) = locf(quala(j)) - j1
+         case (20)
+           scod(2) = locf(boron(j)) - j1
+         case (21)
+           scod(2) = locf(satt(j)) - j1
+         case (22)
+           scod(2) = locf(floreg(j)) - j1
+         case (23)
+           scod(2) = locf(rhom(j)) - j1
+         case (24)
+           scod(2) = locf(hsteam(j)) - j1
+         case (25)
+           scod(2) = locf(sathf(j)) - j1
+         case (26)
+           scod(2) = locf(sathg(j)) - j1
+         case (27)
+           scod(2) = locf(betaff(j)) - j1
+         case (28)
+           scod(2) = locf(betagg(j)) - j1
+         case (29)
+           scod(2) = locf(csubpf(j)) - j1
+         case (30)
+           scod(2) = locf(csubpg(j)) - j1
+         case (31)
+           scod(2) = locf(viscf(j)) - j1
+         case (32)
+           scod(2) = locf(viscg(j)) - j1
+         case (33)
+           scod(2) = locf(sigma(j)) - j1
+         case (34)
+           scod(2) = locf(thconf(j)) - j1
+         case (35)
+           scod(2) = locf(thcong(j)) - j1
+         case (36)
+           scod(2) = locf(pps(j)) - j1
+         case (37)
+           scod(2) = locf(hif(j)) - j1
+         case (38)
+           scod(2) = locf(hig(j)) - j1
+         case (39)
+           scod(2) = locf(gammaw(j)) - j1
+         case (40)
+           scod(2) = locf(gammac(j)) - j1
+         case (41)
+           scod(2) = locf(drfdp(j)) - j1
+         case (42)
+           scod(2) = locf(drfduf(j)) - j1
+         case (43)
+           scod(2) = locf(drgdp(j)) - j1
+         case (44)
+           scod(2) = locf(drgdug(j)) - j1
+         case (45)
+           scod(2) = locf(drgdxa(j)) - j1
+         case (46)
+           scod(2) = locf(dtfdp(j)) - j1
+         case (47)
+           scod(2) = locf(dtfduf(j)) - j1
+         case (48)
+           scod(2) = locf(dtgdp(j)) - j1
+         case (49)
+           scod(2) = locf(dtgdug(j)) - j1
+         case (50)
+           scod(2) = locf(dtgdxa(j)) - j1
+         case (51)
+           scod(2) = locf(dtdp(j)) - j1
+         case (52)
+           scod(2) = locf(dtdug(j)) - j1
+         case (53)
+           scod(2) = locf(dtdxa(j)) - j1
+         case (54)
+           scod(2) = locf(fwalf(j+num2)) - j1
+         case (55)
+           scod(2) = locf(fwalg(j+num2)) - j1
+         case (56)
+           scod(2) = locf(avol(j+num2)) - j1
+         case (57)
+           scod(2) = locf(hvmix(j)) - j1
+         case (58)
+           scod(2) = locf(pecltv(j)) - j1
+         case (59)
+           scod(2) = locf(v(j)) - j1
+         case (60)
+           scod(2) = locf(tsatt(j)) - j1
+         case (61,62)
+           go to 4350
+         case (63)
+           scod(2) = locf(vollev(j)) - j1
+         case (64)
+           scod(2) = locf(voidla(j)) - j1
+         case (65)
+           scod(2) = locf(voidlb(j)) - j1
+         case (66)
+           scod(2) = locf(tmassv(j)) - j1
+         case (67)
+           scod(2) = locf(tiengv(j)) - j1
+         case (68)
+           scod(2) = locf(dotm(j)) - j1
+         case (69)
+           scod(2) = locf(hgf(j)) - j1
+         case (70)
+           scod(2) = locf(qualan(j+nonhy-1)) - j1
+         case (71)
+           scod(2) = locf(gaman(j+nonhy-1)) - j1
+$if def,hydrolod
+         case (72)
+           scod(2) = locf(loadc(j)) - j1
+         case (73)
+           scod(2) = locf(loada(j)) - j1
+         case (74)
+           scod(2) = locf(loadb(j)) - j1
+$endif
+         case default
+           call fabend
+         end select
+         if (ityp .eq. 0) go to 4450
+       endif
+ 1150  select case (i)
+       case (1,2,3,20,23,45)
+         conv = cunr
+         labl(33:48) = unr(l)
+       case (4,5,25,26)
+         conv = cunu
+         labl(33:48) = unu(l)
+       case (6,7,11,12,19,22,64,65,70)
+         conv = 1.0
+       case (8,9,17)
+         conv = cunv
+      labl(33:48) = unv(l)
+       case (10,36)
+         conv = cunp
+         labl(33:48) = unp(l)
+       case (13,14)
+         conv = cunq
+         labl(33:48) = unq(l)
+       case (15,16,21,60)
+         conv = cuntp
+         labl(33:48) = unt(l)
+       case (18,39,40,68,71)
+         conv = cmdt
+         labl(33:48) = unmdt(l)
+       case (24)
+         conv = cunu
+         labl(33:48) = unu(l)
+       case (27,28)
+         conv = cunint
+         labl(33:48) = unint(l)
+       case (29,30)
+         conv = cuncp
+         labl(33:48) = uncp(l)
+       case (31,32)
+         conv = cunvis
+         labl(33:48) = unvis(l)
+       case (33)
+         conv = cunsig
+         labl(33:48) = unsig(l)
+       case (34,35)
+         conv = cunthc
+         labl(33:48) = unthc(l)(1:12)
+         labl(49:64) = unthc(l)(13:17)
+       case (37,38,69)
+         conv = cunhtc
+         labl(33:48) = unhtc(l)(1:13)
+         labl(49:64) = unhtc(l)(14:18)
+       case (41,43)
+         conv = cunrdp
+         labl(33:48) = unrdp(l)
+       case (42,44)
+         conv = cunruf
+         labl(33:48) = unruf(2*l)
+       case (46,48,51)
+         conv = cundtp
+         labl(33:48) = undtp(l)(1:10)
+         labl(49:64) = undtp(l)(11:14)
+       case (47,49,52)
+         conv = cundtu
+         labl(33:48) = undtu(l)(1:11)
+         labl(49:64) = undtu(l)(12:15)
+       case (50,53)
+         conv = 1.0/cunint
+         labl(33:48) = unt(l)
+       case (54,55)
+         conv = cunfwg
+         labl(33:48) = unfwg(l)
+       case (56)
+         conv = cuna
+         labl(33:48) = una(l)
+       case (57)
+         conv = cunu
+         labl(33:48) = unu(l)
+       case (58)
+         conv = 1.0
+       case (59)
+         conv = cunvol
+         labl(33:48) = unvol(l)
+       case (61,62)
+         go to 4350
+       case (63)
+         conv = cunv
+         labl(33:48) = und(l)
+       case (66)
+         conv = cunmf
+         labl(33:48) = unms(l)
+       case (67)
+         conv = cunq
+         labl(33:48) = uneng(l)
+$if def,hydrolod
+       case (72)
+         conv = cunlc
+         labl(33:48) = unlc(l)
+       case (73)
+         conv = cunla
+         labl(33:48) = unla(l)
+       case (74)
+         conv = cunlb
+         labl(33:48) = unlb(l)
+$endif
+       case default
+         call fabend
+       end select
+       labl(1:16) = t2(i)
+       write (labl(17:32),'(i10)') num
+       go to 4340
+c  Check if request is in junction block.
+ 2350  igoto = 5
+       esloop = .false.
+       do i = 1,numt3
+         if (alph .eq. t3(i)) then
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 2740
+       if (itypi .ge. 0) then
+         if (filid(5) .eq. 0.0) go to 4350
+         j1 = locf(fa(filndx(5)))
+         j = filndx(5)
+         esloop = .false.
+         do j2 = 1,njuns(j)
+           if (num .eq. junno(j)) then
+             esloop = .true.
+             exit
+           endif
+           j = j + ijskp
+         enddo
+         if (.not.esloop) go to 4360
+         scod(1) = 5
+         select case (i)
+         case (1)
+           scod(2) = locf(velfj(j)) - j1
+         case (2)
+           scod(2) = locf(velgj(j)) - j1
+         case (3)
+           scod(2) = locf(rhofj(j)) - j1
+         case (4)
+           scod(2) = locf(rhogj(j)) - j1
+         case (5)
+           scod(2) = locf(ufj(j)) - j1
+         case (6)
+           scod(2) = locf(ugj(j)) - j1
+         case (7)
+           scod(2) = locf(mflowj(j)) - j1
+         case (8)
+           scod(2) = locf(voidfj(j)) - j1
+         case (9)
+           scod(2) = locf(voidgj(j)) - j1
+         case (10)
+           scod(2) = locf(qualaj(j)) - j1
+         case (11)
+           scod(2) = locf(fij(j)) - j1
+         case (12)
+           scod(2) = locf(formfj(j)) - j1
+         case (13)
+           scod(2) = locf(formgj(j)) - j1
+         case (14)
+           scod(2) = locf(xej(j)) - j1
+         case (15)
+           scod(2) = locf(sonicj(j)) - j1
+         case (16)
+           scod(2) = locf(c0j(j)) - j1
+         case (17)
+           scod(2) = locf(vgjj(j)) - j1
+         case (18)
+           scod(2) = locf(florgj(j)) - j1
+         case (19)
+           scod(2) = locf(iregj(j)) - j1
+         case (20)
+           scod(2) = locf(voidj(j)) - j1
+         case (21)
+           scod(2) = locf(flenth(j)) - j1
+         case (22)
+           scod(2) = locf(chokef(j)) - j1
+         case (23)
+           scod(2) = locf(fwalfj(j)) - j1
+         case (24)
+           scod(2) = locf(fwalgj(j)) - j1
+         case (25)
+           scod(2) = locf(fjunft(j)) - j1
+         case (26)
+           scod(2) = locf(fjunrt(j)) - j1
+$if -def,hydrolod
+         case (27)
+           scod(2) = locf(mflowfj(j)) - j1
+         case (28)
+           scod(2) = locf(mflowgj(j)) - j1
+$endif
+$if def,hydrolod,2
+         case (27)
+           scod(2) = locf(loado(j)) - j1
+         case default
+           call fabend
+         end select
+         if (ityp .eq. 0) go to 4450
+       endif
+ 2390  select case (i)
+       case (1,2,15,17)
+         conv = cunv
+         labl(33:48) = unv(l)
+       case (3,4)
+         conv = cunr
+         labl(33:48) = unr(l)
+       case (5,6)
+         conv = cunu
+         labl(33:48) = unu(l)
+$if -def,hydrolod
+       case (7,27,28)
+         conv = cunmf
+         labl(33:48) = unmf(l)
+$endif
+$if def,hydrolod
+       case (7)
+         conv = cunmf
+         labl(33:48) = unmf(l)
+$endif
+       case (8,9,10,12,13,14,16,18,19,20,22:26)
+         conv = 1.0
+       case (11)
+         conv = cunfij
+         labl(33:48) = unfij(l)
+       case (21)
+         conv = cunq
+         labl(33:48) = unq(l)
+$if def,hydrolod,3
+       case (27)
+         conv =cunlo
+         labl(33:48) = unlo(l)
+       case default
+         call fabend
+       end select
+       labl(1:16) = t3(i)
+       write (labl(17:32),'(i10)') num
+       go to 4340
+c  Check if request is in heat conduction block.
+ 2740  igoto = 6
+       esloop = .false.
+       do i = 1,numt4
+         if (alph .eq. t4(i)) then
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 3020
+       if (itypi .ge. 0) then
+         if (filid(8) .eq. 0.0) go to 4350
+         num1 = num
+         num2 = 0
+         if (i .ne. 1) then
+           num1 = num/100
+           num2 = num - num1*100
+         endif
+         j1 = filndx(8)
+         j2 = j1 + nhtstr(j1) - 1
+         esloop = .false.
+         do j = j1,j2
+           j2 = ihtptr(j) + filndx(8)
+           if (num1 .eq. htstno(j2)) then
+             esloop = .true.
+             exit
+           endif
+         enddo
+         if (.not.esloop) go to 4380
+         scod(1) = 8
+         j1 = locf(fa(filndx(8)))
+         if (i.ne.5 .and. num2.gt.1) go to 4370
+         select case (i)
+         case (1)
+           scod(2) = locf(htvatp(j2)) - j1
+         case (2)
+           scod(2) = locf(htrnro(j2+num2)) - j1
+         case (3)
+           scod(2) = locf(htchfo(j2+num2)) - j1
+         case (4)
+           scod(2) = locf(htbcao(j2+num2)) - j1
+         case (5)
+           if (num2.eq. 0.or. num2.gt.htnmpt(j2)) go to 4370
+           j3 = htxft(j2) + filndx(8) + num2 - 1
+           scod(2) = locf(httmp(j3)) - j1
+         case (6)
+           scod(2) = locf(htmod(j2+num2)) - j1
+         case (7)
+           scod(2) = locf(htrgno(j2+num2)) - j1
+         case (8)
+           scod(2) = locf(htrfno(j2+num2)) - j1
+         case (9)
+           scod(2) = locf(stanto(j2+num2)) - j1
+         case (10)
+           scod(2) = locf(peclo(j2+num2)) - j1
+         end select
+         if (ityp .eq. 0) go to 4450
+       endif
+ 2800  select case (i)
+       case (1)
+         conv = cuntp
+         labl(33:48)=unt(l)
+       case (2,3,7)
+         conv = cunht
+         labl(33:48) = unht(l)
+       case (4)
+         conv = cunhc
+         labl(33:48) = unhc(l)(1:13)
+         labl(49:64) = unhc(l)(14:18)
+       case (5)
+         conv = cuntp
+         labl(33:48) = unt(l)
+       case (6,9,10)
+         conv = 1.0
+       case (8)
+         conv = cmdt
+         labl(33:48) = unmdt(l)
+       end select
+       select case (i)
+       case (1)
+         write (labl(17:32),'(i10)') num1
+       case default
+         write (labl(17:32),'(i8,i3)') num1, num2
+       end select
+       labl(1:16) = t4(i)
+       go to 4340
+c  Check if request is in reactor kinetics block.
+ 3020  igoto = 7
+       esloop = .false.
+       do i = 1,numt6
+         if (alph .eq. t6(i)) then
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 3760
+       if (itypi .ge. 0) then
+         if (filid(21) .eq. 0) go to 4350
+         scod(1) = 21
+         j1 = locf(fa(filndx(21)))
+         select case (i)
+         case (1)
+           scod(2) = locf(rkpow(filndx(21))) - j1
+         case (2)
+           scod(2) = locf(rkpowf(filndx(21))) - j1
+         case (3)
+           scod(2) = locf(rkpowg(filndx(21))) - j1
+         case (4)
+           scod(2) = locf(rkrn(filndx(21))) - j1
+         case (5)
+           scod(2) = locf(rkomeg(filndx(21))) - j1
+         case (6)
+           scod(2) = locf(rkpowk(filndx(21))) - j1
+         case (7)
+           scod(2) = locf(rkpowa(filndx(21))) - j1
+         end select
+         if (ityp .eq. 0) go to 4450
+       endif
+ 3050  select case (i)
+       case (1:3,6:7)
+         labl(33:48) = unq(1)
+       case (4)
+         labl(33:48) = undolr
+       case (5)
+         labl(33:48) = rsec
+       end select
+       conv = 1.0
+       labl(1:16) = t6(i)
+       go to 4340
+c  Check if request is in reflood block.
+ 3760  igoto = 9
+       esloop = .false.
+       do i = 1,numt8
+         if (alph.eq.t8(i)) then
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 3920
+       if (itypi .ge. 0) then
+         if (filid(32) .eq. 0.0) go to 4350
+         j1 = filndx(32)
+         j2 = j1 + (nrflht(j1) - 1)*nhtga
+         esloop = .false.
+         do j = j1,j2,nhtga
+           iqfhb = lhtrfl(j) + filndx(8)
+           iqfhb = ihtptr(iqfhb) + filndx(8)
+crex       if (iand(htopt(iqfhb),2048) .eq. 0) cycle
+crex       if (lhtrfl(j).ge.0) cycle
+crex       iqfhb = lhtrfl(j) + filndx(8)
+           ipx = htstno(iqfhb)/1000
+           if (num .eq. ipx) then
+             esloop = .true.
+             exit
+           endif
+         enddo
+         if (.not.esloop) go to 4360
+         scod(1) = 32
+         j1 = locf(fa(filndx(32)))
+         select case (i)
+         case (1)
+           scod(2) = locf(zqbot(j)) - j1
+         case (2)
+           scod(2) = locf(zqtop(j)) - j1
+         case (3)
+           scod(2) = locf(fines(j)) - j1
+         case (4)
+           scod(2) = locf(tchfqf(j)) - j1
+         case (5)
+           scod(2) = locf(trewet(j)) - j1
+         end select
+         if (ityp .eq. 0) go to 4450
+       endif
+ 3800  select case (i)
+       case (1,2)
+         conv = cunv
+         labl(33:48) = und(l)
+       case (3,4)
+         conv = cuntp
+         labl(33:48) = unt(l)
+       case (5)
+         conv = cuntp
+         labl(33:48) = unhc(l)(1:13)
+         labl(49:64) = unhc(l)(14:18)
+       end select
+       labl(1:16) = t8(i)
+       write (labl(17:32),'(i4)') num
+       go to 4340
+!  Check if request if for a general table quantity.
+ 3920  continue
+       if (alph .ne. t7(2)) go to 3930
+       if (itypi .ge. 0) then
+         if (ngtbls .eq. 0) go to 4350
+         esloop = .false.
+         do j = 1,ngtbls
+           if (num .eq. gtnum(j)) then
+             esloop = .true.
+             exit
+           endif
+         enddo
+         if (.not.esloop) go to 4360
+         if (.not.gen(j)%gteval) go to 4360
+         scod(1) = 0
+         scod(2) = locf(gen(j)%gtval) - locf(fa(1)) + 1
+         if (ityp .eq. 0) go to 4450
+       endif
+       conv = 1.0
+       write (labl(17:32),'(i8)') num
+       labl(1:16) = t7(2)
+       go to 4340
+c  Check if request is for a control system variable.
+ 3930  igoto = 8
+       if (alph .ne. t7(1)) go to 3970
+       if (itypi .ge. 0) then
+         if (filid(27) .eq. 0) go to 4350
+         j1 = filndx(27)
+         esloop = .false.
+         do j = 1,cnvnum(j1)
+           if (num .eq. cnvpnm(j1)) then
+             esloop = .true.
+             exit
+           endif
+           j1 = j1 + cnvlen(j1)
+         enddo
+         if (.not.esloop) go to 4360
+         scod(1) = 27
+         scod(2) = locf(cnvarn(j1)) - locf(fa(filndx(27)))
+         if (ityp .eq. 0) go to 4450
+         write (labl(33:48),'(a8)') cnvnam(j1)
+         labl(49:64) = cnvtpa(cnvtyp(j1))
+       endif
+ 3960  conv = 1.0
+       write (labl(17:32),'(i8)') num
+       labl(1:16) = t7(1)
+       go to 4340
+c  Check if request is in hydrodynamic systems block.
+ 3970  igoto = 10
+       esloop = .false.
+       do i = 1,numt11
+         if (alph .eq. t11(i)) then
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 4070
+       if (itypi .lt. 0) go to 4020
+       if (nloops .eq. 0) go to 4350
+       if (num .gt. nloops) go to 4360
+ 4010  scod(1) = 0
+       j2 = locf(fa(1)) - 1
+       select case (i)
+       case (1)
+         scod(2) = locf(lpdat(num)%sysmer) - j2
+       case (2)
+         scod(2) = locf(lpdat(num)%systms) - j2
+       end select
+       if (ityp .eq. 0) go to 4450
+ 4020  conv = cunmf
+       labl(1:16) = t11(i)
+       write (labl(17:32),'(i4)') num
+       labl(33:48) = unms(l)
+       go to 4340
+$if -def,selap,1
+ 4070  go to 4400
+$if def,selap
+c  NOTE that scdap does not respond to the 'itypi' variable other than
+c  to prevent input checking if itypi<0; e.g., label, conversion, and
+c  location info are returned for each variable.
+ 4070  igoto = 11
+c  Check if request is in scdap system variables.
+       esloop = .false.
+       do i = 1,numt9a
+         if (alph .eq. t9a(i)) then
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 4075
+c  Error if not a scdap problem.
+       if (itypi.ge.0 .and. .not.scntrl(1)) go to 4350
+       if (num .ne. 0) go to 4420
+       select case (i)
+       case (1)
+         scod(2) = locf(bgth)
+         labl(33:48) = unmf(l)
+         conv = cunmf
+       case (2)
+         scod(2) = locf(bgnhg)
+         labl(33:48) = unq(l)
+         conv = cunq
+       case (3)
+         scod(2) = locf(bgmct)
+          labl(33:48) = unt(l)
+          conv = cuntp
+       case (4)
+         scod(2) = locf(bgtfrs)
+         labl(33:48) = unmf(l)
+         conv = cunmf
+       case (5)
+         scod(2) = locf(bgtfrn)
+         labl(33:48) = unmf(l)
+         conv = cunmf
+       case (6)
+         scod(2) = locf(bgthq)
+         labl(33:48) = unq(l)
+         conv = cunq
+       case (7)
+         scod(2) = locf(bgthu)
+         labl(33:48) = unmf(l)
+         conv = cunmf
+       case (8)
+cljs  cumulative hydrogen production
+         scod(2) = locf(h2prod)
+         labl(33:48) = unms(l)
+         conv = cunmf
+       case (9)
+         scod(2) = locf(crucb)
+         labl(33:48) = und(l)
+         conv = 1.0
+       case (10)
+         scod(2) = locf(repool)
+         labl(33:48) = und(l)
+         conv = cunv
+       case (11)
+         scod(2) = locf(shqin)
+         labl(33:48) = unq(l)
+         conv = cunq
+       case (12)
+         scod(2) = locf(shqout)
+         labl(33:48) = unq(l)
+         conv = cunq
+       case (13)
+         scod(2) = locf(bgmat)
+         labl(33:48) = unt(l)
+         conv = cuntp
+       case (14)
+         scod(2) = locf(tcorav)
+         labl(33:48) = unt(l)
+         conv = cuntp
+       case (15)
+         scod(2) = locf(qlpoolr)
+         labl(33:48) = unq(l)
+         conv = cunq
+       case (16)
+         scod(2) = locf(qcrustr)
+         labl(33:48) = unq(l)
+         conv = cunq
+       case (17)
+         scod(2) = locf(ztpool)
+         labl(33:48) = und(l)
+         conv = cunv
+       case (18)
+cljs  variable name not printed at bottom of plot
+         scod(2) = locf(frcbotn)
+         labl(33:48) = und(l)
+         conv = 1.0
+cljs  variable name printed on plot?
+       case (19)
+         scod(2) = locf(frcradn)
+         labl(33:48) = und(l)
+         conv = 1.0
+       case (20)
+         scod(2) = locf(pexpool)
+         labl(33:48) = unp(l)
+         conv = cunp
+       case (21)
+         scod(2) = locf(zbpool)
+         labl(33:48) = und(l)
+         conv = cunv
+       case (22)
+         scod(2) = locf(sedomer)
+         labl(33:48) = unp(l)
+         conv = cunp
+       case (23)
+         scod(2) = locf(sudomer)
+         labl(33:48) = unp(l)
+         conv = cunp
+       case (24)
+         scod(2) = locf(tcdomer)
+         labl(33:48) = und(l)
+         conv = cunv
+       case (25)
+         scod(2) = locf(radpool)
+         labl(33:48) = und(l)
+         conv = 1.0
+       case (26)
+         scod(2) = locf(pipool)
+         labl(33:48) = unp(l)
+         conv = cunp
+       case (27)
+         scod(2) = locf(tmzthrw)
+         labl(33:48) = unv(l)
+         conv = cunv
+       case (28)
+         scod(2) = locf(tmrthrw)
+         labl(33:48) = unv(l)
+         conv = cunv
+       case (29)
+!  total decay heat in molten pool in core region
+       scod(2) = locf(qdcaypl)
+       labl(33:48) = unq(l)
+       conv = cunq
+       case (30)
+!  total rate of heat transfer out of molten pool in core region
+!  defintion of dmaxcr in hardpn.hh needs to be corrected
+         scod(2) = locf(dmaxcr)
+         labl(33:48) = unq(l)
+         conv = cunq
+       case (31)
+!  minimum thickness crust bottom molten pool
+       scod(2) = locf(tcbotmn)
+       labl(33:48) = und(l)
+       conv = cunv
+       case (32)
+!  minimum thickness crust side molten pool
+         scod(2) = locf(tcsidmn)
+         labl(33:48) = und(l)
+         conv = cunv
+       case default
+         write (output,9070) alph,ir
+ 9070  format ('0********* Alphanumeric part, ',a8,', of variable requ
+     &est',i10,', has generated an internal scnreq error.'/
+     & ' Please contact code developers.')
+         go to 4361
+       end select
+       go to 4100
+c  Check if request is in scdap component variables.
+ 4075  esloop = .false.
+       do i = 1,numt9b
+         if (alph .eq. t9b(i)) then
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 4080
+c  Error if not a scdap problem.
+       if (itypi.ge.0 .and. .not.scntrl(1)) go to 4350
+       jcmp = num
+       esloop = .false.
+       do idxo = 1,ncomp
+         if (jcmp .eq. scd1(idxo)%cmpno) then
+           esloop = .true.
+           jcmp = idxo
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 4360
+       if (itypi.ge.0 .and. (jcmp.lt.1 .or. jcmp.gt.ncomp)) go to 4360
+       select case (i)
+       case (1)
+         scod(2) = locf(achdpn(jcmp))
+         labl(33:48) = unt(l)
+         conv = cuntp
+       case (2)
+         if (jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         scod(2) = locf(pgas(jcmp))
+         labl(33:48) = unp(l)
+         conv = cunp
+       case (3)
+         if (jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         scod(2) = locf(wdtqlp(jcmp))
+         labl(33:48) = uneng(l)
+         conv = cunq
+       case (4)
+         if (jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         scod(2) = locf(zbtrub(jcmp))
+         labl(33:48) = und(l)
+         conv = cunv
+       case (5)
+         if (jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         scod(2) = locf(ztprub(jcmp))
+         labl(33:48) = und(l)
+         conv = cunv
+       case (6)
+         if (jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         scod(2) = locf(zbtcoh(jcmp))
+         labl(33:48) = und(l)
+         conv = cunv
+       case (7)
+         if (jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         scod(2) = locf(ztpcoh(jcmp))
+         labl(33:48) = und(l)
+         conv = cunv
+       case (8)
+         if(jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         scod(2)= locf(cumco(jcmp))
+         labl(33:48) = unms(l)
+         conv = cunmf
+       case (9)
+         if(jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         scod(2) = locf(cumco2(jcmp))
+         labl(33:48) = unms(l)
+         conv = cunmf
+       case (10)
+         if(jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         scod(2) = locf(cumch4(jcmp))
+         labl(33:48) = unms(l)
+         conv = cunmf
+       case (11)
+         if(jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         scod(2) = locf(cartot(jcmp))
+         labl(33:48) = unms(l)
+         conv = cunmf 
+       case (12)
+         if(jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         scod(2) = locf(wh2b4c(jcmp))
+         labl(33:48) = unms(l)
+         conv = cunmf
+       case (13)
+         if(jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         scod(2) = locf(wb4ctot(jcmp))
+         labl(33:48) = unms(l)
+         conv = cunmf                               
+       case (14)
+         if (jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         scod(2) = locf(rmheat(jcmp))
+	 labl(33:48) = unohm(l)
+         conv = 1.0  
+       case (15)
+         if (jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         scod(2) = locf(rmelec(jcmp))
+         labl(33:48) = unohm(l)
+         conv = 1.0
+       case (16)
+         if (jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         scod(2) = locf(flxwid(jcmp))         
+         labl(33:48) = unohm(l)
+         conv = 1.0   
+       case default
+         write (output,9070) alph,ir
+         go to 4361
+       end select
+       go to 4100
+c  Check if request is in scdap axial variables.
+ 4080  esloop = .false.
+       do i = 1,numt9c
+         if (alph .eq. t9c(i)) then
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 4085
+c  Error if not a scdap problem.
+       if (itypi.ge.0 .and. .not.scntrl(1)) go to 4350
+       jrad = num/10000
+       jcmp = num - 10000*jrad
+       jaxn = jcmp/100
+       jcmp = jcmp - (jaxn*100)
+       esloop = .false.
+       do idxo = 1,ncomp
+         if (jcmp .eq. scd1(idxo)%cmpno) then
+           esloop = .true.
+           jcmp = idxo
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 4360
+       if (itypi.ge.0) then
+         if (jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         select case (i)
+         case (2)
+c  Check for valid fission product number.
+           if (jrad.ne.0 .or. jaxn.lt.1 .or. jaxn.gt.17) go to 4360
+         case (1,3:21,24:28)
+           if (jrad.ne.0 .or. jaxn.lt.1 .or. jaxn.gt.naz) go to 4360
+         case (22:23)
+           if (jrad .eq. 0) then
+             jrad = 1
+           else
+             if (jrad .gt. 2) go to 4360
+           endif
+         end select
+       endif
+       select case (i)
+       case (1)
+         scod(2) = locf(brchv(jaxn,jcmp))
+         conv = 1.0
+       case (2)
+         scod(2) = locf(ggivy(jaxn,jcmp))
+         labl(33:48) = unms(l)
+         conv = cunmf
+       case (3)
+         scod(2) = locf(damlev(jaxn,jcmp))
+         conv = 1.0
+       case (4)
+         scod(2) = locf(dzfrcq(jaxn,jcmp))
+         conv = 1.0
+       case (5)
+         scod(2) = locf(effoxd(jcmp,jaxn))
+         labl(33:48) = und(l)
+         conv = cunv
+       case (6)
+         scod(2) = locf(h2oxd2(jaxn,jcmp))
+         labl(33:48) = unmf(1)
+         conv = cunmf
+       case (7)
+         scod(2) = locf(hoop2(jaxn,jcmp))
+         conv = 1.0
+       case (8)
+         scod(2) = locf(oxdeo2(jaxn,jcmp))
+         labl(33:48) = und(l)
+         conv = cunv
+       case (9)
+         scod(2) = locf(rci2(jaxn,jcmp))
+         labl(33:48) = und(l)
+         conv = cunv
+       case (10)
+         scod(2) = locf(rco2(jaxn,jcmp))
+         labl(33:48) = und(l)
+         conv = cunv
+       case (11)
+         scod(2) = locf(rnalf((jcmp-1)*ndax+jaxn))
+         labl(33:48) = und(l)
+         conv = cunv
+       case (12)
+         scod(2) = locf(rnoxd((jcmp-1)*ndax+jaxn))
+         labl(33:48) = und(l)
+         conv = cunv
+       case (13)
+         scod(2) = locf(rcrst2(jaxn,jcmp))
+         labl(33:48) = und(l)
+         conv = cunv
+       case (14)
+         scod(2) = locf(rpel2(jaxn,jcmp))
+         labl(33:48) = und(l)
+         conv = cunv
+       case (15)
+c  Use ruliq  space to store riss for control rod.
+         if (idcomp(jcmp) .eq. 1) then
+           scod(2) = locf(riss2(jaxn,jcmp))
+         else
+           scod(2) = locf(ruliq((jcmp-1)*ndax+jaxn))
+         endif
+         labl(33:48) = und(l)
+         conv = cunv
+       case (16)
+         scod(2) = locf(wfrosr((jcmp-1)*ndax+jaxn))
+         labl(33:48) = unms(l)
+         conv = cunmf
+       case (17)
+c  Use wfrouo space to store wfroab for control rod.
+         if(idcomp(jcmp).eq.1) then
+           scod(2) = locf(wfroab((jcmp-1)*ndax+jaxn))
+           labl(33:48) = unms(l)
+           conv = 1.0
+         else
+           scod(2) = locf(wfrouo((jcmp-1)*ndax+jaxn))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         endif
+       case (18)
+         scod(2) = locf(wfrozr((jcmp-1)*ndax+jaxn))
+         labl(33:48) = unms(l)
+         conv = cunmf
+       case (19)
+         scod(2) = locf(wremsr((jcmp-1)*ndax+jaxn))
+         labl(33:48) = unms(l)
+         conv = 1.0
+       case (20)
+         if(idcomp(jcmp).eq.1) then
+           scod(2) = locf(wremab((jcmp-1)*ndax+jaxn))
+         else
+           scod(2) = locf(wremuo((jcmp-1)*ndax+jaxn))
+         endif
+         labl(33:48) = unms(l)
+         conv = cunmf
+       case (21)
+         scod(2) = locf(wremzr((jcmp-1)*ndax+jaxn))
+         labl(33:48) = unms(l)
+         conv = cunmf
+       case (22)
+         scod(2) = locf(scd21(jaxn,jcmp,jrad)%qscd)
+         labl(33:48) = unq(l)
+         conv = cunq
+       case (23)
+         scod(2) = locf(scd21(jaxn,jcmp,jrad)%qwgscd)
+         labl(33:48) = unq(l)
+         conv = cunq
+       case (24)
+         scod(2) = locf(qflux0(ndax*(jcmp-1)+jaxn))
+         labl(33:48) = unht(l)
+         conv = cunht
+       case (25)
+         scod(2) = locf(qfg0(ndax*(jcmp-1)+jaxn))
+         labl(33:48) = unht(l)
+         conv = cunht
+       case (26)
+         scod(2) = locf(hfixf(ndax*(jcmp-1)+jaxn))
+         labl(33:48) = unhc(l)
+         conv = cunhtc
+       case (27)
+         scod(2) = locf(hfixg(ndax*(jcmp-1)+jaxn))
+         labl(33:48) = unhc(l)
+         conv = cunhtc
+       case (28)
+         scod(2) = locf(unuca(jaxn,jcmp))
+         labl(33:48) = unpowl(l)
+         conv = cunpowl
+       case (29)
+cljs  mole fraction O2 in fluid at axial node of component
+         scod(2) = locf(frcmo2(jaxn,jcmp))
+         conv=1.0
+       case (30)
+cljs  mole fractions N2 in fluid
+         scod(2) = locf(frcmn2(jaxn,jcmp))
+         conv = 1.0
+       case (31)
+cljs   mole fractions H2O in fluid
+       scod(2) = locf(frmh2o(jaxn,jcmp))
+       conv = 1.0
+       case (32)
+cljs   mole fractions H2 in fluid
+       scod(2) = locf(frcmh2(jaxn,jcmp))
+       conv = 1.0
+       case (33)
+cljs   weight gain oxygen (kg/m2)
+       scod(2) = locf(oxdwc2(jaxn,jcmp))
+       conv = 1.0
+       labl(33:48) = unkgm2(l)
+       case (34)
+cljs   fraction cladding oxidized
+       scod(2) = locf(froxpl(jaxn,jcmp))
+       conv = 1.0
+       case (35)
+cljs   mole fraction of argon in fluid
+       scod(2) = locf(frcmar(jaxn,jcmp))
+       conv = 1.0
+       case (36)
+cljs   effective oxide thickness for case of oxdidation in air
+       scod(2) = locf(thxeg(jaxn,jcmp))
+       labl(33:48) = und(1)
+       conv = cunv
+       case (37)
+cljs  extent breakway fraction for case of oxidation in air
+       scod(2) = locf(f1air(jaxn,jcmp))
+       conv = 1.0
+       case (38)
+cljs   breakaway parameter for oxidation in air
+       scod(2) = locf(rbkarg(jaxn,jcmp))
+       conv =1.0
+       case (39)
+cljs   breakaway thickness for oxidation in steam
+       scod(2) = locf(thbksg(jaxn,jcmp))
+       labl(33:48) = und(1)
+       conv = cunv
+       case (40)
+cljs   breakaway thickness for oxidation in air
+       scod(2) = locf(thbkag(jaxn,jcmp))
+       labl(33:48) = und(1)
+       conv = cunv
+       case (41)
+cljs   heat generation due to oxidation (W/m)
+       scod(2) = locf(oxdhcc(jaxn,jcmp))
+       labl(33:48) = unqpom(1)
+       conv = 1.0 
+       case (42)
+cljs   heat generation due to fission and decay heat (W/m)
+       scod(2) = locf(unuca(jaxn,jcmp))
+       labl(33:48) = unqnum(1)
+       conv = 1.0
+       case (43)
+cljs   effective breakaway thickness of oxide scale (m)
+       scod(2) = locf(thbeg(jaxn,jcmp))
+       labl(33:48) = und(1)
+       conv = cunv
+       case (44)
+cljs   fraction mole fraction air
+       scod(2) = locf(frairm(jaxn,jcmp))
+       conv = 1.0
+       case (45)
+       scod(2) = locf(thbsag(jaxn,jcmp))
+       labl(33:48) = und(l)
+       conv = cunv
+       case (46)
+cljs   fraction of helium
+       scod(2) = locf(frcmhe(jaxn,jcmp))
+       conv = 1.0
+       case (47)
+cljs   fraction reduction decay power due volitile release
+       scod(2) = locf(frdkpw(jaxn,jcmp))
+       conv = 1.0
+       case default
+         write (output,9070) alph,ir
+         go to 4361
+       end select
+       go to 4100
+c  Check for SCDAP radial quantities (cadct).
+ 4085  if (alph .ne. t9d) go to 4087
+       jrad = num/10000
+       jaxn = (num - jrad*10000)/100
+       jcmp = num - jrad*10000 - jaxn*100
+       esloop = .false.
+       do idxo = 1,ncomp
+         if (jcmp .eq. scd1(idxo)%cmpno) then
+           jcmp = idxo
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 4360
+       if (itypi .ge. 0) then
+         if (jcmp.lt.1 .or. jcmp.gt.ncomp) go to 4360
+         if(jrad.le.0 .or.
+     &   jrad.gt.nrods2(naz,jcmp)) go to 4360
+         if (jaxn.lt.1 .or. jaxn.gt.naz) go to 4360
+       endif
+       scod(2) = locf(tcond3(jrad,jaxn,jcmp))
+       labl(33:48) = unt(l)
+       conv = cuntp
+       go to 4100
+c  Check for Creep Rupture.
+ 4087  esloop = .false.
+       do i = 1,numt9e
+         if (alph .eq. t9e(i)) then
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 4130
+c  Error if not a scdap problem.
+       if (itypi .ge. 0) then
+         if (.not.scntrl(1)) go to 4350
+         if (num .lt. 1) go to 4360
+       endif
+       if (i .eq. 1) then
+         if (itypi.ge.0 .and. num.gt.nrlhmx) go to 4360
+         scod(2) = locf(dcreph(num))
+         conv = 1.0
+       elseif (i .eq. 2) then
+         if (itypi.ge.0 .and. num.gt.nrlcmx) go to 4360
+         scod(2) = locf(dcrepc(num))
+         conv = 1.0
+       else
+         write (output,9070) alph,ir
+         go to 4361
+       endif
+ 4100  scod(1) = 0
+       scod(2) = scod(2) - locf(fa(1)) + 1
+       if (ityp .eq. 0) go to 4450
+ 4120  labl(1:16) = alph
+       write (labl(17:32),'(i10)') num
+       go to 4340
+c  Check if request is in fission product block.
+ 4130  igoto = 12
+       write (ch,'(a8)') alph
+       if (ch(1:2) .ne. 'fp') go to 4290
+       if (alph .eq. 'fpdeb') go to 4290
+       scod(1) = 34
+       esloop = .false.
+       do i = 1,7
+         if (ch(3:4) .eq. fpvtyp(i)) then
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) then
+         if (ch(3:3).lt.'0' .or. ch(3:3).gt.'9' .or. ch(4:4).lt.'0' .or.
+     &   ch(4:4).gt.'9') go to 4400
+         i = 8
+         read (ch(3:4),'(i2)') kbin
+       endif
+       if (itypi .ge. 0) go to 4170
+ 4160  if (i .ne. 1) go to 4260
+       go to 4270
+ 4170  if (filid(34) .eq. 0.0) go to 4350
+       i34 = filndx(34)
+       if (i .eq. 8) then
+         if (kbin.eq.0 .or. kbin.gt.fpnbin(i34)) go to 4350
+       endif
+       call fpspix (ch(5:8),ksp)
+       if (ksp .eq. 0) go to 4350
+       isysk = fpsysk(i34)
+       ivolk = fpvolk(i34)
+       isrfk = fpsrfk(i34)
+       ispvk = fpspvk(i34)
+       ispsk = fpspsk(i34)
+       isys1 = i34 + fpsyso(i34)
+       isysn = isys1 + (fpnsys(i34) - 1)*isysk
+       if (i.lt.5 .or. i.eq.8) then
+         esloop = .false.
+         lp01: do isys = isys1,isysn,isysk
+           ivol1 = i34 + fpvolo(isys)
+           ivoln = ivol1 + (fpnvol(isys) - 1)*ivolk
+           do ivol = ivol1,ivoln,ivolk
+             if (num .eq. fpvoln(ivol)) then
+               esloop = .true.
+               exit lp01
+             endif
+           enddo
+         enddo lp01
+         if (.not.esloop) go to 4360
+         isp = ivol + (ksp-1)*ispvk
+         j2 = locf(fa(i34))
+         select case (i)
+         case (1)
+           scod(2) = locf(fpsrc(isp)) - j2
+           if (ityp .eq. 0) go to 4450
+         case (2)
+           scod(2) = locf(fpliq(isp)) - j2
+         case (3)
+           scod(2) = locf(fpvap(isp)) - j2
+         case (4)
+           scod(2) = locf(fpvtm(isp)) - j2
+         case (8)
+           scod(2) = locf(fpbin(isp+kbin-1)) - j2
+         end select
+       else
+         num1 = num/100
+         num2 = num - 100*num1
+         lp02: do isys = isys1,isysn,isysk
+           ivol1 = i34 + fpvolo(isys)
+           ivoln = ivol1 + (fpnvol(isys)-1)*ivolk
+           do ivol = ivol1,ivoln,ivolk
+             nsrf = fpnsrf(ivol)
+             if (nsrf .gt. 0) then
+               isrf1 = i34 + fpsrfo(ivol)
+               isrfn = isrf1 + (nsrf-1)*isrfk
+               do isrf = isrf1,isrfn,isrfk
+                 if (num1 .ne. fpsrfn(isrf)) cycle
+                 if (num2 .eq. fpsflr(isrf)) then
+                   esloop = .true.
+                   exit lp02
+                 endif
+               enddo
+             endif
+           enddo
+         enddo lp02
+         if (.not.esloop) go to 4360
+         isp = isrf + (ksp - 1)*ispsk
+         j2 = locf(fa(i34))
+         select case (i)
+         case (5)
+           scod(2) = locf(fpsfmc(isp)) - j2
+         case (6)
+           scod(2) = locf(fpsfma(isp)) - j2
+         case (7)
+           scod(2) = locf(fpsfmp(isp)) - j2
+         end select
+       endif
+       if (ityp .eq. 0) go to 4450
+ 4260  labl(33:48) = unms(1)
+       go to 4280
+ 4270  labl(33:48) = unmf(1)
+ 4280  conv = 1.0
+       labl(1:16) = alph
+       write (labl(17:32),'(i10)') num
+       go to 4340
+c  Check if request is in couple variables.
+ 4290  igoto = 13
+c  First check to see if request is not in an array.
+       esloop = .false.
+       do i = 1,numt10a
+         if (alph .eq. t10a(i)) then
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 4311
+       scod(1) = 0
+       labl(1:16) = t10a(i)
+       if (itypi .ge. 0) then
+         if(i.eq.26 .or. i.eq.27) then
+           num = num/100
+           mcp = 1
+         else
+           mcp = mod(num,100)
+         endif
+         if (mcp.lt.1 .or. mcp.gt.ncpmsh) go to 4360
+         select case (i)
+         case (1)
+c  tmpdmx.
+           scod(2) = locf(tmpdmx(mcp))
+           conv = cuntp
+           labl(33:48) = unt(l)
+         case (2)
+c  hgtdeb.
+           scod(2) = locf(hgtdeb(mcp))
+           conv = cunv
+           labl(33:48) = und(l)
+         case (3)
+c  pdbtot.
+           scod(2) = locf(pdbtot(mcp))
+           labl(33:48) = unq(l)
+           conv = cunq
+         case (4)
+c  twalmx.
+           scod(2) = locf(twalmx(mcp))
+           labl(33:48) = unt(l)
+           conv = cuntp
+         case (5)
+c  tmpdav.
+           scod(2) = locf(tmpdav(mcp))
+           labl(33:48) = unt(l)
+           conv = cuntp
+         case (6)
+c  masliq.
+           scod(2) = locf(thkcer(1))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         case (7)
+c  liqavg.
+           scod(2) = locf(thkcer(7))
+           labl(33:48) = unt(l)
+           conv = cuntp
+         case (8)
+c  masszr.
+           scod(2) = locf(wst(1,mcp))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         case (9)
+c  massu.
+           scod(2) = locf(wst(2,mcp))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         case (10)
+c  massfe.
+           scod(2) = locf(wst(3,mcp))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         case (11)
+c  massag.
+           scod(2) = locf(wst(4,mcp))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         case (12)
+c  masb4c.
+           scod(2) = locf(wst(5,mcp))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         case (13)
+c  masuo2.
+           scod(2) = locf(wst(6,mcp))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         case (14)
+c  maszo2.
+           scod(2) = locf(wst(7,mcp))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         case (15)
+c  massal.
+           scod(2) = locf(wst(8,mcp))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         case (16)
+c  massli.
+           scod(2) = locf(wst(9,mcp))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         case (17)
+c  masscd.
+           scod(2) = locf(wst(10,mcp))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         case (18)
+c  liqfe.
+           scod(2) = locf(thkcer(2))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         case (19)
+c  liqzr.
+           scod(2) = locf(thkcer(3))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         case (20)
+c  liqag.
+           scod(2) = locf(thkcer(4))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         case (21)
+c  liquo2.
+           scod(2) = locf(thkcer(5))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         case (22)
+c  liqzo2.
+           scod(2) = locf(thkcer(6))
+           labl(33:48) = unms(l)
+           conv = cunmf
+         case (23)
+c  denrgy.
+           scod(2) = locf(thkcer(8))
+           labl(33:48) = uneng(l)
+           conv = cunq
+         case (24)
+c  csenrg.
+           scod(2) = locf(thkcer(13))
+           labl(33:48) = uneng(l)
+           conv = cunq
+         case (25)
+c  intpow.
+           scod(2) = locf(thkcer(15))
+           labl(33:48) = uneng(l)
+           conv = cunq
+         case (26)
+c  intq.
+           scod(2) = locf(thkcer(16))
+           labl(33:48) = uneng(l)
+           conv = cunq
+         case (27)
+c  debqup.
+           scod(2) = locf(thkcer(10))
+           labl(33:48) = uneng(l)
+           conv = cunq
+         case (28)
+c  mppden.
+           scod(2) = locf(thkcer(9))
+           labl(33:48) = unpd(l)
+           conv = cunpd
+         end select
+         write (labl(17:32), '(i10)')num
+         scod(2) = scod(2) - locf(fa(1)) + 1
+       endif
+       go to 4340
+ 4311  esloop = .false.
+       do i = 1,numt10b
+         if (alph .eq. t10b(i)) then
+           esloop = .true.
+           exit
+         endif
+       enddo
+       if (.not.esloop) go to 4400
+       scod(1) = 0
+       labl(1:16) = t10b(i)
+       if (itypi .ge. 0) then
+         mcp = mod(num,100)
+         j2 = num/100
+         if (mcp.lt.1 .or. mcp.gt.ncpmsh) then
+           write (output,9011) 'Mesh',mcp,ir
+ 9011  format ('0********** ',a,' number ',i10,', of variable request,',
+     & i10,', is not part of this problem.')
+           go to 4361
+         endif
+         if (i .eq. 2) then
+           j3 = j2/1000
+           j2 = j2 - 1000*j3
+         endif
+         select case (i)
+         case (1)
+           if (j2.lt.1 .or. j2.gt.numnp) then
+             write (output,9011) 'Node',j2,ir
+             go to 4360
+           endif
+         case (2:8)
+           if (j2.lt.1 .or. j2.gt.numel) then
+             write (output,9011) 'Element',j2,ir
+             go to 4361
+           endif
+         end select
+c  Variable is in a array; get iparm array for couple mesh mcp.
+         call gpcoup(1)
+         select case (i)
+         case (1)
+c  tmpcou.
+           scod(2) = locf(a(i22+j2-1))
+           conv = cuntp
+           labl(33:48) = unt(l)
+         case (2)
+c  fpdeb.
+           do ispd = 1,nspdeb
+             if (j3 .eq. iafp(iptspl+ispd-1)) go to 4330
+           enddo
+           go to 4360
+ 4330      scod(2) = locf(a(iptspd+(ispd-1)*numel+j2-1))
+           conv = cunmf
+           labl(33:48) = unms(l)
+         case (3)
+c  oxthk.
+           scod(2) = locf(a(ipoxth+j2-1))
+           conv = cunv
+           labl(33:48) = und(l)
+         case (4)
+c  afbulk.
+           scod(2) = locf(a(i88+j2-1))
+         case (5)
+c  fracml.
+           scod(2) = locf(a(iptfml+j2-1))
+         case (6)
+c  tmltel.
+           scod(2) = locf(a(iptmlt+j2-1))
+           labl(33:48) = unt(l)
+           conv = cuntp
+         case (7)
+c  pore.
+           scod(2) = locf(a(i70+j2-1))
+         case (8)
+c  powdb.
+           scod(2) = locf(a(i90+j2-1))
+           labl(33:48) = unpd(l)
+           conv = cunpd
+         case (9)
+c  tothtc.
+c  Total heat transfer coefficient for convective boundary condition.
+           labl(33:48) = unhtc(l)
+           conv = cunhtc
+c  Determine convective node number that matches absolute node number.
+           nfindc = 0
+           do nnn = 1,ncev
+             if (iafp(iptihs+nnn-1) .eq. j2) then
+               if (iafp(i44+nnn-1) .ge. 0) then
+                 nfindc = nnn
+                 scod(2) = locf(a(ihtcto+nfindc-1))
+                 exit
+               endif
+             endif
+           enddo
+           if (nfindc .eq. 0) then
+             write (output,9011) 'Node',j2,ir
+             go to 4361
+           endif
+         case (10)
+c  Gap heat transfer coefficient.
+           labl(33:48) = unhtc(l)
+           conv = cunhtc
+c  Determine convective node number that matches absolute node number.
+           nfindc = 0
+           do nnn = 1,ncev
+             if (iafp(iptihs+nnn-1) .eq. j2) then
+               if (iafp(i44+nnn-1) .lt. 0) then
+                 nfindc = nnn
+                 scod(2) = locf(a(i41+nfindc-1))
+                 exit
+               endif
+             endif
+           enddo
+           if (nfindc .eq. 0) then
+             write (output,9011) 'Node',j2,ir
+             go to 4361
+           endif
+         case (11)
+c  mphtc
+           scod(2) = locf(a(i113+j2-1))
+           labl(33:48) = unhtc(l)
+           conv = cunhtc
+         end select
+         write (labl(17:32), '(i10)') num
+         scod(2) = scod(2) - locf(fa(1)) + 1
+       endif
+       go to 4340
+$endif
+c
+ 4340  if (ityp .le. 1) go to 4450
+c  Remove all series of blanks greater than one long to make default
+c  plotting labels.
+       j3 = 64
+       call rmblnk (labl,lblscr,j3,0)
+       go to 4450
+c
+ 4350  write (output,9000) alph,ir
+ 9000  format ('0********* Alphanumeric part, ',a8,
+     & ', of variable request ',i10,
+     & ', refers to a variable that is not part of this problem.')
+       error = .true.
+       if (itypi .eq. 0) go to 4450
+$if def,selap,2
+       go to (4450,4450,470,1150,2390,2800,3050,3960,3800,4010,4120,
+     & 4160,4450), igoto
+$if -def,selap,1
+       go to (4450,4450,470,1150,2390,2800,3050,3960,3800,4010), igoto
+       call fabend
+ 4360  write (output,9010) num,ir
+ 9010  format ('0******** Numeric part, ',i10,', of variable request,',
+     & i10,', refers to a variable that is not part of this problem.')
+ 4361  error = .true.
+       if (itypi .eq. 0) go to 4450
+$if def,selap,2
+       go to (4450,4450,470,1150,2390,4450,4450,3960,3800,4010,4120,
+     & 4160,4450), igoto
+$if -def,selap,1
+       go to (4450,4450,470,1150,2390,4450,4450,3960,3800,4010), igoto
+       call fabend
+ 4370  write (output,9020) num2,ir
+ 9020  format (/'0******** Last two digits of number part,',i11,
+     & ', of variable request,',i10,', is out of range.')
+       error = .true.
+       go to 4450
+ 4380  write (output,9010) num1,ir
+       error = .true.
+       if (itypi .ne. 0) go to 2800
+       go to 4450
+ 4400  write (output,
+     & "('0********* Alphanumeric part, ',a10,', of variable request ,',
+     & i10,', is not in table of legal variables.')")
+     & alph,ir
+       error = .true.
+       go to 4450
+ 4420  write (output,
+     & "('0********* Alphanumeric and integer parts ',
+     & a,i11,' of variable request',i9,' are incompatible.')")
+     & alph,num,ir
+       error = .true.
+       if (itypi .ne. 0) go to 470
+       go to 4450
+ 4430  write (output,
+     & "('0******** ',a8,' in variable request',i10,
+     & ' is not in list of interactive variable names.')")
+     &  alph,ir
+c
+ 4450  pckcod(1) = scod(1)
+       pckcod(2) = scod(2)
+       return
+       end

@@ -1,0 +1,588 @@
+*mlist
+       subroutine rradht
+c
+c
+c  Reads in radiation heat transfer cards.
+c
+c  Cognizant engineer: rjw.
+c
+*in32 iscr
+*in32end
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'htsrcm.h'
+       include 'radhtc.h'
+       include 'machls.h'
+c
+c  Read in radiation heat transfer cards.
+c  Card 60000000.  Radiation heat transfer control card, if not present
+c  radiation heat transfer will not be calculated.
+c       w1(i)    nrset
+c                number of sets of radiation surfaces.
+c
+c  card 6ss00000   (ss = 1,nrset)
+c       w1(i)    nrh
+c                number of conductor surfaces in set ss.
+c       w2(r)    trmin                      (degrees f or degrees k)
+c                minimum surface temperature of heat slab for
+c                radiation heat transfer to be calculated  (f or k)
+c                (default = 900 k)
+c       w3(r)    voidmn
+c                minimum vapor void fraction of volume for radiation
+c                heat transfer to be calculated.
+c                (default value of 0.75)
+c       w4(i)    nrefer
+c                referal flag for view factors.  if used its
+c                value is equal to the set from which view factors
+c                are to be taken.
+c
+c  card 6ssnn001-99 (ss=1,nrset ; nn=1,nrh(ss) )
+c                radiation heat transfer data
+c                data entered for each conductor surface which
+c                participates in radiative heat transfer.
+c       w1(i)    jrh
+c                heat conductor number of surface nn
+c       w2(i)    jlr
+c                0 = left surace
+c                1 = right surface
+c       w3(r)    emis
+c                emissivity of surface nn
+c
+c  card 6ssnn101-99 (ss=set number, nn=1,nrh(ss))
+c                cards for set ss are not needed if word 4
+c                of card 6ss00000 is nonzero
+c                radiation view factors
+c       w1(r)    vfij
+c                view factor from surface nn
+c       w2(i)    radiation surface number
+c       ...      repeat above two words until view factors to all nrh
+c       ...      surfaces are entered in sequential expansion.
+c
+       include 'ufiles.h'
+c
+       character chwrd*8
+       logical add,delete,oldfil
+       integer i,ic1,ic2,ic3,idel1,idel2,idel3,idex,idx,idx1,idx2,
+     & ii,index,iscr(200),ix,j,jchk,jend,jh,jj,jr,js,jst,
+     & jstrt,jt,k,ki,l3a(10),l3b(9),l3c(3),l3e(7),lcontg,n1,
+     & n3,n4,n5,nadd,newj,newset,nl6,nmax,nmin,nread,nset,nsiz,
+     & nsrtot,nstore,nstr,nsur,nsurt,ntimes,nvrad1,nview,nview1,nwrd
+       real deter,dkron,ftbnid,scr(200),simul
+       equivalence (iscr(1),scr(1))
+c
+       data l3a/60000000,0,0,1,0,1,0,1,1,0/
+       data l3e/60000000,0,1,1,0,1,-1/
+       data l3b/1,0,3,9,0,1,0,0,1/
+       data l3c/2,1,0/
+       data add,delete/2*.false./
+       include 'machlf.h'
+c
+c  Check for radiation ht control card.
+       call inplnk (l3a(1),ix,n3,n4,fa(filndx(1)))
+c
+c  Do not proceed further if no radiation input data and its a new deck.
+c  n4 = 0 means no radiation input data.
+c  newrst=T means this input is a new (original deck) problem.
+c  Also do not go further if there is no radiation input and
+c   there was none originally (filid(38)=0.)
+c
+       oldfil = .false.
+       if (n4 .eq. 0 ) then
+         if (newrst) go to 999
+         if (filid(38) .eq. 0.) go to 999
+       endif
+c
+c
+c  On restart problems heat transfer renodalization changes are allowed
+c  and the heat structure and radiation storage is repacked.
+c
+c  nsurt=total number of radiating surfaces on old file.
+c  nsrtot=total number of surfaces on new file.
+       nsrtot = 0
+       nsurt = 0
+       nview = 0
+c  Check to see if heat structure data exists.
+       if (filsiz(8) .eq. 0) then
+         fail = .true.
+         write(output,9999)
+ 9999  format ('0******** Cannot have radiation input data if no heat st
+     &ructures in problem.')
+         go to 999
+       endif
+c  Bring in heat structure file 8.
+       jh = filndx(8)
+c  Size of blocks in the radiation file.
+c    1st block, present only once, nvrad1 words.
+c    2nd block, one block for each radiation set.
+c    3rd block, one block for each radiation surface.
+c    4th block, view factors.
+c    5th block, rad heat fluxes for structures.
+       nvrad1 = 2
+c  Temporarily set file size to all space avail.
+       nsiz = lcontg(1)
+       if (filid(38) .eq. 0) then
+         filid(38) = ftbnid(1)
+         filsiz(38) = nsiz
+         call ftbrsv (filid(38),filsiz(38),1,filndx(38))
+       else
+         oldfil = .true.
+c  Must check radiation file even if no radiation input because
+c  heat str. file may have been reorganized.
+c  1st step.  Loop over sets and for those which have view factors
+c  then call simul to reinvert view factor matrix, thus restoring
+c  it to what is normally input on cards.
+         jr = filndx(38)
+         do k = 1,nrset(filndx(38))
+c  Reset jlr for each heat str.
+           do i=1,nrh(jr)
+             js = filndx(38) + irhoff(jr) + nrhskp*(i-1)
+             if (jlr(js) .lt. 0) jlr(js) = 0
+             if (jlr(js) .gt. 0) jlr(js) = 1
+           enddo
+           if (refset(jr) .eq.0) then
+c  nview=total number of view factors in the old radiation file.
+             nview = nview + nrh(jr)*nrh(jr)
+             idex = filndx(38) + ivewof(jr)
+             deter = simul(nrh(jr),vfij(idex),scr,0.001,-1,nrh(jr))
+             if (deter .eq. 0.0) then
+               fail = .true.
+               write (output,2000) setno(jr)
+ 2000  format ('0******** Singular matrix when reinverting view factor m
+     &atrix for set ',i4,' in rradht routine.')
+             endif
+             do i = 1,nrh(jr)
+               js = filndx(38) + irhoff(jr) + nrhskp*(i-1)
+               do j = 1,nrh(jr)
+                 dkron=0.0
+                 if (i .eq. j) dkron=1.0
+                 idex = filndx(38) + ivewof(jr) + (j-1)*nrh(jr) + i-1
+                 vfij(idex) = -(vfij(idex)-dkron)/(1.-emis(js))
+               enddo
+             enddo
+           endif
+           nsurt = nsurt + nrh(jr)
+           jr = jr + nrsskp
+         enddo
+         jstrt = filndx(38) + 2
+         jend = filndx(38) + filsiz(38)
+       endif
+c  If radiation cards not present can now return.  radiation file is set
+c  for processing by iradht routine if this is restart.
+       if (n4 .eq. 0) go to 99
+c  If this is restart or new prob then set iextra to show changes being
+c  made to radiation file or radiation file being added, then begin
+c  processing input.
+       iextra = ior(iextra,16)
+       jr = filndx(38)
+c  Read 60000000 card.
+       call inp2 (fa(filndx(1)), iscr   , l3a)
+       if (l3a(6) .eq. -1) then
+         fail = .true.
+         write (output, 800)
+  800  format ('0******** Format error on card 60000000, no further chec
+     &king of radiation input.')
+         go to 999
+       endif
+c  Set up to read in 6ss00000 cards (ss=set number).
+       nset = iscr(1)
+       if (.not.oldfil) nrset(jr) = nset
+       l3a(3) = 1
+       l3a(4) = 4
+c  Loop to read 6ss00000 cards (ss=set number).
+       nread = 0
+       do jj=1,99
+         if (nread .eq. nset) go to 9
+c  Drop out of loop when nset cards read.
+         l3a(1) = l3a(1) + 100000
+         l3e(1) = l3a(1)
+         l3a(6) = 1
+         l3e(6) = 1
+c  Find if card is present (n4 returned as 0 if no card).
+         call inplnk (l3a(1),ix,n3,n4,fa(filndx(1)))
+         if (n4. eq. 0) cycle
+c  Card present, see if 1st word is integer (ie,not a delete card).
+         add = .false.
+         delete = .false.
+         call inpmod (fa(filndx(1)),l3a,n3,1,n5,0)
+         if (n5 .ne. 0) then
+           call inp2(fa(filndx(1)),iscr,l3e)
+           write (chwrd,'(a8)') iscr(1)
+           delete = .true.
+           if (chwrd .ne. 'delete') then
+             fail=.true.
+             write (output,843)
+  843  format ('0******** Delete expected but not found on card ',i10,
+     & ',  delete assumed')
+           endif
+         else
+           call inp2(fa(filndx(1)),iscr,l3a)
+           if (l3a(6) .eq. -1) then
+             fail = .true.
+             write(output,806) l3a(1)
+  806  format ('0******** Format error on card',i10,' default values use
+     &d for input checking.')
+             iscr(1) = 1
+             scr(2) = 0.0
+             scr(3) = 0.0
+             l3a(6) = 1
+           endif
+         endif
+         nread = nread + 1
+         if (oldfil) then
+c  oldfil true if old radiation file exists and prob is restart.
+           newset = (l3a(1)-60000000)/100000
+           nstr = nrset(filndx(38))
+           js = filndx(38)
+c  Loop over sets to find if old set number matchs new number.
+           idel1 = 0
+           idel2 = 0
+           do i=1,nstr
+             if (setno(js) .eq. newset) then
+c  Match found, squeeze out vfij entries for set, (refset>0 means set
+c  has no entries).
+               if (refset(js) .eq. 0) then
+                 idx1 = ivewof(js) + filndx(38)
+                 idel1 = nrh(js)**2
+                 nview = nview - idel1
+                 idx2 = idx1 + idel1
+                 nwrd = filndx(38) + filsiz(38) - idx2
+                 call ftbmov (fa(idx2),fa(idx1),nwrd)
+                 filsiz(38) = filsiz(38) - idel1
+c  Update ivewof pointer for all ivewof which point to location beyond
+c  space just deleted.
+                 jt = filndx(38)
+                 do ii=1,nstr
+                   if (refset(jt).eq.0 .and. jt.ne.js  .and.
+     &             ivewof(jt).gt.ivewof(js)) ivewof(jt) = ivewof(jt) -
+     &             idel1
+                   jt = jt+nrsskp
+                 enddo
+                 jstrt = filndx(38) + 2
+                 jend = filndx(38) + filsiz(38)
+               endif
+c  Squeeze out second block (surfaces block).
+               idx1 = irhoff(js) + filndx(38)
+               idel2 = nrhskp*nrh(js)
+               idx2 = idx1 + nrhskp*nrh(js)
+               nwrd = filndx(38) + filsiz(38) - idx2
+               call ftbmov (fa(idx2),fa(idx1),nwrd)
+               filsiz(38) = filsiz(38) - idel2
+               nsurt = nsurt - nrh(js)
+c  Update pointers for all sets after set being deleted , but only
+c  ivewof pointer for sets preceeding set being deleted.
+               irhflx(filndx(38)) = irhflx(filndx(38)) - idel1 - idel2
+               jt = filndx(38)
+               do ii = 1,nstr
+                 if (ii .gt. i) irhoff(jt) = irhoff(jt) - idel2
+                 if (refset(jt) .eq. 0) ivewof(jt) = ivewof(jt) - idel2
+                 jt = jt + nrsskp
+               enddo
+               jstrt = filndx(38) + 2
+               jend = filndx(38) + filsiz(38)
+c  Squeeze out 1st block if set being deleted, leave if set being
+c  overlayed.
+               if (delete) then
+                 idx1 = locfi(setno(js)) - locf(fa(filndx(38))) +
+     &           filndx(38)
+                 idel3 = nrsskp
+                 idx2 = idx1 + nrsskp
+                 nwrd = filndx(38) + filsiz(38) - idx2
+                 call ftbmov (fa(idx2),fa(idx1),nwrd)
+                 filsiz(38) = filsiz(38) - idel3
+                 nstr = nstr - 1
+                 nrset(filndx(38)) = nstr
+                 irhflx(filndx(38)) = irhflx(filndx(38)) - idel3
+c  Update all pointers for all sets.
+                 jt = filndx(38)
+                 do ii = 1,nstr
+                   irhoff(jt) = irhoff(jt) - idel3
+                   if (refset(jt) .eq. 0) ivewof(jt) = ivewof(jt) -
+     &             idel3
+                   jt = jt + nrsskp
+                 enddo
+                 jstrt = filndx(38) + 2
+                 jend = filndx(38) + filsiz(38)
+               endif
+               go to 104
+             endif
+             js = js + nrsskp
+           enddo
+c  If drop out of loop then set is being added, not overlayed.
+           add = .true.
+c
+c  At this point we have deleted a set or overlayed a set.
+c  If delete then check for success.
+c  idel3 > 0 indicates a set was deleted.
+  104      if (delete) then
+             if (idel3 .eq. 0) then
+               fail = .true.
+               write (output,807) l3a(1)
+  807  format ('******** Illegal delete attempt on card ',i10,', set not
+     & found on old file.')
+             endif
+             cycle
+           endif
+c  Get here if a set is being overlayed or a new set is being added.  At
+c  this point the old set has been deleted except for the 1st block.
+c  If set being added must make room for 1st block (nrsskp words).
+           if (add) then
+             if (nsiz .lt. nrsskp) then
+               fail = .true.
+               write (output,815)
+  815  format ('0******** Insufficient space for processing radiation in
+     &put.')
+               go to 99
+             endif
+             nwrd = filsiz(38) - irhoff(filndx(38))
+             idx1 = filndx(38) + irhoff(filndx(38))
+             idx2 = idx1 + nrsskp
+             call ftbmov (fa(idx1),fa(idx2),-nwrd)
+             nsiz = nsiz - nrsskp
+             filsiz(38) = filsiz(38) + nrsskp
+c  Update all ivewof pointers.
+             js = filndx(38)
+             do i=1,nstr
+               irhoff(js) = irhoff(js) + nrsskp
+               if (refset(js) .gt. 0) ivewof(js) = ivewof(js) + nrsskp
+               js = js + nrsskp
+             enddo
+             nstr = nstr + 1
+             nrset(filndx(38)) = nstr
+             jstrt=filndx(38) +2
+             jend = filndx(38)+filsiz(38)
+           endif
+c  Setno to negative to show file must be expanded (2nd block, vfij
+c  block).
+           setno(js) = -newset
+           jr = js
+         endif
+c  End of block to treat input on restart.
+c  setno if prob type is new or no existing radiation file on restart.
+c  If there was an old file then setno was set above.
+         if (.not.oldfil) setno(jr) = (l3a(1)-60000000)/100000
+         refset(jr) = 0
+         nrh(jr) = iscr(1)
+         trmin(jr) = scr(2)
+         voidmn(jr) = scr(3)
+         timron(jr) = 0.0
+         timrof(jr) = 0.0
+c  Check units for conversion.
+         if (.not.uniti .and. trmin(jr).ne.0.0)
+     &   trmin(jr) = (trmin(jr) + 460.0)/1.8
+c  Set trmin and voidmn defaults.
+         if (l3a(6) .lt. 2) trmin(jr) = 900.0
+         if (l3a(6) .lt. 3) voidmn(jr) = 0.75
+c  Check words on card 6ss00000 (1 to 4 words).
+c  no. str in set ,  trmin ,  voidmn ,  view factor referal
+         if (l3a(6).ge.1 .and. l3a(6).le.4) go to 33
+         fail = .true.
+         write (output,802) l3a(1)
+  802  format ('0******** Error, number of entries on card ',i10,
+     & ' must be at least 1 and at most 4.')
+c  If 4 words on card, treat referal.
+c  Word 4 is set from which view factors come.
+   33    if (l3a(6) .eq. 4) then
+           if (jj .le. iscr(4)) then
+             fail = .true.
+             write (output,811) l3a(1),jj,iscr(4)
+  811  format ('0******** Error card ',i10, 'radiation set ',i4,
+     & 'view factor referal is to a set not yet read(set',i4,')'
+     & /15x,'set being referred to must be ahead of set using referal.')
+           endif
+c  Store referal number in refset.
+           refset(jr) = iscr(4)
+         endif
+c  Increase pointer by set skip factor.
+         jr = jr + nrsskp
+       enddo
+c  End of loop for reading 6ss00000 cards.
+    9  if (nread .ne. nset) then
+         write (output,816) nread,nset
+         fail = .true.
+  816 format('0******** Number of sets requested on card 60000000 does n
+     &ot match number of sets input on cards 60100000-69900000'/10x,
+     &'sets of 6ss00000 cards= ',i5,'. number on 60000000 card= ',i5)
+       endif
+c  Loop over number of radiation sets and calculate offset to radiation
+c  surface data for each set.  If setno is neg then the necesarry space
+c  must be allocated.
+       jr = filndx(38)
+       nset = nrset(jr)
+       idx = nvrad1 + nset*nrsskp
+c
+       do jj=1,nset
+         nsrtot= nrh(jr) + nsrtot
+         nadd = nrh(jr)*nrhskp
+         if (setno(jr) .lt.0) then
+           if (nsiz .lt. nadd) then
+             fail = .true.
+             write (output,815)
+             go to 99
+           endif
+           idx1 = nvrad1 + nset*nrsskp + nsurt*nrhskp
+           irhoff(jr) = idx1
+           nsurt= nsurt + nrh(jr)
+           nwrd = filsiz(38) - idx1
+           idx1 = filndx(38) + idx1
+           idx2 = idx1 + nadd
+           call ftbmov(fa(idx1),fa(idx2),-nwrd)
+           nsiz = nsiz - nadd
+           filsiz(38) = filsiz(38) + nadd
+         elseif (setno(jr).gt.0) then
+           irhoff(jr) = idx
+           idx = idx + nadd
+         endif
+         jr = jr + nrsskp
+       enddo
+       if (oldfil) then
+         jstrt = filndx(38) + 2
+         jend = filndx(38) + filsiz(38)
+       endif
+c
+c  Loop over number of radiation sets and calculate offset to view
+c  factor data associated with each set.  Also compute nview, the total
+c  number of words used for view factors.  If a set refers to another
+c  set for view factors, then refset is set number being referred to.
+       jr = filndx(38)
+       ivewof(jr) = nvrad1 + nset*nrsskp + nsrtot*nrhskp
+       nview1 = 0
+c  nview1 used to count number of view factors for prob type = new
+c  or to count existing view factors for prob type=restart.
+c  nview is the number of view factors in file when loop 21 is started.
+c  It increases only if view factors are being added.
+       do jj=1,nset
+         nsur = nrh(jr)
+         if (refset(jr) .ne. 0) then
+c  Pick up view factor pointer for reference set.
+           js = filndx(38)
+           do ii=1,nset
+             if (refset(jr) .eq. abs(setno(js))) then
+               ivewof(jr) = ivewof(js)
+               go to 23
+             endif
+             js = js + nrsskp
+           enddo
+c  No match found for refset, flag as error, write message.
+           fail = .true.
+           ii = abs(setno(jr))
+           write (output,817) ii,refset(jr)
+  817  format ('0******** Set ',i3,' refers to set ',i3,' for view facto
+     &rs but that set is not present.')
+           cycle
+   23      continue
+         else
+           nadd = nsur*nsur
+           if (setno(jr) .gt. 0) then
+             ivewof(jr) = ivewof( filndx(38) ) + nview1
+             nview1 = nview1 + nadd
+           elseif (setno(jr) .lt. 0) then
+             if (nsiz .lt. nadd) then
+               fail=.true.
+               write (output,815)
+               go to 99
+             endif
+             nsiz = nsiz - nadd
+             filsiz(38) = filsiz(38) + nadd
+             ivewof(jr) = ivewof( filndx(38) ) + nview
+             nview = nview + nadd
+           endif
+         endif
+         jr = jr + nrsskp
+       enddo
+c  If there was no old rad file then number of view factors is nview1
+c  otherwise it is nview.
+       if (.not.oldfil) nview=nview1
+c  Offset to radiation heat fluxes for all heat structures in heat
+c  structure file.
+       jr = filndx(38)
+       irhflx(jr) = ivewof(jr) + nview
+       filsiz(38) = irhflx(jr) + 2*nhtstr(jh)
+       jstrt = filndx(38) + 2
+       jend = filndx(38) + filsiz(38)
+c  Loop over radiation sets reading 6ssnn001 and 6ssnn101 cards.
+c  ss=set no. and nn = surface no. in a set.
+       do 15 jj=1,nset
+c  For case of changes on restart read only cards for input sets
+c  but read cards if rad file being added on restart or new prob.
+         if (iand(iextra,16).ne.0  .and. oldfil) then
+           if (setno(jr) .gt. 0) go to 15
+         endif
+         nsur = nrh(jr)
+c  Read in radiation heat transfer data.
+         do 10 j = 1, nsur
+           l3b(1) = 60000001 + abs(setno(jr))*100000 + j*1000
+           l3b(6) = 1
+           index = filndx(38) + irhoff(jr) + (j-1)*nrhskp
+           call inp2 (fa(filndx(1)),fa(index),l3b)
+           if (l3b(6) .le. 0) then
+             fail=.true.
+             write (output, 803) l3b(1)
+  803  format ('0******** Format error on card or card missing ',i10)
+           endif
+           ic1 = 60000101 + j*1000 + abs(setno(jr))*100000
+c  Test if view factor referal method was used in input for this set of
+c  surfaces.
+           if (refset(jr) .ne. 0) then
+c  Pick up surface pointer for reference set.
+             js = filndx(38)
+             do ii=1,nset
+               if (refset(jr) .eq. abs(setno(js))) then
+                 ki = filndx(38) + irhoff(js) + (j-1)*nrhskp
+                 go to 27
+               endif
+               js = js + nrsskp
+             enddo
+c  No match found for refset, flag as error, write message.
+             fail = .true.
+             ii = abs(setno(jr))
+             write (output,817) ii,refset(jr)
+             go to 15
+   27        continue
+c  Match found for refset. check that corresponding surfaces in
+c  referring set and referred set have same emissivities.
+             if (emis(index) .eq. emis(ki)) go to 10
+             fail=.true.
+             write (output,840) l3b(1)
+  840  format ('0******** Error on card ',i10,', if view factor referal
+     &is used, than referring and referred'/9x,'sets must have the same
+     &emissivities on corresponding surfaces.')
+             go to 10
+           endif
+c  View factor referal method not used for set, so read 6ssnn101-99
+c  cards for this set and surface.
+           ic2 = -ic1 - 98
+           ic3 = 1
+           n1 = 1
+           nmin = 0
+           nmax = nrh(jr)
+           nstore = nrh(jr)
+           ntimes = 1
+           newj = 1
+           jst = 1
+           idex = filndx(38) + ivewof(jr) + (j-1)
+           nl6 = 200
+           call inp5 (ic1,ic2,ic3,n1,nmin,nmax,nstore,ntimes,newj,jst,
+     &     fa(filndx(1)),fa(idex),l3c,scr(1),nl6)
+           if (jst .gt. 0) go to  6
+           fail=.true.
+           write (output, 803) ic1
+    6      if (jst .le. 0) go to 10
+           jchk = (jst/2)*2
+           if (jchk .eq. jst) go to 10
+           fail=.true.
+           write (output,804) ic1,ic2
+  804  format ('0******** Error, number of entries on cards',i10,
+     & ' to ',i10,' is not a multiple of 2.')
+   10    continue
+         jr = jr + nrsskp
+   15  continue
+c  All input data is now read in, set nrset negative if radiation file
+c  newly created.  Will use nrset as flag to pass to iradht routine.
+       if (.not.oldfil) nrset(filndx(38)) = -nrset(filndx(38))
+   99  continue
+       call ftbsft (filid(38),filsiz(38),2,filndx(38))
+  999  call fmvlwr
+       return
+       end

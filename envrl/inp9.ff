@@ -1,0 +1,143 @@
+       function inp9(a)
+c
+c  This integer function returns the new length of the table-list array
+c  after it has deleted all previously referenced cards.
+c
+c  Cognizant engineer: rjw.
+c
+c  Parameters in the call list
+c  a       table-list array
+c
+$if -def,in32,2
+       integer a(*)
+       integer ptrn
+$if def,in32,2
+       integer a(2,*)
+       integer iptrn(2)
+c  msk = 2**30 - 1, mak17 = 2**17 - 1, msk11 = 2**11 -1
+       parameter (msk=1073741823,msk17=131071,msk11=2047)
+       parameter (modes=31,modesm=30)
+       logical s1
+c
+$if -def,in32,4
+$if def,cray,1
+       data ptrn /0777777777777777777777b/
+$if -def,cray,1
+       data ptrn /o"0777777777777777777777"/
+c  iptrn = 7fff ffff ffff ffff (NaN on IEEE-754 cpus)
+$if def,in32,1
+       data iptrn/2147483647,-1/
+c
+c  Take table-list word apart to find old table, list lengths.
+$if -def,in32,2
+       ltab = ishft(a(1),-30)
+       list = iand(a(1),msk)
+$if def,in32,2
+       ltab = a(1,1)
+       list = a(2,1)
+c  list=length of list, ltab=length of table.
+       if (list.eq.0 .or. ltab.eq.0) go to 10
+       nfirst = list + 2
+       last = nfirst + ltab - 1
+       lend = list
+       s1 = .false.
+c  Top of loop for each table entry.
+   20  do 2 lcard = nfirst,last
+c  Take table entry apart to look at individual items.
+$if -def,in32,1
+       if (iand(a(lcard),ishft(1,59)) .eq. 0) go to 2
+$if def,in32,1
+       if (iand(a(1,lcard),ishft(1,29)) .eq. 0) go to 2
+c  Card should be deleted.
+$if -def,in32,1
+       locz = iand(ishft(a(lcard),-11),msk17)
+$if def,in32,1
+       locz = iand(ishft(a(2,lcard),-11),msk17)
+c  locz=index (in a) of first item on the card.
+$if -def,in32,1
+       many = iand(a(lcard),msk11)
+$if def,in32,1
+       many = iand(a(2,lcard),msk11)
+       many = many + (many + modesm)/modes
+c  Many=number of data items on the card.
+       if (s1) go to 21
+       if (many .eq. 0) go to 2
+c  Set bit pattern in list for later deletion.
+       l1 = locz + many - 1
+       do i = locz,l1
+$if -def,in32,1
+         a(i) = ptrn
+$if def,in32,1
+         a(:,i) = iptrn
+       enddo
+       go to 2
+c  Clear the table entry.
+$if -def,in32,1
+   21  a(lcard) = 0
+$if def,in32,1
+   21  a(:,lcard) = 0
+c  Correct all table entries with list entries higher than locz.
+       do l = nfirst,last
+$if -def,in32,1
+         if (a(l) .eq. 0) cycle
+$if def,in32,1
+         if (a(1,l).eq.0 .and. a(2,l).eq.0) cycle
+c  Take table entry apart to look at individual items.
+$if -def,in32,1
+         nthis = iand(ishft(a(l),-11),msk17)
+$if def,in32,1
+         nthis = iand(ishft(a(2,l),-11),msk17)
+c  nthis=index (in a) of data for current card.
+         if (nthis .le. locz) cycle
+         nthis = nthis - many
+c  Repack new list location into table entry.
+$if -def,in32,1
+         a(l) = ior(iand(a(l),not(ishft(msk17,11))),ishft(nthis,11))
+$if def,in32,1
+         a(2,l) = ior(iand(a(2,l),not(ishft(msk17,11))),ishft(nthis,11))
+       enddo
+c  Reduce the list length.
+       list = list - many
+c  Reduce the table length.
+       ltab = ltab - 1
+    2  continue
+c  End of loop for each table entry.
+       s1 = .not.s1
+       if (s1) go to 20
+       if (ltab .eq. 0) go to 1
+c  Squeeze the list.
+       k = 0
+       do i = 1,lend
+$if -def,in32,1
+         if (a(i+1) .eq. ptrn) cycle
+$if def,in32,1
+         if (a(1,i+1).eq.iptrn(1) .and. a(2,i+1).eq.iptrn(2)) cycle
+         k = k + 1
+$if -def,in32,1
+         a(k+1) = a(i+1)
+$if def,in32,1
+         a(:,k+1) = a(:,i+1)
+       enddo
+       if (k .ne. list) call fabend
+c  Move table up to the list dropping out all cleared entries.
+       l = 0
+       do i = nfirst,last
+$if -def,in32,1
+         if (a(i) .eq. 0) cycle
+$if def,in32,1
+         if (a(1,i).eq.0 .and. a(2,i).eq.0) cycle
+         l = l + 1
+         k = k + 1
+         a(:,k+1) = a(:,i)
+       enddo
+       if (l.ne.ltab) call fabend
+c  Compute new length.
+c  Repack new table-list length word into a(1).
+$if -def,in32,1
+    1  a(1) = ior(ishft(ltab,30),list)
+$if def,in32,2
+    1  a(1,1) = ltab
+       a(2,1) = list
+   10  inp9 = list + ltab + 1
+       return
+       end

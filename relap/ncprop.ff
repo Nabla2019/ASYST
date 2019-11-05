@@ -1,0 +1,183 @@
+*mlist
+       subroutine ncprop(iv,pvap,pgas,wvap,rgas,tsat,hfg,
+     & cpvap,rhomix,cpmix,conmix,vismix)
+c
+c
+c  Calculates the vapor/gas mixture properties needed for the turbulent
+c  diffusion model for the effect of NC gases on condensation.
+c
+c  Cognizant engineer: jmk.
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+c  subr:  NCPROP
+c
+c  desc:  NCPROP calculates the vapor/gas mixture properties
+c         needed for the turbulent diffusion model for the effect
+c         of NC gases on condensation.
+c
+c         Vapor saturation properties are calculated as a function
+c         of pressure (PVAP) by the normal RELAP5 subroutines.
+c
+c         NC gas properties are calculated using the same formulas
+c         as in subroutine STATE.
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+c  arguments:
+c
+c  INPUT:     IV     -  volume index.
+c             PVAP   -  partial pressure of vapor.
+c             PGAS   -  partial pressure of NC gases.
+c             WVAP   -  mass fraction of vapor.
+c             RGAS   -  gas constant for NC gas mixture.
+c
+c  OUTPUT:    TSAT   -  saturation temperature at PVAP.
+c             HFG    -  latent heat.
+c             CPVAP  -  specific heat of vapor.
+c             RHOMIX -  density of vapor/gas mixture.
+c             CPMIX  -  specific heat of vapor/gas mixture.
+c             CONMIX -  thermal conductivity of vapor/gas mixture.
+c             VISMIX -  viscosity of vapor/gas mixture.
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+c  calling routine:  NCFILM
+c
+c  routines called: STH2X2, THCOND, VISCOS
+c
+c  last modified:  August 4, 1994
+c
+c  cognizant engineer:  JM Kelly
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+      implicit none
+       include 'fast.h'
+       include 'contrl.h'
+       include 'comctl.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+      real condv, conmix, cpgas, cpmix, cpvap, delt, dugdt, dugndt,
+     &     dum, hfg, mwvap, one, pgas, phiij, pvap, rgas, rhogas,
+     &     rhomix, rhov, trat, treff, tsat, vismix, visv, wgas,
+     &     wvap, xphi, zero
+c
+      real cong(6), mw(6), s(26), visg(6), xmf(6)
+c
+      integer i, j, k, iv
+      integer iones(2)
+c
+      parameter (one=1.0)
+      parameter (zero=0.0)
+      parameter (mwvap=18.016)
+      parameter (treff=114.0)
+c
+      logical erx
+      data erx/.false./, iones/1,1/
+c
+      external sth2x2, thcond, viscos
+c
+c --------------------------------------------------------------------
+c
+c     Vapor Saturation Properties at PVAP:
+c
+c --------------------------------------------------------------------
+c
+      s(2) = pvap
+      s(9) = one
+c
+      call sth2x2(fa(ndxstd),s,erx)
+      if (erx) go to 8000
+c
+      rhov = one / s(12)
+      tsat = s(1)
+      hfg = s(16) - s(15)
+      cpvap = s(22)
+c
+      call thcond(volmat(iv),iones,iones,dum,1,1,tsat,pvap,rhov,
+     &            'vapor',condv,erx)
+c
+      call viscos(volmat(iv),iones,iones,1,1,tsat,pvap,rhov,tsat,
+     &            'vapor',visv,erx)
+c
+c     Store Vapor Properties as Gas #1.
+c
+      visg(1) = visv
+      cong(1) = condv
+      mw(1) = mwvap
+      xmf(1) = wvap / mwvap
+      wgas = one - wvap
+c
+c --------------------------------------------------------------------
+c
+c     NC Gas Transport Properties for Each Species.
+c        -  offset indices by 1 to allow for vapor.
+c
+c --------------------------------------------------------------------
+c
+      trat = tsat**1.5 / (tsat + treff)
+      delt = max(zero,tsat-250.)
+      dugdt = zero
+c
+      do 100 k = 1,noncn
+c
+         visg(k+1) = visao(k) * trat
+         cong(k+1) = thca(k) * tsat**thcb(k)
+         dugndt = cvaox(k) + dcvax(k)*delt
+         dugdt = dugdt + qualan(iv+k-1)*dugndt
+         mw(k+1) = wmolea(k)
+         xmf(k+1) = qualan(iv+k-1) * wgas / mw(k+1)
+c
+ 100  continue
+c
+c
+c --------------------------------------------------------------------
+c
+c     Vapor/Gas Mixture Transport Properties.
+c        -  mixture rule of Wilke.
+c
+c --------------------------------------------------------------------
+c
+      conmix = zero
+      vismix = zero
+c
+      do 300 i = 1,noncn+1
+c
+         xphi = zero
+         do 200 j = 1,noncn+1
+c
+            phiij = (one + sqrt((visg(i)/visg(j))*sqrt(mw(j)
+     &            / mw(i))))**2 / sqrt(8.0*(one + (mw(i)/mw(j))))
+            xphi = xphi + xmf(j)*phiij
+c
+ 200     continue
+c
+         conmix = conmix + xmf(i)*cong(i)/xphi
+         vismix = vismix + xmf(i)*visg(i)/xphi
+c
+ 300   continue
+c
+c --------------------------------------------------------------------
+c
+c     Vapor/Gas Mixture Density & Specific Heat.
+c
+c --------------------------------------------------------------------
+c
+      rhogas = pgas / (rgas * tsat)
+      rhomix = rhov + rhogas
+c
+      cpgas = dugdt + rgas
+      cpmix = wvap*cpvap + wgas*cpgas
+c
+      return
+c
+ 8000 write (output,9000) pvap
+ 9000 format ('0******** Subroutine sth2x2 returned an error flag for p
+     &vap =',1pe14.7,'.  Called from NCPROP.')
+      return
+      end

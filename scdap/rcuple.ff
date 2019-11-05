@@ -1,0 +1,195 @@
+*mlist
+*if def,selap
+       subroutine rcuple
+c
+c  Processess input data for a coupled mesh.
+c
+c  Cognizant engineer: ewc.
+c
+*in32 idat
+*in32 nhydv
+*in32 igeom
+*in32end
+c
+       implicit none
+       include 'cpmdat.h'
+       include 'alcm.h'
+       include 'iparm.h'
+       include 'iparmm.h'
+       include 'iparmc.h'
+       include 'parm.h'
+       include 'parmm.h'
+       include 'parmc.h'
+       include 'scddat.h'
+       include 'slumpv.h'
+       include 'ufilef.h'
+       include 'ufiles.h'
+       include 'contrl.h'
+       include 'coupl.h'
+       include 'fast.h'
+       include 'comctl.h'
+      integer jcmp
+      real rdat(80)
+      integer idat(80)
+      integer ncard,next,istart,ndata
+      integer l01(14),l1(11),l5(7),l8(21)
+      equivalence (idat(1),rdat(1))
+      data l01 /6*0,8*-1/
+      data l1 /0,0,5,5,6*0,1/
+      data l5 /0,0,1,1,0,0,1/
+      data l8 /0,0,15,18*0/
+      integer i, lastal
+      integer nkk
+      lastal=1
+      parm(1:npar1) = 0.0
+      time = timehy
+      iparm(1:nipar3) = 0
+      nnli = 10
+      maxe = 50
+c    Check connected Scdap components, and fission prods. to track.
+      call ifprod
+c  transfer nsptrk from slumpv common to iparm array
+      nspdeb = ntstrk(mcp)
+      nslph = nslphs(mcp)
+      if (nslph .eq.-1) then
+        height = hgtdeb(mcp)
+        dh = 0.0
+      endif
+      ncpow = ncpowi(mcp)
+      last = lastal
+c 50000010 First title card
+      l01(1)= 50000010
+      l01(6)=1
+      call inp2(fa(filndx(1)),hed1,l01)
+c 50000020 c second title card
+      l01(1)= 50000020
+      l01(6)=1
+      call inp2(fa(filndx(1)),hed2,l01)
+c 4ccc0100 Mesh Generator control card
+      jcmp=1
+   50 ncard=jcmp*10000 + 50000100
+      call inplnk(ncard,next,istart,ndata,fa(filndx(1)))
+      if(ndata.le.0)then
+        if(next.lt.59990100)then
+          jcmp=(next-50000100)/10000
+          goto 50
+        endif
+        return
+      endif
+      mcp=mcp+1
+      if(mcp .gt. maxcpm) then
+        write(output,*)'0******** too many couple meshes'
+        fail=.true.
+        return
+      endif
+      l1(1)=jcmp*10000 + 50000100
+      l1(6)=1
+      call inp2(fa(filndx(1)),rdat,l1)
+      if(l1(6).lt. 4)then
+        fail=.true.
+      else
+        maxi=idat(1)
+        maxj=idat(2)
+        npp=idat(3)
+        nmtl=idat(4)
+c nmtl is recalculated in relem. unfortunately it is needed
+c in imesh, called previous to relem. the read in nelem
+c could be moved to this routine.
+        uncon=rdat(5)
+      endif
+      write(output,1001)maxi,maxj,npp,uncon
+ 1001 format(
+     # ' maxi--------------------------------',i5/
+     # ' maxj--------------------------------',i5/
+     # ' geometric code----------------------',i5/
+     # ' unit conversion ---------------------', 1p,e13.5)
+c line segment cards are handled in the routine rmesh
+c imesh is used to handle mesh generation
+      call imesh(jcmp)
+c 5ccc0500 Emissivity
+      l5(1)=jcmp*10000+50000500
+      l5(6)=1
+      call inp2(fa(filndx(1)),rdat,l5)
+      if(l5(6) .eq. 1) then
+        emissm=rdat(1)
+      endif
+c material property calculations are done in rtprop
+      i5=last
+      last=i5+135
+      call rtprop(a(i5),jcmp)
+c Temperature control
+c User defined layer of the couple mesh
+      call rstep(jcmp)
+c here we set idf to 1 to imply old style blocks undefined
+      idf=1
+      call funct
+      call initl
+      idf=0
+c set idf back to 0 to imply old style blocks present
+c Number of materials without internal heat generation
+c we'll read in the numbers of materials without internal heat
+c  generation in order to provide a count, then pass this to rgg2 where
+c  it will be stored permentantly
+c Power Densities all read in rgg2 called from rgen
+      l8(1)=jcmp*10000+50000800
+      l8(6)=1
+      call inp2(fa(filndx(1)),rdat,l8)
+      if (l8(6) .gt. 0) then
+         ngenm=l8(6)
+      endif
+      nkk=1
+      call rgen(powscm(mcp,nkk), nctcno(mcp), idat)
+c Mass fractions
+c Fission Products are assigned in ricnsl
+      call ricnsl(a(i8),a(i100),a(iptspd))
+c Surfaces with convective and radiative heat transfer identification
+      call rconst(jcmp)
+c here we set idf to 1 to imply old style blocks undefined
+      idf=1
+      call radset
+      idf=0
+c set idf back to 0 to imply old style blocks present
+c Remedial calling to establish defaults, new routines have values
+c stated as required in old couple input hardwired in.
+      call rtemps
+c here we set idf to 1 to imply old style blocks undefined
+      idf=1
+      call fluid
+      idf=0
+c set idf back to 0 to imply old style blocks present
+      call rploti
+      if(itx.eq.1) go to 200
+      call titl
+      write (output,150) mcp
+  150 format ('0  couple input appears to be complete for mesh', i4)
+c       Initialize Couple debris structure ave. and max. temps.
+c       Relap5 reactor kinetics may need tmpdav.
+      tmpdav(mcp) = tempin
+      tmpdmx(mcp) = tempin
+      twalav(mcp) = tempin
+      twalmx(mcp) = tempin
+      call icpl(a(i9),a(i8),a(i22),a(n101),a(n100),a(i102),
+     + a(i103),a(i74),a(i76),a(i78),a(i80),a(i82), a(i84), a(i86),
+     * a(i88), a(i111), a(iptspd), a(iptsmx), a(iptspl),
+     # a(idetop),a(iptfpv),a(iptgav),a(inussn),a(ipbfp),a(iptnbu),
+     # a(i107),a(iptkfz),a(iptmlt),a(iptalf),a(iptlif),a(iptcdf),
+     # a(iptsif),a(iptfml))
+      go to 900
+  200 write (output,230)
+  230 format ('0******** error in couple input processing, noted above')
+  300 fail = .true.
+      write (output,310) mcp
+  310 format ('    error above is in couple mesh', i4)
+  900 continue
+      lastal = last
+      icoup(mcp) = 1
+      if (nslph .eq.-1) icoup(mcp) = 2
+      mmcond = max(mmcond,mcond)
+c   Put Couple mesh mcp arrays iparm and parm back into storage.
+      call gpcoup (2)
+      write (output,400) mcp
+  400 format ('0 **** End of input processing for Couple mesh', i3)
+  500 continue
+      return
+      end
+*endif

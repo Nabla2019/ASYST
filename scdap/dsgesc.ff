@@ -1,0 +1,155 @@
+*mlist
+*if def,selap
+      subroutine dsgesc (meth, elco, tesco)
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: ljs.
+c
+       implicit none
+      integer meth
+      real elco(13,12), tesco(3,12)
+c
+c  ...1...  function / purpose  .......
+c       sets the coefficients for the core integrator.  these are
+c       set for all orders for the current method
+c  ...2...  arguments / parameters / constants  .......
+c     ..a..  input arguments  .....
+c          meth  i:1  - basic method indicator
+c               = 1, adams methods
+c               = 2, stiff methods of gear or
+c                    backward differentiation formulas (bdf)
+c     ..b..  output arguments  .....
+c          elco  r:13,12  - basic method coefficients for all orders
+c          tesco  r:3,12  - test constants used for the local error
+c              test and the selection of step size and/or order
+c     ..c..  internal / local variables  .....
+c
+      integer i, ib, nq, nqm1, nqp1
+      real agamq, fnq, fnqm1, one, pint, ragq, rqfac, rq1fac, tsign,
+     *   two, xpin, zero
+      real pc(12)
+c
+c     ..d..  external / subprogram references  .....
+c          intrinsic function - float
+       save
+c     ..e..  constants  .....
+c
+      data zero /0.0e0/, one /1.0e0/, two /2.0e0/
+c  ...3...  notes / remarks  .......
+c     ..a..  usage  .....
+c          (1) called once at the beginning of the problem, and is not
+c          called again unless and until meth is changed.  the maximum
+c          order assumed here is 12 if meth = 1 and 5 if meth = 2.
+c          (a smaller value of the maximum order is also allowed.)
+c          (2) at order nq, tesco(k,nq) is used for the selection of
+c          step size at order nq - 1 if k = 1, at order nq if k = 2,
+c          and at order nq + 1 if k = 3.
+c     ..b..  algorithm  .....
+c          the coefficients el(i), 1 .le. i .le. nq+1, for the method of
+c          order nq are stored in elco(i,nq).  they are given by a
+c          generating polynomial, i.e.,
+c             l(x) = el(1) + el(2)*x + ... + el(nq+1)*x**nq
+c          for the implicit adams methods, l(x) is given by
+c            dl/dx = (x+1)*(x+2)*...*(x+nq-1)/factorial(nq-1), l(-1) = 0
+c          for the bdf methods, l(x) is given by
+c            l(x) = (x+1)*(x+2)* ... *(x+nq)/k,
+c          where  k = factorial(nq)*(1 + 1/2 + ... + 1/nq).
+c     ..c..  portability  .....
+c     ..d..  references  .....
+c          see dsgedr
+c     ..e..  history  .....
+c          origin - cfode, a.c. hindmarsh, lsode, 3/6/80
+c          modified - header, structure - e.s. marwil, 4 may 81
+c
+      if (meth .eq. 2) go to 50
+      elco(1,1) = one
+      elco(2,1) = one
+      tesco(1,1) = zero
+      tesco(2,1) = two
+      tesco(1,2) = one
+      tesco(3,12) = zero
+      pc(1) = one
+      rqfac = one
+c ---
+c  1  compute the coefficients of  p(x) = (x+1)*(x+2)*...*(x+nq-1)
+c ---
+      do 40 nq = 2, 12
+         rq1fac = rqfac
+         rqfac = rqfac / float(nq)
+         nqm1 = nq - 1
+         fnqm1 = float(nqm1)
+         nqp1 = nq + 1
+c    ---
+c     a  form coefficients of  p(x) * (x+nq-1)
+c    ---
+         pc(nq) = zero
+         do 10 ib = 1, nqm1
+            i = nqp1 - ib
+            pc(i) = pc(i-1) + fnqm1 * pc(i)
+   10       continue
+         pc(1) = fnqm1 * pc(1)
+c    ---
+c     b  compute integral, -1 to 0, of p(x) and  x * p(x)
+c    ---
+         pint = pc(1)
+         xpin = pc(1) / two
+         tsign = one
+         do 20 i = 2, nq
+            tsign = -tsign
+            pint = pint + tsign * pc(i) / float(i)
+            xpin = xpin + tsign * pc(i) / float(i+1)
+   20       continue
+c    ---
+c     c  store coefficients in elco and tesco
+c    ---
+         elco(1,nq) = pint * rq1fac
+         elco(2,nq) = one
+         do 30 i = 2,nq
+            elco(i+1,nq) = rq1fac * pc(i) / float(i)
+   30       continue
+         agamq = rqfac * xpin
+         ragq = one / agamq
+         tesco(2,nq) = ragq
+         if (nq .lt. 12) tesco(1,nqp1) = ragq * rqfac / float(nqp1)
+         tesco(3,nqm1) = ragq
+   40    continue
+      go to 90
+c -------------
+   50 continue
+      pc(1) = one
+      rq1fac = one
+c ---
+c  2  compute the coefficients of  p(x) = (x+1)*(x+2)*...*(x+nq)
+c ---
+      do 80 nq = 1,5
+         fnq = float(nq)
+         nqp1 = nq + 1
+c    ---
+c     a  form coefficients of p(x)*(x+nq)
+c    ---
+         pc(nqp1) = zero
+         do 60 ib = 1, nq
+            i = nq + 2 - ib
+            pc(i) = pc(i-1) + fnq * pc(i)
+   60       continue
+         pc(1) = fnq*pc(1)
+c    ---
+c     b  store coefficients in elco and tesco
+c    ---
+         do 70 i = 1, nqp1
+            elco(i,nq) = pc(i) / pc(2)
+   70       continue
+         elco(2,nq) = one
+         tesco(1,nq) = rq1fac
+         tesco(2,nq) = float(nqp1) / elco(1,nq)
+         tesco(3,nq) = float(nq+2) / elco(1,nq)
+         rq1fac = rq1fac / fnq
+   80    continue
+      tesco(1,1) = zero
+      tesco(3,5) = zero
+c ---------------------
+   90 continue
+      return
+      end
+*endif

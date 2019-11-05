@@ -1,0 +1,289 @@
+*mlist
+*if def,selap
+      subroutine couinp
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: ewc.
+c
+c This is a COUPLE ROUTINE
+c
+      implicit none
+*call cpmdat
+*call alcm
+*call iparm
+*call iparmm
+*call iparmc
+*call parm
+*call parmm
+*call parmc
+*call scddat
+*call slumpv
+*call ufilef
+*call ufiles
+*call contrl
+*call coupl
+*call comctl
+c
+      character*4 ihead(3),isep(14)
+      data isep/'titl','auto','mate','step','func','init','gene',
+     1'conv','rads','temp','flui','plot','coup','end '/
+      external gpcoup, findbl, titl, aumesh, materl, step, funct, initl
+      external genset, conset, radset, tempst, fluid, icpl, icnosl
+      external ifprod
+c
+      integer i, ib, is, j, je, lastal, n, nsep
+      integer naf, nfp, nkk
+      real blank
+      character blnk*8
+      data blnk / ' ' /
+c
+      mmcond = 0
+      lastal = 1
+c
+      if (newrst) then
+        do 20 mcp=1,maxcpm
+   20   mcostr(mcp) = 0
+      else
+        do 50 mcp=1,maxcpm
+        if (mcostr(mcp) .gt. 0) then
+c
+c   Couple mesh mcp exists.
+c
+c       Get iparm and parm arrays for Couple mesh mcp.
+c
+          call gpcoup (1)
+c
+          if (icoup(mcp) .lt. 1) then
+c
+c       Couple mesh mcp is either going to be turned off, or be
+c       redefined with new input.  In the latter case, new space in
+c       array a for mesh mcp will be appended after the last word
+c       currently used.
+c       (Later, we may wish to insert coding here to delete
+c       unused space in array a for former mesh mcp.)
+c
+            mcostr(mcp) = 0
+            last = 0
+            mcond = 0
+          end if
+          mmcond = max (mmcond,mcond)
+          lastal = max (lastal,last)
+c
+c       Put Couple mesh mcp arrays iparm and parm back into storage.
+c
+          call gpcoup (2)
+c
+        end if
+   50   continue
+      end if
+c
+      do 500 mcp=1,maxcpm
+      if (icoup(mcp) .ne. -1) go to 500
+c
+      mcostr(mcp) = lastal
+c
+      do 30 i=1,npar1
+   30 parm(i) = 0.0
+      time = timehy
+c
+      do 40 i=1,nipar3
+   40 iparm(i) = 0
+      nnli = 10
+      maxe = 50
+c
+c       Check connected Scdap components, and fission prods. to track.
+      call ifprod
+c
+c  transfer nsptrk from slumpv common to iparm array
+      nspdeb = ntstrk(mcp)
+      nslph = nslphs(mcp)
+      if (nslph .eq.-1) then
+        height = hgtdeb(mcp)
+        dh = 0.0
+      end if
+      ncpow = ncpowi(mcp)
+      last = lastal
+c
+      je=0
+c     read scdap end comment card.
+      read (eoin,1000,end=999) ihead
+  100 if(idf.eq.1) go to 103
+      read (eoin,1000,end=999) ihead
+ 1000 format(3a4)
+  103 je=je+1
+      j=0
+      nsep = 14
+      do 101 i=1,nsep
+  101 if(ihead(1).eq.isep(i)) j=i
+      idf=0
+      if(j.ne.je) idf=1
+      if(j.eq.0) go to 102
+      go to(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15),je
+  102 call findbl
+      idf=0
+      go to 100
+    1 nline = 1
+      if (idf .eq. 0) then
+        read (eoin,1010) hed1, hed2
+ 1010   format (10a8)
+        call findbl
+      else
+        read (blnk,'(a8)') blank
+        do 75 ib=1,10
+        hed1(ib) = blank
+   75   hed2(ib) = blank
+      end if
+      go to 100
+    2 call aumesh
+      go to 100
+    3 call materl
+      go to 100
+    4 call step
+      go to 100
+    5 call funct
+      go to 100
+    6 call initl
+      go to 100
+    7 if (idf .eq. 0) then
+        nkk = 1
+        call genset (powscm(mcp,nkk), nctcno(mcp), naf, nfp)
+      else
+        write (output,117)
+  117   format ('0******** Couple GENERATION input is required.')
+        fail = .true.
+      end if
+      if (nslph .eq.-1) then
+        call icnosl (a(i8), a(i100), a(iptspd), naf, nfp)
+        if (naf .gt. 0 .or. nfp .gt. 0) call findbl
+      else
+        call findbl
+      end if
+      go to 100
+    8 call conset
+      go to 100
+    9 call radset
+      go to 100
+   10 call tempst
+      go to 100
+   11 call fluid
+      go to 100
+   12 call ploti
+      go to 100
+   13 continue
+      call findbl
+      go to 100
+   14 continue
+      if(itx.eq.1) go to 200
+      call titl
+      write (output,150) mcp
+  150 format ('0  couple input appears to be complete for mesh', i4)
+c
+c
+c       Initialize Couple debris structure ave. and max. temps.
+c       Relap5 reactor kinetics may need tmpdav.
+      tmpdav(mcp) = tempin
+      tmpdmx(mcp) = tempin
+      twalav(mcp) = tempin
+      twalmx(mcp) = tempin
+c
+      call icpl(a(i9),a(i8),a(i22),a(n101),a(n100),a(i102),
+     + a(i103),a(i74),a(i76),a(i78),a(i80),a(i82), a(i84), a(i86),
+     * a(i88), a(i111), a(iptspd), a(iptsmx), a(iptspl),
+     # a(idetop),a(iptfpv),a(iptgav),a(inussn),a(ipbfp),a(iptnbu),
+     # a(i107),a(iptkfz),a(iptmlt),a(iptalf),a(iptlif),a(iptcdf),
+     # a(iptsif),a(iptfml))
+c    zero out natural convection htcs
+      do185n=1,numel
+      a(i113+n-1)=0.0
+185   continue
+      go to 900
+c
+  200 write (output,230)
+  230 format ('0******** error in couple input processing, noted above')
+      go to 300
+  999 write (output,240)
+  240 format ('0******** couple input absent or incomplete.')
+      go to 300
+   15 write (output,250)
+  250 format ('0******** "end " card not found in couple input.')
+  300 fail = .true.
+      write (output,310) mcp
+  310 format ('    error above is in couple mesh', i4)
+c
+  900 continue
+c
+      lastal = last
+      icoup(mcp) = 1
+      if (nslph .eq.-1) icoup(mcp) = 2
+      mmcond = max(mmcond,mcond)
+c
+c   Put Couple mesh mcp arrays iparm and parm back into storage.
+c
+      call gpcoup (2)
+c
+      write (output,400) mcp
+  400 format ('0 **** End of input processing for Couple mesh', i3)
+c
+  500 continue
+c
+      if (nmcpwr .gt. 0) then
+        mcp = nmcpwr
+        call gpcoup (1)
+        is = 0
+        open (unit=coupfl,file=filsch(10),status='new',
+     1        form='unformatted',access='direct',recl=8,iostat=is)
+        if (is .ne. 0) then
+          write (tty,610) is, trim(filsch(10))
+  610     format ('Open error number',i8,' on file ',a,' perhaps file',
+     *            'already exists.')
+          stop 'couple-1'
+        end if
+c
+c         Write number of nodes, elements, and time steps.
+        nrecno = 1
+        write (coupfl,rec=nrecno,err=620) numnp
+        nrecno = nrecno + 1
+        write (coupfl,rec=nrecno,err=620) numel
+        nrecno = nrecno + 1
+        n = 0
+        write (coupfl,rec=nrecno,err=620) n
+        nrecno = nrecno + 1
+        go to 650
+c
+  620   write (tty,630) trim(filsch(10))
+  630   format (' Error writing to file ',a)
+        stop  'couple-2'
+  650   continue
+c
+c         Write node coordinates to Couple output file.
+        do 710 n = 1, nmax
+       if (iafp(n7+n-1) .eq. 1) then
+        write (coupfl,rec=nrecno,err=720) a(n5+n-1)
+        nrecno = nrecno + 1
+        write (coupfl,rec=nrecno,err=720) a(n6+n-1)
+        nrecno = nrecno + 1
+       end if
+  710   continue
+        go to 750
+  720   write (tty,730) trim(filsch(10))
+  730   format (' Error writing node coords. to file ',a)
+        stop  'couple-3'
+  750   continue
+c
+c         Write element node numbers to Couple output file.
+        do 810 n = 1, numel
+        do 808 i = 1, 4
+        write (coupfl,rec=nrecno,err=820)  iafp(i8+5*(n-1)+i-1)
+        nrecno = nrecno + 1
+  808   continue
+  810   continue
+        go to 850
+  820   write (tty,830) trim(filsch(10))
+  830   format (' Error writing element node nos. to file ',a)
+        stop  'couple-4'
+  850   continue
+      end if
+      return
+      end
+*endif

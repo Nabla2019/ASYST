@@ -1,0 +1,488 @@
+*mlist
+       subroutine qfmove
+c
+c  Driving subroutine for the reflood calculation.
+c    1.   test the condition for the beginning of reflood
+c    2.   set up the initial axial nodes
+c    3.   call qfsrch to find heat transfer patterns
+c    4.   perform fine mesh rezoning
+c    5.   call qfhtrc to find heat transfer coefficients
+c    6.   call ht2tdp to advance temperatures.
+c
+c  Cognizant engineer: rjw (hxc).
+c
+c***********************************************************************
+c    onrefl: Flag when reflooding is activated.
+c***********************************************************************
+       use lpdatc
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'flood.h'
+       include 'htrflb.h'
+       include 'htscr1.h'
+       include 'htscr2.h'
+       include 'htsrcm.h'
+       include 'rflhtc.h'
+       include 'statec.h'
+       include 'tmsrcm.h'
+       include 'trpblk.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'scrtch.h'
+c
+c  Local variables.
+       integer hindex,i,i71,i72,i73,i74,idx,ih,inde,inds,indy,indz,int1,
+     & int2,int3,inscr3,ipn,iqfhb,iqfhe,iztchf,j,k3,knum,jo,l,ll,
+     & lnds,lrflz,lx,m,mesho4,nmy
+       real dlovr2,dlovr4,gterm,scrach,sumz,term,
+     & term1,tchf,tfref,tfmin,vdfref,zchf,zfact
+       equivalence (s(1),knum),(s(4),inscr3),(s(7),k3),(s(8),tfref),
+     & (s(9),vdfref),(s(11),gterm)
+       equivalence (prop(1),int1),(prop(2),int2),(prop(3),int3)
+crex   equivalence (prop(4),hcchf),(prop(5),tchf),(prop(6),tqf),
+crex * (prop(7),tibn),(prop(8),qchf),(prop(9),zchf)
+       external ftbmov,ht2tdp,htrc2,qfhtrc,qfsrch
+c
+       ih = filndx(32)
+       do 10 ipn = 1,nrflht(ih)
+crex     call ftbmov (zbunht(ih),prop(4),6)
+         lx = lhtrfl(ih) + filndx(8)
+         jo = ihtptr(lx) + filndx(8)
+         iqfhb = lx
+         iqfhe = lx + htnusr(jo) - 1
+         idrfl = iand(ishft(htopt(jo),-9),1)
+crex-begin
+         inscr1 = htiscr(jo) + ixpc
+         inscr2 = inscr1 + max(iglrfl(ih),htnmpt(jo))*(nscra1 + 1) +
+     &   htnusr(jo) + 1
+crex-end
+         lrflz=iglrfl(ih)*htnmpt(jo)
+         inxtmn=inxrfl(ih+2)+lrflz
+c  bit 11 (2048) is left boundary conduction type
+         if (iand(htopt(jo),2048) .ne. 0) go to 300
+         if (succes .ne. 0) go to 999
+         if (htrflg(jo) .gt. 2) go to 130
+         sumz=0.0
+         dlovr2=0.0
+         dlovr4=0.0
+         i = lx
+         do 104 m = 1,htnusr(jo)
+           hindex = ihtptr(i) + filndx(8)
+           idx = htbvo(hindex+idrfl)
+           dlovr2=dlovr2+1.0
+           sumz=sumz+voidg(idx)
+           dlovr4=dlovr4+p(idx)
+           i = i + 1
+  104    continue
+         tchf = tsatt(idx) + 40.
+         twchf = tchf
+         sumz=sumz/dlovr2
+         dlovr4=dlovr4/dlovr2
+           if (dlovr4 .ge. 1.2e6) go to 999
+           if ((htrflg(jo).ne.1 .and. sumz.gt.0.1) .or.
+     &     (htrflg(jo).eq.1 .and. sumz.gt.0.9)) go to 148
+           go to 999
+  130    if (trptm(htrflg(jo+1)) .lt. 0.0) go to 999
+  148    htopt(jo) = ior(htopt(jo),2048)
+         do 134 j=4,9
+           prop(j)=0.0
+  134    continue
+c
+c  Set up the initial 2-d grids.
+         i = inxrfl(ih)
+         do 149 m = 1,htnusr(jo)
+           nmzht(i) = 2
+           i = i + 1
+  149    continue
+         meshy = 2*htnusr(jo) + 1
+         mesh4=meshy*nscra2
+         indz=inscr1
+         int3=inscr2
+         tfmin = 1000.
+         i = lx
+         do 160 m = 1,htnusr(jo)
+           hindex = ihtptr(i) + filndx(8)
+           htopt(hindex) = ior(htopt(hindex),1)
+           idx = htbvo(hindex+idrfl)
+           tfmin = min(tfmin,tempf(idx))
+           imap(idx) = ior(imap(idx),ishft(1,29))
+           int1 = htxft(hindex) + filndx(8)
+           dlovr4=dl(idx)*0.25
+           do 150 l=1,2
+             htdz(indz)=dlovr4
+             indz=indz+nscra1
+  150      continue
+           int3=int3+nscra2
+           int2=int3
+           do 154 l = 1,htnmpt(jo)
+             aijt(int2)=httmp(int1)
+             int1=int1+1
+             int2=int2+mesh4
+  154      continue
+           int3=int3+nscra2
+           i = i + 1
+  160    continue
+         tchf = tsatt(idx) + 40.
+         twchf = tchf
+         nmy=meshy-3
+         if(nmy.gt.1) go to 172
+         int1=inscr2+nscra2
+cdir$ ivdep
+         do 168 i = 1,htnmpt(jo)
+           aijt(int1+nscra2)=aijt(int1)
+           aijt(int1-nscra2)=aijt(int1)
+           int1=int1+mesh4
+  168    continue
+         go to 188
+  172    inde=nscra1+nscra1
+         indy=nscra2+nscra2
+         int1=inscr2+indy
+         indz=inscr1+nscra1
+         do 180 i=2,nmy,2
+           int3=int1
+           term=htdz(indz)/(htdz(indz)+htdz(indz+nscra1))
+           do 176 m = 1,htnmpt(jo)
+             dlovr2=aijt(int3-nscra2)
+             aijt(int3)=dlovr2+term*(aijt(int3+nscra2)-dlovr2)
+             int3=int3+mesh4
+  176      continue
+           int1=int1+indy
+           indz=indz+inde
+  180    continue
+         int2=inscr2
+         do 184 i = 1,htnmpt(jo)
+           aijt(int1)=aijt(int1-nscra2)*2.0-aijt(int1-indy)
+c  Do not let the wall temps be less than the coldest liquid.
+c  This is correct for rods but may need additional attention
+c  for core barrels.
+           aijt(int1) = max(aijt(int1),tfmin)
+           aijt(int2)=aijt(int2+nscra2)*2.0-aijt(int2+indy)
+           aijt(int2) = max(aijt(int2),tfmin)
+           int1=int1+mesh4
+           int2=int2+mesh4
+  184    continue
+  188    knum=2
+         iglrfl(ih+1)=meshy
+         if (help .ne. 0) then
+           if( iand(ihlppr(1),ishft(1,26)).ne.0 ) then
+       write (output,7777) inscr1,mmeshz,inscr2,meshy,inxtmn,mesh4,
+     & indtol,idrfl,inxlsr,nqfmov
+ 7777  format ('    inscr1    mmeshz    inscr2     meshy    inxtmn     m
+     &esh4     idtol     idrfl   ixlsr-1   ixlsr-2'/10i10/'    nqfmov'/
+     & i10)
+          i71 = inxrfl(ih)
+          i72 = i71 + htnusr(jo) - 1
+          write (output,7773) (nmzht(i73),i73=i71,i72)
+ 7773     format (' nmzht'/(10i10))
+          write (output,7772) meshy
+ 7772     format (' aijt    meshy=',i5)
+          i71 = inscr2
+          do 7601 i73 = 1,meshy
+            i72 = i71 + htnmpt(jo)*mesh4 - 1
+            write (output,7771) i73,(aijt(i74),i74=i71,i72,mesh4)
+ 7771     format (i5,1p,5g18.7/(5x,5g18.7))
+            i71 = i71 + nscra2
+ 7601     continue
+         endif
+       endif
+       go to 368
+c
+c  Reflood calculation is on.
+  300 if(succes.eq.0) go to 350
+c
+c  Unsuccessful advancement;use old axial nodes.
+      meshy=iglrfl(ih+1)
+      mesh4=meshy*nscra2
+             indtol = inscr2 + mesh4*htnmpt(jo) - nscra2
+      inxlsr(1)=inscr2
+      inxlsr(2)=indtol+nscra2-mesh4
+      nqfmov=(meshy-1)*nscra1
+             inde = meshy*htnmpt(jo)
+       int2 = inxrfl(ih+2)
+       idx = inscr2
+       do 304 i = 1,inde
+         tmpscr(idx) = tmprfo(int2)
+         int2 = int2 + 1
+         idx = idx + nscra2
+  304  continue
+       call ftbmov (htdzlm(inxrfl(ih+1)),htdz(inscr1),nqfmov)
+       inscr3 = inscr1 + max(iglrfl(ih),htnmpt(jo))*nscra1 + 1
+$if -def,in32,1
+       call ftbmov (nmzht(inxrfl(ih)),ia(inscr3),htnusr(jo))
+$if def,in32,1
+       call ftbmov (nmzht[inxrfl(ih)),ia[inscr3),htnusr(jo))
+      go to 504
+c
+c  Successful advancement.
+  350    knum = htnaxl(jo)
+c
+c  Move 2-d final temperatures and store them in aijt.
+         inde = iglrfl(ih+1)*htnmpt(jo)
+       int2 = inxtmn
+       idx = inscr2
+       do 364 i = 1,inde
+         aijt(idx) = tmprfn(int2)
+         int2 = int2 + 1
+         idx = idx + nscra2
+  364  continue
+c
+c  Save the new 1-d average temperatures.
+  368    i = lx
+         do 374 m = 1,htnusr(jo)
+         hindex = ihtptr(i) + filndx(8)
+         int2 = htxft(hindex) + filndx(8)
+         int1 = htxit(hindex) + filndx(8)
+c  Move final temperatures to initial temperatures if last advancement
+c  is to be saved.
+           call ftbmov (fa(int2),fa(int1),htnmpt(jo))
+      htpowo(hindex) = htpown(hindex)
+      htrnso(hindex) = htrnro(hindex)
+      htrnsn(hindex) = htrnrn(hindex)
+      htrgoo(hindex)=htrgno(hindex)
+      htrgon(hindex)=htrgnn(hindex)
+         i = i + 1
+  374 continue
+c
+c  Preparation for calling qfsrch to find heat transfer patterns
+c  and determine axial nodalization.
+c
+         nqfmov = max(iglrfl(ih),htnmpt(jo))*nscra1 + 1
+      inscr3=inscr1+nqfmov
+$if -def,in32,1
+         call ftbmov (nmzht(inxrfl(ih)),ia(inscr1),htnusr(jo))
+$if def,in32,1
+         call ftbmov (nmzht[inxrfl(ih)),ia[inscr1),htnusr(jo))
+      mesho4=iglrfl(ih+1)*nscra2
+         indy = inscr1 + htnusr(jo)
+      indz=indy-1
+      do 380 i = inscr1,indz
+  380 ia(i+nqfmov)=0
+      indz=indz+iglrfl(ih+1)
+      inds=inscr2
+         if (idrfl .eq. 1) inds = inscr2 + mesho4*(htnmpt(jo) - 1)
+      do 396 i = indy,indz
+      fa(i)=aijt(inds)
+  392 inds=inds+nscra2
+  396 continue
+       if (help .ne. 0) then
+       if( iand(ihlppr(1),ishft(1,26)).ne.0 ) then
+       write (output,7770) meshy,iglrfl(ih+1),nqfmov,inscr3
+ 7770  format (5x,'meshy',4x,'meshyo',4x,'nqfmov',4x,'inscr3'/4i10)
+         i71 = inscr1
+         i72 = i71 + htnusr(jo) - 1
+       write (output,7769) (nmzht(i73),i73=i71,i72)
+ 7769  format (' nmzht'/(10i10))
+         i71 = inscr3
+         i72 = i71 + htnusr(jo) - 1
+       write (output,7768) (nmzht(i73),i73=i71,i72)
+ 7768  format (' nmzht-2'/(10i10))
+         i71 = inscr1 + htnusr(jo)
+         i72 = i71 + iglrfl(ih+1) - 1
+       write (output,7767) (fa(i73),i73=i71,i72)
+ 7767  format (' surface temperatures',1p/(5g18.7))
+       endif
+       endif
+       wetbot = zqbot(ih)
+c
+       call qfsrch (ih,jo)
+c
+       if (help .ne. 0) then
+       if( iand(ihlppr(1),ishft(1,26)).ne.0 ) then
+       write (output,7770) meshy,iglrfl(ih+1),nqfmov,inscr3
+         i71 = inscr1
+         i72 = i71 + htnusr(jo) - 1
+       write (output,7769) (nmzht(i73),i73=i71,i72)
+         i71 = inscr3
+         i72 = i71 + htnusr(jo) - 1
+       write (output,7768) (nmzht(i73),i73=i71,i72)
+         i71 = inscr1 + htnusr(jo)
+         i72 = i71 + iglrfl(ih+1) - 1
+       write (output,7767) (fa(i73),i73=i71,i72)
+       endif
+       endif
+c  Get 2-d temperature distribution after rezoning.
+      mesh4=meshy*nscra2
+      indy=inscr2
+      indz=inscr2
+      inds=nscra2+nscra2
+      inde=inscr1
+         do 452 m = 1,htnusr(jo)
+      knum=ia(inde+nqfmov)
+      if(knum-ia(inde)) 420,408,432
+c  Number of axial intervals for this heat structure is unchanged.
+  408 do 416 j=1,knum
+        int2=indz
+        int1=indy
+      do 412 ll = 1,htnmpt(jo)
+        tmpscr(int2)=aijt(int1)
+        int1=int1+mesho4
+        int2=int2+mesh4
+  412 continue
+        indz=indz+nscra2
+        indy=indy+nscra2
+  416 continue
+      go to 448
+c
+c  Number of axial intervals for this heat structure is halved.
+  420 do 428 j=1,knum
+        int1=indy
+        int2=indz
+      do 424 ll = 1,htnmpt(jo)
+        tmpscr(int2)=aijt(int1)
+        int1=int1+mesho4
+        int2=int2+mesh4
+  424 continue
+        indz=indz+nscra2
+        indy=indy+inds
+  428 continue
+      go to 448
+c
+c  Number of axial intervals for this heat structure is doubled.
+  432 do 444 j=2,knum,2
+        int1=indy
+        int2=indz
+      do 436 ll = 1,htnmpt(jo)
+        tmpscr(int2)=aijt(int1)
+        int1=int1+mesho4
+        int2=int2+mesh4
+  436 continue
+        indz=indz+nscra2
+        int1=indy
+        int2=indz
+         do 440 ll = 1,htnmpt(jo)
+        tmpscr(int2)=(aijt(int1)+aijt(int1+nscra2))*0.5
+        int1=int1+mesho4
+        int2=int2+mesh4
+  440 continue
+        indz=indz+nscra2
+        indy=indy+nscra2
+  444 continue
+  448 inde=inde+1
+  452 continue
+c  Top row temperatures.
+      int1=indy
+      int2=indz
+      do 456 ll = 1,htnmpt(jo)
+        tmpscr(int2)=aijt(int1)
+        int1=int1+mesho4
+        int2=int2+mesh4
+  456 continue
+c  Store axial nodalization information.
+$if -def,in32,1
+      call ftbmov (ia(inscr3),nmzht(inxrfl(ih)),htnusr(jo))
+$if def,in32,1
+      call ftbmov (ia[inscr3),nmzht[inxrfl(ih)),htnusr(jo))
+c
+c  Move the new 2-d temperatures and store them in tmprfo.
+  458    inde = meshy*htnmpt(jo)
+       int2 = inxrfl(ih+2)
+       idx = inscr2
+       do 464 i = 1,inde
+         tmprfo(int2) = tmpscr(idx)
+         int2 = int2 + 1
+         idx = idx + nscra2
+  464  continue
+c
+       if (help .ne. 0) then
+       if( iand(ihlppr(1),ishft(1,26)).ne.0 ) then
+         i71 = inxrfl(ih+2)
+       do 7602 i73 = 1,meshy
+         i72 = i71 + htnmpt(jo)*meshy - 1
+         write (output,7771) i73,(tmprfo(i74),i74=i71,i72,meshy)
+         i71 = i71 + 1
+ 7602  continue
+       endif
+       endif
+c
+c  Zero-out the scratch storage 1.
+      nqfmov=(meshy-1)*nscra1
+      indz=nqfmov+inscr1-1
+      do 466 i=inscr1,indz
+  466 htdz(i)=0.0
+c
+c  Get axial interval parameters.
+         indtol = inscr2 + mesh4*htnmpt(jo) - nscra2
+      inxlsr(1)=inscr2
+      inxlsr(2)=indtol+nscra2-mesh4
+      inds=inxlsr(1+idrfl)
+      iztchf=0
+       inde = inxrfl(ih)
+      indz=inscr1
+       i = lx
+         do 472 m = 1,htnusr(jo)
+         knum = nmzht(inde)
+         hindex = ihtptr(i) + filndx(8)
+         idx = htbvo(hindex+idrfl)
+      if(htchfo(hindex+idrfl).le.0.0) go to 488
+      iztchf=int3
+      lnds=inds
+      zfact=0.0
+      if(k3.gt.0) go to 483
+      do 480 j=1,knum
+      if(tchf.ge.tmpscr(lnds)) go to 488
+      zfact=1.0
+      iztchf=iztchf+1
+      lnds=lnds+nscra2
+  480 continue
+      go to 486
+  483 do 484 j=1,knum
+      if(tchf.le.tmpscr(lnds)) go to 488
+      zfact=1.0
+      iztchf=iztchf+1
+      lnds=lnds+nscra2
+  484 continue
+  486 iztchf=iztchf-1
+      zfact=0.0
+      lnds=lnds-nscra2
+  488 term1=dl(idx)
+      term=1.0/term1
+      dlovr2=term1/float(knum)
+      dlovr4=dlovr2*0.5
+      term1=0.5/dlovr2
+      do 468 j=1,knum
+           indzhs(indz) = hindex
+           indzhs(indz+1) = idx
+           indzhs(indz+2)= i
+      htdz(indz)=dlovr4
+      htbc2(indz)=dlovr2*term
+      htbd2(indz)=term1
+      indz=indz+nscra1
+      inds=inds+nscra2
+  468 continue
+      inde=inde+1
+         i = i + 1
+  472 continue
+c
+      if(iztchf.le.0) go to 474
+      zchf = fa(iztchf)
+      if(zfact.eq.0.0) go to 474
+      scrach = tmpscr(lnds+nscra2)-tmpscr(lnds)
+           if (scrach .eq. 0.0) write (output,1200) timehy
+ 1200 format(1x/1x,'**** about to divide by zero in qfmove ***'/)
+       zchf = zchf + zfact*(fa(iztchf+1)-fa(iztchf))*
+     & (tchf-tmpscr(lnds))/scrach
+  474 continue
+       iglrfl(ih+1) = meshy
+crex   call ftbmov (prop(4),zbunht(ih),6)
+       inds = htbntr(hindex+1-idrfl)
+       zbun = zbunht(ih)
+       wettop = zbun - zqtop(ih)
+       if (inds .ne. 0) call htrc2 (ih,jo,inds,timeht,dtht)
+c
+       onrefl = 1
+       call qfhtrc (ih,jo)
+c
+       zqbot(ih) = wetbot
+       zqtop(ih) = zbun - wettop
+       fines(ih) = float(meshy)
+       tchfqf(ih) = twchf
+       trewet(ih) = twqf
+c
+       call ftbmov (htdz(inscr1),htdzlm(inxrfl(ih+1)),nqfmov)
+  504  call ht2tdp (ih,jo,timeht,dtht)
+  999    ih = ih + nhtga
+   10  continue
+      return
+      end

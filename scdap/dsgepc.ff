@@ -1,0 +1,258 @@
+*mlist
+*if def,selap
+      subroutine dsgepc (yh, ldyh, n, ewt, error, y, savf, pw, ipiv,
+     *                   fcn, jac, t, h, el, rc, bnd, iparm, job, info)
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: ljs.
+c
+       implicit none
+c
+       external lsgefa,lsgesl,insect,triv
+      external fcn, jac
+      integer ipiv(1), ldyh, n, iparm(3), job(2), info
+      real yh(ldyh,2), ewt(1), error(1), y(1), savf(1), pw(ldyh,1),
+     *     t, h, el, rc, bnd
+       integer ii,ii1,ii2
+       real eps,rdelta
+c
+c  ...1...  function / purpose  .......
+c       performs the corrector iteration
+c  ...2...  arguments / parameters / constants  .......
+c     ..a..  input arguments  .....
+c          yh  r:ldyh,2  - nordseick history array
+c          ldyh  i:1  - leading dimension of yh
+c          n  i:1  - number of first order odes
+c          ewt  r:n  - weighting vector used for error control
+c              in the weighted root-mean-square norm
+c          error  r:n  - estimate of one step errors
+c          y, savf  r:n  - work vectors
+c          pw  r:n,n  - partial derivative matrix or approximation
+c          ipiv  i:n  - pivot vector (used only if mitr = 1 or 2)
+c          fcn  e  - user supplied subroutine defining the differential
+c              equation
+c          jac  e  - user supplied subroutine calculating the jacobian
+c              matrix of partial derivatives
+c          t  r:1  - independent variable
+c          h  r:1  - current step size
+c          el  r:1  - leading coefficient for the current order
+c          rc  r:1  - ratio of new to old values of the coefficient h*el
+c          bnd  r:1  - corrector convergence test value
+c          job  i:2  - job path parameters
+c              (1)/jstr - start / restart indicator
+c              (2)/mitr - method of iteration indicator
+c     ..b..  output arguments  .....
+c          iparm  i:3  - integer parameters
+c               (1)/nst - number of steps taken so far
+c               (2)/nfe - number of fcn evaluations
+c               (3)/nje - number of jac evaluations
+c          info  i:1  - error condition / message code
+c                 << type 3 - terminal >>
+c              =31, corrector convergence could not be achieved
+c     ..c..  internal / local variables  .....
+      integer i, j, m, mio, mitr, newj, nfe, nst, nstj
+      real crate, d, delta, d1, epsfcn, hl, phl, r,
+     *   temp, uround
+c     ..d..  external / subprogram references  .....
+      real usmach, vswrms
+       external usmach, vswrms
+c          minerva real functions - usmach, vswrms
+c          minerva subroutines - lsgefa, lsgesl
+c          fortran library - sqrt
+c          intrinsic functions - abs, max, min
+       save
+c     ..e..  constants  .....
+c  ...3...  notes / remarks  .......
+c     ..a..  usage  .....
+c     ..b..  algorithm  .....
+c     ..c..  portability  .....
+c     ..d..  references  .....
+c          see dsgedr
+c     ..e..  history  .....
+c          origin - stiff, pset - a.c. hindmarsh, gear, 12/20/74
+c                 - stode, prepj, solsy - a.c. hindmarsh, lsode, 3/6/80
+c          modified - header, structure - e.s. marwil, 4 may 81
+c
+      mitr = job(2)
+      nst = iparm(1)
+      nfe = iparm(2)
+      if (job(1) .ne. 1) go to 10
+         uround = usmach(5)
+         crate = 0.7
+         nstj = 0
+         mio = 0
+   10 continue
+c ---
+c  1  check for change of method of iteration
+c ---
+      if (mitr .eq. mio) go to 20
+         mio = mitr
+         newj = 1
+   20 continue
+      if (nst .ge. nstj + 20) newj = 1
+      if (abs (rc - 1.0) .gt. 0.3) newj = 1
+c ------------
+   30 continue
+      m = 1
+      info = 0
+      d1 = 0.0
+       do 31 ii = 1,n
+         error(ii) = 0.0
+   31  continue
+       do 32 ii = 1,n
+         y(ii) = yh(ii,1)
+   32  continue
+c
+   40 continue
+      call fcn (savf, n, y, t)
+      nfe = nfe + 1
+      if (mitr .eq. 4) go to 160
+c ---                  ---------
+c  2  chord methods
+c ---
+      if (newj .le. 0) go to 140
+c    ---               ---------
+c     a  reevaluate jacobian
+c    ---
+         newj = 0
+         rc = 1.0
+         crate = 0.7
+         nstj = nst
+         hl = h*el
+         iparm(3) = iparm(3) + 1
+         if (mitr .eq. 3) go to 110
+         if (mitr .eq. 2) go to 50
+c       ---
+c       (1) analytic jacobian
+c       ---
+            call jac (pw, ldyh, n, yh, t)
+            go to 90
+c           --------
+   50    continue
+c       ---
+c       (2) finite difference jacobian
+c       ---
+            epsfcn = abs(h)*1.0e3*uround
+            eps    = sqrt(max(epsfcn,uround))
+            do 80 j = 1, n
+               temp = yh(j,1)
+               delta  = eps*abs(temp)
+               if (delta .eq. 0.0) delta = eps
+               yh(j,1) = temp + delta
+               call fcn (y, n, yh, t)
+               yh(j,1) = temp
+               rdelta = 1.0/delta
+               do 81 ii = 1,n
+                 pw(ii,j) = (y(ii) - savf(ii))*rdelta
+   81          continue
+   80          continue
+            nfe = nfe + n
+c
+   90       continue
+            ii2 = ldyh*n
+            do 91 ii = 1,ii2
+              pw(ii,1) = -hl*pw(ii,1)
+   91       continue
+            ii1 = ldyh + 1
+            ii2 = 1
+            do 92 ii = 1,n
+              pw(ii2,1) = pw(ii2,1) + 1.0
+              ii2 = ii2 + ii1
+   92       continue
+            call lsgefa (pw, ldyh, n, ipiv, info)
+            if (info .ne. 0) go to 200
+c                            ---------
+            go to 160
+c           ---------
+  110    continue
+c       ---
+c       (3) diagonal jacobian approximation
+c       ---
+            r = 0.1*el
+            do 120 i = 1, n
+               y(i) = y(i) + r*(h*savf(i) - yh(i,2))
+  120          continue
+            call fcn (pw, n, y, t)
+            nfe = nfe + 1
+            do 130 i = 1, n
+               r = h*savf(i) - yh(i,2)
+               d = 0.1*r - h*(pw(i,1) - savf(i))
+               pw(i,1) = 1.0
+               if (abs(r) .lt. uround*ewt(i)) go to 130
+               if (d .eq. 0.0) go to 200
+c                               ---------
+               pw(i,1) = 0.1*r/d
+               y(i) = pw(i,1)*r
+  130          continue
+            go to 180
+c           ---------
+  140 continue
+      if (mitr .ne. 3) go to 160
+c    ---               ---------
+c     b  update diagonal jacobian approximation
+c    ---
+         phl = hl
+         hl = h*el
+         if (hl .eq. phl) go to 160
+            r = hl/phl
+            do 150 i = 1, n
+               d = 1.0 - r*(1.0 - 1.0/pw(i,1))
+               if (d .eq. 0.0) go to 210
+c                               ---------
+               pw(i,1) = 1.0/d
+  150          continue
+c
+  160 continue
+c ---
+c  3  set up and solve linear system
+c ---
+      do 170 i = 1, n
+         y(i) = h*savf(i) - (yh(i,2) + error(i))
+  170    continue
+       if (mitr .eq. 3) then
+         do 171 ii = 1,n
+           y(ii) = pw(ii,1)*y(ii)
+  171    continue
+       endif
+      if (mitr .eq. 1 .or. mitr .eq. 2)
+     *   call lsgesl (pw, ldyh, n, ipiv, y, 0)
+c
+  180 continue
+c ---
+c  4  update
+c ---
+       do 181 ii = 1,n
+         error(ii) = error(ii) + y(ii)
+  181  continue
+      d  = vswrms (n, y, 1, ewt, 1)
+       do 183 ii = 1,n
+         y(ii) = yh(ii,1) + el*error(ii)
+  183  continue
+c ---
+c  5  test for convergence
+c ---
+      if (m .ne. 1) crate = max (0.2e0*crate, d/d1)
+      if (d*min(1.0, 1.5*crate) .le. bnd) go to 220
+c                                                ---------
+      if (m .eq. 4) go to 200
+      if (crate .ge. 1.0) go to 200
+         m = m + 1
+         d1 = d
+         go to 40
+c        ========
+  200 continue
+      if (newj .eq. -1) go to 210
+         info = 31
+         go to 220
+c        ---------
+  210 continue
+         newj = 1
+         go to 30
+c -------========
+  220 continue
+      if (info .eq. 0 .and. mitr .ne. 4) newj = -1
+      iparm(2) = nfe
+      return
+      end
+*endif

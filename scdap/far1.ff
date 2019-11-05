@@ -1,0 +1,307 @@
+*mlist
+*if def,selap
+       subroutine far1 (gmix,ftemp,strnl,strnr,strna,strnc
+     & ,rad    ,twall  ,ctemp  ,delz   ,fcp    ,frp    ,fap
+     & ,acd   ,aad   ,ard   ,fnck  ,fncn  ,cwkf  ,cwnf  ,dz0 )
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: ljs.
+c
+       implicit none
+*call scddat
+c     far1 and balon2 extended memory declaration
+       real gmix,ctemp,strnl,strnr,strna,strnc,rad,twall,ftemp,delz,fcp,
+     * frp,fap,acd,aad,ard,fnck,fncn,cwkf,cwnf,dz0
+      dimension         gmix(*)
+       dimension
+     #   ctemp(9,9)  ,strnl(9,9)  ,strnr(9,9)  ,strna(9,9)
+     #  ,strnc(9,9)  ,rad(9,9)    ,twall(9,9)  ,ftemp(9,9)
+     #  ,delz(9,9)   ,fcp(9,9)    ,frp(9,9)    ,fap(9,9)
+     #  ,acd(9,9)    ,aad(9,9)    ,ard(9,9)
+c
+c  Local variables.
+       integer i,i1,ibal,ilop,j,k,nj,nk,nodes
+       real a,b,balx,bl,bmac,c,delt,denom,dtax,dtth,dtthf,dtthp,dum,
+     * ecntct,fotmtl,fraden,fru,frumax,frumid,frusd,fuelk,g,g1,g2,
+     * g3,gaph,gave,p1,p2,pmaxt,sdfru,sdpb,sigt,slope,tcesd,tcmid,
+     * ti,tim1,timdb,tip1,tj,tmax,tmid,tmin,z,z1,z2,zbal0,zl,zmin
+       real erf,gthcon
+       external gthcon
+$if def,erf,1
+       external erf
+       external balon2,fthcon
+c
+c    this subroutine calculates flow area reduction resulting from clad
+c    ballooning calculated in balon2
+c
+c    far1 is called by driveb and calls balon2,fthcon and gthcon
+c
+c    programed by e r carlson august 81
+c     modified by j. e. tolli  august 1983
+*call bln2wk
+c
+c    gmix : gap gas components
+c    ftemp -  : balon2 working arrays
+c     (see balon2 comments for description of these variables)
+c
+*call blonab
+*call cons
+*call ufiles
+c
+c
+      dimension    balx(20)  ,bl(2)    ,fru(2)   ,sigt(20)  ,tj(20)
+c
+       data  nj/9/, nk/9/
+      data timdb/0.0/
+c     timdb = time when debug print begins
+c
+c         quadratic coefficients for temperature profile (cramer's rule)
+      denom = ztmax*zm1bal**2 + zm1bal*zp1bal**2 + zp1bal*ztmax**2
+     #      - ztmax*zp1bal**2 - zm1bal*ztmax**2 - zp1bal*zm1bal**2
+          a = ztmax*tm1bal    + zm1bal*tp1bal    + zp1bal*tc0bal
+     #      - ztmax*tp1bal    - zm1bal*tc0bal  - zp1bal*tm1bal
+      a = a/denom
+          b = tc0bal*zm1bal**2 + tm1bal*zp1bal**2 + tp1bal*ztmax**2
+     #      - tc0bal*zp1bal**2 - tm1bal*ztmax**2 - tp1bal*zm1bal**2
+      b = b/denom
+          c =   tp1bal*ztmax*zm1bal**2 + tc0bal*zm1bal*zp1bal**2
+     #        + tm1bal*zp1bal*ztmax**2 - tm1bal*ztmax*zp1bal**2
+     #        - tp1bal*zm1bal*ztmax**2 - tc0bal*zp1bal*zm1bal**2
+      c = c/denom
+c
+c         thermal resistances
+      gave = rmpbal - .5*h0bal*(r0bal-.5*h0bal)/rmpbal - rfbal
+      gaph = gthcon(gmix ,tgbal ,pgbal ,gave)
+      fraden = 0.96
+      fotmtl = 2.0
+      call fthcon(tf0bal ,fraden ,fotmtl ,fuelk ,dum)
+c
+c         circumferential temperature variation
+      dtthf  =   (2.*qbal)*(rfbal/fuelk)*(1./gaph)   /
+     #         ((rfbal/fuelk) + (1./gaph) + (1./htcbal))
+      dtthp = .001*qbal*(1./htcbal + 1./gaph)
+      dtth = sqrt(dtthp**2 + dtthf**2)/tf0bal
+      if (dtth .lt. .005) dtth = .005
+      if (dtth .gt. .1) dtth = .1
+c
+c         axial temperature variation
+      if (a .lt. 0.0) go to 10
+       dtax = .005
+       if (nbncal .eq. 0) zbaln = 0.3
+       zmin = 0.0
+       zl = zndbal
+       go to 20
+  10  continue
+      dtax = -a*((zbaln/2.)**2)/tc0bal
+      if (nbncal .eq. 1) go to 20
+       if (dtax .lt. .005) zbaln = 2.*sqrt(.005*tc0bal/(-a))
+       if (zbaln .gt. 0.3) zbaln = 0.3
+  20  continue
+      if (dtax .lt. .005) dtax = .005
+      if (dtax .gt. .1) dtax = .1
+c
+      do 30 k=1,nk
+      do 30 j=1,nj
+        ftemp(k,j) = tf0bal * (1. + dtth * (1.0 + sin(pi*(j+3)/8))/2.0
+     #                        + dtax * sin(pi*(k-1.)/(2.*(nk-1.))) )
+  30  continue
+c
+      if (timbal .lt. timdb) go to 40
+      if(nprntb .eq. 0) go to 40
+       write (output,1001) tm1bal,tc0bal,tp1bal,zm1bal,ztmax,zp1bal
+        write (output,1001) ((ftemp(k,j),j=1,nj),k=1,nk)
+       write (output,1001) a,b,c,denom
+       write (output,1001) qbal,rfbal,fuelk,gaph,gave,htcbal,r0bal
+       write (output,1001) dtthf ,dtthp ,dtth ,dtax ,zbaln
+ 1001  format (' far1',9e14.5)
+  40  continue
+c
+        call balon2     (gmix   ,ftemp  ,strnl  ,strnr  ,strna  ,strnc
+     #          ,rad    ,twall  ,ctemp  ,delz   ,fcp    ,frp    ,fap
+     #          ,acd    ,aad    ,ard    ,fnck   ,fncn   ,cwkf   ,cwnf
+     #          ,acs    ,aas    ,ars
+     #          ,ace    ,aae    ,are    ,dbyth  ,dbyz   ,stresf ,tstres
+     #          ,disp   ,deh    ,dea    ,rstran ,rave   ,stresr ,stresa
+     #          ,dz0  )
+c
+c         initialize and return for small maximum strains
+      do 50  k = 1,2*ndax
+       farbal(k) = 0.0
+       sdfar(k) = 0.0
+       zfarbl(k) = 0.0
+  50  continue
+      if (tcebal .lt. 0.01)  go to 190
+c
+c         balloon profile
+       zfarbl(1) = dz0/2.
+      do 60  k = 1,nk
+       balx(k) = ( rave(k) - (r0bal-0.5*h0bal) ) / (r0bal-0.5*h0bal)
+       if (k.gt.1)  zfarbl(k) = zfarbl(k-1) + dz0
+  60  continue
+c
+c         characterize balloon
+      g = piovr4/(pdrato**2 - piovr4)
+      ecntct = pdrato - 1.
+      g1 = 0.93
+      g3 = g*(2.*ecntct + 2.) / (g1 - g*(ecntct**2 + 2.*ecntct))
+      g2 = (g1 - g*(ecntct**2 + 2.*ecntct))*exp(g3*ecntct)
+c         base shape
+      fru(2) = g*(balx(2)**2 + 2.*balx(2))
+      if (balx(2) .gt. ecntct) fru(2) = g1 - g2*exp(-g3*balx(2))
+      if (balx(1) .lt. balx(3)) go to 70
+       bl(2) = 1.5*zbaln
+       go to 80
+  70  continue
+       slope = (balx(3) - balx(1)) / (zfarbl(3) - zfarbl(1))
+       zbal0 = balx(1) - slope*zfarbl(1)
+       bl(2) = zbaln +2.*(zbal0 - .33*balx(2))/slope
+       if (bl(2) .gt. 1.5*zbaln) bl(2) = 1.5*zbaln
+  80  continue
+c         peak shape
+      frumax = g*(tcebal**2 + 2.*tcebal)
+      if (tcebal .gt. ecntct) frumax = g1 - g2*exp(-g3*tcebal)
+      fru(1) = frumax - fru(2)
+      tcmid = (balx(2) + tcebal)/2.
+      z1 = 0.0
+      z2 = zbaln
+      do 90 i=1,nk
+        if (balx(i).lt.tcmid) then
+          z1 = zfarbl(i)
+          z2 = 2.*zfarbl(nk) - zfarbl(i)
+        endif
+  90  continue
+      bl(1) = z2 - z1
+      if(bl(1) .lt. dz0) bl(1) = dz0
+c
+c         axial ballooning range
+      if (a .ge. 0.0)  go to 100
+       tmax = c - b*b/(4.*a)
+       tmin = tmax - 4.66*.025 * abs(tmax-tbkbal) * sqrt(1.+tcebal/0.3)
+       if (tcebal.gt.0.3) tmin = tmax -4.66*.025 *abs(tmax-tbkbal)*sqrt2
+       bmac =  sqrt( b*b - 4.*a*(c-tmin) )
+       zmin = (-b + bmac)/(2.*a)
+       zl = -bmac / a
+       if (zmin .lt. 0.0)   zl = zl + zmin
+       if (zmin .lt. 0.0)   zmin = 0.0
+       if ((zmin + zl) .gt. zndbal)   zl = zndbal - zmin
+       if (zl .lt. bl(1))  zl = bl(1)
+ 100  continue
+c
+c         standard deviation of unit far and probability
+      frumid = g*(tcmid**2 + 2.*tcmid)
+      if (tcmid .gt. ecntct) frumid = g1 - g2*exp(-g3*tcmid)
+      tcesd = 5.*tcmid/6.
+      frusd = g*(tcesd**2 + 2.*tcesd)
+      if (tcesd .gt. ecntct) frusd = g1 - g2*exp(-g3*tcesd)
+      sdfru = frumid - frusd
+      sdpb = bl(2)/(8.*zl)
+c
+      if(nprntb .eq. 0) go to 101
+      if (timbal.gt.timdb)  write (output,1001) (balx(k),k=1,nk)
+     #    ,(zfarbl(k),k=1,nk), fru, bl, tmin, zmin, zl, tcebal
+     #    ,frumid ,frumax ,tcmid ,sdfru ,sdpb
+c
+ 101  continue
+c         loop over balloon shape
+      do 180 ibal = 1,2
+c         nodalization
+       nodes = int(zl/bl(ibal))
+       if ( (zl/bl(ibal) - float(nodes)) .gt. 0.5 )  nodes = nodes + 1
+       if (nodes .lt. 2)  nodes = 2
+       if (nodes .gt. 20) nodes = 20
+c
+c         temperature and temperature uncertainty distribution
+       do 110  i = 1,nodes
+        z = zmin + zl*(float(i)-.5)/float(nodes)
+        if (ibal .eq. 1) zfarbl(i) = zmin + zl*float(i)/float(nodes)
+        balx(i) = zmin + zl*float(i)/float(nodes) + .0001
+        tj(i) = a*z*z + b*z + c
+        sigt(i) = abs(tj(i) - tbkbal)*.025*sqrt(1.+ tcebal/0.3)
+        if (tcebal .gt. 0.3) sigt(i) = abs(tj(i) - tbkbal)*.025*sqrt2
+        if (sigt(i) .lt. .01) sigt(i) = 0.01
+ 110   continue
+       i1 = 1
+c
+c         for each node numerically integrate between + & - 3.5 standard
+c         deviations equation (25) in fdr/cdf-ft-10 using simpson's rule
+c         ("elementary numerical analysis"   conte and de boor)
+       do 170 i = 1,nodes
+c
+c         first increment of max temp probability
+        delt = 0.1*sigt(i)
+        ti = tj(i) - 3.5*sigt(i)
+        tip1 = ti + delt
+        p1 = 1.0
+        do 120 j = 1,nodes
+         if (j .eq. i) go to 120
+         p1 = p1*(erf( (ti-tj(j)) / (sqrt2*sigt(j)) ) + 1.)/2.
+ 120    continue
+        p1 = p1*exp( -.5*( (ti-tj(i)) / sigt(i) )**2 )/(sigt(i)*sqrt2p)
+        pmaxt = p1*(tip1 - ti)/6.
+c
+c         sum incremental max temp probability
+        do 140 ilop = 1,70
+         tim1 = ti
+         ti = tip1
+         tip1 = tip1 + delt
+         tmid = (ti + tim1)/2.
+        p1 = 1.0
+        p2 = 1.0
+        do 130 j = 1,nodes
+         if (j .eq. i) go to 130
+         p1 = p1*(erf( (ti-tj(j)) / (sqrt2*sigt(j)) ) + 1.)/2.
+         p2 = p2*(erf( (tmid-tj(j)) / (sqrt2*sigt(j)) ) + 1.)/2.
+ 130    continue
+        p1 = p1*exp( -.5*( (ti-tj(i)) / sigt(i) )**2 )/(sigt(i)*sqrt2p)
+        p2 =p2*exp( -.5*( (tmid-tj(i)) / sigt(i) )**2 )/(sigt(i)*sqrt2p)
+         pmaxt = pmaxt + p1*(tip1 - tim1)/6. + 2.*p2*(ti - tim1)/3.
+ 140    continue
+c
+c         sum final increment of max temp probability
+        tmid = (tip1 + ti)/2.
+        p1 = 1.0
+        p2 = 1.0
+        do 150 j = 1,nodes
+         if (j .eq. i) go to 150
+         p1 = p1*(erf( (tmid-tj(j)) / (sqrt2*sigt(j)) ) + 1.)/2.
+         p2 = p1*(erf( (tip1-tj(j)) / (sqrt2*sigt(j)) ) + 1.)/2.
+ 150    continue
+        p1 =p1*exp( -.5*( (tmid-tj(i)) / sigt(i) )**2 )/(sigt(i)*sqrt2p)
+        p2 =p2*exp( -.5*( (tip1-tj(i)) / sigt(i) )**2 )/(sigt(i)*sqrt2p)
+        pmaxt = pmaxt + 2.*p1*(tip1 - ti)/3. + p2*(tip1 - ti)/6.
+c
+      if( (timbal .gt. timdb) .and. (nprntb .gt. 0) )
+     #      write (output,1002) i,nodes,pmaxt,zfarbl(i),balx(i),tj(i),
+     * sigt(i)
+ 1002   format(5h far1,2i5,6e12.4)
+c
+c         incremental flow area reduction from peak shape
+        if (ibal .gt. 1) go to 160
+         nodprm = nodes
+         farbal(i) = fru(ibal)*pmaxt*rnbnt
+         go to 170
+c
+c         incremental flow area reduction from base shape
+c         flow area reduction standard deviation
+ 160    continue
+        if (zfarbl(i1) .gt. balx(i)) go to 170
+         farbal(i1) = farbal(i1) + fru(ibal)*pmaxt*rnbnt
+         i1 = i1 + 1
+         if (i1 .gt. nodprm) go to 170
+         go to 160
+ 170   continue
+ 180  continue
+c
+      if (timbal .lt. timdb) go to 190
+      if(nprntb .eq. 0) go to 190
+       write (output,1003) (zfarbl(i),i=1,nodprm)
+       write (output,1004) (farbal(i),i=1,nodprm)
+       write (output,1005) (sdfar(i),i=1,nodprm)
+ 1003  format('0Elevation (m)                  ',1p,6e15.4)
+ 1004  format('0Flow area reduction            ',1p,6e15.4)
+ 1005  format('0Flow area reduction uncertainty',1p,6e15.4)
+c
+ 190  return
+      end
+*endif

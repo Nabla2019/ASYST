@@ -1,0 +1,137 @@
+*mlist
+       subroutine pump
+c
+c  Computes pressure change and torque for pump, torque for
+c  inductive motor if present, and advances pump speed if not connected
+c  to a shaft control component.
+c
+c  Cognizant engineer: rjw.
+c
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'lvectr.h'
+       include 'pumpblk.h'
+       include 'scrtch.h'
+       include 'trpblk.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer i,i1,ierr,itemp,ix,iy,m,n
+       real alf,h,h2,hm,pss,ps2,t,t2,tm,s,wflow
+       external polat,pump2
+c
+c  Data statements.
+c
+       i1 = lvpump(lpdat(issys)%llvect)
+       do m = 1,lvptr(i1)
+         i1 = i1 + 1
+         n = lvptr(i1)
+c  Save new pump speed or restore old pump speed depending on succes.
+         if (lpdat(issys)%lsuces .ne. 0) then
+           pmpold(n) = pmpspr(n)
+         else
+           pmpspr(n) = pmpold(n)
+         endif
+c
+         i = nvco(n) + filndx(4)
+         ix = vctrls(i)
+         wflow = (hyarf(i)*velf(i) + hyarg(i)*velg(i))*avol(i)/rho(i)
+c  Get single phase homologous data.
+         call pump2 (wflow,h,t,pss,n,ierr,1)
+         if (ierr .ne. 0) cycle
+         pslope(ix) = pss
+c  Get two phase multiplier data if available.
+         if (ipuhmi(n) .ne. 0) then
+           alf = voidg(i)
+           iy = ipuhmi(n+1) + filndx(3)
+           call polat (pmptbl(iy),pmptbl(iy+3),alf,hm,ierr)
+           iy = iputmi(n+1) + filndx(3)
+           call polat (pmptbl(iy),pmptbl(iy+3),alf,tm,ierr)
+           if (hm.ne.0.0 .or. tm.ne.0.0) then
+c  Get two phase homologous data.
+             call pump2 (wflow,h2,t2,ps2,n,ierr,2)
+             if (ierr .ne. 0) cycle
+             h = h - hm * h2
+             t = t - tm * t2
+             pslope(ix) = pss - hm*ps2
+           endif
+         endif
+c  Set pump pressure change and torque.
+         pmpttk(n) = -t*rho(i)/pmprho(n)
+         pmpthd(n) = h*rho(i)*gravcn
+c  Check if pump stops are to be checked.
+         if (iand(cmpopt(n),4) .eq. 0) go to 260
+c  Check if pump has been stopped.
+         angmm(ix) = 0.0
+         if (iand(cmpopt(n),8) .ne. 0) cycle
+         if (pmpstm(n) .le. 0.) go to 230
+         if (timehy - dt .gt. pmpstm(n)) go to 250
+  230    if (pmpfsp(n) .eq. 0.0) go to 240
+         if (pmpold(n) .gt. pmpfsp(n)) go to 250
+  240    if (pmpbsp(n) .eq. 0.0) go to 260
+         if (pmpold(n) .ge. pmpbsp(n)) go to 260
+c  Set the pump to stopped condition.
+  250    pmpold(n) = 0.0
+         cmpopt(n) = ior(cmpopt(n),12)
+         pmpmt(n) = 0.0
+         cycle
+c  Add pump friction to pump torque.
+  260    s = abs(pmpold(n)/pmprsp(n))
+         pmpttk(n) = pmpttk(n) - sign(pmptf1(n) + s*(pmptf2(n) +
+     &   s*(pmptf3(n) + s*pmptf4(n))),pmpold(n))
+         angmm(ix) = -pmpttk(n)*pmpold(n)
+c  Get pump inertia.
+         pmpnrt(n) = pmpint(n)
+         if (pmptrp(n).lt.0.0 .or. s.lt.pmptrp(n)) go to 280
+         pmpnrt(n) = pmptrp(n+4) + s*(pmptrp(n+3) + s*(pmptrp(n+2) +
+     &   s*pmptrp(n+1)))
+         if (pmpnrt(n) .gt. 0.0) go to 280
+         write (output,900) timehy,s
+  900  format('0******** Error, calculated pump moment of inertia is zer
+     &o or negative at time =',1p,g13.6,' sec,'/10x,'normalized pump spe
+     &ed (n/nr) =',g13.6/
+     & 10x,'check variable inertial coefficients input for pump',i4,'.')
+         fail = .true.
+         pmpnrt(n) = pmpint(n)
+c  Check if pump speed table is to be used.
+  280    if (ipuspi(n) .eq. 0) go to 262
+         iy = ipuspi(n+1) + filndx(3)
+         if (ipmvtr(iy) .eq. 0) go to 293
+         if (trptm(ipmvtr(iy+1)) .ge. 0.0) go to 290
+c
+  262    pmpmt(n) = 0.0
+         if (iputrp(n) .eq. 0) go to 261
+         if (trptm(iputrp(n+1)) .ge. 0.0) go to 270
+c
+  261    if (ipumtk(n) .ne. 0) go to 263
+         if (iand(cmpopt(n),16) .ne. 0) cycle
+         pmpmt(n) = -pmpttk(n)
+         go to 271
+  263    itemp = ipumtk(n+1) + filndx(3)
+         call polat (pmptbl(itemp),pmptbl(itemp+3),pmpold(n),t,ierr)
+         pmpmt(n) = pmprmt(n)*t
+c  Compute pump rotational velocity if no shaft connected.
+  270    if (iand(cmpopt(n),16) .ne. 0) cycle
+c  w(rad/sec) = t(n-m) * dt(sec) / i(kg-m2)
+  271    pmpold(n) = pmpold(n) + (pmpmt(n) + pmpttk(n))*dt/pmpnrt(n)
+         if (pmpold(n) .ge. 0.) cycle
+         if (iand(cmpopt(n),32) .eq. 0) pmpold(n) = 0.0
+         cycle
+c  Compute pump rotational velocity from table.
+  290    if (ipmvpc(iy) .ne. 0) go to 295
+         s = timehy - trptm(ipmvtr(iy+1))
+         go to 294
+  293    if (ipmvpc(iy) .ne. 0) go to 295
+         s = timehy
+         go to 294
+  295    s = fa(ipmvpc(iy+1))
+  294    call polat (pmpvtl(iy-3),pmpvtl(iy),s,pmpold(n),ierr)
+         pmpmt(n) = (pmpold(n) - pmpspr(n))*pmpnrt(n)/dt - pmpttk(n)
+       enddo
+       return
+       end

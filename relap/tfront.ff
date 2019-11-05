@@ -1,0 +1,163 @@
+*mlist
+       subroutine tfront
+c  Tracks the thermal front in 1-D vertical components.
+c
+c  Cognizant engineer: ssa.
+c
+c  Purpose --
+c    perform calculations to detect a thermaL front within a
+c      hydrodynamic cell.
+c    compute front propagation velocity, above-front liq .internal
+c      energy,
+c      below-front liq. int. energy and front position related to
+c      the bottom of the cell.
+c    set front flags.
+c  New volume variables
+c    ufla   liquid internal energy above the thermal front
+c    ufao
+c    uflb   liquid internal energy below the two-phase level
+c    ufbo
+c    vfront    velocity of the thermal front movement
+c    dfront    location of the thermal front
+c    dfrnto
+c  Parameters define the existance of thermal front
+c    drhofc  critical density ratio difference
+!
+       use invtbl
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'eccmxc.h'
+       include 'jundat.h'
+       include 'przdat.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer i,ibot,itop,jbot,ifrmto,jtop,jx,jtype,
+     & jvx,jupdw,l,loop,m
+       real drhofc,btavol,dll,
+     & testa,testb,testc,testd,tpavol
+       real darea, dtriang, tanb, cotb,sinrb
+c
+c  Data statements.
+       data drhofc/0.01/
+c
+       i = lpdat(issys)%liv
+c  Loop over volumes.
+       do 266 m = 1,lpdat(issys)%livn
+c  Check front tracking flag.
+         if (iand(vctrl(i),4) .ne. 0) then
+c  Loop over junctions attached to volume.
+           itop = 0
+           ibot = 0
+           jtop = 0
+           jbot = 0
+           tpavol = 0.0
+           btavol = 0.0
+           ufla(i) = 0.0
+           uflb(i) = 0.0
+           dfront(i) = 0.0
+           vfront(i) = 0.0
+           l = invfnd(i)
+           do loop = 1,invcnt(i)
+             jx = invj(l)%invvnx
+c  jx is junction  index.
+c
+             jtype = iand(ishft(jc(jx),-26),1)
+             if (jtype.eq.0) go to 227
+c
+c  Get from-to junction flag.
+             ifrmto = iand(ishft(invj(l)%invjun,-2),1)
+c  Get up-down juction flag.
+             jupdw  = iand(ishft(jc(jx),-27),1)
+c  when jupdw = 0, then the k vol is the down vol
+c
+c  Set top-bot flag.
+             jtype = abs(ifrmto - jupdw)
+             jvx = ij1nx(jx-ifrmto+1)
+             if (jtype .eq. 1) then
+               if (avol(jvx) .gt. btavol) then
+                 jbot = jx
+                 ibot = jvx
+               endif
+             else
+               if (avol(jvx) .gt. tpavol) then
+                 jtop = jx
+                 itop = jvx
+               endif
+             endif
+  227        l = l + 1
+           enddo
+           if ((itop.eq.0) .or. (ibot.eq.0)) go to 3999
+           testa = abs(rhof(itop) - rhof(i))/rhof(i) - drhofc
+           testb = abs(rhof(i) - rhof(ibot))/rhof(i) - drhofc
+           testc = abs(rhof(itop) - rhof(i))/rhof(i) - 0.1*drhofc
+           testd = abs(rhof(i) - rhof(ibot))/rhof(i) - 0.1*drhofc
+c
+           if (dfrnto(i) .gt. 0.0) then
+             go to 3100
+           elseif (dfrnto(itop) .gt. 0.0) then
+             go to 3999
+           elseif (testa.gt.0.0) then
+             go to 3100
+           elseif (dfrnto(ibot) .gt. 0.0) then
+             go to 3999
+           elseif (testb.gt.0.0)  then
+             go to 3100
+           endif
+           go to 3999
+c
+c  Perform level calculation for normal void profile.
+c
+c  Determine the void fraction above and below the level.
+ 3100      continue
+           ufla(i) = uf(itop)
+           uflb(i) = uf(ibot)
+c
+ 3300      continue
+c  Location of the two-phase level.
+           dll = dl(i)
+           if ((uf(itop)-uf(ibot)) .gt. 0.0 .and.
+     &     (uf(itop)-uf(i)) .gt. 0.0 ) then
+             dfront(i) = dll*(uf(itop)-uf(i))/(uf(itop)-uf(ibot))
+             dfront(i) = min(dfront(i), dl(i))
+c            if ((dfront(i)/dl(i) .le. 0.005) .or.
+c    &       (dfront(i)/dl(i) .gt. 0.995)) go to 3999
+             if ((dfront(i)/dl(i) .le. 0.020) .or.
+     &       (dfront(i)/dl(i) .gt. 0.980)) go to 3999
+c            if (dtriang .gt. 0.02*darea) then
+           else
+             dfront(i) = 0.0
+             vfront(i) = 0.0
+           endif
+c  Calculation of level velocity.
+           vfront(i) = 0.0
+           vfront(i) = (dfront(i) - dfrnto(i))/dt
+c  Test if level is near the cell boundary.
+           if (((testd.lt.0.0) .and.
+     &     (vfront(i).gt.0.0)) .or.
+     &     (testc.lt.0.0 .and.
+     &     vfront(i).lt.0.0)) then
+             dfront(i) = 0.0
+             vfront(i) = 0.0
+           endif
+           go to 4000
+c  No level in volume i.
+ 3999      continue
+           dfront(i) = 0.0
+           vfront(i) = 0.0
+ 4000      continue
+c
+         endif
+         i = i + ivskp
+  266  continue
+       return
+       end

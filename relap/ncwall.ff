@@ -1,0 +1,212 @@
+*mlist
+      subroutine ncwall(iv,twall,qwall)
+c
+c
+c  Estimates the effect of non-condensible gases upon dropwise
+c  condensation.
+c
+c
+c  Cognizant engineer: jmk.
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+c  subr:  NCWALL
+c
+c  desc:  NCFILM estimates the effect of non-condensible gases
+c         upon dropwise condensation.
+c
+c         A turbulent diffusion model, similar to Colburn-Hougen,
+c         is used to add a resistance due to the presence of NC
+c         gases.  A maximum heat transfer rate, assuming negligible
+c         resistance in the liquid, is calculated and used to
+c         limit the dropwise condensation rate in the wall heat
+c         transfer routine CONDN2.
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+c  Notes:
+c
+c         -  This routine assumes that the working fluid is H2O.
+c
+c         -  This routine is coded for 1-D version of RELAP5.
+c
+c         -  This routine replaces the degradation factors applied
+c            in earlier models to the wall heat transfer coefficient,
+c            but is only used for dropwise condensation.
+c
+c         -  The mixture of NC gases is being treated as a single
+c            gas.  That is, the mass ratio of each species is
+c            assumed constant over the boundary layer.  The total
+c            NC mass fraction does vary, but each species maintains
+c            its relative mass fraction.
+c
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+c  calling routine:  CONDN2
+c
+c  routines called: NCPROP & PSATPD
+c
+c  last modified:  August 4, 1994
+c
+c  cognizant engineer:  JM Kelly
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+      implicit none
+       include 'fast.h'
+       include 'contrl.h'
+       include 'comctl.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+      real barg, bfact, conmix, cpmix, cpvap,
+     &     diffc, dpvdt, twall, qwall
+c     real hnu, gcond, qfilm, rnu, prmix, hfact
+      real dzero, hcond, hfg,
+     &     mwgas, mwmixb, mwmixi, mwvap, mw1, mw2,
+     &     one, pgref, pvapb, pvapi, pvref, qcond,
+     &     rconst, remix, rgas, rhomix,
+     &     scmix, shno, tintff, trefs,
+     &     vismix, wvapb, wvapi, wvref, w1, xmf, xmsum, xvref,
+     &     zero
+      real xmolef
+c
+      integer iones(2), iv, k
+c
+      parameter (one=1.0)
+      parameter (zero=0.0)
+      parameter (rconst=8314.3)
+      parameter (mwvap=18.016)
+c
+      logical erx
+      data erx/.false./, iones/1,1/
+c
+      external ncprop, psatpd
+c
+c  Statement Function for Mole Fraction.
+c
+      xmolef(w1,mw1,mw2) = w1 / (w1 + (one - w1)*(mw1/mw2))
+c
+c
+c ----------------------------------------------------------------
+c
+c  Turbulent Diffusion Model based on Colburn-Hougen.
+c
+c ----------------------------------------------------------------
+c
+c     Evaluate Diffusion Coefficient Constant for a Mixture of Gases.
+c        ref:  eq. 7.40 of "Transfer Processes", by Edwards, Denny &
+c              Mills.  2nd edition,  McGraw-Hill.
+c
+      dzero = zero
+      xmsum = zero
+      do 10 k = 1,noncn
+         xmf = qualan(iv+k-1)/wmolea(k)
+         dzero = dzero + xmf/dconst(k)
+         xmsum = xmsum + xmf
+ 10   continue
+      dzero = xmsum / dzero
+c     - molecular weight & gas constant for NC gas mixture.
+      mwgas = one / xmsum
+      rgas = rconst * xmsum
+c     - bulk vapor weight fraction & vapor/gas mixture
+c       molecular weight.
+      wvapb = one - quala(iv)
+      pvapb = pps(iv)
+      mwmixb = mwvap*mwgas / (mwvap + (mwgas - mwvap)*wvapb)
+c
+c     Interface Temperature is set to the Wall Temp.
+c
+      tintff = twall
+c
+ 1000 continue
+c
+c     Vapor Partial Pressure at Interface.
+c
+      call psatpd(tintff,pvapi,dpvdt,1,erx)
+c
+      if (erx) go to 2000
+c
+c     Evaluate boundary layer reference mass fraction.
+c        ref : Knuth & Dershin, "Use of Reference States in Predicting
+c              Transport Rates in High-Speed Turbulent Flows with
+c              Mass Transfers", IJHMT, Vol. 6, pp. 999-1018, 1963.
+c
+      wvapi = (mwvap/mwgas)*pvapi / (p(iv)
+     &      - (one - (mwvap/mwgas))*pvapi)
+      mwmixi = mwvap*mwgas / (mwvap + (mwgas - mwvap)*wvapi)
+      wvref = (mwvap/(mwvap - mwgas)) * log(mwmixb/mwmixi) /
+     &        log((wvapb*mwmixb)/(wvapi*mwmixi))
+c
+c     Reference Value of Vapor Pressure.
+c
+      xvref = xmolef(wvref,mwvap,mwgas)
+      pvref = xvref * p(iv)
+      pgref = p(iv) - pvref
+c
+c     Evaluate Vapor/Gas Transport Properties at Reference State.
+c
+      call ncprop(iv,pvref,pgref,wvref,rgas,trefs,hfg,
+     &            cpvap,rhomix,cpmix,conmix,vismix)
+c
+c     Evaluate Diffusion Coefficient at Reference State.
+c
+      diffc = dzero * trefs**1.75 / p(iv)
+c
+c     Sherwood No. (Dittus-Boelter).
+c
+      remix = abs(ggas(iv)) * diamv(iv) / vismix
+      scmix = vismix / (rhomix * diffc)
+      shno = 0.023 * remix**0.8 * scmix**0.4
+c
+c     Limit Sherwood No. with laminar flow value.
+c
+      shno = max(4.36,shno)
+c
+c     Mass Transfer Correction for Sherwood No.:
+c
+      barg = (wvapb - wvapi) / (wvapi - one)
+      barg = max(-0.9999,min(-0.0001,barg))
+      bfact = log(one + barg) / barg
+      shno = bfact * shno
+c
+c     Nusselt No. - for sensible heat transfer:
+c
+c     prmix = cpmix * vismix / conmix
+c     rnu = 0.023 * remix**0.8 * prmix**0.4
+c     rnu = max(4.36,rnu)
+c     hnu = (conmix / diamv(iv)) * rnu
+c
+c     Mass Transfer Correction for Nusselt No.
+c
+c     gcond = qfilm / hfg
+c     hfact = - gcond * cpvap / hnu
+c     hfact = max(-10.0,min(-0.0001,hfact))
+c     hfact = hfact / (exp(hfact) - one)
+c     hnu = hfact * hnu
+c
+c     Heat Flux due to Mass Transfer (Condensation):
+c
+      hcond = shno * (diffc/diamv(iv)) * (hfg*p(iv)*mwvap /
+     &        (rconst*trefs))
+      qcond = hcond * log(pvapb/pvapi)
+c
+      qwall = qcond
+cdbg
+c      write (output,9010) iv, tintff,shno,bfact,hcond,
+c     &        qcond,pvapb,pvapi
+c 9010 format (2x,'NCWALL: ',i6,1p,7e14.4)
+cdbg
+c
+      return
+c
+ 2000 write (output,9000) pvapi
+ 9000 format ('0******** Subroutine psatpd returned an error flag for p
+     &vapi =',1pe14.7,'.  Called from NCFILM.')
+      fail = .true.
+c
+      return
+      end

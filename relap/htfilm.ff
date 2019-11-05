@@ -1,0 +1,319 @@
+*mlist
+       subroutine htfilm (iv,hfilm,caller)
+c
+c  Calculates the heat transfer coefficient associated with the
+c  transfer of heat across a liquid film.
+c
+c  Cognizant engineer: ras (jmk).
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+c  subr:  HTFILM
+c
+c  desc:  HTFILM calculates the heat transfer coefficient associated
+c         with the transfer of heat across a liquid film.  Thus, it
+c         encompasses both heat transfer from the wall to the bulk
+c         fluid temperature (HWALL), and heat transfer from the
+c         bulk fluid temperature to the liquid/vapor interface
+c         (HINTF).  That is (for steady heat flow through a film):
+c
+c       HFILM*(TWALL-TINTF) = HWALL*(TWALL-TLIQ) = HINTF*(TLIQ-TINTF)
+c
+c         For a given situation, e.g., heat transfer through a
+c         laminar film, the distribution of the heat transfer
+c         resistance between the wall and the interfacial components
+c         can be calculated.  Thus, both the wall and interfacial
+c         heat transfer coefficients can be determined.
+c
+c         However, there is no generally applicable method of
+c         determining the individual resistances as they are
+c         dependent on the temperature profile within the film. As
+c         a reasonable approach for thin films, the resistances
+c         will be split as for a laminar film:
+c
+c           HWALL = (8/5)*HFILM  and  HINTF = (8/3)*HFILM
+c
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+c  Notes:
+c
+c         -  For a vertical surface, this routine calculates the
+c            resistance across either a falling film or a highly
+c            sheared film.  If a film is sheared, the effect
+c            of gravity is ignored.
+c
+c         -  For a horizontal surface, only the sheared film is
+c            considered.  At low vapor flowrates, this devolves
+c            to a single phase liquid heat transfer coefficient.
+c
+c         -  For wall condensation within a horizontal pipe, if
+c            the vapor flowrate is low so that the film is not
+c            highly sheared, then the contribution to HWALL due to
+c            the cold surface above the stratified layer must be
+c            added.  To accomplish this, the Nusselt formula for a
+c            tube is integrated wrt temperaure over all heat slabs
+c            that connect to this volume.  No attempt is made to
+c            factor in the position of the heat slab.
+c
+c         -  This routine is coded for 1-D version of RELAP5.
+c
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+c  Calling routine:  PHANTV & CONDN2
+c
+c  Cognizant engineer:  JM Kelly.
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+       use invhtb
+       implicit none
+       include 'fast.h'
+       include 'contrl.h'
+       include 'comctl.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'htsrcm.h'
+c
+      real a, direct, dtsat, dtsurf, dt14, f, fcond, ffilm, film,
+     &     filml, filmt, gliqa, ggasa, gravh, gravz, hcond, hfact,
+     &     hfg, hfilm, nuspl, prfilm, refilm, sfilm, tsurf,
+     &     xtt
+c
+      integer iv, j, l
+c
+      character*6 caller
+c
+c     Statement Function for Horizontal Pipe Condensation Factor.
+c       - Curvefit to table 10.5 of Collier.
+c
+      hfact(a) = 0.70885 + a*(-1.1864 + a*(2.0641 - 1.52*a))
+c
+c
+c -------------------------------------------------------------------
+c
+c  PART ONE: Calculate Film Thickness.
+c
+c     - Highly Sheared Film: use F factor from macroscopic part
+c       of the Chen Flow Boiling Correlation. This has been shown
+c       to approximate the Shah Condensation Correlation reasonably
+c       well but may over estimate the film thickness at high
+c       quality conditions (x > 0.9).
+c
+c     - Falling Film: use Nusselt for laminar film and correlation
+c       by Kelly for a turbulent film.
+c
+c     - Use minimum of the sheared and falling film values for
+c       cocurrent downflow, use the sheared film value for cocurrent
+c       upflow, and use the falling film value for counter-
+c       current flow.  Note, Chen is not applicable for
+c       counter-current flow.
+c
+c     - Use 10 microns as the minimum allowable film thickness. This
+c       value is a rough estimate for the point at which a film
+c       breaks up into rivulets and will approximate the heat
+c       transfer for dropwise condensation.
+c
+c     - Eventually, the calculated value of the liquid volume
+c       fraction should be used for the film thickness.  This would
+c       include both the effects of gravity and interfacial shear,
+c       however, at present, the wall friction factor apportioning
+c       prevents the code from correctly predicting the liquid
+c       fraction.
+c
+c -------------------------------------------------------------------
+c
+c
+      gliqa = abs(gliq(iv)) + 0.001
+      ggasa = abs(ggas(iv)) + 0.001
+      refilm = gliqa * diamv(iv) / viscf(iv)
+c
+c     Compute direction cosine:
+c        -  Horizontal = 0.0
+c        -  Vertical oriented upwards = 1.0
+c        -  Vertical oriented downwards = -1.0
+c
+      direct = (hydzc(iv) + hydzc(iv+1))/dl(iv)
+      gravz = gravcn*abs(direct) + 1.0e-06
+      gravh = gravcn*(1.0 - abs(direct))
+c
+c ---------------------------------------------------
+c     Sheared Film Thickness:  Chen F Factor.
+c ---------------------------------------------------
+c
+      xtt = (ggasa/gliqa)**0.9 * sqrt(rhof(iv)/rhog(iv))
+     &      * (viscg(iv)/viscf(iv))**0.1
+      f = 2.35 * (xtt + 0.213)**0.736
+      f = max(1.0,min(100.0,f))
+      sfilm = 0.25 * diamv(iv) / f
+c
+c     Set large value for falling film thickness in case
+c        not computed before needed in MIN function.
+c
+      ffilm = 0.25 * diamv(iv)
+cdbg
+c      write (output,9000) iv, direct, f, sfilm
+c 9000 format (2x,'HTFILM',i5,1p,3f14.5)
+cdbg
+c
+c -------------------------------------------------------
+c  Falling Film Thickness: within horizontal pipe.
+c -------------------------------------------------------
+c
+      if (abs(direct) .lt. 0.99) then
+c
+c     -  Horizontal Pipe: calculate unless pipe is exactly
+c        vertical to provide smooth transition.
+c
+         if (caller .eq. 'PHANTV') then
+c
+c        -  Add contribution for film condensation above
+c           stratified layer to the interfacial HTC.
+c           The contribution to the wall HTC for each
+c           heat slab is done in CONDN2.
+c
+            if (inhcnt(iv) .eq. 0) then
+c
+c           - No heat slabs are modeled, use liquid temperature
+c             as wetted surface temperature.
+c
+               dtsat = satt(iv) - tempf(iv)
+c
+               if(dtsat .gt. 0.0) then
+                  dt14 = 1.0/sqrt(sqrt(max(1.0,dtsat)))
+                  fcond = 1.0
+               else
+                  fcond = 0.0
+               endif
+c
+            else
+c
+c           - Loop over all heat slabs in volume.
+               fcond = 0.0
+               dtsat = 0.0
+               dt14 = 0.0
+c
+               l = invhtf(iv)
+               do j = 1,inhcnt(iv)
+                 tsurf = httmp(invh(l)%insrft)
+                 dtsurf = satt(iv) - tsurf
+                 if (dtsurf .gt. 0.0) then
+                   fcond = fcond + invh(l)%frahaw
+                   dtsat = dtsat + invh(l)%frahaw*dtsurf
+                   dt14 = dt14 + invh(l)%frahaw/
+     &             sqrt(sqrt(max(1.0,dtsurf)))
+                   l = l + 1
+                 endif
+               enddo
+            endif
+c
+c           - Check for wall condensation.
+            if (fcond .gt. 0.0) then
+               hfg = sathg(iv) - sathf(iv)
+     &             + 0.68*csubpf(iv)*dtsat/fcond
+               hcond = hfact(voidf(iv)) * sqrt(sqrt(rhof(iv)*
+     &                 (rhof(iv) - rhog(iv)) * gravh * hfg *
+     &                 thconf(iv)**3 / (diamv(iv) * viscf(iv))))
+     &                 * dt14
+c
+c              Note: fraction of surface with condensation is
+c                    factored into FFILM.
+               ffilm = thconf(iv) / hcond
+            endif
+         endif
+      endif
+c
+c -------------------------------------------------------
+c  Select Regime and Set Film Thickness.
+c -------------------------------------------------------
+c
+      if (abs(direct) .gt. 0.01 .and.
+     &   (direct*gliq(iv)) .lt. 0.0) then
+c
+c     -  Vertical Pipe with Liquid Downflow: calculate
+c        unless pipe is exactly horizontal to provide
+c        a smooth transition.
+c
+         filml = 0.9085 * refilm**0.3333
+         filmt = 0.165 * refilm**0.566
+         film = max(filml,filmt) * ((viscf(iv)/rhof(iv))**2
+     &          / abs(gravz))**0.3333
+c
+         if ((gliq(iv)*ggas(iv)) .gt. 0.0) then
+c
+c     -  Cocurrent Downflow: use minimum of vertical falling
+c        film, horizontal falling film, and sheared film.
+c
+            film = min(ffilm,film,sfilm)
+c
+         else
+c
+c     -  Counter-current Downflow: use minimum of vertical
+c        falling film and horizontal falling film.
+c
+            film = min(ffilm,film)
+c
+         endif
+c
+      else
+c
+c     -  Cocurrent Upflow or Horizontal:  use minimum of
+c        sheared film and horizontal falling film.
+c
+         film = min(ffilm,sfilm)
+c
+      endif
+c
+c     Apply 10 micron lower limit (film breakup).
+c
+      film = max(1.0e-05,film)
+c
+c     Use computed liquid fraction as a limit.  This value is too
+c     small for annular flow due to the wall friction problem.
+c     However, its use here helps to transition from annular to
+c     slug flow.
+c
+      film = max(0.25*diamv(iv)*voidf(iv),film)
+c
+c
+c -------------------------------------------------------------------
+c
+c  PART TWO:  Single Phase Liquid Nusselt No.
+c
+c     - Laminar: use value of 4 (average of constant q and T).
+c
+c     - Turbulent: use Dittus-Boelter correlation as per Chen.
+c
+c -------------------------------------------------------------------
+c
+      prfilm = csubpf(iv) * viscf(iv) / thconf(iv)
+      nuspl = max(4.0,0.023*refilm**0.8*prfilm**0.4)
+c
+c -------------------------------------------------------------------
+c
+c  PART THREE: Convert Single Phase Nusselt No. to Film HTC.
+c
+c     - Divide by 4 to get film Nusselt No. This gives the Nusselt
+c       result of unity for a laminar film and approximates
+c       turbulent falling film results (falls below Colburn corr.
+c       and above most others).
+c
+c     - Note: for a sheared film, the factor of 4 cancels that
+c       in the film thickness and Chen macroscopic is reproduced.
+c
+c     - Note: there is experimental evidence that suggests the
+c       exponent of 0.8 on the Reynolds No. is not high enough.
+c
+c -------------------------------------------------------------------
+c
+       hfilm = 0.25*(thconf(iv)/film)*nuspl
+cdbg
+c      write (output,9001) film,ffilm,sfilm,nuspl,hfilm
+c9001  format (5x,1p,6e14.5)
+cdbg
+       return
+       end

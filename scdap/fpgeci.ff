@@ -1,0 +1,341 @@
+*mlist
+*if def,selap
+       subroutine fpgeci (yh,ldyh,n,fcn,jac,t,h,rparm,iparm,ewt,error,
+     & y,wa,iwk,job,info)
+c
+c  Performs one step of the integration of an initial value problem for
+c  a system of first order ordinary differential equations.
+c
+c  Cognizant engineer: ljs.
+c
+       implicit none
+       external fcn, jac
+       integer ldyh, n, iparm(6), iwk(1), job(3), info
+       real yh(ldyh,2), t, h, rparm(3), ewt(1), error(1), y(1), wa(1)
+c
+c  ...2...  arguments / parameters / constants  .......
+c
+c     ..a..  input arguments  .....
+c
+c          yh [r:ldyh,mxord+1] - nordseick history array containing
+c              the dependent variables and their scaled derivatives
+c
+c          ldyh [i:1] - leading dimension of yh
+c
+c          n [i:1] - number of first order differential equations
+c
+c          fcn [e] - user supplied subroutine defining the differential
+c              equation
+c
+c          jac [e] - user supplied subroutine calculating the analytic
+c              jacobian matrix of partial derivatives
+c
+c          t [r:1] - independent variable
+c
+c          h [r:1] - step size to be attempted on the next step
+c
+c          rparm [r:3] - real parameters
+c              (1)/hmin - minimum step size to be allowed
+c              (2)/hmxi - inverse of maximum step size to be allowed
+c
+c          iparm [i:6] - integer parameters
+c              (1)/mxord - maximum order to be allowed
+c
+c          ewt [r:n] - weighting vector used for error control in the
+c              weighted root mean square norm
+c
+c          error [r:n] - vector of one step error estimates
+c
+c          y, wa [r:n] - working storage
+c
+c          iwk [i:n] - working storage
+c
+c          job [i:3] - job path parameters
+c              (1)/jstr - start / restart indicator
+c                  = 1, first call: new problem
+c                  = 2, subsequent call: continue the integration
+c                  = 3, subsequent call: change of n, meth, or mitr
+c                  = 4, subsequent call: change of h only
+c              (2)/mitr - method of iteration indicator
+c              (3)/meth - basic method indicator
+c
+c     ..b..  output arguments  .....
+c
+c          t - updated value of the independent variable
+c
+c          rparm(3)/hu - step size last used successfully
+c
+c          iparm - integer parameters
+c              (2)/nst - number of steps taken so far
+c              (3)/nfe - number of fcn evaluations so far
+c              (4)/nje - number of jac evaluations so far
+c              (5)/nqu - order last used successfully
+c              (6)/nq - order to be attempted on next step
+c
+c          info - error condition / message code
+c
+c                 << type 3 - terminal >>
+c
+c              =31, corrector convergence failed repeatedly or
+c                   abs(h) = hmin
+c              =32, error test failed repeatedly or abs(h) = hmin
+c
+c     ..c..  internal / local variables  .....
+c
+       integer i,ialth,iflag,iss,isuc,j,jstr,l,lmax,meo,meth,mxord,ncf,
+     & nef,nq,nqo,nqu,pw
+       real bnd,d,el1,hmin,hmxi,hold,micro,onepsm,rc,rh,rhcf,rmax,
+     & rmax1,rmax2,rmax4,rmin,told
+       real el(13),elco(13,12),tq(3,12)
+c
+c     ..d..  external / subprogram references  .....
+c
+      real vswrms
+c
+c          minerva real function - vswrms
+c          minerva subroutines - dsgenm, dsgeos, dsgepc, dsgesc
+c
+c     ..e..  constants  .....
+cccc
+       save
+cccc
+c
+       data onepsm /1.00001e0/
+       data rmin/0.1e0/, rmax1/1.0e4/, rmax2/1.0e1/, rmax4/2.0e0/,
+     & micro/1.0e-6/, rhcf/0.25e0/
+c
+c  ...3...  notes / remarks  .......
+c
+c     ..a..  usage  .....
+c
+c     ..b..  algorithm  .....
+c
+c     ..c..  portability  .....
+c
+c     ..d..  references  .....
+c
+c          see dsgedr
+c
+c     ..e..  history  .....
+c
+c          origin - stiff, a.c. hindmarsh, gear, 12/20/74
+c                 - stode, a.c. hindmarsh, lsode, 12/18/80
+c          modified - header, sturcture - e.s. marwil, 4 may 81
+c
+c ****
+c ---
+c  1  initialize
+c ---
+       hmin = rparm(1)
+       hmxi = rparm(2)
+       mxord = iparm(1)
+       lmax = mxord + 1
+       jstr = job(1)
+       meth = job(3)
+       info = 0
+       isuc = 0
+       ncf = 0
+       nef = 0
+       told = t
+       iss = 2
+c ---
+c  2  determine type of call.
+c ---
+       if (jstr .eq. 2) go to 100
+       if (jstr .eq. 4) go to 50
+c  --------
+       if (jstr .eq. 1) go to 10
+c    ---
+c   a  subsequent call with changes.
+c    ---
+       if (ialth .eq. 1) ialth = 2
+       go to 20
+c        --------
+   10  continue
+c    ---
+c     b  initial call; set test quantities, counters and flags
+c    ---
+         iss = 1
+         rh = 1.0
+         rc = 0.0
+         rmax = rmax1
+         el1 = 1.0
+c
+         pw = 1 + ldyh
+         meo = 0
+         nq = 1
+         l = 2
+c
+   20 continue
+c ---
+c  3  check for change of basic method
+c ---
+      if (meth .eq. meo) go to 30
+         meo = meth
+         call dsgesc (meth, elco, tq)
+         ialth = l
+         nqo = 0
+c
+   30 continue
+      if (nq .le. mxord) go to 40
+         nq = mxord
+         l = lmax
+         iss = 4
+         d = vswrms (n, yh(1,l+1), 1, ewt, 1)
+         rh = 1.0/(1.3*(micro + (d/tq(1,l))**(1.0/float(l))))
+         rh = min(rh,1.0)
+   40 continue
+c ---
+c  4  check for change of order
+c ---
+      if (nq .eq. nqo) go to 50
+         nqo = nq
+         do i = 1, nq+1
+           el(i) = elco(i,nq)
+         enddo
+         rc = rc*el(1)/el1
+         el1 = el(1)
+         bnd = .5*tq(2,nq)/float(nq+2)
+c
+   50 continue
+c ---
+c  5  check for change of step size
+c ---
+      if (iss .eq. 1) go to 90
+      if (iss .eq. 2) go to 70
+      if (iss .eq. 3) go to 60
+      if (h .eq. hold) go to 60
+         rh = min(rh, h/hold)
+         h = hold
+         go to 80
+   60 continue
+         rh = max(rh,hmin/abs(h))
+         go to 80
+   70 continue
+      if (h .eq. hold) go to 100
+c                      ---------
+         rh = h/hold
+         h = hold
+   80 continue
+         rh = min(rh, rmax)
+         rh = rh/max(1.0,abs(h)*hmxi*rh)
+         h = h*rh
+         call dsgenm (yh,ldyh,n,rh,nq,0)
+         rc = rc*rh
+         ialth = l
+         if (isuc .eq. 0) go to 100
+c       ---               ---------
+c        a  successful step, order and/or step size set for next step
+c       ---
+            rmax = rmax2
+            go to 170
+c           ---------
+   90 continue
+         rh = max(rh,hmin/abs(h))
+         h = h*rh
+         do i = 1, n
+           yh(i,2) = h*yh(i,2)
+         enddo
+c
+  100 continue
+c ---
+c  6  predictor / corrector
+c ---
+      t = t + h
+      call dsgenm (yh,ldyh,n,rh,nq,1)
+c
+       call fpgepc (yh,ldyh,n,ewt,error,y,wa(1),wa(pw),iwk,fcn,jac,t,h,
+     & el1,rc,bnd,iparm(2),job,info)
+c
+      if (info .eq. 0) go to 120
+c    ---               ---------
+c     a  corrector failed to converge; recovery attempt
+c    ---
+         ncf = ncf + 1
+         t = told
+         call dsgenm (yh, ldyh, n, rh, nq, -1)
+         rmax = rmax4
+         if (abs(h) .gt. hmin*onepsm .and. ncf .lt. 10) go to 110
+            info = 31
+            go to 180
+c           ---------
+  110    continue
+            iss = 3
+            rh = rhcf
+            go to 50
+c           --------
+  120 continue
+c ---
+c  7  corrector converged; perform error test
+c ---
+      d = vswrms (n, error, 1, ewt, 1)
+      if (d .gt. tq(2,nq)) go to 140
+c    ---                   ---------
+c     a  error test passed
+c    ---
+         nef = 0
+         isuc = 1
+         nqu = nq
+         rparm(3) = h
+         iparm(5) = nqu
+         iparm(2) = iparm(2) + 1
+         do i = 1, l
+            do j = 1, n
+               yh(j,i) = yh(j,i) + el(i)*error(j)
+            enddo
+         enddo
+         if (ialth .eq. 0) go to 160
+c                          ---------
+            ialth = ialth - 1
+            if (ialth.eq.0 .and. l.lt.lmax) then
+               do i = 1, n
+                  yh(i,lmax) = error(i)
+               enddo
+            endif
+            go to 170
+c           ---------
+  140 continue
+c    ---
+c     a' error test failed
+c    ---
+         nef = nef + 1
+         t = told
+         call dsgenm (yh, ldyh, n, rh, nq, -1)
+         rmax = rmax4
+         if (abs(h) .gt. hmin*onepsm .and. nef .lt. 10) go to 150
+            info = 32
+            go to 180
+c           ---------
+  150    continue
+         if (nef .lt.  3) go to 160
+            call fcn (yh(1,2), n, yh, h)
+            iparm(3) = iparm(3) + 1
+            iss = 1
+            rh = rmin
+            rc = 0.0
+            ialth = 5
+            nq = 1
+            l = 2
+            go to 40
+c ----------========
+  160 continue
+c ---
+c  8  evaluate order / step size change
+c ---
+       iss = 3
+       call dsgeos (yh,ldyh,n,ewt,error,tq(1,nq),d,nq,rh,l,el(l),nef,
+     & lmax,ialth,wa,iflag)
+       if (iflag .eq. 1) go to 40
+c
+  170 continue
+       do i = 1, n
+         error(i) = error(i)/tq(2,nqu)
+       enddo
+       job(1) = 2
+c
+  180  continue
+       hold = h
+       iparm(6) = nq
+       return
+       end
+*endif

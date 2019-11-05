@@ -1,0 +1,474 @@
+*mlist
+       subroutine issi
+c
+c
+c  I level checking for the optional cards 140-147 that allow extra
+c  input checking for self initialization problems.
+c
+c  Cognizant engineer: swj/dmk.
+c
+       use gentblc
+       implicit none
+       include 'fast.h'
+       include 'cnvtpa.h'
+       include 'cmpdat.h'
+       include 'cmpdtv.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'convarc.h'
+       include 'pumpblk.h'
+       include 'ssiblk.h'
+       include 'stcblk.h'
+       include 'trpblk.h'
+       include 'turbin.h'
+       include 'ufiles.h'
+c
+c  Local variables.
+       integer i,itbl,j,k,kind,kk,kpz,kssi,l,ll,nf,np,ns,numsi,nssi,
+     & nssk,nx
+       real psia,px
+       character*15 tblfct(3),chwrd*8
+       character*9 lablp, labpsi, labpbr
+c
+c  Data statements.
+       data tblfct/'   pump control','  steam control',
+     & '   feed control'/
+       include 'cmpalf.h'
+       data labpsi/'(pa)'/, labpbr/'(lbf/in2)'/, psia/6894.757/
+c  ifilid = dynamic type files loaded from disk
+c 1.  file # 3  = component block
+c     there are 14 total component types...from which only the
+c     following can be governed by a control component.
+c    #2  = tmdpvol
+c    #4  = pump
+c    #9  = tmdpjun
+c    #12 = valve (only srvvlv can be controlled by cntrlvar)
+c 2.  file # 27 = control system block
+c     there are 22 total control variables types...from which only the
+c     following are allowed as self initialization controllers.
+c    #20 = pumpctl
+c    #21 = steamctl
+c    #22 = feedctl
+c 3.  file # 37 = steady state self initialization block
+c
+c  Check if self initialization file exists.
+       if (filid(37) .eq. 0.0) return
+       kssi   = filndx(37)
+       np     = npumps(filndx(37))
+       ns     = nstctl(filndx(37))
+       nf     = nfeeds(filndx(37))
+       numsi  = ssiskp*(np + ns + nf)
+       nssi   = kssi + numsi - 1
+       nssk   = nssi
+       kpz     = 0
+       if (filsiz(37) .gt. (numsi + 4)) then
+         kpz  = nssi + 1
+         nssk = nssi + ssiskp
+       endif
+c  Control variable loop, check if filid(27) exists.
+       if (filid(27) .eq. 0.0) then
+         fail = .true.
+         write(output, '(''0******** missing control component block fil
+     &id(27) and cannot do i-level check for self initialization control
+     &lers.'')')
+       else
+c  filid(27) exists, find control components referenced as contid
+c  on cards 140-146 and store info. for i-level checking.
+         i = filndx(27)
+         do j =1, cnvnum(i)
+c  Get control component type and number.
+           if (cnvtyp(i) .eq. 0) go to 112
+c  Search for contid = inum. if found store information for i-level
+c  checking.
+           do k = kssi,nssi,ssiskp
+             if (contid(k) .eq. cnvpnm(i)) then
+               cvrtno(k) = cnvtyp(i)
+               go to 112
+             endif
+           enddo
+  112      i = i + cnvlen(i)
+         enddo
+       endif
+c  Component loop, check if filid(3) exists.
+       if (filid(3) .eq. 0.0) then
+         fail = .true.
+         write(output, '(''0******** missing component block filid(3) an
+     &d cannot do i-level component check for self initialization.'')')
+       else
+c  filid(3) exists, find hydrodynamic components referenced as compid
+c  on cards 140-146 and store information for i-level checking.
+         i = filndx(3)
+         do 120 j = 1,ncmps(i)
+c  Get the component type and number.
+c  Search for compid = inum. if found store information for i-level
+c  checking (depending on component type).
+           do 122 k = kssi,nssk,ssiskp
+             if (compid(k) .eq. cmpnum(i)) then
+               cmptno(k) = cmptyp(i)
+c  Check for tmdpvol.
+               if (cmptyp(i) .eq. 2) then
+                 write (chwrd,'(a8)') nctalf(i)
+                 if (chwrd .ne. ' ') then
+                   cmpvnm(k) = nctalf(i)
+                 else
+                    chwrd = 'time'
+                    read (chwrd,'(a8)') cmpvnm(k)
+                 endif
+                 cmpvno(k) = nctdpv(i)
+                 cmpiii(k) = nctblt(i)
+                 cmptrp(k) = ncttrp(i)
+                 go to 123
+               else
+c  Check for tmdpjun.
+               if (cmptyp(i) .eq. 9) then
+                 write (chwrd,'(a8)') nctalf(i)
+                 if (chwrd .ne. ' ') then
+                   cmpvnm(k) = nctalf(i)
+                 else
+                   chwrd = 'time'
+                   read (chwrd,'(a8)') cmpvnm(k)
+                 endif
+                 cmpvno(k) = nctdpv(i)
+                 cmpiii(k) = nctblt(i)
+                 cmptrp(k) = ncttrp(i)
+                 go to 123
+               else
+c  Check for pump.
+               if (cmptyp(i) .eq. 4) then
+                 if (ipuspi(i) .eq. 0) go to 123
+                 itbl = filndx(3) + ipuspi(i+1)
+                 write (chwrd,'(a8)') ipmval(itbl)
+                 if (chwrd .eq. ' ') then
+                   chwrd = 'time'
+                   read (chwrd,'(a8)') cmpvnm(k)
+                 else
+                   cmpvnm(k) = ipmval(itbl)
+                 endif
+                 cmpvno(k) = ipmvnm(itbl)
+                 cmptrp(k) = ipmvtr(itbl)
+                 go to 123
+               else
+c  Check for srvvlv.
+               if (cmptyp(i) .eq. 12) then
+                 cmptrp(k) = 0
+                 if (vlvnm(i) .ne. 5) go to 123
+                 if ((filid(27) .eq. 0.0) .or.
+     &               (clstrp(i) .eq. 0  )) go to 123
+                 cmpvno(k) = opntrp(i)
+                 chwrd = 'cntrlvar'
+                 read (chwrd,'(a8)') cmpvnm(k)
+                 go to 123
+               endif
+               endif
+               endif
+               endif
+             endif
+  122      continue
+c  Search for compid = inum, a pressurizer connection.  If found
+c  store information for i-level checking.
+           if (kpz .ne. 0) then
+             if (contid(kpz) .eq. cmpnum(i)) then
+               cvrtno(kpz) = cmptyp(i)
+             endif
+           endif
+  123      i = i + cmplen(i)
+  120    continue
+       endif
+c  Compare the pump, controller information in the ssi block.
+       if (np .gt. 0) then
+         kk = kssi + np*ssiskp - 1
+         do 130 k = kssi,kk,ssiskp
+c  Check if component exists.
+           if (cmptno(k) .le. 0) then
+             fail = .true.
+             write(output, '(''0******** component'',i5,'' input on c'',
+     &       ''ards 141-142 is an undefined hydrodynamic component'')')
+     &       compid(k)
+           else
+c  Component exists; is it a pump?
+           if (cmptno(k) .ne. 4) then
+             fail = .true.
+             write(output, '(''0******** component'',i5,'' input on card
+     &s 141-142 is an incorrect hydrodynamic component of type = '',a8/
+     & 10x,''and must be specified as a type = pump'')') compid(k),
+     & cmpalf(cmptno(k))
+           else
+c  Component is a pump; does a pump speed table exist?
+           write (chwrd,'(a8)') cmpvnm(k)
+           if (cmpvno(k).le.0 .and. chwrd.eq.' ') then
+             fail = .true.
+             write(output, '(''0******** component'',i5,'' is input on c
+     &ards 141-142 as a s.i. controlled pump.''/10x,''however no pump sp
+     &eed table has been input'')') compid(k)
+           else
+c  Pump speed table exists.
+c  Is search variable = cntrlvar, contid?
+           if (chwrd.ne.'cntrlvar' .or. cmpvno(k).ne.contid(k)) then
+             fail = .true.
+             write(output, '(''0******** component'',i5,'' is a pump gov
+     &erned by control component'',i5,'' as input on cards 141-142.''/
+     & 10x,''however, the pump speed table search variable has been inco
+     &rrectly input = '',a8,i10)') compid(k),contid(k),cmpvnm(k),
+     & cmpvno(k)
+           endif
+           endif
+           endif
+c  Check if pump regulator also controlled by a trip.
+           if (cmptrp(k) .ne. 0) then
+           if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &     write(output, '(''0$$$$$$$$ warning, component'',i5,'' is a s
+     &.i. pump that is also governed by trip no.'',i5)')
+     &     compid(k), cmptrp(k)
+           endif
+           endif
+c  Check if s.i. pump regulator controller exists.
+           if (cvrtno(k) .le. 0) then
+             fail = .true.
+             write(output, '(''0******** controller'',i5,'' input on car
+     &ds 141-142 is an undefined control component'')')
+     &       contid(k)
+           else
+c  Controller exists. is it = pumpctl?
+           if (cvrtno(k) .ne. 20) then
+             fail = .true.
+             write(output, '(''0******** control variable'',i5,'' must b
+     &e a pumpctl type controller governing pump component'',i5/
+     &10x,''but is input incorrectly as a '',a8,'' type controller'')')
+     & contid(k),compid(k),cnvalf(cvrtno(k))
+           endif
+           endif
+  130    continue
+       endif
+c  Compare the steam regulator information in the ssi block.
+       if (ns .gt. 0) then
+         ll = kssi + np*ssiskp
+         kk = ll + ns*ssiskp - 1
+         do 140 k = ll,kk,ssiskp
+c  Check if s.i. steam regulator component exists.
+           if (cmptno(k) .le. 0) then
+             fail = .true.
+             write(output, '(''0******** component'',i5,'' input on card
+     &s 143-144 is an undefined hydrodynamic component'')')
+     &       compid(k)
+           else
+c  Component exists; is it = tmdpjun or valve?
+           if ((cmptno(k) .ne. 9) .and. (cmptno(k) .ne. 12)) then
+             fail = .true.
+             write(output, '(''0******** component'',i5,'' input on card
+     &s 143-144 is an incorrect hydrodynamic component of type = '',a8/
+     & 10x,''and must be specified as a type = tmdpjun or servo valve'')
+     &') compid(k),cmpalf(cmptno(k))
+           else
+c  it = tmdpjun or valve; does search var. or pointer exist?
+           write (chwrd,'(a8)') cmpvnm(k)
+           if (cmpvno(k).le.0 .and. chwrd.eq.' ') then
+             fail = .true.
+             write(output, '(''0******** the search or control variable
+     &is undefined for the s.i. steam regulator component'',
+     & i5,'' input on cards 143-144.''/10x,''refer to the input descript
+     &ion for a '',a8,'' component'')') compid(k),cmpalf(cmptno(k))
+           else
+c  Search variable or pointer exists. is it = cntrlvar, contid?
+           if (chwrd.ne.'cntrlvar' .or. cmpvno(k).ne.contid(k)) then
+             fail = .true.
+             write(output, '(''0******** the search or control variable
+     &for the s.i. steam regulator component'',i5,'' is incorrectly spec
+     &ified = '',a8,i10/10x,'' and must be specified = cntrlvar'',i5)')
+     &       compid(k), cmpvnm(k), cmpvno(k), contid(k)
+           endif
+           endif
+           endif
+c  Check if steam regulator also controlled by a trip.
+           if (cmptrp(k) .ne. 0) then
+             if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &       write(output, '(''0$$$$$$$$ the s.i. steam regulator compon
+     &ent'',i5,'' is also governed by trip no. ='',i5)')
+     &       compid(k), cmptrp(k)
+           endif
+           endif
+c  Check if s.i. steam regulator controller exists.
+           if (cvrtno(k) .le. 0) then
+             fail = .true.
+             write(output, '(''0******** controller'',i5,'' input on car
+     &ds 143-144 is an undefined control component'')') contid(k)
+           else
+c  Controller exists. is it = steamctl?
+           if (cvrtno(k) .ne. 21) then
+             fail = .true.
+             write(output, '(''0******** the s.i. steam regulator contro
+     &ller'',i5,'' coverning component'',i5/10x,'' is an incorrect contr
+     &oller type = '',a8,'' and must be of type = steamctl'')')
+     &       contid(k),compid(k),cnvalf(cvrtno(k))
+           endif
+           endif
+  140    continue
+       endif
+c  Compare the feed regulator information in the ssi block.
+       if (nf .gt. 0) then
+         ll = kssi + ssiskp*(np + ns)
+         kk = ll + nf*ssiskp - 1
+         do 150 k = ll,kk,ssiskp
+c  Check if s.i. feed regulator component exists.
+           if (cmptno(k) .le. 0) then
+             fail = .true.
+             write(output, '(''0******** component'',i5,'' input on card
+     &s 145-146 is an undefined hydrodynamic component'')')
+     &       compid(k)
+           else
+c  Component exists; is it = pump, tmdpjun or valve?
+           if (cmptno(k).ne.4 .and. cmptno(k).ne.9 .and.
+     &     cmptno(k).ne.12) then
+             fail = .true.
+             write(output, '(''0******** component'',i5,'' input on card
+     &s 145-146 is an incorrect hydrodynamic component of type = '',a8/
+     & 10x,''and must be specified as a type = tmdpjun, pump or valve'')
+     &') compid(k),cmpalf(cmptno(k))
+           else
+c  Component = correct; does a search var. or pointer exist?
+            write (chwrd,'(a8)') cmpvnm(k)
+            if (cmpvno(k).le.0 .and. chwrd.eq.' ') then
+         fail = .true.
+             write(output, '(''0******** the search or control variable
+     &for component'',i5,'' input on cards 145-146 is undefined.''/10x,
+     & ''refer to the input description for a'',1x,a8,'' hydrodynamic co
+     &mponent.'')') compid(k),cmpalf(cmptno(k))
+           else
+c  Search variable or pointer exists; is it = cntrlvar, contid?
+           if (chwrd.ne.'cntrlvar' .or. cmpvno(k).ne.contid(k)) then
+             fail = .true.
+             write(output, '(''0******** the search or control variable
+     &for the s.i. feed regulator component'',i5,'' is incorrectly speci
+     &fied = '',a8,i10/10x,'' and must be specified = cntrlvar'',i5)')
+     &       compid(k), cmpvnm(k), cmpvno(k), contid(k)
+           endif
+           endif
+           endif
+c  Check if feed regulator also controlled by a trip.
+           if (cmptrp(k) .ne. 0) then
+             if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write(output, '(''0$$$$$$$$ warning, component'',i5,'' input on
+     & cards 145-146 is also governed by trip no. ='',i5)')
+     & compid(k), cmptrp(k)
+           endif
+           endif
+c  Check if s.i. feed regulator controller exists.
+           if (cvrtno(k) .le. 0) then
+             fail = .true.
+             write(output, '(''0******** controller'',i5,'' input on car
+     &ds 145-146 is an undefined control component'')')
+     &       contid(k)
+           else
+c  Controller exists; is it = feedctl?
+           if (cvrtno(k) .ne. 22) then
+             fail = .true.
+             write(output, '(''0******** controller'',i5,'' input on car
+     &ds 145-146 is an incorrect control component of type = '',a8/
+     & 10x,'' and must be specified of type = feedctl'')')
+     & contid(k),cnvalf(cvrtno(k))
+           endif
+           endif
+  150    continue
+       endif
+c  Compare the pressurizer tmdpvol information in the ssi block.
+       if (kpz .ne. 0) then
+c  Check if pressurizer tmdpvol component exists.
+         if (cmptno(kpz) .le. 0) then
+           fail = .true.
+           write(output,3001) compid(kpz)
+ 3001  format ('0******** Pressurizer replacement component',i5,' input
+     &on card 147 is an undefined hydrodynamic component.')
+         else
+c  Component exists; is it = tmdpvol?
+         if (cmptno(kpz) .ne. 2) then
+           fail = .true.
+           write(output,3002) compid(kpz),cmpalf(cmptno(kpz))
+ 3002  format ('0******** Pressurizer replacement component',i5,' input
+     &on card 147 is an incorrect hydrodynamic component'/10x,'of type =
+     & ',a8,' and must be defined as a type = tmdpvol.')
+         else
+c  Component = correct; does a search var. or pointer exist?
+         write (chwrd,'(a8)') cmpvnm(kpz)
+         if (cmpvno(kpz).le.0 .and. chwrd.eq.' ') then
+           fail = .true.
+           write(output, '(''0******** the search variable for pressuriz
+     &er replacement component'',i5,'', input on cards 147, is undefined
+     & for a'',1x,a8,'' hydrodynamic component.'')')
+     &     compid(kpz),cmpalf(cmptno(kpz))
+         else
+         endif
+         endif
+c  Check if pressurizer component also controlled by a trip.
+         if (cmptrp(kpz) .ne. 0) then
+           if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &     write(output, '(''0$$$$$$$$ warning, pressurizer replacement
+     &component'',i5,'', input on card 147, is also governed by trip no.
+     & ='',i5)') compid(kpz), cmptrp(kpz)
+         endif
+         endif
+c  Check if pressurizer connection component exists.
+         if (cvrtno(kpz) .le. 0) then
+           fail = .true.
+           write (output,3003) contid(kpz)
+ 3003  format ('0******** Pressurizer connection component',i5,', input
+     &on card 147, is an undefined hydrodynamic component.')
+         else
+c  Component exists; is it = sngljun or branch?
+           if (cvrtno(kpz) .ne. 11) then
+             fail = .true.
+             write(output,3004) contid(kpz),cmpalf(cvrtno(kpz))
+ 3004  format ('0******** Pressurizer connection component',i5,', input
+     &on card 147, is an incorrect hydrodynamic component'/10x,'of type
+     &= ',a8,' and must be specified as a type = sngljun')
+           endif
+         endif
+       endif
+c  Print a table summarizing self initialization checkout information.
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       if (numsi .le. 0) go to 180
+       write (output,
+     & '(''0summary of self initialization component, controller configu
+     &ration''/4x,''function      si input (cards 140-147)'',
+     & 7x,''si controller'',30x,''si component''/19x,''component'',
+     & 3(3x,''controller''),3x,2(''component'',4x),2(''search var'',2x
+     & ),1x,''table''/17x,2(4x,''id no'',4x),2(2x,''type no'',8x,
+     & ''type'',5x),3x,''name'',7x,''number'',4x,''trip no'')')
+       kk = kssi
+       kind = kssi
+       do 170 l = 1, 3
+         nx = npumps(kind)
+         if (nx .gt. 0) then
+           write (output, 1000) tblfct(l)
+ 1000 format(1x,a16)
+           do 160 k = 1, nx
+             write (output,1010) compid(kk),contid(kk),cvrtno(kk),
+     &       cnvtpa(cvrtno(kk)),cmptno(kk),cmpalf(cmptno(kk)),
+     &       cmpvnm(kk),cmpvno(kk),cmptrp(kk)
+ 1010  format (17x,2(4x,i5,4x),2(4x,i5,6x,a8,3x),1x,a8,1x,i10,5x,i5)
+             kk = kk + ssiskp
+  160      continue
+         endif
+         kind = kind + 1
+  170  continue
+c  Printout for si pressurizer control.
+  180  if (kpz .ne. 0) then
+         px    = pzpres(kpz)
+         lablp = labpsi
+         if (.not.unito) then
+           px    = px/psia
+           lablp = labpbr
+         endif
+         write (output, '(''0pressurizer replaced  by component'',i5,
+     & '' of type'',i3,'' a '',a8/10x,''the time dep. tbl. is an i.c. ty
+     &pe'',i3,'' controlled by trip'',i5,'' with search variable '',
+     &a8,i10/'' pressurizer is connected to component'',i5,'' of type''
+     & ,i3,'' a '',a8/'' desired pressurizer pressure is'',
+     & 1p,g14.6,1x,a9)')
+     &   compid(kpz),cmptno(kpz),cmpalf(cmptno(kpz)),cmpiii(kpz),
+     &   cmptrp(kpz),cmpvnm(kpz),cmpvno(kpz),contid(kpz),cvrtno(kpz),
+     &   cmpalf(cvrtno(kpz)),px,lablp
+       endif
+       endif
+       call fmvlwr
+       nfluid = 0
+       return
+       end

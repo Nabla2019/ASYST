@@ -1,0 +1,615 @@
+*mlist
+*if def,selap
+       subroutine rups
+c
+c  this subroutine processes input data for the upper plenum structures
+c  and includes the following:
+c    (1) constant initialization
+c    (2) input card processing
+c    (3) mass and node length array initialization
+c
+c  Cognizant engineer: ewc (fpg).
+c
+*in32 idat
+*in32 idatax
+*in32end
+c
+       implicit none
+*call scddat
+*call upccon
+*call upcvar
+*call fast
+*call voldat
+*call ufiles
+*call contrl
+*call comctl
+c
+c  local variables (must be defined every call)
+c
+c  is      index that represents current upper plenum structure number
+c  iax     index that represents current upper plenum axial level number
+c  icn     index that represents current upper plenum conduction node
+c          number
+c  iox     index that represents current upper plenum oxide species
+       integer upsflg
+       parameter (upsflg=8)
+       real tkroom, tsol, sden, soden, lxmaxl, lxmaxr
+       real ytmp(nmupcn)
+       real cmft,   ckf1, ckf2
+       data cmft,   ckf1, ckf2
+     &     /0.3048, 1.8,  459.67/
+       real    rdat(nmupcn), rdatax(4*nmupax)
+       integer idat(nmupcn), idatax(4*nmupax)
+       equivalence (rdat(1),idat(1)), (rdatax(1),idatax(1))
+       integer is, iax, icn, iox
+       integer iv, ive
+       integer isscnt, issnxt, next, where, nfield
+       integer iaxini, icrd, ncrd, mcrd
+c
+c  card format data
+c
+       integer nmucm2
+       parameter (nmucm2 = nmupcn-2)
+       integer l0(7), l1(6+nmucm2), l3(8), l4(6+nmucm2)
+       data l0/0,0,1,1,     0,1,0/
+       data l1/0,0,1,nmucm2,0,1,nmucm2*1/
+       data l3/0,0,0,2,     0,1,1,1/
+       data l4/0,0,1,nmucm2,0,1,nmucm2*1/
+       integer l2(6+4*nmupax), l5(6+4*nmupax)
+c
+c  constants (initialize one time only)
+c
+       wtfe=55.85
+       wtcr=52.00
+       wtni=58.71
+       wtfeo=71.85
+       wtf3o4=231.55
+       wtc2o3=152.00
+       wtnio=74.71
+       wth2o=18.00
+       fmfe   = 0.74
+       fmcr   = 0.18
+       fmni   = 0.08
+       fmfeo  = fmfe * wtfeo / wtfe
+       fmf3o4 = fmfe * wtf3o4 / (3.0 * wtfe)
+       fmc2o3 = fmcr * wtc2o3 / (2.0 * wtcr)
+       fmnio  = fmni * wtnio / wtni
+       tkroom = 298.0
+       call shyprp(tsol,tmlups)
+       dnmups = sden(tkroom)
+       dnlups = sden(tmlups)
+       dnxups = soden(tkroom)
+       hfuups = 2.668e5
+       fxlups = 0.5
+       thlups = 0.002
+       ulups  = 0.5
+       hlups  = 17000.0
+c
+c  scan input deck for upper plenum structure cards 4xssttnn
+c
+       ntups = 0
+       isscnt = 1
+c  beginning of loop to read input data
+   10  continue
+       l0(1) = isscnt*10000 + 40000000 + upsflg*1000000
+       if(l0(1).ge.40000000 + (upsflg+1)*1000000) goto 20
+       call inplnk (l0(1),next,where,nfield,fa(filndx(1)))
+       if (nfield .eq. 0) then
+c  when card 4xss0000 is not present, ckeck for other 4xssttnn cards
+         if (next.eq.-1 .or.
+     &   next.ge.40000000 + (upsflg+1)*1000000) goto 20
+         issnxt = (next - 40000000 - upsflg*1000000)/10000
+         if (issnxt .eq. isscnt) then
+           write (output,2000) l0(1),' is missing'
+ 2000      format('0******** Card',i10,a)
+           fail = .true.
+           isscnt = isscnt + 1
+         else
+           isscnt = issnxt
+         endif
+         goto 10
+       endif
+c  card 4xss0000 is present
+       if(ntups .ge. nmups) then
+         write(output,2010) nmups
+ 2010    format('0******** Total number of upper plenum structures ',
+     &   'can not exceed ',i3)
+         fail = .true.
+         goto 20
+       endif
+       ntups = ntups + 1
+       is = ntups
+       isuser(is) = isscnt
+c  card 4xss0000 - general data
+c  data l0 /0,0,1,1,0,1,0/
+       l0(6) = 1
+       call inp2(fa(filndx(1)),rdat,l0)
+       if(l0(6).lt.0)then
+         fail = .true.
+         isscnt = isscnt + 1
+         goto 10
+       else
+         ntupax(is) = idat(1)
+c  range checking
+         if(ntupax(is).lt.1 .or. ntupax(is).gt.nmupax) then
+           write(output,2020) l0(1),'Total number of upper plenum ',
+     &     'axial levels is out of range'
+ 2020      format('0******** Card',i10,' - ',a,a)
+           fail = .true.
+           isscnt = isscnt + 1
+           goto 10
+         endif
+       endif
+c  cards 4xss0101 thru 4xss0199 - mesh data
+c  data l1/0,0,1,nmucm2,0,1,nmucm2*1/
+       do 100 iax=1,ntupax(is)
+         l1(1) = isscnt*10000 + 40000100 + upsflg*1000000 + iax
+         l1(6) = 1
+         call inp2(fa(filndx(1)),rdat,l1)
+         if(l1(6).lt.0)then
+           fail = .true.
+           isscnt = isscnt + 1
+           goto 10
+         else
+           ntupcn(iax,is) = l1(6) + 2
+           iupls(iax,is)  = 2
+           iuprs(iax,is)  = ntupcn(iax,is) - 1
+           do 110 icn=iupls(iax,is),iuprs(iax,is)
+             if(uniti) then
+c  rdat in si units (m)
+               liups(icn,iax,is) = rdat(icn-1)
+             else
+c  rdat in british units (ft)
+               liups(icn,iax,is) = rdat(icn-1) * cmft
+             endif
+c  range checking
+             if(liups(icn,iax,is).lt.0.99e-6) then
+               write(output,2020) l1(1),'Initial length of upper ',
+     &         'plenum structure node is out of range'
+               fail = .true.
+               liups(icn,iax,is) = 1.0e-6
+             endif
+             lups(icn,iax,is)  = liups(icn,iax,is)
+  110      continue
+           liups(1,iax,is) = 1.0e6
+           liups(ntupcn(iax,is),iax,is) = 1.0e6
+           lups(1,iax,is) = 0.0
+           lups(ntupcn(iax,is),iax,is) = 0.0
+         endif
+  100  continue
+c
+c  cards 4xss0201 thru 4xss0299 - surface and relocation data
+c
+       l2(1) = isscnt*10000 + 40000201 + upsflg*1000000
+       l2(2) = -l2(1) - 98
+       l2(3) = 4
+       l2(4) = 4*ntupax(is)
+       l2(5) = 0
+       l2(6) = 1
+       do 200 iax=1,nmupax
+         l2(4*iax+3) = 1
+         l2(4*iax+4) = 0
+         l2(4*iax+5) = 1
+         l2(4*iax+6) = 0
+  200  continue
+       call inp2(fa(filndx(1)),rdatax,l2)
+       if(l2(6).lt.0)then
+         fail=.true.
+       else
+         ncrd = l2(6)/4
+         mcrd = mod(l2(6),4)
+         if(mcrd.ne.0) then
+           write(output,2050) l2(1),-l2(2)
+ 2050      format('0******** illegal format on cards',i10,
+     &     ' through',i10)
+           fail=.true.
+         elseif(idatax(4*ncrd).ne.ntupax(is)) then
+           write(output,2050) l2(1),-l2(2)
+           fail=.true.
+         else
+           do 210 icrd=1,ncrd
+             if(icrd.eq.1) then
+               iaxini = 1
+             else
+               iaxini = idatax(4*icrd-4) + 1
+             endif
+             if(iaxini.lt.1 .or. idatax(4*icrd).gt.ntupax(is) .or.
+     &       iaxini.gt.idatax(4*icrd)) then
+               write(output,2050) l2(1),-l2(2)
+               fail=.true.
+             else
+               do 220 iax=iaxini,idatax(4*icrd)
+                 isoups(iax,is) = idatax(4*icrd-2)
+                 if(uniti) then
+c  rdatax in si units (m2, m)
+                   saups(iax,is)  = rdatax(4*icrd-3)
+                   hvups(iax,is)  = rdatax(4*icrd-1)
+                 else
+c  rdatax in british units (ft2, ft)
+                   saups(iax,is)  = rdatax(4*icrd-3)*cmft**2
+                   hvups(iax,is)  = rdatax(4*icrd-1)*cmft
+                 endif
+c  range checking
+                 if(saups(iax,is).le.0.0) then
+                   write(output,2060) l2(1),-l2(2),'Heat transfer ',
+     &             'surface areas (word 1) are out of range'
+ 2060              format('0******** Cards',i10,' through',i10,' - ',
+     &             a,a)
+                   fail = .true.
+                   saups(iax,is) = 1.0
+                 endif
+                 if(isoups(iax,is).lt.0 .or.
+     &           isoups(iax,is).gt.2) then
+                   write(output,2060) l2(1),-l2(2),'Surface ',
+     &             'orientation flags (word 2) are out of range'
+                   fail = .true.
+                   isoups(iax,is) = 0
+                 endif
+                 if(hvups(iax,is).lt.1.0e-6) then
+                   write(output,2060) l2(1),-l2(2),'Relocation ',
+     &             'heights (word 3) are out of range'
+                   fail = .true.
+                   hvups(iax,is) = 1.0e-6
+                 endif
+  220          continue
+             endif
+  210      continue
+         endif
+       endif
+c  initialize other surface and relocation variables
+       hhtot(is) = 0.0
+       do 230 iax=1,ntupax(is)
+         if(isoups(iax,is).eq.0) then
+c  vertical surface
+           hhtot(is) = hhtot(is) + hvups(iax,is)
+           hhups(iax,is) = hhtot(is)
+         else
+c  horizontal surface
+           hvups(iax,is) = 1.0e12
+           hhups(iax,is) = saups(iax,is)**0.5
+         endif
+         etlupl(iax,is) = -1.0
+         eblupl(iax,is) = -1.0
+         etlupr(iax,is) = -1.0
+         eblupr(iax,is) = -1.0
+  230  continue
+c
+c  card 4xss0300 - initial oxide thicknesses
+c  data l3/0,0,0,2,     0,1,1,1/
+c
+       l3(1) = isscnt*10000 + 40000300 + upsflg*1000000
+       l3(6) = 1
+       call inp2(fa(filndx(1)),rdat,l3)
+       do 300 iax=1,ntupax(is)
+         lxupls(iax,is) = 0.0
+         lxuprs(iax,is) = 0.0
+         if(l3(6).lt.0)then
+           fail=.true.
+         else
+           if(uniti) then
+c  rdat in si units (m)
+             if(l3(6).ge.1) lxupls(iax,is) = rdat(1)
+             if(l3(6).ge.2) lxuprs(iax,is) = rdat(2)
+           else
+c  rdat in british units (ft)
+             if(l3(6).ge.1) lxupls(iax,is) = rdat(1) * cmft
+             if(l3(6).ge.2) lxuprs(iax,is) = rdat(2) * cmft
+           endif
+c  range checking
+           if(lxupls(iax,is).lt.0.0) then
+             if(iax.eq.1)
+     &       write(output,2030) l3(1),'Initial oxide thickness ',
+     &       '(word 1) is out of range, default value 0.0 m is used'
+ 2030        format('0$$$$$$$$ Card',i10,' - ',a,a)
+             lxupls(iax,is) = 0.0
+           endif
+           if(lxuprs(iax,is).lt.0.0) then
+             if(iax.eq.1)
+     &       write(output,2030) l3(1),'Initial oxide thickness ',
+     &       '(word 2) is out of range, default value 0.0 m is used'
+             lxuprs(iax,is) = 0.0
+           endif
+           if(iupls(iax,is).eq.iuprs(iax,is)) then
+             lxmaxl = 0.5*liups(iupls(iax,is),iax,is)
+             lxmaxr = 0.5*liups(iuprs(iax,is),iax,is)
+           else
+             lxmaxl = liups(iupls(iax,is),iax,is)
+             lxmaxr = liups(iuprs(iax,is),iax,is)
+           endif
+           if(lxupls(iax,is).gt.lxmaxl) then
+             write(output,2040) l3(1),'Initial oxide thickness ',
+     &       '(word 1) is out of range for axial level',iax
+ 2040        format('0******** Card',i10,' - ',a,a,i3)
+             fail = .true.
+             lxupls(iax,is) = 0.0
+           endif
+           if(lxuprs(iax,is).gt.lxmaxr) then
+             write(output,2040) l3(1),'Initial oxide thickness ',
+     &       '(word 2) is out of range for axial level',iax
+             fail = .true.
+             lxuprs(iax,is) = 0.0
+           endif
+         endif
+  300  continue
+c
+c  cards 4xss0401 thru 4xss0499 - initial temperatures
+c  data l4/0,0,1,nmucm2,0,1,nmucm2*1/
+c
+       do 400 iax=1,ntupax(is)
+         l4(1) = isscnt*10000 + 40000400 + upsflg*1000000 + iax
+         l4(3) = ntupcn(iax,is) - 2
+         l4(4) = ntupcn(iax,is) - 2
+         l4(6) = 1
+         call inp2(fa(filndx(1)),rdat,l4)
+         if(l4(6).lt.0)then
+           fail = .true.
+           do 410 icn=iupls(iax,is),iuprs(iax,is)
+             tups(icn,iax,is) = 300.0
+  410      continue
+         else
+           do 420 icn=iupls(iax,is),iuprs(iax,is)
+             if(uniti) then
+c  rdat in si units (k)
+               tups(icn,iax,is) = rdat(icn-1)
+             else
+c  rdat in british units (f)
+               tups(icn,iax,is) = (rdat(icn-1)+ckf2)/ckf1
+             endif
+c  range checking
+             if(tups(icn,iax,is).lt.300.0 .or.
+     &       tups(icn,iax,is).gt.tmlups) then
+               write(output,2020) l4(1),'Initial temperature of upper ',
+     &         'plenum structure node is out of range'
+               fail = .true.
+               tups(icn,iax,is) = 300.0
+             endif
+  420      continue
+           tups(1,iax,is) = tups(iupls(iax,is),iax,is)
+           tups(ntupcn(iax,is),iax,is) =
+     &                      tups(iuprs(iax,is),iax,is)
+         endif
+  400  continue
+c
+c  cards 4xss0501 thru 4xss0599 - left and right boundary conditions
+c
+       l5(1) = isscnt*10000 + 40000501 + upsflg*1000000
+       l5(2) = -l5(1) - 98
+       l5(3) = 4
+       l5(4) = 4*ntupax(is)
+       l5(5) = 0
+       l5(6) = 1
+       do 500 iax=1,nmupax
+         l5(4*iax+3) = 0
+         l5(4*iax+4) = 0
+         l5(4*iax+5) = 0
+         l5(4*iax+6) = 0
+  500  continue
+       call inp2(fa(filndx(1)),rdatax,l5)
+       if(l5(6).lt.0)then
+         fail=.true.
+       else
+         ncrd = l5(6)/4
+         mcrd = mod(l5(6),4)
+         if(mcrd.ne.0) then
+           write(output,2050) l5(1),-l5(2)
+           fail=.true.
+         elseif(idatax(4*ncrd).ne.ntupax(is)) then
+           write(output,2050) l5(1),-l5(2)
+           fail=.true.
+         else
+           do 510 icrd=1,ncrd
+             if(icrd.eq.1) then
+               iaxini = 1
+             else
+               iaxini = idatax(4*icrd-4) + 1
+             endif
+             if(iaxini.lt.1 .or. idatax(4*icrd).gt.ntupax(is) .or.
+     &       iaxini.gt.idatax(4*icrd)) then
+               write(output,2050) l5(1),-l5(2)
+               fail=.true.
+             else
+               do 520 iax=iaxini,idatax(4*icrd)
+                 if(iax.eq.iaxini) then
+                   volupl(iax,is) = idatax(4*icrd-3)
+                   volupr(iax,is) = idatax(4*icrd-2)
+                 else
+                   volupl(iax,is) = volupl(iax-1,is) +
+     &             idatax(4*icrd-1)
+                   volupr(iax,is) = volupr(iax-1,is) +
+     &             idatax(4*icrd-1)
+                 endif
+  520          continue
+             endif
+  510      continue
+         endif
+       endif
+       do 530 iax=1,ntupax(is)
+c  initialize other left boundary condition variables
+         qrupls(iax,is) = 0.0
+         qwgupl(iax,is)=0.0
+         qupl(iax,is)=0.0
+         gamupl(iax,is)=0.0
+c  initialize other right boundary condition variables
+         qruprs(iax,is) = 0.0
+         qwgupr(iax,is)=0.0
+         qupr(iax,is)=0.0
+         gamupr(iax,is)=0.0
+  530  continue
+c
+c  initialize coolant condition offset indexes nvadul, nvadur
+c  (perform once for each ups)
+c
+       if (filid(4) .ne. 0.0) then
+c  note that filid(4)=0.0 only if an input processing error occurs
+         ive = filndx(4) + nvols(filndx(4))*ivskp - 1
+         do 700 iax = 1,ntupax(is)
+c  volumes adjacent to left surface nodes
+           do 710 iv = filndx(4),ive,ivskp
+             if (volupl(iax,is) .eq. volno(iv)) then
+               nvadul(iax,is) = iv - filndx(4)
+               go to 720
+             endif
+  710      continue
+           write(output,730) is,iax,volupl(iax,is)
+  730  format ('0******** upper plenum structure',i3,', axial level',
+     & i3,' references a non-existent hydrodynamic volume, ',i9,'.')
+           fail = .true.
+  720      continue
+c  volumes adjacent to right surface nodes
+           do 740 iv = filndx(4),ive,ivskp
+             if (volupr(iax,is) .eq. volno(iv)) then
+               nvadur(iax,is) = iv - filndx(4)
+               go to 700
+             endif
+  740      continue
+           write(output,730) is,iax,volupr(iax,is)
+           fail = .true.
+  700    continue
+       endif
+c
+c  initialize mass and node length arrays (perform once for each ups)
+c
+       do 800 iax=1,ntupax(is)
+         do 810 icn=iupls(iax,is),iuprs(iax,is)
+           mmups(icn,iax,is)=saups(iax,is)*lups(icn,iax,is)*dnmups
+  810    continue
+         mmups(1,iax,is)=0.0
+         mmups(ntupcn(iax,is),iax,is)=0.0
+c  left surface oxides (fe3o4, cr2o3, nio)
+         mxupls(1,iax,is)=saups(iax,is)*lxupls(iax,is)*dnxups
+         mxupls(2,iax,is)=0.0
+         mxupls(3,iax,is)=0.0
+         mxupls(4,iax,is)=0.0
+         mxupls(5,iax,is)=mxupls(1,iax,is)*fmf3o4/(fmf3o4+fmc2o3+fmnio)
+         mxupls(6,iax,is)=mxupls(1,iax,is)*fmc2o3/(fmf3o4+fmc2o3+fmnio)
+         mxupls(7,iax,is)=mxupls(1,iax,is)*fmnio /(fmf3o4+fmc2o3+fmnio)
+         mmups(iupls(iax,is),iax,is)=mmups(iupls(iax,is),iax,is)-
+     &   mxupls(1,iax,is)/(fmf3o4+fmc2o3+fmnio)
+         mmgupl(iax,is)=0.0-mxupls(1,iax,is)/(fmf3o4+fmc2o3+fmnio)
+c  right surface oxides (fe3o4, cr2o3, nio)
+         mxuprs(1,iax,is)=saups(iax,is)*lxuprs(iax,is)*dnxups
+         mxuprs(2,iax,is)=0.0
+         mxuprs(3,iax,is)=0.0
+         mxuprs(4,iax,is)=0.0
+         mxuprs(5,iax,is)=mxuprs(1,iax,is)*fmf3o4/(fmf3o4+fmc2o3+fmnio)
+         mxuprs(6,iax,is)=mxuprs(1,iax,is)*fmc2o3/(fmf3o4+fmc2o3+fmnio)
+         mxuprs(7,iax,is)=mxuprs(1,iax,is)*fmnio /(fmf3o4+fmc2o3+fmnio)
+         mmups(iuprs(iax,is),iax,is)=mmups(iuprs(iax,is),iax,is)-
+     &   mxuprs(1,iax,is)/(fmf3o4+fmc2o3+fmnio)
+         mmgupr(iax,is)=0.0-mxuprs(1,iax,is)/(fmf3o4+fmc2o3+fmnio)
+c  node lengths (note possibility of iupls=iuprs)
+         lups(iupls(iax,is),iax,is)=mmups(iupls(iax,is),iax,is)/
+     &   saups(iax,is)/dnmups
+         lups(iuprs(iax,is),iax,is)=mmups(iuprs(iax,is),iax,is)/
+     &   saups(iax,is)/dnmups
+         lups(iupls(iax,is),iax,is)=lups(iupls(iax,is),iax,is)+
+     &   lxupls(iax,is)
+         lups(iuprs(iax,is),iax,is)=lups(iuprs(iax,is),iax,is)+
+     &   lxuprs(iax,is)
+         mlupl(iax,is)=0.0
+         mlupr(iax,is)=0.0
+         do 820 iox=1,7
+           mxlupl(iox,iax,is)=0.0
+           mxlupr(iox,iax,is)=0.0
+  820    continue
+  800  continue
+       mlupl(0,is)=0.0
+       mlupr(0,is)=0.0
+       mluph(is)=0.0
+       do 830 iox=1,7
+         mxlupl(iox,0,is)=0.0
+         mxlupr(iox,0,is)=0.0
+         mxluph(iox,is)=0.0
+  830  continue
+c
+c  print input data (perform once for each ups)
+c
+c  print header
+       write(output,900) is
+  900  format('1Input data for upper plenum structure number',i3)
+c  print lengths
+       if(unito) then
+         write(output,910) '(m)'
+       else
+         write(output,910) '(ft)'
+       endif
+  910  format(/' Axial  Initial thicknesses ',a,' of nodes and oxides'/
+     &         ' level  __oxides_  _intact_(1_or_more)_',
+     &               '  __oxides_')
+       do 920 iax=ntupax(is),1,-1
+         if(unito) then
+           write(output,940) iax,lxupls(iax,is),
+     &     (liups(icn,iax,is),icn=iupls(iax,is),iuprs(iax,is)),
+     &     lxuprs(iax,is)
+         else
+           write(output,940) iax,lxupls(iax,is)/cmft,
+     &     (liups(icn,iax,is)/cmft,icn=iupls(iax,is),iuprs(iax,is)),
+     &     lxuprs(iax,is)/cmft
+         endif
+  940    format(' ',i4,1x,1p,10e11.3)
+  920  continue
+c  print temperatures
+       if(unito) then
+         write(output,950) '(K)'
+       else
+         write(output,950) '(F)'
+       endif
+  950  format(/' Axial  Initial temperatures ',a,' of nodes'/
+     &         ' level             _intact_(1_or_more)_')
+       do 960 iax=ntupax(is),1,-1
+         do 970 icn=iupls(iax,is),iuprs(iax,is)
+           if(unito) then
+             ytmp(icn)=tups(icn,iax,is)
+           else
+             ytmp(icn)=tups(icn,iax,is)*ckf1-ckf2
+           endif
+  970    continue
+         write(output,980) iax,
+     &   (ytmp(icn),icn=iupls(iax,is),iuprs(iax,is))
+  980    format(' ',i4,12x,8f11.2)
+  960  continue
+c  print boundary conditions and relocation data
+       if(unito) then
+         write(output,990) '(m2) ',' (m)'
+       else
+         write(output,990) '(ft2)','(ft)'
+       endif
+  990  format(/'         Left or      Right        Surface',
+     & '     Surface     Height for'/
+     & ' Axial    bottom      or top        area  ',
+     & '   orientation   relocation'/
+     & ' level    volume      volume        ',a5,
+     & '        flag         ',a4)
+       do 1000 iax=ntupax(is),1,-1
+         if(isoups(iax,is).eq.0) then
+           if(unito) then
+             write(output,1010) iax, volupl(iax,is), volupr(iax,is),
+     &       saups(iax,is), isoups(iax,is), hvups(iax,is)
+           else
+             write(output,1010) iax, volupl(iax,is), volupr(iax,is),
+     &       saups(iax,is)/cmft**2, isoups(iax,is), hvups(iax,is)/cmft
+           endif
+         else
+           if(unito) then
+             write(output,1010) iax, volupl(iax,is), volupr(iax,is),
+     &       saups(iax,is), isoups(iax,is)
+           else
+             write(output,1010) iax, volupl(iax,is), volupr(iax,is),
+     &       saups(iax,is)/cmft**2, isoups(iax,is)
+           endif
+         endif
+ 1010    format(' ',i4,2i12,1p,e14.4,i8,e18.4)
+ 1000  continue
+c  print blank line
+       write(output,1090)
+ 1090  format(' ')
+c
+c  scan input deck for more upper plenum structure cards 4xssttnn
+c
+       isscnt = isscnt + 1
+       goto 10
+c  end of loop to read input data
+   20  continue
+       return
+       end
+*endif

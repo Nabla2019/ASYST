@@ -1,0 +1,472 @@
+*mlist
+*if def,selap
+      subroutine oxconss(ngeom, tss,xo,xro,ph2o,ph2,dt, height, 
+     *                  rout,wh2oin, xoo,dh2o,qmw,wsscon,i,j)
+c
+c 
+c  Descriptive sentence for ssoxdk goes here.
+c
+c  Cognizant engineer: ewc (ljo fpg).
+c
+c******************************************************************
+c
+c     at high temperatures (close to its melting point) stainless steel
+c     reacts vigorously with steam to yield the metal oxide and large
+c     quantities of hydrogen.
+c     the reaction is similar to that of zr and h2o, but the reaction
+c     energy is considerably less than that of zr/h2o per unit mass of
+c     metal reacted.
+c     after reviewing the available literature (including l.baker's
+c     assessment in anl/lwr/saf 83-3), the decision was made to use
+c     white's kinetic correlations (gemp-1004(1968) and bakers report)
+c     for the steam rich region and baker's correlation (above report)
+c     for the hydrogen excess region. for the steam lean region a mean
+c    of the above correlations will be used. for the situation where the
+c     reaction rate is controlled by gaseous diffusion, the baker/just
+c     approach (anl-6548(1962)) is used.
+c   also baker's criteria (anl/lwr/saf 83-3) for determining steam rich,
+c     steam lean or hydrogen excess atmosphere are used.
+c     the oxidation of cr and ni is considered since these
+c     elements make up 18% and 8% respectively of stain. steel. (note,
+c     that the oxidation of cr is the major contributor to the reaction
+c     energy evolved.)
+c
+c
+c  input parameters:
+c     ngeom = geometry number
+c     tss     = temperature of stainless steel                k
+c     xo      = oxidation thickness at begining of time step      m
+c     xro     = initial metal thickness                           , m
+c     ph2o    = partial pressure of steam                         , psia
+c     ph2     = partial pressure of hydrogen                      , psia
+c     dt     = time step                                         , sec
+c     height      = height of stainless steel section                 , m
+c     rout         = outer radius  of absorber sheath(m)
+c     ffei    = weight of unreacted fe in the oxide layer           , kg
+c     ffeoi   = weight of feo in the oxide layer                         , kg
+c               (ffei and ffeoi at begining of time step)
+c    wh2oin = available oxide weight             ,kg
+c  output parameters:
+c
+c     xoo     = oxidation thickness at end of time step           , cm
+c     iflag   = indicates whether its a steam rich (1),
+c               steam deprived (2) , or hydrogen excess (3)
+c               atmosphere
+c     dh2o    = mass of h2o reacted                               , kg
+c     urxfe     = weight of unreacted fe in the oxide layer
+c     urxfeo    = weight of feo in the oxide layer
+c               (ffe and ffeo at end of time step)
+c     qmw     = combined heat of reaction                         , btu
+c
+      implicit none
+       include 'scddat.h'
+      real            amcr  , amfe  , amfer , amni  , amss  , amurfe,
+     *                dh2o   , dt   , dxdt  , dxdtb , rout,
+     *                dxdtl , dxdtp , dxdtw , dz    , factor,
+     *                 h2ocr , h2ofe , h2ofeo,
+     *                h2oni , h2oufe, hcr2o3, hfe3o4, hfeo  , hfeoox,
+     *                hnio  , ph2   , ph2o  , pop1  , pop2  , qmw
+     *                , t     ,    height,
+     *                tss   , urxfe , urxfeo, wcr   ,
+     *               wfe   , wh2oin, wh2oo , wni   , wsscon,
+     *                xdel  , xo    , xoo   , xro   
+        dimension    wsscon(ndax,ndcomp,8)
+c
+      integer         ngeom, i   , iflag , j ,k
+      
+      real     snfunc, sden, rhoss,soxwgn
+      external  snfunc, sden,soxwgn
+c
+c *** data statements:
+c
+      data wcr,wfe,wni/0.18,0.74,0.08/
+c
+c *** statement functions:
+c
+c-----baker's criteria
+c
+c     (steam rich/steam lean)
+c
+      pop1(t)=1122.474716*exp(-4250.702/t)
+c
+c     (steam lean/hydrogen excess)
+c
+      pop2(t)=3.136787*exp(-2858.0/t)
+c
+c-----heat(s) of reaction      (btu/lbm h2o consumed)
+c
+c     fe + h2o > feo + h2
+c
+      hfeo(t)=(9294.8-3.2744*t)*232.58
+c
+c     2cr + 3h2o > cr2o3 + 3h2
+c
+      hcr2o3(t)=(102987.7+t*(5.42125e-3*t-18.55925))*77.53
+c
+c     ni + h2o > nio + h2
+c
+      hnio(t)=(-522.34-2.4167*t)*232.58
+c
+c     3fe + 4h2o > fe3o4 + 4h2
+c
+      hfe3o4(t)=(49031.16+t*(6.55833e-3*t-28.20968))*58.146
+c
+c     3feo + h2o > fe3o4 + h2
+c
+      hfeoox(t)=(7948.74+0.2784*t)*232.58
+c
+c *** initialization and checks
+c
+      iflag=0
+      qmw=0.0
+      dh2o=0.0
+      xoo=xo
+      wh2oo=wh2oin
+      xdel=xo-xro
+      if(xdel.gt.0.00001)return
+      if(ph2o.eq.0.0)return
+      if(wh2oin.le.0.0)return
+      if(xo.lt.0.0)xo=0.0
+      rhoss=sden(tss)
+
+c *** determine the amount of feo and unreacted fe in the
+c     oxide layer
+c
+      urxfe =wsscon(i,j,8)
+      urxfeo=wsscon(i,j,4)
+c
+c *** determine whether its a steam rich, steam lean or
+c     hydrogen excess atmosphere
+c
+      iflag=1
+      if(ph2.le.0.0)go to 18
+      if(ph2o/ph2.lt.pop1(tss))iflag=2
+      if(ph2o/ph2.lt.pop2(tss))iflag=3
+      go to(18,28,38),iflag
+c
+c**********************************************************************
+c*****************                                 ********************
+c*****************      steam rich atmosphere      ********************
+c*****************                                 ********************
+c**********************************************************************
+c
+c     the essential chemical reactions are
+c
+c                2cr + 3h2o > cr2o3 + 3h2               (1)
+c                3fe + 4h2o > fe3o4 + 4h2               (2)
+c                 ni +  h2o > nio   +  h2                    (3)
+c               3feo +  h2o > fe3o4 +  h2                (4)
+c
+c
+c-----determine kinetic reaction rate (in m/sec)
+c
+c     solid state controlled reaction rate (white's correlations)
+c
+c     linear portion:
+c
+   18 dxdtl=36.2426e-02*exp(-22320.06/tss)
+c
+c     parabolic portion:
+c
+       dxdtp=((xo**2 + 1.0857e-07*soxwgn(tss)*dt)**0.5-xo)/dt
+c
+c     load dxdt (the minimum of the above two terms)
+c
+      dxdt=min(dxdtl,dxdtp)
+c
+c-----check new oxide thickness. If oxide layer grows more than it can
+c-----, set the initial metal thickness
+c
+      xoo=xo+dxdt*dt
+      if(xoo.gt.xro)then
+           dxdt=xdel/dt
+           xoo=xo+xdel
+      end if
+c
+c-----check for oxidation of unreacted fe and feo, first
+c
+c     determine h2o needed to react urxfe and urxfeo
+c
+      h2oufe=urxfe/55.847*4.0/3.0*18.015
+      h2ofeo=urxfeo/71.846*1.0/3.0*18.015
+c
+c     check availability of h2o
+c
+      if((h2oufe+h2ofeo).gt.wh2oin)then
+           factor=wh2oin/(h2oufe+h2ofeo)
+           h2oufe=factor*h2oufe
+           h2ofeo=factor*h2ofeo
+           dh2o=h2oufe+h2ofeo
+           wsscon(i,j,8)=(1.0-factor)*urxfe
+           wsscon(i,j,4)=(1.0-factor)*urxfeo
+      else
+           dh2o=h2oufe+h2ofeo
+           wsscon(i,j,8)=0.0
+           wsscon(i,j,4)=0.0
+      end if
+      wsscon(i,j,5)=wsscon(i,j,5)+(urxfe-wsscon(i,j,8))*231.54/
+     &    55.847/3.0+(urxfeo-wsscon(i,j,4))*231.54/71.85/3.0
+c
+c-----check availability of h2o for reaction of virgin steel
+c
+c     determine amount of steel reacted (given dxdt)
+c
+      amss=rhoss*dt*dxdt*snfunc(ngeom, rout, height, 1.0)
+c
+c     determine fe,cr and ni reacted
+c
+      amfe=min(wfe*amss/55.847,wsscon(i,j,1)/55.847)
+      amcr=min(wcr*amss/51.996,wsscon(i,j,2)/51.996)
+      amni=min(wni*amss/58.710,wsscon(i,j,3)/58.710)
+c
+c     determine h2o needed for reacting amfe, amcr, and amni
+c
+      h2ocr=amcr*3.0/2.0*18.015
+      h2ofe=amfe*4.0/3.0*18.015
+      h2oni=amni*18.015
+c
+c     check sum of h2ocr, h2ofe, and h2oni versus (wh2oin-dh2o)
+c     and adjust dxdt (if necessary)
+c
+      factor=max(wh2oin-dh2o,0.0)
+      if((h2ocr+h2ofe+h2oni).gt.factor)then
+           factor=factor/(h2ocr+h2ofe+h2oni)
+           dxdt=dxdt*factor
+           h2ocr=h2ocr*factor
+           h2ofe=h2ofe*factor
+           h2oni=h2oni*factor
+           amcr=h2ocr/18.015*2.0/3.0*51.996
+           amfe=h2ofe/18.015*3.0/4.0*55.847
+           amni=h2oni/18.015*58.710
+           xoo=xo+dxdt*dt
+      else
+           amcr=amcr*51.996
+           amfe=amfe*55.847
+           amni=amni*58.710
+           xoo=xo+dxdt*dt
+      end if
+      amfe=min(amfe,wsscon(i,j,1))
+      amcr=min(amcr,wsscon(i,j,2))
+      amni=min(amni,wsscon(i,j,3))
+      wsscon(i,j,1)=wsscon(i,j,1)-amfe
+      wsscon(i,j,2)=wsscon(i,j,2)-amcr
+      wsscon(i,j,3)=wsscon(i,j,3)-amni
+      wsscon(i,j,5)=wsscon(i,j,5)+amfe*231.54/55.847/3.0
+      wsscon(i,j,6)=wsscon(i,j,6)+amcr*152.02/51.996/2.0
+      wsscon(i,j,7)=wsscon(i,j,7)+amni*74.71/58.70
+c
+c-----calculate heat of reaction
+c
+      qmw=h2ocr*hcr2o3(tss)+(h2ofe+h2oufe)*hfe3o4(tss)+
+     *    h2oni*hnio(tss)+h2ofeo*hfeoox(tss)
+      dh2o=h2ocr+h2ofe+h2oni+h2oufe+h2ofeo
+c
+c *** finished
+c
+      return
+c
+c**********************************************************************
+c*****************                                 ********************
+c*****************      steam lean atmosphere      ********************
+c*****************                                 ********************
+c**********************************************************************
+c
+c     essential chemical reactions are:
+c
+c                2cr + 3h2o > cr2o3 + 3h2            (1)
+c                 fe +  h2o > feo   +  h2                 (2)
+c
+c     note , that nickel does not react under these conditions.
+c
+c-----determine kinetic reaction rate (in m/sec)
+c     (white)
+c
+c     solid state controlled reaction rate (white's correlations)
+c
+c     linear portion:
+c
+   28 dxdtl=36.2426e-02*exp(-22320.06/tss)
+c
+c     parabolic portion:
+c
+       dxdtp=((xo**2 + 1.0857e-07*soxwgn(tss)*dt )**0.5-xo)/dt
+c
+c     load dxdtw (the minimum of the above two terms)
+c
+      dxdtw=min(dxdtl,dxdtp)
+c
+c-----determine kinetic reaction rate (in m/sec)
+c     (baker)
+c
+c     solid state controlled reaction rate (baker's correlation)
+c
+       dxdtp=((xo**2 + 4.752e-05*exp(-25163.56/tss)*dt)**0.5-xo)/dt
+c
+c     load dxdtb
+c
+      dxdtb=dxdtp
+c
+c-----kinetic reaction rate will be the mean of dxdtw and dxdtb
+c
+      dxdt=(dxdtw+dxdtb)/2.0
+c
+c-----check new oxidation thickness
+c
+      xoo=xo+dxdt*dt
+      if(xoo.gt.xro)then
+           dxdt=xdel/dt
+           xoo=xo+xdel
+      end if
+c
+c-----check for oxidation of unreacted fe , first
+c
+c     determine h2o needed to react urxfe
+c
+      h2oufe=urxfe/55.847*18.015
+c
+c     check availability of h2o
+c
+      if(h2oufe.gt.wh2oin)then
+           factor=wh2oin/h2oufe
+           h2oufe=factor*h2oufe
+           dh2o=h2oufe
+           wsscon(i,j,8)=(1.0-factor)*urxfe
+      else
+           dh2o=h2oufe
+           wsscon(i,j,8)=0.0
+      end if
+c
+c-----check availability of h2o for reaction of virgin steel
+c
+c     determine amount of steel reacted (given dxdt)
+c
+      amss=rhoss*dt*dxdt*snfunc(ngeom, rout, height, 1.0)
+c
+c     determine fe and cr reacted (mole)
+c
+      amfe=min(wfe*amss/55.847,wsscon(i,j,1)/55.847)
+      amcr=min(wcr*amss/51.996,wsscon(i,j,2)/51.996)
+c
+c     determine h2o needed for reacting amfe and amcr
+c
+      h2ocr=amcr*3.0/2.0*18.015
+      h2ofe=amfe*18.015
+c
+c     check sum of h2ocr and h2ofe versus (wh2oin-dh2o)
+c     and adjust dxdt (if necessary)
+c
+      factor=max(wh2oin-dh2o,0.0)
+      if((h2ocr+h2ofe).gt.factor)then
+           factor=factor/(h2ocr+h2ofe)
+           dxdt=dxdt*factor
+           h2ocr=h2ocr*factor
+           h2ofe=h2ofe*factor
+           amcr=h2ocr/18.015*2.0/3.0*51.996
+           amfe=h2ofe/18.015*55.847
+           xoo=xo+dxdt*dt
+      else
+           amcr=amcr*51.996
+           amfe=amfe*55.847
+           xoo=xo+dxdt*dt
+      end if
+      amfe=min(amfe,wsscon(i,j,1))
+      amcr=min(amcr,wsscon(i,j,2))
+      wsscon(i,j,4)=urxfeo+((urxfe-wsscon(i,j,8))+amfe)*71.85/55.847
+      wsscon(i,j,1)=wsscon(i,j,1)-amfe
+      wsscon(i,j,2)=wsscon(i,j,2)-amcr
+      wsscon(i,j,6)=wsscon(i,j,6)+amcr*152.02/51.996/2.0
+c
+c-----calculate heat of reaction
+c
+      qmw=h2ocr*hcr2o3(tss)+(h2ofe+h2oufe)*hfeo(tss)
+      dh2o=h2ocr+h2ofe+h2oufe
+c
+c *** finished
+c
+      return
+c
+c**********************************************************************
+c***************                                      *****************
+c***************      hydrogen excess atmosphere      *****************
+c***************                                      *****************
+c**********************************************************************
+c
+c     the oxidation of steel will form a 'spinal' compound in a
+c     hydrogen excess atmosphere where
+c
+c                2cr + fe + 4h2o > feo*cr2o3 + 4h2        (1)
+c
+c     note ,that nickel does not react under these conditions.
+c
+c-----determine kinetic reaction rate (in m/sec)
+c
+c     solid state controlled reaction rate (baker's correlation)
+c
+   38  dxdtp=((xo**2 + 4.752e-05*exp(-25163.56/tss)*dt)**0.5-xo)/dt
+c
+c     load dxdt
+c
+      dxdt=dxdtp
+c
+c-----check new oxidation thickness
+c
+      xoo=xo+dxdt*dt
+      if(xoo.gt.xro)then
+           dxdt=xdel/dt
+           xoo=xo+xdel
+      end if
+c
+c-----check availability of h2o for reaction
+c
+c     determine amountof steel reacted (given dxdt)
+c
+      amss=rhoss*dt*dxdt*snfunc(ngeom, rout, height, 1.0)
+c
+c     determine fe and cr reacted (moles)
+c
+      amfe=min(wfe*amss/55.847,wsscon(i,j,1)/55.847)
+      amcr=min(wcr*amss/51.996,wsscon(i,j,2)/51.996)
+      amfer=amcr*1.0/2.0
+c
+c     determine h2o needed for reacting amfer and amcr
+c
+      h2ocr=amcr*3.0/2.0*18.015
+      h2ofe=amfer*18.015
+c
+c     check sum of h2ocr and h2ofe versus wh2oin
+c     and adjust dxdt (if necessary)
+c
+      if((h2ocr+h2ofe).gt.wh2oin)then
+           factor=wh2oin/(h2ocr+h2ofe)
+           dxdt=dxdt*factor
+           h2ocr=h2ocr*factor
+           h2ofe=h2ofe*factor
+           xoo=xo+dxdt*dt
+           amcr=h2ocr/18.015*2.0/3.0*51.996
+           amss=amcr/wcr
+           amfe=wfe*amss
+           amfer=h2ofe/18.015*55.847
+           amurfe=max(amfe-amfer,0.0)
+      else
+           amcr=amcr*51.996
+           amfe=amfe*55.847
+           amfer=amfer*55.847
+           xoo=xo+dxdt*dt
+           amurfe=max(amfe-amfer,0.0)
+      end if
+      wsscon(i,j,8)=urxfe+amurfe
+      wsscon(i,j,4)=urxfeo+amfer*71.85/55.847
+      wsscon(i,j,1)=wsscon(i,j,1)-amfe
+      wsscon(i,j,2)=wsscon(i,j,2)-amcr
+      wsscon(i,j,6)=wsscon(i,j,6)+amcr*152.02/51.996/2.0
+c
+c-----calculate heat of reaction
+c
+      qmw=h2ocr*hcr2o3(tss)+h2ofe*hfeo(tss)
+      dh2o=h2ocr+h2ofe
+c
+c *** finished
+c
+      return
+      end
+*endif

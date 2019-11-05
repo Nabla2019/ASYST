@@ -1,0 +1,141 @@
+*mlist
+       subroutine htadv
+c
+c  Controls advancement of heat structures and computes heat added to
+c  hydrodynamic volumes.
+c
+c  Cognizant engineer: rjw.
+c
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'radhtc.h'
+       include 'htscr.h'
+       include 'htsrcm.h'
+       include 'scrtch.h'
+       include 'voldat.h'
+       include 'fpfast.h'
+c
+c  Local variables.
+       real pow,thy2,tx,ty
+       integer i,ix,iz,izr,izr2,j,k,l,m
+       real qold,qgold
+$if def,selap,1
+       integer jxs
+c
+       if (aflag) then
+         if (filid(38) .ne. 0.0) then
+           if (succes .eq. 0) call radht
+           izr = filndx(38) + irhflx(filndx(38))
+         endif
+         if (filid(32) .ne. 0.0) call qfmove
+         i = filndx(8)
+         do m = 1,nhtstr(i)
+           j = ihtptr(i) + filndx(8)
+           l = htiscr(j) + ixpc
+           if (filid(38) .eq. 0.0) then
+             qradlr(l)  = 0.0
+             qradlr(l+1)  = 0.0
+           else
+             qradlr(l)  = qlrad(izr)
+             qradlr(l+1)  = qrrad(izr)
+             izr = izr + 2
+           endif
+           if (iand(htopt(j),1) .eq. 0) then
+             call ht1tdp (i,timeht,dtht)
+             fail = fail .or. iand(htopt(j),2) .ne. 0
+           endif
+           i = i + 1
+         enddo
+         timeht = timeht + dtht
+       endif
+c  Compute power input to hydrodynamic volumes from heat transfer from
+c  heat structures and direct heating.
+       thy2 = timehy - 0.5*dt
+c  Time step advancement is saved for ihte only when reflood is
+c  activated.
+c  Change this coding when reflood coding is changed.
+       i = filndx(8)
+       do m = 1,nhtstr(i)
+         j = ihtptr(i) + filndx(8)
+         iz = htiscr(j) + ixpc
+         izr = iz
+         tx = (thy2 - htimeo(j))/htdt(j)
+         pow = htpowo(j) + (htpown(j) - htpowo(j))*tx
+         do l = 1,2
+           if (htbvc(j+l-1) .gt. 0) then
+             k = htbvo(j+l-1)
+cc
+$if def,dbgprnt
+             if (help.ne.0 .and. iand(ihlppr(1),ishft(1,10)).ne.0) then
+               if (iand(vctrlx(k),1).ne.0) then
+                 write (12,"('htadv00',2i10,1p,3e13.5)")
+     &           ncount,volno(k),htrfno(j+l-1),htgsmf(izr),htgsmg(izr)
+               endif
+             endif
+$endif
+cc
+$if def,selap,2
+             jxs = htsrt(j+1) + filndx(34)
+             if (htsrt(j) .eq. -1) htftro(j) = fpsfbv(jxs)
+             ty = pow*htftro(j+l-1)
+       qold = q(k)
+       qgold = qwg(k)
+             q(k) = q(k) + htrnro(j+l-1)*htsrfo(j+l-1) + ty
+             qwg(k) = qwg(k) + htrgno(j+l-1)*htsrfo(j+l-1) + ty*quals(k)
+$if def,dbgprnt
+       if (help.ne.0 .and. iand(ihlppr(1),ishft(1,10)).ne.0) 
+     & write (12,"(a,i9,2i10,7es13.5)")
+     & 'htadv01',ncount,htstno(j),volno(k),voidg(k),qold,qgold,
+     & qold-qgold,q(k),qwg(k),q(k)-qwg(k)
+$endif
+       qold = gammaw(k)
+       qgold = gammac(k)
+             gammaw(k) = gammaw(k) + (htrnro(j+l-1) -
+     &       htrgno(j+l-1))*htgsmf(izr)
+             gammac(k) = gammac(k) + htrgno(j+l-1)*htgsmg(izr)
+$if def,dbgprnt
+             if (help.ne.0 .and. iand(ihlppr(1),ishft(1,10)).ne.0) 
+     &       write (12,"(a,i9,2i10,7es13.5)")
+     &       'htadv02',ncount,htstno(j),volno(k),qold,qgold,gammaw(k),
+     &       gammac(k),htgsmf(izr),htgsmg(izr)
+$endif
+             if (iand(print,64) .ne. 0) then
+               izr2 = iz + (l - 1)*((htnmpt(j) - 1)*htscrp + 4)
+               ix = vctrls(k)
+               tx = hthhff(izr) + hthhft(izr)
+               ty = tx*htf(izr2+1) - hthhff(izr)
+               htcff(ix) = htcff(ix) + ty*htsrfo(j+l-1)
+               htgwff(ix) = htgwff(ix) + htgsmf(izr)*ty
+               ty = tx*htf(izr2+2)
+               htcfg(ix) = htcfg(ix) + ty*htsrfo(j+l-1)
+               htgwfg(ix) = htgwfg(ix) + htgsmf(izr)*ty
+               ty = tx*htf(izr2+3) - hthhft(izr)
+               htcft(ix) = htcft(ix) + ty*htsrfo(j+l-1)
+               htgwft(ix) = htgwft(ix) + htgsmf(izr)*ty
+               ty = tx*htf(izr2+4)
+               htcfp(ix) = htcfp(ix) + ty*htsrfo(j+l-1)
+               htgwfp(ix) = htgwfp(ix) + htgsmf(izr)*ty
+               tx = hthhgg(izr) + hthhgt(izr) + hthhgp(izr)
+               ty = tx*htf(izr2+1)
+               htcgf(ix) = htcgf(ix) + ty*htsrfo(j+l-1)
+               htgcgf(ix) = htgcgf(ix) + htgsmg(izr)*ty
+               ty = tx*htf(izr2+2) - hthhgg(izr)
+               htcgg(ix) = htcgg(ix) + ty*htsrfo(j+l-1)
+               htgcgg(ix) = htgcgg(ix) + htgsmg(izr)*ty
+               ty = tx*htf(izr2+3) - hthhgt(izr)
+               htcgt(ix) = htcgt(ix) + ty*htsrfo(j+l-1)
+               htgcgt(ix) = htgcgt(ix) + htgsmg(izr)*ty
+               ty = tx*htf(izr2+4) - hthhgp(izr)
+               htcgp(ix) = htcgp(ix) + ty*htsrfo(j+l-1)
+               htgcgp(ix) = htgcgp(ix) + htgsmg(izr)*ty
+             endif
+           endif
+           izr = izr + 1
+         enddo
+         i = i + 1
+       enddo
+       return
+       end

@@ -1,0 +1,112 @@
+*mlist
+       subroutine qmwr (hindex, qdi, qdo, dtime)
+c
+c
+c  Calculates the metal-water reaction on the outside of the fuel
+c  pins and also on the inside of the clad if the fuel pin has ruptured.
+c
+c  Cognizant engineer: rjw.
+c
+c      This subroutine calculates metal-water reaction on the outside
+c      of the fuel pins and also on the inside of the clad if the fuel
+c      pin has ruptured.  The calculation is based on parabolic rate
+c      law kinetics.  the user has the option of using either the
+c      conservative baker-just coefficients or the best estimate values
+c      of cathart et.al.  The quantities calulated and their variable
+c      names are:
+c
+c        oxto(j)   = oxide thickness on outside (m)
+c        oxti(j)   = oxide thickness on inside (m)
+c        qdo(j)    = heat generated on outside (joules/m)
+c        qdi(j)    = heat generated on inside (joules/m)
+c        h2gen(j)  = hydrogen generated (kg)
+c---quantities no longer calculated----
+c        alto(j)   = alpha layer thickness on outside (m)
+c                       (b.e. model only)
+c        alti(j)   = alpha layer thickness on inside (m)
+c                       (b.e. model only)
+c        oci(j)    = oxygen consumed on inside (kg)
+c        oco(j)    = oxygen consumed on outside (kg)
+c
+       implicit none
+       integer hindex
+       real qdi,qdo,dtime
+c
+       include 'cons.h'
+       include 'fast.h'
+       include 'comctl.h'
+       include 'htsrcm.h'
+c
+       integer iicl,indi,is,j,jbc,kt,nn
+       real aocp,clad,den,h2,hr,kocp,mzro,mzri,rin,rout,tci,tco,
+     & tot,ts,z
+c
+       data kocp/0.000002252/
+       data aocp/18062./
+c  data for zr.
+       data hr/6511730./
+       data h2/0.04385/
+       data den/6500./
+c
+       j      = hindex
+       indi   = htxit(j) + filndx(8)
+       nn     = htnmpt(j) -1
+c                            is = index to outside clad node for temps
+       is     = indi + nn
+       qdi    = 0.0
+       qdo    = 0.0
+       mzri = 0.0
+       mzro = 0.0
+       iicl    = iand( imw(j),511 )
+       indi   = htgom(j) + filndx(8) + (iicl-1)*htgskp
+       rin    = gprinc (indi)
+       rout   = gprinc (indi + htgskp)
+       clad   = rout - rin
+c
+c                            check to see if reaction has
+c                               consumed all of the clad.
+c                            if so return with qdi and qdo set to zero.
+       tot    = oxtoo(j) + oxtio(j)
+       if (tot .ge. clad) return
+c
+c                            define local variables
+       jbc     = htgom(hindex) + filndx(8)
+       z       = htsrfn(j) / arean(jbc)
+c      ocit = ocio(j) / (twopi * rin     * z)
+c      ocot = ocoo(j) / (twopi * rout(j) * z)
+       tco     = httmp(is)
+       kt      = htxft(j) + iicl + filndx(8) -1
+       tci     = httmp(kt)
+       ts      = dtime
+c
+c                            calculate oxide layer thickness
+   10  oxto(j) = sqrt (oxtoo(j) * oxtoo(j) + kocp*ts * exp (-aocp/tco))
+c
+c                            check to see if rupture has occurred.
+c                              if not do not do
+c                              mw reaction on inside of clad.
+      if (iand(imw(j),8192) .ne. 0) then
+c
+c                            rupture has occurred so mw reaction
+c                              will be calculated on
+c                              inside of clading.
+c                            calculate oxide layer on inside of clad.
+      oxti(j) = sqrt (oxtio(j) * oxtio(j) + ts * kocp * exp(-aocp/tci))
+       mzri   = den * pi * (2. * rin     * (oxti(j) - oxtio(j))
+     &           + oxti(j)  * oxti(j)  - oxtio(j) * oxtio(j))
+       qdi    = hr * mzri
+c
+      endif
+c                            calculate the total mass of oxide formed,
+c                            heat and hydrogen generated.
+c                            it is assumed that formation of the
+c                            alpha layer does not contribute to the
+c                            generation of heat or hydrogen.
+       mzro   = den * pi * (2. * rout    * (oxto(j) - oxtoo(j))
+     &           + oxtoo(j) * oxtoo(j) - oxto(j) * oxto(j))
+c                            calculate heat generated
+       qdo    = hr * mzro
+c                            calculate total hydrogen generated
+       h2gen(j) = (mzro + mzri) * h2 * z + h2geno(j)
+       return
+       end

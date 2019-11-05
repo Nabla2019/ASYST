@@ -1,0 +1,1798 @@
+*mlist
+       subroutine phantj(ilev)
+c
+c  Subroutine computes interphase drag and also calculates some
+c  information for vexplt.  This replaces the junction loop in
+c  earlier subroutine phaint, which replaced earlier subroutines
+c  fidrag and mdot.
+c
+c  Cognizant engineer:  rar kuo (hxc wmb).
+c
+c----------------------------------------------------------------------
+c        If ( reflood ), the selection logic of the pre-  or post-chf
+c        interfacial shear correlations is modified as was done by
+c        Analytis in RELAP5/MOD2.
+c----------------------------------------------------------------------
+c  ilev = 0; compute interface drag for all junctions
+c  ilev = 1; compute interface drag for junction in scratch list
+c  for level crossing
+c
+       use invtbl
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'scddat.h'
+       include 'tblsp.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'cons.h'
+       include 'contrl.h'
+       include 'eccmxc.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       real dlen,fx,fxb,timjnv,tcourj
+       real wj,voidft,velgjt,velfjt,csthej,dstarj,rvcrtj,pfnrgj,fgf,
+     & fgf1,fgf2,fstraj,fstrbj,alpan,alpanf,alpbub,alpdrp,alphab,alphac,
+     & alphad,alphbc,alphcd,alphde,alphef,alpian,avev,centr,cphik,cphil,
+     & cthek,cthel,ctheta,diams,diamva,dxkk,dxll,dxxx,dzk,dzl,fabrup,
+     & fanm,fbub,fdis,fian,fic,fic1,ficb,fids,fislg,fkk,fll,fluxjm,
+     & fslug,fstrat,htheta,psinq,rdstar,reg,reginv,rhofaa,rhofg,
+     & rhogaa,rhyli,rhyva,rvx,sannu,sbubb,scrach,sdrop,shzst,
+     & slugc,slslg,sphik,sphil,sqvoid,stheta,svslg,termj,tgsat,
+     & vfgbb,void,voidb,vodfa,vodga,voidgs,voidfm,vcritl,vfin,vlgfj,x,
+     & vvg,c0,c0b,hflagk,hflagl,strat1,strat2,strat,veps,
+     & acrit,vfilm,afilm,diamjt,fluxm1,fangle,x1,xj
+       integer i,imbot,ivbndk,ivbot,ivtndk,ivtop,ix,izz,jhs,
+     & jk,jl,jm1,jup,k,k1,kf,kf2,kk,kkf,ks,kup,
+     & kupx,kx,kx1,l,lf,lf2,lmap,ls,lx,lx1,lz,m,n,ndk,ndl,nmapj
+       integer ll,nj,lj,ljs,ilev,ilvk,ilvl
+       real sinbk,sinbl
+       real dcthek,dcthel,diamvk,diamvl
+       logical bundle,hmap,irt,poschf,posdry,vmap,reflod
+       real alpg,delz,delzz,rfg,jgp,rat,twindo,preduc
+$if def,selap
+$if def,debth,4
+      real alph0,alph1,alph2,alph3,alph4,fijd1,fijd2
+      real eta,gam,fgeom,csubv,csubi,jsubs,zeta,wfac,kg,etag,dbubl,wfac1
+      real acons,bcons,fac1,fac2a,fac2b,eps,dpart
+      integer idbm
+$endif
+$if def,mmfld,1
+       real flammt,viscm,xmj,wmj,voidjj
+c
+c  Data statements.
+       data veps/0.465/
+c
+c  Define statement functions.
+       psinq(x) = x*(x*(x*(x*(-0.239e-7*x + 0.27526e-5) - 0.1984090e-3)
+     & + 0.0083333315) - 0.1666666664)
+c
+c   Loop over junction in list of junction needing a momentun solution
+       ll = lpdat(issys)%llvect
+       if( ilev.eq.0 ) then
+         lj = lvajun(ll)
+       else
+         lj = lvscr(ll)
+       endif
+       ljs = lj
+       nj = lvptr(lj)
+       if( nj.ne.0 ) then
+         do 10 m = 1,nj
+           lj = lj + 1
+           i = lvptr(lj)
+           n = jcnfnd(i)
+           ix = jcnxs(i)
+           faaj(i) = 0.0
+           vgjj(i) = 0.0
+c  Initialize c0j(i) to 1.0, fxj(i) to 0.0.
+c  (These values will be used if homogeneous flow).
+           c0j(i) = 1.0
+           fxj(i) = 0.0
+           dpstf(ix) = 0.0
+           dpstfk(ix) = 0.0
+           dpstfl(ix) = 0.0
+$if def,mmfld,1
+           dpstm(ix) = 0.0
+           flompj(ix) = 0
+           ireg(ix) = 0
+           hmap = .false.
+           vmap = .false.
+           reflod = .false.
+$if def,mmfld
+           if (lpdat(issys)%lnonmf .ne. 0) then
+             cgmj(i) = 0.
+             cfmj(i) = 0.
+           endif
+$endif
+           fij(i) = 1.0e30
+           fabrup = 0.693
+           pfnrgj = 0
+           k = ij1nx(i)
+           ndk = iand(ishft(jcex(i),-12),7)
+           kf2 = k + ndk
+           kf = k + iand(ndk,not(1))
+           dzk = hydzc(kf) + hydzc(kf+1)
+           ndk = ishft(ndk,-1)
+           kf = k + ndk
+           kx = vctrls(k)
+           kx1 = kx + ndk
+           l = ij2nx(i)
+           ndl = iand(ishft(jcex(i),-9),7)
+           lf2 = l + ndl
+           lf = l + iand(ndl,not(1))
+           dzl = hydzc(lf) + hydzc(lf+1)
+           ndl = ishft(ndl,-1)
+           lf = l + ndl
+           lx = vctrls(l)
+           lx1 = lx + ndl
+           jk = ndk
+           jl = ndl
+           dxkx(ix) = dl(kf)
+           dxlx(ix) = dl(lf)
+           dxxx =  1.0/(dxkx(ix)+dxlx(ix))
+           if (iand(jc(i),256) .ne. 0) then
+             avkx(ix) = ajun(i)/max(ajun(i),avol(kf)*arat(i))
+             avlx(ix) = ajun(i)/max(ajun(i),avol(lf)*arat(i+1))
+           else
+             avkx(ix) = ajun(i)/avol(kf)
+             avlx(ix) = ajun(i)/avol(lf)
+           endif
+c  If the following if-conditional is false, proceed to end.
+           if ((iand(jc(i),512) .eq. 0) .and.
+     &     (voidg(k).ne.0.0 .or. voidg(l).ne.0.0 .or.
+     &     voidf(k).ne.0.0 .or. voidf(l).ne.0.0)) then
+             vlgfj = (avkx(ix)*dxkx(ix) + avlx(ix)*dxlx(ix))*dxxx
+$if def,mmfld
+             if (lpdat(issys)%lnonmf .ne. 0) then
+               ffmj(i) = 0.
+               fgmj(i) = 0.
+               if (voidgj(i).ne.0.0 .and. voidmj(i).ne.0.0) then
+                 if (abs(velmj(i) - velgj(i)) .gt. 1.0e-10) then
+                   viscm = 0.0014
+                   flammt = viscm/(rhomj(i)*abs(velmj(i) - velgj(i))*
+     &             (diamv(kf) + diamv(lf))*0.5)
+                   flammt = max(64.0*flammt,0.3164*flammt**0.25)
+                   fgmj(i) = voidmj(i)*rhomj(i)*flammt*(velmj(i) -
+     &             velgj(i))/(diamv(kf)+diamv(lf))
+                 else
+                   fgmj(i) = 8.0*voidmj(i)*sign(1.0,velmj(i) -
+     &             velgj(i))/(diamv(kf)+diamv(lf))**2
+                 endif
+               endif
+             endif
+$endif
+c  Weighting factor for junction void fraction and sine of junction
+c  angle calculations.
+             xj = voidgj(i)*velgj(i) + voidfj(i)*velfj(i)
+             wj = 1.0
+$if def,mmfld
+             if (lpdat(issys)%lnonmf .ne. 0) then
+               xmj = voidgj(i)*velgj(i) + voidmj(i)*velmj(i)
+                 wmj = 1.0
+             endif
+$endif
+             kk = k
+             kkf = kf
+             if (xj .lt. 0.0) then
+               wj = 0.0
+               kk = l
+               kkf = lf
+             endif
+$if def,mmfld
+             if (lpdat(issys)%lnonmf .ne. 0) then
+               if (xmj .lt. 0.0) wmj = 0.0
+               if (abs(xmj) .le. veps) then
+                 x1 = (xmj + veps)/(2.0*veps)
+                 wmj = x1*x1*(3.0 - 2.0*x1)
+               endif
+             endif
+$endif
+             if (abs(xj) .le. veps) then
+               x1 = (xj + veps)/(2.0*veps)
+               wj = x1*x1*(3.0 - 2.0*x1)
+             endif
+             if (xj .eq. 0.0) then
+               if (v(k) .lt. v(l)) then
+                 kk = k
+                 kkf = kf
+               else
+                 kk = l
+                 kkf = lf
+               endif
+             endif
+c  Junction void fraction, preliminary information.
+             voidgk(ix) = voidg(k)
+             voidgl(ix) = voidg(l)
+             if (iand(jc(i),2) .eq. 0) then
+               lmap = iand (ishft(jc(i),-27),1)
+c  Junction void fraction, k volume, apply level tracking model.
+               if (iand(ishft(imap(k),-28),1) .ne. 0) then
+                 ilvk = iand(ishft(vctrlx(k),-7),1)
+                 if (ilvk .eq.1) then
+                   if (lmap .eq. 0) then
+c  K volume at bottom.
+                     voidgk(ix) = voidla(k)
+                   else
+c  K volume at top.
+                     voidgk(ix) = voidlb(k)
+                   endif
+                 endif
+c  Junction void fraction, k volume, vertically stratified.
+               elseif (iand(ishft(imap(kf),-11),1) .ne. 0) then
+                 if (iand(vctrl(l),1) .eq. 0) then
+                   nmapj = iand(imap(lf),63)
+                   if (nmapj .ne. 2 .and. nmapj .ne. 4) then
+                     ks = vctrls(k)
+                     voidfm = (voidgu(ks)-voidg(k))/
+     &               (voidgu(ks)-voidgd(ks))
+                     if (lmap .eq. 0) then
+                       strat1 = min(1.0,max(0.0,1.0 -
+     &                 exp(-0.5*voidf(l))))
+                     else
+                       strat1 = min(1.0,max(0.0,20.0*(voidfm-0.05)))
+                     endif
+                     vvg = 0.35*sqrt(gravcn*diamv(kf)*(max(rhof(k) -
+     &               rhog(k),1.0e-7))/rhof(k))
+                     vvg = (hyarf(k)*abs(velf(kf)) +
+     &               hyarg(k)*abs(velg(kf)))/(rho(k)*vvg)
+                     strat2 = min(1.0,max(0.0,2.0*(1.0-vvg)))
+                     strat = strat1*strat2
+                     strat = min(1.0,max(0.0,strat))
+                     voidgk(ix) = strat*voidg(l) + (1.0-strat)*
+     &               voidg(k)
+                   endif
+                 endif
+c  Junction void fraction, k volume, horizontally stratified.
+               elseif (iand(jc(i),2048).ne.0 .and. velgj(i).ge.0.0)
+     &         then
+                 voidgk(ix) = voidgj(i)
+               endif
+c  Junction void fraction, l volume, apply level tracking model.
+               if (iand(ishft(imap(l),-28),1) .ne. 0) then
+                 ilvl = iand(ishft(vctrlx(l),-7),1)
+                 if (ilvl .eq. 1) then
+                   if (lmap .eq. 0) then
+c  L volume at top.
+                     voidgl(ix) = voidlb(l)
+                   else
+c  L volume at bottom.
+                     voidgl(ix) = voidla(l)
+                   endif
+                 endif
+c  Junction void fraction, l volume, vertically stratified.
+               elseif (iand(ishft(imap(lf),-11),1) .ne. 0) then
+                 if (iand(vctrl(k),1) .eq. 0) then
+                     nmapj = iand(imap(kf),63)
+                     if (nmapj .ne. 2 .and. nmapj .ne. 4) then
+                     ls = vctrls(l)
+                     voidfm = (voidgu(ls)-voidg(l))/
+     &               (voidgu(ls)-voidgd(ls))
+                     if (lmap .eq. 0) then
+                       strat1 = min(1.0,max(0.0,20.0*(voidfm-0.05)))
+                     else
+                       strat1 = min(1.0,max(0.0,1.0 -
+     &                 exp(-0.5*voidf(k))))
+                     endif
+                     vvg = 0.35*sqrt(gravcn*diamv(lf)*(max(rhof(l) -
+     &               rhog(l),1.0e-7))/rhof(l))
+                     vvg = (hyarf(l)*abs(velf(lf)) + hyarg(l)*
+     &               abs(velg(lf)))/(rho(l)*vvg)
+                     strat2 = min(1.0,max(0.0,2.0*(1.0-vvg)))
+                     strat = strat1*strat2
+                     strat = min(1.0,max(0.0,strat))
+                     voidgl(ix) = strat*voidg(k) + (1.0-strat)*
+     &               voidg(l)
+                   endif
+                 endif
+c  Junction void fraction, l volume, horizontally stratified.
+               elseif (iand(jc(i),2048).ne.0 .and. velgj(i).lt.0.0)
+     &         then
+                 voidgl(ix) = voidgj(i)
+               endif
+             endif
+c  Junction void fraction and sine of junction angle, interpolation.
+             voidj(i) = wj*voidgk(ix) + (1.0-wj)*voidgl(ix)
+             voidft = 1.0 - voidj(i)
+c  Check for normal volume, if time dependent, use sinb from volume
+c  connected to it. This is 'k' side.
+             if (iand(vctrl(k),1) .eq. 0) then
+               sinbk = sinb(kf)
+               if (iand(jc(i),4) .ne. 0) sinbk = -sinbk
+             else
+               sinbk = sinb(lf)
+               if (iand(jc(i),8) .ne. 0) sinbk = -sinbk
+             endif
+c  Same for 'l' side.
+             if (iand(vctrl(l),1) .eq. 0) then
+               sinbl = sinb(lf)
+               if (iand(jc(i),8) .ne. 0) sinbl = -sinbl
+             else
+               sinbl = sinb(kf)
+               if (iand(jc(i),4) .ne. 0) sinbl = -sinbl
+             endif
+             sinbt(ix) = wj*sinbk + (1.0-wj)*sinbl
+             if (iand(jc(i),65536) .eq. 0) then
+               jhs = iand(ishft(jc(i),-17),3)
+               if (jhs.eq.1 .or. jhs.eq.2) then
+                 jup = iand(ishft(jc(i),-27),1)
+                 if (jup .eq. 0) sinbt(ix) = 1.0
+                 if (jup .eq. 1) sinbt(ix) = -1.0
+               endif
+               if (jhs .eq. 3) sinbt(ix) = 0.0
+             endif
+             fangle = min(1.0,max(0.0,2.732050813*(0.866025403 -
+     &       abs(sinbt(ix)))))
+c  Dynamical drag.
+             faaj(i) = 1.5/max(voidj(i),voidft,1.0e-5) - 1.0
+$if def,mmfld
+             if (lpdat(issys)%lnonmf .ne. 0) then
+               if (voidmj(i).ne.0) then
+                 voidjj = wmj*voidgk(ix) + (1.0-wmj)*voidgl(ix)
+                 voidft = 1.0 - voidjj
+               endif
+             endif
+$endif
+c  Interphase drag.
+             velgjt = 0.0
+             velfjt = 0.0
+             if (athrot(i) .ne. 0.0) then
+               velgjt = velgj(i)/athrot(i)
+               velfjt = velfj(i)/athrot(i)
+             endif
+             diamjt = max(1.0e-3,diamj(i)*sqrt(athrot(i)))
+             csthej = sign(1.0, (0.5 - voidj(i)))
+             dstarj = 0.0
+             fbub = 0.0
+             fslug = 0.0
+             fanm = 0.0
+             fdis = 0.0
+             fian = 0.0
+             fislg = 0.0
+             fids = 0.0
+             fstrat = 0.0
+             nmapj = iand(imap(kkf),63)
+             fluxjm = voidgj(i)*rhogj(i)*abs(velgjt) + voidfj(i)*
+     &       rhofj(i)*abs(velfjt)
+             rhofg = max(1.0e-07,rhofj(i) - rhogj(i))
+             dstarj = diamjt*sqrt(gravcn*rhofg/max(sigma(kk),1.0e-7))
+c  Set bundle flag and variables.
+             bundle = iand(vctrl(kk),ishft(1,30)) .ne .0
+             ficb = 0.0
+             c0b = 1.0
+             fxb = 1.0
+             if (nmapj .eq. 5) then
+c  Call eccmix for its particular flow regime patterns.
+               posdry = .false.
+               poschf = .false.
+c  Prevention of calling eccmix, if no condensation is expected.
+               if (voidg(kk) .gt. 0.0) then
+                 lz = invfnd(kk)
+                 jm1 = invj(lz)%invvnx
+                 k1 = ij1nx(jm1)
+                 if (velfj(jm1)*voidfj(jm1).gt.0.01 .and.
+     &           tempf(k1) + 0.1.lt.satt(kk)) then
+                   call eccmxj (i, jm1, kk, lz, ix, n)
+                   go to 700
+                 endif
+               endif
+               nmapj = 2
+             endif
+             if (nmapj .eq. 4) then
+c  High mixing map decisions.
+               posdry = .false.
+               poschf = .false.
+               if (voidj(i) .le. 0.5) then
+c  Bubbly.
+                 flompj(ix) = 1
+                 fbub = 1.0
+               else
+                 alphad = 1.0e-4
+                 if (voidj(i) .lt. 0.95) then
+c  Transition.
+                   flompj(ix) = 2
+                   alpbub =0.5*exp(-10.0*(voidj(i) - 0.5))
+                   alpdrp = 0.05*exp(-10.0*(0.95 - voidj(i)))
+                   fdis = max(0.0,min((voidj(i) - alpbub)/(1.0 -
+     &             alpbub - alpdrp),1.0))
+                   fbub = max(0.0, min(1.0, (1.0 - fdis)))
+                 else
+c  Dispersed.
+                   fdis = 1.0
+                   flompj(ix) = 3
+                 endif
+               endif
+             endif
+ 1521        if (nmapj .le. 3 .and. (abs(sinbt(ix)) .le. 0.5 .or.
+     &       vmap)) then
+c  Horizontal map decisions.
+               hmap = .true.
+               poschf = .false.
+               posdry = .false.
+               if (vmap) then
+                 fbub = 0.0
+                 fslug = 0.0
+                 fanm = 0.0
+                 fdis = 0.0
+                 fian = 0.0
+                 fislg = 0.0
+                 fids = 0.0
+                 fstrat = 0.0
+               endif
+c  Compute Dukler's stratification criterion.
+               void = min(voidj(i),1.0 - voidj(i))
+               csthej = htheta(void)
+               scrach = csthej*csthej
+               alphad = 1.0e-4
+               alphef = max(2.0*alphad,min(2.0e-3*rhogj(i)/rhofj(i),
+     &         2.0e-4))
+               stheta = max(alphad,csthej*(1.0 + psinq(scrach)))
+               csthej = sqrt(max(0.0,min(1.0,(1.0 - stheta)*(1.0 +
+     &         stheta))))*sign(1.0,(0.5 - voidj(i)))
+               ctheta = csthej
+c  vcritl is Taitel-Dukler critical velocity squared.
+c  0.19634954 = .5**2*pi/4
+               vcritl=0.19634954*gravcn*rhofg*voidj(i)*diamjt*
+     &         (1.0 - ctheta)**2/(rhogj(i)*stheta)
+               scrach = max(1.0e-30,(velgjt - velfjt)**2)
+               rvcrtj = sqrt(scrach/max(scrach*1.0e-30,vcritl))
+               if (rvcrtj.lt.1.0 .and. fluxjm.lt.3000.0) then
+                 fstraj = min(1.0,max(0.0,2.0*(1.0 - rvcrtj)))
+                 fstrbj = min(1.0,max(0.0,0.002*(3000.0 - fluxjm)))
+                 fstrat = fstraj*fstrbj
+                 fstrat = fstrat*min(1.0,voidft/alphef,max(0.0,
+     &           voidj(i)*1.0e5 - 1.0))
+                 fstrat = min(1.0,max(0.0,fstrat))
+               endif
+               if (fstrat .lt. 1.0) then
+                 if (fluxjm .gt. 2000.0) then
+                   alphab = min(0.50,0.25e-3*(fluxjm - 2000.0) +
+     &             0.25)
+                 else
+                   alphab = 0.25
+                 endif
+                 if (voidj(i) .le. alphab) then
+c  Bubbly.
+                   flompj(ix) = 4
+                   fbub = 1.0
+                 else
+                   alphac = 0.8
+                   alphde = 0.75
+                   centr = 4.0e-5
+                   if (voidj(i) .le. alphac) then
+c  Slug.
+                     flompj(ix) = 5
+                     fanm = max(0.0,
+     &               min((20.0*(voidj(i) - alphde)), 1.0))
+                     fslug = max(0.0, min((1.0 - fanm), 1.0))
+                     alpan = alphac
+                     slugc = 8.0/(alphac - alphab)
+                   elseif (voidj(i) .gt. alphac .and. voidj(i) .le.
+     &             1.0 - alphad) then
+c  Annular-mist.
+                     flompj(ix) = 6
+                     fanm = 1.0
+                     alpan = voidj(i)
+                     scrach = 4.0e-5*(rvcrtj**2)**3
+                   else
+c  Dispersed.
+                     fdis = 1.0
+                     flompj(ix) = 7
+                   endif
+                 endif
+               endif
+             endif
+             if (nmapj .le. 3 .and. (abs(sinbt(ix)) .gt. 0.5 .and.
+     &       .not.vmap)) then
+c  Vertical flow map decisions.
+               vmap = .true.
+c  Determine if wet or dry wall map is to be used.
+               tgsat = tempg(kk) - tsatt(kk) - 1.0
+               reflod = iand(imap(kkf),ishft(1,29)).ne.0
+               if (reflod) then
+c  When bundle modify tgsat
+                 if (bundle) tgsat = tgsat - 30.
+               endif
+               poschf = (qwg(kk).gt.0.0 .or. reflod)
+     &                  .and. tgsat.gt.0.0
+c  15 to 60 degree interpolation window as p-reduced varies from .025
+c  to .25.
+               if (poschf) then
+                 preduc = p(kk)/pcrit
+                 if (preduc .lt. 0.25) then
+                   if (preduc .lt. 0.025) then
+                     twindo = 0.06666667
+                   else
+                     twindo = 1.0/(15.0 + 200.*(preduc-0.025))
+                   endif
+                 else
+                   twindo = 0.016666667
+                 endif
+                 pfnrgj = max(0.0,min(1.0,twindo*tgsat))
+               endif
+               if (reflod) then
+c When bundle modif pfnrgj (wet-wall below 1; dry-wall above 1)
+                 if (iand(vctrl(i),ishft(1,30)) .ne. 0) then
+                   if(poschf)  pfnrgj=(1.-exp(-0.5*tgsat))*1.0000454
+                 else
+                   if(poschf) pfnrgj = min(1., twindo*tgsat)
+                 endif
+               endif
+               vcritl = 5.66*sqrt(sqrt(max(sigma(kk),1.0e-7)*rhofg)/
+     &         rhogj(i))
+               alphab = max(0.25*min(1.0,(((0.045*dstarj)**2)**2)**
+     &         2),1.0e-3)
+c  Set minimum slug transition to 0.25 for bundle geometry.
+               if (bundle) alphab = max(0.25,alphab)
+               if (fluxjm .gt. 2000.0) then
+                 if (fluxjm .lt. 3000.0) then
+                   alphab=1.0e-3*(fluxjm - 2000.0)*(0.5 - alphab) +
+     &             alphab
+                 else
+                   alphab=0.5
+                 endif
+                 pfnrgj = max(0.0,min(1.0,pfnrgj*(0.4 - alphab)*
+     &           10.0))
+               endif
+               if (pfnrgj .eq. 0.0) poschf = .false.
+               posdry = pfnrgj .ge. 1.0
+               alphbc = 0.05
+c  Modifications for revised annular flow transition criteria (uk).
+               acrit = vcritl/max(abs(velgjt),vcritl)
+               vfilm = 3.13*sqrt(diamjt*rhofg/rhogj(i))
+               if (sinbt(ix) .ge. 0.0) then
+                 afilm = wj*vfilm/max(abs(velgjt),vfilm) +
+     &           (1.0 - wj)*0.75
+               else
+                 afilm = (1.0 - wj)*(vfilm/max(abs(velgjt),vfilm)) +
+     &           wj*0.75
+               endif
+               if (voidj(i) .le. alphab) then
+c  Bubbly and/or inverse-annular.
+                 if (.not.poschf) then
+                   flompj(ix) = 4
+                   fbub = 1.0
+                 elseif (posdry) then
+                   flompj(ix) = 8
+                   fian = 1.0
+                   alpian = voidj(i)
+                 else
+                   flompj(ix) = 8
+                   fbub = 1.0
+                   fian = 1.0
+                   alpian = voidj(i)
+                 endif
+               else
+                 alphac = max(0.5,min(afilm,acrit,0.9))
+c  Set minimum annular-mist transition to 0.8 for bundle geometry.
+                 if (bundle) alphac = max(0.8,alphac)
+                 alphad = 1.0e-4
+                 centr = 7.5e-5
+                 if (voidj(i) .le. alphac) then
+c  Slug and/or inverse-slug.
+                   slugc = 8.0/(alphac - alphab)
+                   if (.not.poschf) then
+                     flompj(ix) = 5
+                     alphde = max(alphab,alphac - 0.05)
+                     alphef = max(2.0*alphad, min(2.e-3*rhogj(i)/
+     &               rhofj(i),2.e-4))
+                     fanm = max(0.0,min((20.0*(voidj(i) - alphde)),
+     &               1.0))
+                     fslug = max(0.0, min((1.0 - fanm), 1.0))
+                     alpan = alphac
+                     rvcrtj =  voidj(i)*velgjt/vcritl
+                   elseif (posdry) then
+                     flompj(ix) = 9
+                     alphcd = min(alphac,alphab+0.2)
+                     fian = max(0.0, min(5.0*(alphcd - voidj(i)),
+     &               1.0))
+                     fislg = max(0.0, min((1.0 - fian), 1.0))
+                     alpian = alphab
+                   else
+                     flompj(ix) = 9
+                     alphde = max(alphab,alphac - 0.05)
+                     alphef = max(2.0*alphad, min(2.e-3*rhogj(i)/
+     &               rhofj(i),2.e-4))
+                     fanm = max(0.0,min((20.0*(voidj(i) - alphde)),
+     &               1.0))
+                     fslug = max(0.0, min((1.0 - fanm), 1.0))
+                     alpan = alphac
+                     rvcrtj =  voidj(i)*velgjt/vcritl
+                     alphcd = min(alphac,alphab+0.2)
+                     fian = max(0.0, min(5.0*(alphcd - voidj(i)),
+     &               1.0))
+                     fislg = max(0.0, min((1.0 - fian), 1.0))
+                     alpian = alphab
+                   endif
+                 elseif (voidj(i) .gt. alphac .and. voidj(i) .le.
+     &           1.0 - alphad) then
+c  Annular-mist and/or dispersed.
+                   if (.not.poschf) then
+                     flompj(ix) = 6
+                     alphef = max(2.0*alphad,min(2.0e-3*rhogj(i)/
+     &               rhofj(i),2.0e-4))
+                     alpan = voidj(i)
+                     rvcrtj =  voidj(i)*velgjt/vcritl
+                     fanm = 1.0
+                   elseif (posdry) then
+                     flompj(ix) = 10
+                     fids = 1.0
+                   else
+                     flompj(ix) = 10
+                     alphef = max(2.0*alphad,min(2.0e-3*rhogj(i)/
+     &               rhofj(i),2.0e-4))
+                     alpan = voidj(i)
+                     rvcrtj =  voidj(i)*velgjt/vcritl
+                     fanm = 1.0
+                     fids = 1.0
+                   endif
+                 else
+c  Dispersed.
+                   if (.not.poschf) then
+                     flompj(ix) = 7
+                     fdis = 1.0
+                   elseif (posdry) then
+                     flompj(ix) = 11
+                     fids = 1.0
+                   else
+                     flompj(ix) = 11
+                     fdis = 1.0
+                     fids = 1.0
+                   endif
+                 endif
+               endif
+             endif
+$if def,selap
+$if def,debth
+c porous debris bed flow regime map
+               if(idbvol(kk).gt.0)then
+                 if(ncount.eq.207)then
+                   alph3=0.6
+                 endif
+                 if(idbvol(kk).eq.1)then
+c in-core debris
+                   eps=porcom(ndbvol(kk),mdbvol(kk))
+                   dpart=diacom(ndbvol(kk),mdbvol(kk))
+c                else
+c couple debris
+                 endif
+                 alph2=pi/6.
+                 alph3=0.6
+                 alph4=pi*sqrt(2.)/6.
+                 rhofg = max(1.0e-07,rhofj(i) - rhogj(i))
+                 dbubl=1.35*sqrt(sigma(kk)/(gravcn*rhofg))
+                 if(voidgj(i).lt.alph2)then
+                   if(dbubl/dpart .le. 0.29) then
+                     alph1=0.3
+                   else
+                     alph1=0.6*(1.-dbubl/dpart)*(1.-dbubl/dpart)
+                   endif
+                   if(voidgj(i).lt.alph1)then
+                     idbm=1
+                   else
+                     idbm=2
+                   endif
+                 elseif(voidgj(i) .lt. alph3)then
+                   idbm=3
+                 elseif(voidgj(i).lt.alph4) then
+                   idbm=4
+                 else
+                   idbm=5
+                 endif
+c  Determine if wet or dry wall map is to be used.
+                 tgsat = tempg(kk) - tsatt(kk) - 1.0
+                 poschf = (qwg(kk).gt.0.0 .or. reflod)
+     &                    .and. tgsat.gt.0.0
+c  15 to 60 degree interpolation window as p-reduced varies from .025
+c  to .25.
+                 if (poschf) then
+                   preduc = p(kk)/pcrit
+                   if (preduc .lt. 0.25) then
+                     if (preduc .lt. 0.025) then
+                       twindo = 0.06666667
+                     else
+                       twindo = 1.0/(15.0 + 200.*(preduc-0.025))
+                     endif
+                   else
+                     twindo = 0.016666667
+                   endif
+                   pfnrgj = max(0.0,min(1.0,twindo*tgsat))
+                 endif
+                 alphab = max(0.25*min(1.0,(((0.045*dstarj)**2)**2)**2),
+     &           1.0e-3)
+                 if (fluxjm .gt. 2000.0) then
+                   if (fluxjm .lt. 3000.0) then
+                     alphab=1.0e-3*(fluxjm-2000.0)*(0.5-alphab)+alphab
+                   else
+                     alphab=0.5
+                   endif
+                   pfnrgj = max(0.0,min(1.0,pfnrgj*(0.4 - alphab)*10.0))
+                 endif
+                 if (pfnrgj .eq. 0.0) poschf = .false.
+                 posdry = pfnrgj .ge. 1.0
+                 fbub=0.0
+                 fian=0.0
+                 fslug=0.0
+                 fislg=0.0
+                 fanm=0.0
+                 fids=0.0
+                 if(idbm.eq.1)then
+                   if(.not.poschf)then
+c  Bubbly (debris)
+                     flompj(ix) = 4
+                     fbub = 1.0
+                   elseif(posdry)then
+c  Inverted annular (debris)
+                     flompj(ix) = 8
+                     fian = 1.0
+                   else
+                     flompj(ix) = 4
+                     fian = 1.0
+                     fbub = 1.0
+                   endif
+                 elseif(idbm.eq.2)then
+                   if(.not.poschf)then
+c Bubbly / Slug (debris)
+                     flompj(ix) = 5
+                     fbub = 1.0
+                     fslug = 1.0
+                   elseif(posdry)then
+c  Inverted annular - inverted slug (debris)
+                     flompj(ix) =  9
+                     fian = 1.
+                     fislg = 1.
+                   else
+                     flompj(ix) = 5
+                     fbub = 1.0
+                     fslug = 1.0
+                     fian = 1.
+                     fislg = 1.
+                   endif
+                 elseif(idbm.eq.3)then
+                   if(.not.poschf)then
+c  Slug (debris)
+                     flompj(ix) = 5
+                     fslug = 1.0
+                   elseif(posdry)then
+c  Inverted Slug (debris)
+                     flompj(ix) = 9
+                     fislg = 1.0
+                   else
+                     flompj(ix) = 5
+                     fislg = 1.0
+                     fslug = 1.0
+                   endif
+                 elseif(idbm.eq.4) then
+                   if(.not.poschf)then
+c  Slug / Annular (debris)
+                     flompj(ix) = 6
+                     fslug = 1.0
+                     fanm = 1.0
+                   elseif(posdry)then
+c  Inverted Slug / Mist (debris)
+                     flompj(ix) = 11
+                     fislg = 1.0
+                   else
+                     flompj(ix) = 6
+                     fslug = 1.0
+                     fanm = 1.0
+                     fislg = 1.0
+                     fids = 1.0
+                   endif
+                 else
+                   if(.not.poschf)then
+c  Mist (debris)
+                     flompj(ix) = 6
+                     fanm = 1.0
+                   elseif(posdry)then
+c  Annular Mist (debris)
+                     flompj(ix) = 11
+                     fids = 1.0
+                   else
+                     flompj(ix) = 6
+                     fanm = 1.0
+                     fids = 1.0
+                   endif
+                 endif
+c debris flow regime established - now use correlations for fij
+                 jsubs = abs(voidfj(i)*(velg(kf)-velf(kf)))
+                 jsubs = max(jsubs, 0.000001)
+                 if(fbub .ge. 0.01)then
+c        eps is the debris porosity
+                   eta=((pi*sqrt(2.))/(6.*(1-eps)))** 0.333
+                   gam = dbubl/dpart
+                   alph0 = (pi/3.)*((1.-eps)/eps)*gam*(1.+gam)*
+     #                     (6*eta-5*(1+gam))
+                   alph0 = max(alph0, 0.0)
+                   fgeom = 0.5 * (1+gam)*log(1.+2./gam)
+                   if(fslug.lt.0.01)then
+c bubbly or inverted annular
+                     if(poschf)then
+                       if(voidgj(i).gt.0.0)then
+                         if (voidgj(i) .le. alph0) then
+                           csubv=18.*voidfj(i)*fgeom
+                           csubi=0.34*voidgj(i)**3*voidfj(i)*fgeom**2
+                         else
+                           csubv=18. * (alph0*fgeom+voidfj(i)-alph0)
+                           csubi= 0.34 * voidgj(i)**3 *
+     #                     (alph0*fgeom**2 + voidfj(i) - alph0)
+                         endif
+                         fijd1 = csubv*viscg(i)/(jsubs*dbubl**2) +
+     #                     (csubi* (rhogj(i)-voidfj(i)*rhogj(i)+
+     #                      voidfj(i)*rhofj(i)))/(dbubl**2*eps)
+                       else
+                         fijd1=0.0
+                       endif
+                     endif
+                     if(.not.posdry)then
+                       if(voidgj(i).gt.0.0)then
+                         if (voidgj(i) .le. alph0) then
+                           csubv=18.*voidgj(i)*fgeom
+                           csubi=0.34*voidfj(i)**3*voidgj(i)*fgeom**2
+                         else
+                           csubv=18. * (alph0*fgeom+voidgj(i)-alph0)
+                           csubi= 0.34 * voidfj(i)**3 *
+     #                     (alph0*fgeom**2 + voidgj(i) - alph0)
+                         endif
+                         fijd2 = csubv*viscf(i)/(jsubs*dbubl**2) +
+     #                     (csubi*(rhofj(i)-voidgj(i)*rhofj(i)+
+     #                      voidgj(i)*rhogj(i)))/(dbubl**2*eps)
+                       else
+                         fijd2=0.0
+                       endif
+                     endif
+                     if(posdry)then
+                       fij(i)=fijd1
+                     elseif(.not.poschf)then
+                       fij(i)=fijd2
+                     else
+                       fij(i)=fijd2*(1.-pfnrgj) + fijd1*pfnrgj
+                     endif
+                   else
+c bubbly-slug or (inverted annular - inverted slug)
+                     if(poschf)then
+                       zeta=(voidfj(i)-alph1)/(alph2-alph1)
+                       wfac=zeta*zeta*(3.-2.*zeta)
+                       csubv=18.*(voidfj(i)*fgeom+voidfj(i)-alph0)*
+     #                       (1.-wfac)+(5.21*voidfj(i)*wfac)
+                       csubi=(1.-voidfj(i))**3 *
+     #                  (0.34*(alph0*fgeom**2+voidfj(i)-alph0)*(1.-wfac)
+     #                   +0.92*voidfj(i)*wfac)
+                       fijd1= csubv*viscg(i)/(jsubs*dbubl**2) +
+     #                  (csubi*
+     #                (rhogj(i)-voidfj(i)*rhogj(i)+voidfj(i)*rhofj(i)))/
+     #                 (dbubl**2*eps)
+                     endif
+                     if(.not.posdry)then
+                       zeta=(voidgj(i)-alph1)/(alph2-alph1)
+                       wfac=zeta*zeta*(3.-2.*zeta)
+                       csubv=18.*(voidgj(i)*fgeom+voidgj(i)-alph0)*
+     #                       (1.-wfac)+(5.21*voidgj(i)*wfac)
+                       csubi=(1.-voidgj(i))**3 *
+     #                  (0.34*(alph0*fgeom**2+voidgj(i)-alph0)*(1.-wfac)
+     #                   +0.92*voidgj(i)*wfac)
+                       fijd2= csubv*viscf(i)/(jsubs*dbubl**2) +
+     #                  (csubi*
+     #                (rhofj(i)-voidgj(i)*rhofj(i)+voidgj(i)*rhogj(i)))/
+     #                 (dbubl**2*eps)
+                     endif
+                     if(posdry)then
+                       fij(i)=fijd1
+                     elseif(.not.poschf)then
+                       fij(i)=fijd2
+                     else
+                       fij(i)=fijd2*(1.-pfnrgj) + fijd1*pfnrgj
+                     endif
+                   endif
+                 elseif(fslug.ge.0.01)then
+                   if(fanm.le.0.01)then
+c slug or inverted slug
+                     if(poschf)then
+                       csubv=5.21 * voidfj(i)
+                       csubi=0.92 * (1.-voidfj(i))**3 * voidfj(i)
+                       fijd1= csubv*viscg(i)/(jsubs*dbubl**2) +
+     #                  (csubi*
+     #                (rhogj(i)-voidfj(i)*rhogj(i)+voidfj(i)*rhofj(i)))/
+     #                  (dbubl**2*eps)
+                     endif
+                     if(.not.posdry)then
+                       csubv=5.21 * voidgj(i)
+                       csubi=0.92 * (1.-voidgj(i))**3 * voidgj(i)
+                       fijd2= csubv*viscf(i)/(jsubs*dbubl**2) +
+     #                  (csubi*
+     #                (rhofj(i)-voidgj(i)*rhofj(i)+voidgj(i)*rhogj(i)))/
+     #                  (dbubl**2*eps)
+                     endif
+                     if(posdry)then
+                       fij(i)=fijd1
+                     elseif(.not.poschf)then
+                       fij(i)=fijd2
+                     else
+                       fij(i)=fijd2*(1.-pfnrgj) + fijd1*pfnrgj
+                     endif
+                   else
+c slug-annular or inverted slug-mst
+                     zeta=(voidgj(i)-alph3)/(alph4-alph3)
+                     wfac=zeta*zeta*(3.-2.*zeta)
+                     acons=150.*(1-eps)**2/(eps**3*dbubl**2)
+                     bcons=1.75*(1-eps)/(eps**3*dbubl**2)
+                     if(poschf)then
+                       kg=((1.-eps)/(1.-eps*voidfj(i)))**4/3 *
+     #                   voidfj(i)**2 /(wfac+(1-wfac)/voidfj(i))
+                       etag=((1.-eps)/(1.-eps*voidfj(i)))**2/3 *
+     #                    voidfj(i)**2/(wfac+(1-wfac)/voidfj(i))
+                       fac1=(5.21*voidfj(i)*viscg(i)*(1.-wfac)/dbubl**2*
+     #                  (eps*acons*viscf(i))/kg*wfac)
+                       fac2a= 0.92*voidfj(i)*voidgj(i)**3 *
+     #                 (rhogj(i)-rhogj(i)*voidfj(i)+rhofj(i)*voidfj(i))*
+     #                  (1-wfac)/(eps*dbubl)
+                       fac2b=eps*voidfj(i)/voidgj(i)*
+     #                  (bcons*rhofj(i))/etag
+                       fijd1=(fac1+fac2a+fac2b*wfac)/jsubs
+                     endif
+                     if(.not.posdry)then
+                       kg=((1.-eps)/(1.-eps*voidgj(i)))**4/3 *
+     #                   voidgj(i)**2 /(wfac+(1-wfac)/voidgj(i))
+                       etag=((1.-eps)/(1.-eps*voidgj(i)))**2/3 *
+     #                    voidgj(i)**2/(wfac+(1-wfac)/voidgj(i))
+                       fac1=(5.21*voidgj(i)*viscf(i)*
+     #                      (1.-wfac)/dbubl**2 +
+     #                  (eps*acons*viscg(i))/kg*wfac)
+                       fac2a= 0.92*voidgj(i)*voidfj(i)**3 *
+     #                 (rhofj(i)-rhofj(i)*voidgj(i)+rhogj(i)*voidgj(i))*
+     #                  (1.-wfac)/(eps*dbubl)
+c whatif voidfj is zero
+                       if(voidfj(i).eq.0.)then
+                         fac2b=1.-voidgj(i)
+                       else
+                         fac2b=voidfj(i)
+                       endif
+                       fac2b=eps*voidgj(i)/fac2b*
+     #                  (bcons*rhogj(i))/etag
+                       fijd2=fac1/jsubs+(fac2a+fac2b*wfac)
+                       if(fijd2.lt.0.)then
+                         call fabend
+                       endif
+                     endif
+                     if(posdry)then
+                       fij(i)=fijd1
+                     elseif(.not.poschf)then
+                       fij(i)=fijd2
+                     else
+                       fij(i)=fijd2*(1.-pfnrgj) + fijd1*pfnrgj
+                     endif
+                   endif
+                 elseif(fanm.gt.0.01)then
+                   acons=150.*(1-eps)**2/(eps**3*dbubl**2)
+                   bcons=1.75*(1-eps)/(eps**3*dbubl**2)
+                   zeta=(voidgj(i)-alph3)/(alph4-alph3)
+                   wfac=zeta*zeta*(3.-2.*zeta)
+                   wfac1=wfac+(1.-wfac)/voidgj(i)
+                   if(poschf)then
+                     if(voidfj(i).gt.0.0)then
+                       kg=(((1.-eps)/(1.-eps*voidfj(i)))**4/3 *
+     #                   voidfj(i)**2)/wfac1
+                       etag=(((1.-eps)/(1.-eps*voidfj(i)))**2/3 *
+     #                   voidfj(i)**2)/wfac1
+                       fijd1=(eps*acons*viscf(i))/(kg*jsubs) +
+     #                   (eps*voidfj(i))/voidgj(i)*
+     #                   (bcons*rhofj(i))/etag
+                     else
+                       fijd1=0.0
+                     endif
+                   endif
+                   if(.not.posdry)then
+                     if(voidfj(i).gt.0.0)then
+                       kg=(((1.-eps)/(1.-eps*voidgj(i)))**4/3 *
+     #                   voidgj(i)**2)/wfac1
+                       etag=(((1.-eps)/(1.-eps*voidgj(i)))**2/3 *
+     #                   voidgj(i)**2)/wfac1
+                       fijd2=(eps*acons*viscg(i))/(kg*jsubs) +
+     #                   (eps*voidgj(i))/voidfj(i)*
+     #                   (bcons*rhogj(i))/etag
+                     else
+                       fijd2 = 0.0
+                     endif
+                   endif
+                   if(posdry)then
+                     fij(i)=fijd1
+                   elseif(.not.poschf)then
+                     fij(i)=fijd2
+                   else
+                     fij(i)=fijd2*(1.-pfnrgj) + fijd1*pfnrgj
+                   endif
+                 endif
+                 if(fij(i).lt.0.)call fabend
+               else
+$endif
+$endif
+             if (.not.posdry) then
+c  Wet wall correlations.
+               c0 = 1.0
+               fx = 0.0
+               if (nmapj .ne. 4) then
+                 fic = 1.0
+                 fic1 = 1.0
+               else
+                 fic  = 0.0
+                 fic1 = 0.0
+               endif
+               if (fstrat .lt. 1.0) then
+                 if (fbub .gt. 0.0) then
+c  Bubbly.
+                   vfgbb = velgjt - velfjt
+                   if (flompj(ix) .ne. 2) alpbub = max(voidj(i),
+     &             1.0e-5)
+                   if (voidj(i) .lt. 1.0e-5) vfgbb = vfgbb*voidj(i)*
+     &             1.0e5
+                   if (hmap .or. nmapj.eq.4) then
+                     call fidis2 (fic,vfgbb,alpbub,sbubb,i,0,kk,
+     &               diamjt,reflod)
+                   else
+c  Fic, fx and c0 from uk interphase friction model. note:
+c  The bubble parameters calculated above using the relap5/mod2
+c  interphase friction model are still needed for the interphase
+c  heat transfer calculation.
+c  If a transition to post dryout flow is taking place, the values of
+c  fic, fx and c0 calculated represent bubbly flow contributions.
+c  At present, the uk interphase friction model is not used in the
+c  high mixing flow regime (ie pumps), as the relap5/mod2
+c  model is believed to be more appropriate (at least when the pumps
+c  are running).  Thus, fbub = 1 here if uk model is invoked.  If the
+c  uk model were used for pumps, consideration must be given as
+c  to whether the void fraction used by fidisj in the transition
+c  regime should be voidg(i) or alpbub.  further coding changes will
+c  also be required to calculated appropriate values of c0j(i) and
+c  fxj(i) for this regime.
+c  The uk model is not used for a time dependent volume as the
+c  interfacial friction coefficients for a time dependent volume (tdv)
+c  make no contribution to the junction interfacial friction (and
+c  dl(kk) and elevation change are zero for a tdv, which causes problems
+c  in subroutine fidisj).
+c  The uk model is not used for horizontal volumes as it has not
+c  been fully developed for this situation and the relap5/mod2 model
+c  is believed to be adequate.  If the uk model were used for
+c  horizontal volumes, further coding changes will be required to
+c  calculate appropriate values of fij(i), fxj(i) and c0j(i) for
+c  transition to horizontal stratified flow.
+                     call fidisj(fic,c0,i,output,kk,ix,velgjt,velfjt,
+     &               diamjt,k,l,reflod)
+                     fx = 1.0
+c  Save drag variables for bundle logic at end of dispersed flow.
+                     ficb = fic
+                     fxb = fx
+                     c0b = c0
+                   endif
+                   if (fbub .lt. 1.0) then
+                     if (nmapj .eq. 4) then
+                       fic = fic*fbub
+                     else
+                       if (vmap .and. hmap) then
+                         fic = fic**(fbub*(1.0-fstrat))
+                       else
+                         fic = fic**fbub
+                       endif
+                     endif
+                   endif
+                 endif
+                 if (fslug .gt. 0.0) then
+c  Slug flow.
+                   vfgbb = exp(-slugc*(voidj(i) - alphab))
+                   alpbub = alphab*vfgbb
+                   voidb = (voidj(i) - alpbub)/(1.0 - alpbub)
+                   scrach =(velgjt - velfjt)*vfgbb**2
+                   if (hmap) then
+                     call fidis2 (fic1,scrach,alpbub,sbubb,i,0,kk,
+     &               diamjt,reflod)
+                     void = 1.0 - voidb
+                     sbubb = void*sbubb*vfgbb
+c  Ishii-Chawla NUREG/CR-1230, Eq. 52;
+c  Projected area/vol = voidf/length
+c  2*rd/Dh = sqrt(voidg); Cd/2=5.45*sqrt(voidg)*(1.-voidg)**3
+                     if (dl(kkf) .eq. 0.) then
+                       dlen = max(dl(lf),dl(kf))
+                     else
+                       dlen = dl(kkf)
+                     endif
+                     svslg = sqrt(voidb)/dlen
+c  Add droplet and slug contribution together.
+                     fic1 = void*(fic1 +
+     &               5.45*rhofj(i)*voidb*svslg*void**2)
+                   else
+c  Fic1, fx and c0 from new interphase friction model. note:
+c  the slug parameters calculated above using the relap5/mod2
+c  interphase friction model are still needed for the interphase
+c  heat transfer calculation.
+c  If a transition to annular mist or post dryout flow
+c  is taking place, the values of fic1, fx and c0
+c  calculated represent slug flow contributions.
+c  The uk model is not used for a time dependent volume as the
+c  interfacial friction coefficients for a time dependent volume (tdv)
+c  make no contribution to the junction interfacial friction (and
+c  dl(kk) and elevation change are zero for a tdv, which causes problems
+c  in subroutine fidisj).
+c  The uk model is not used for horizontal volumes as it has not
+c  been fully developed for this situation and the relap5/mod2 model
+c  is believed to be adequate. if the uk model were used for
+c  horizontal volumes, further coding changes will be required to
+c  calculate appropriate values of fij(i), fxj(i)
+c  and c0j(i) for transition to horizontal stratified flow.
+                     call fidisj (fic1,c0,i,output,kk,ix,velgjt,
+     &               velfjt,diamjt,k,l,reflod)
+                     fx = 1.0
+c  Save drag variables for bundle logic at end of dispersed flow.
+                     ficb = fic1
+                     fxb = fx
+                     c0b = c0
+                   endif
+                   if (fslug .lt. 1.0) then
+c  If above conditional is false, proceed to end of dispersed.
+                     if (vmap .and. hmap) then
+                       fic1 = fic1**(fslug*(1.0 - fstrat))
+c  Modify c0 and fx for slug to annular-mist transition.
+c  For c0, this is the final value as incorporating the contribution
+c  from annular-mist flow results in a multiplication by unity.
+c  For fx, the interpolating parameter fslug is applied as
+c  a multiplier rather than an exponent, as these variables are zero
+c  in the annular-mist regime. consequently, the values of fx
+c  calculated here are also final values for the slug to annular-mist
+c  transition.
+                       c0 = c0**(fslug*(1.0-fstrat))
+                       fx = fx*(fslug*(1.0-fstrat))
+                     else
+                       fic1 = fic1**fslug
+                       c0 = c0**fslug
+                       fx = fx*fslug
+                     endif
+                   endif
+                   fic = fic1
+                 endif
+                 if (fanm .gt. 0.0) then
+c  Annular-mist flow.
+                   scrach = centr*(rvcrtj**2)**3
+                   alpanf = 1.0 - alpan
+                   fluxm1 = 1.0e-4*sqrt(sqrt(abs(velfjt*alpanf*
+     &             rhofj(i)*diamjt/viscf(kk))))
+                   if (scrach .le. 200.0) then
+                     vfgbb = exp(-scrach)*max(0.0,(1.0 - fluxm1))
+                   else
+                     vfgbb = 0.0
+                   endif
+                   if (voidj(i).gt.alphac .and. alpanf.lt.alphef)
+     &             then
+                     scrach = (alpanf - 1.0e-7)/(alphef - 1.0e-7)
+                     alphad = alphad*scrach + 1.0e-5*(1.0 -
+     &               scrach)
+                     vfgbb = vfgbb*scrach
+                   endif
+                   voidb = max(0.0, alpanf*vfgbb)
+                   rdstar = sqrt(sqrt(voidb))
+                   alpdrp = max((alpanf - voidb)/(1.0 - voidb),
+     &             alphad)
+                   scrach = (velgjt - velfjt)*(1.0 - vfgbb)
+                   if (voidft .lt. 1.0e-6) scrach =
+     &             scrach*voidft*1.0e6
+                   call fidis2 (fic,scrach,alpdrp,sdrop,i,1,kk,
+     &             diamjt,reflod)
+                   void = 1.0 - voidb
+                   voidgs = sqrt(void)
+                   sqvoid = sqrt(alpan)
+                   reg = max(0.01,abs(velgjt - velfjt),
+     &             abs(velgj(i) - velfj(i)))
+                   reg = rhogj(i)*reg*sqvoid*diamjt/viscg(kk)
+                   if ((iand(imap(kf),63).eq.3 .and.
+     &             iand(ishft(jc(i),-26),3).eq.3) .or.
+     &             (iand(imap(lf),63).eq.3 .and.
+     &             iand(ishft(jc(i),-26),3).eq.1)) then
+                     sannu = 4.0*sqrt(alpan)/diamjt
+                     void = 0.0
+                   else
+                     sannu = 6.1192775*sqrt(rdstar)*voidgs/diamjt
+                   endif
+                   fgf1 = 64.0/reg
+                   fgf2 = 0.02*(1. + 150.0*(1.0 - sqvoid))
+                   if (reg .le. 500.0) then
+                     fgf = fgf1
+                   elseif (reg .lt. 1500.0) then
+                     fgf = fgf1*(1500.0 - reg)*0.001 +
+     &               fgf2*(reg - 500.0)*.001
+                   else
+                     fgf = fgf2
+                   endif
+                   fic = 0.125*rhogj(i)*sannu*fgf + fic*void
+                   if (fanm .lt. 1.0) then
+                     if (vmap .and. hmap) then
+                       fic = fic1*fic**(fanm*(1.0 - fstrat))
+                     else
+                       fic = fic1*fic**fanm
+                     endif
+                   endif
+                 endif
+                 if (fdis .gt. 0.0) then
+c  Dispersed.
+                   if (flompj(ix) .ne. 2) alpdrp = max(voidft,
+     &             1.0e-4)
+                   scrach = velgjt - velfjt
+                   call fidis2 (fic1,scrach,alpdrp,sdrop,i,1,kk,
+     &             diamjt,reflod)
+                   if (fdis .lt. 1.0) then
+                     if (nmapj .eq. 4) then
+c  Interpolation for high mixing map.
+                       fic1 = fic1*fdis + fic
+                     else
+                       if (vmap .and. hmap) then
+                         fic1 = fic*fic1**(fdis*(1.0-fstrat))
+                       else
+                         fic1 = fic*fic1**fdis
+                       endif
+                     endif
+                   endif
+                   fic = fic1
+                 endif
+c  Bundle Drag.
+c  Take max drag between EPRI and annular-mist/dispersed for bundles.
+                 if ( bundle .and. .not. hmap ) then
+                   if (fanm .gt. 0.0 .or. fdis .gt. 0.0 ) then
+                     call fidisj(ficb,c0b,i,output,kk,ix,velgjt,velfjt,
+     &                 diamjt,k,l,reflod)
+                     fxb = 1.0
+                   endif
+                   fic = max(fic,ficb)
+                   c0 = c0b
+                   fx = fxb
+                 endif
+                 if (vmap .and. hmap) then
+                   fij(i) = fij(i)*(fic/fij(i))**fangle
+                   c0j(i) = c0j(i)*(1.0/c0j(i))**fangle
+                   fxj(i) = fxj(i)*(1.0 - fangle)
+                 else
+                   fij(i) = fic
+                   c0j(i) = c0
+                   fxj(i) = fx
+                 endif
+               endif
+               if (fstrat .gt. 0.0) then
+c  Horizontal stratification.
+                 flompj(ix) = 12
+                 voidb = voidj(i)*pi + csthej*sqrt(max(0.0,
+     &           min(1.0,(1.0 - csthej*csthej))))
+                 scrach = diamjt*pi
+                 rhyva = (voidb + stheta)/(scrach*max(1.0e-9,
+     &           voidj(i)))
+                 rhyli = (pi - voidb + stheta)/
+     &           (scrach*max(1.0e-9,voidft))
+                 reginv = viscg(kk)*rhyva/(rhogj(i)*
+     &           (abs(velgjt - velfjt) + 0.01))
+c  1.273239545 is 4/pi
+                 shzst = 1.273239545*stheta/diamjt
+                 fic = 0.125*shzst*rhogj(i)*max(64.0*reginv,
+     &           0.3164*sqrt(sqrt(reginv)))
+                 if (fstrat .lt. 1.0) then
+                   if (vmap .and. hmap) then
+                     fij(i) = fij(i)*fic**(fstrat*fangle)
+                   else
+                     fij(i) = fij(i)*(fic/fij(i))**fstrat
+                   endif
+                 else
+                   if (vmap .and. hmap) then
+                     fij(i) = fij(i)*(fic/fij(i))**fangle
+                   else
+                     fij(i) = fic
+c  C0j(i) and fxj(i) for horizontal stratified flow.
+                     c0j(i) = 1.0
+                     fxj(i) = 0.0
+                   endif
+                 endif
+               endif
+               if (vmap .and. .not.hmap .and. .not.poschf .and.
+     &         abs(sinbt(ix)).lt.0.866025403) go to 1521
+             endif
+             if (poschf) then
+c  Dry wall correlations.
+               fic = 1.0
+               fic1 = 1.0
+               if (fian .gt. 0.0) then
+c  Inverted annular.
+                 vfgbb = exp(-(alphab - alpian)*8.0/alphab)*
+     &           min(voidj(i)/alphbc,1.0)
+                 voidb = alpian*vfgbb
+                 alpbub = max((alpian - voidb)/(1.0 - voidb),1.0e-7)
+                 vfgbb = 1.0 - vfgbb
+                 scrach = (velgjt - velfjt)*vfgbb**2
+                 call fidis2 (fic,scrach,alpbub,sbubb,i,0,kk,diamjt,
+     &                       reflod)
+                 void = 1.0 - voidb
+                 voidgs = sqrt(void)
+                 sbubb = void*sbubb*vfgbb
+                 sannu = 4.0*voidgs/diamjt
+                 rdstar = min(30.0,1.0/dstarj)
+                 fluxm1 = max(1.0e-08,0.5*(1.0 - voidgs)*dstarj)
+                 fic = rhofj(i)*(0.0025+0.1375*10.0**(9.07*rdstar)*
+     &           fluxm1**(1.63 + 4.74*rdstar))*sannu + fic*void
+                 if (fian .lt. 1.0) then
+                   fic = fic**fian
+                 endif
+               endif
+               if (fislg .gt. 0.0) then
+c  Inverted slug.
+                 void = exp(-(alphac - voidj(i))/(alphac - alphab))
+                 alpdrp = (1.0 - alphac)*void
+                 voidb = (voidft - alpdrp)/(1.0 - alpdrp)
+                 scrach = (velgjt - velfjt)*void**2
+                 call fidis2 (fic1,scrach,alpdrp,sdrop,i,2,kk,
+     &           diamjt,reflod)
+                 void = 1.0 - voidb
+                 sdrop = void*sdrop
+c  Ishii-Chawla NUREG/CR-1230, Eq. 52;
+c  Projected area/vol = voidf/length.
+c  2*rd/Dh = sqrt(voidf); Cd/2=5.45*sqrt(voidf)*(1.-voidf)**3
+                 if (dl(kkf) .eq. 0.) then
+                   dlen = max(dl(lf),dl(kf))
+                 else
+                   dlen = dl(kkf)
+                 endif
+                 slslg = sqrt(voidb)/dlen
+c  Add droplet and slug contribution together.
+                 fic1 = void*(fic1 + 5.45*rhogj(i)*voidb*slslg*
+     &           void**2)
+c  Interpolate inverted slug to dispersed as equilibrium qual ->zero.
+                 if (quale(kk) .gt. -0.02) then
+                   alpdrp = max(voidft,1.0e-4)
+                   scrach = velgjt - velfjt
+                   call fidis2 (fkk,scrach,alpdrp,sdrop,i,2,kk,
+     &             diamjt,reflod)
+                   fic1 = 50.*(fkk - fic1)*min(0.0,quale(kk)) + fkk
+                   flompj(ix) = 10
+                 endif
+                 if (fislg .lt. 1.0) then
+                   fic1 = fic1**fislg*fic
+                 endif
+                 fic = fic1
+               endif
+               if (fids .gt. 0.0) then
+c  Dispersed.
+                 alpdrp = max(voidft,1.0e-4)
+                 scrach = velgjt - velfjt
+                 call fidis2 (fic,scrach,alpdrp,sdrop,i,2,kk,diamjt,
+     &                        reflod)
+               endif
+               if (.not.posdry) then
+                 fij(i) = fij(i)*(1.0 - pfnrgj) + fic*pfnrgj
+c  Modify c0j(i) and fxj(i) for transition boiling.
+c  For fxj(i), pfnrgj is applied as a multiplier rather than an exponent
+c  as these variables are zero for post-dryout conditions.
+                 c0j(i) = c0j(i)*(1.0/c0j(i))**pfnrgj
+                 fxj(i) = fxj(i)*(1.0 - pfnrgj)
+               else
+                 fij(i) = fic
+c  C0j(i) and fxj(i) for post-dryout conditions.
+                 c0j(i) = 1.0
+                 fxj(i) = 0.0
+               endif
+             endif
+             fij(i) = fij(i)*vlgfj
+c  Adjust interfacial heat transfer for vertical stratification.
+             if (iand(jc(i),ishft(1,26)) .ne. 0) then
+               if (iand(jc(i),2) .eq. 0 ) then
+                 lmap = iand(ishft(jc(i),-27),1)
+                 if (lmap .eq. 0) then
+                   ivbot  = k
+                   ivbndk = ndk
+                   imbot = vctrls(k)
+                   ivtop  = l
+                   ivtndk = ndl
+                 else
+                   ivbot  = l
+                   ivbndk = ndl
+                   imbot = vctrls(l)
+                   ivtop  = k
+                   ivtndk = ndk
+                 endif
+                 if (iand(vctrl(ivtop),1).eq.0 .and. .not.chngno(13))
+     &           then
+                   nmapj = iand(imap(ivtop+ivtndk),63)
+                   if (nmapj.ne.2 .and. nmapj.ne.4) then
+                     if (iand(ishft(imap(ivbot+ivbndk),-11),1) .ne. 0)
+     &               then
+                       vfin = fidxup(imbot) - voidg(ivbot)*
+     &                 v(ivbot)
+                       if (vfin .gt. 0.0) then
+                         avev = max(0.01,satt(ivtop) - tempf(ivtop))/
+     &                   max(0.01,satt(ivbot) - tempf(ivbot))
+                         avev = avev*(1.0 - max(0.0,min(1.0,200.0*
+     &                   sqrt(vfin/v(ivtop)))))
+                         hif(ivtop) = hifo(ivtop)*avev + hif(ivbot)*
+     &                   (1.0 - avev)
+                       endif
+                     endif
+                   endif
+                 endif
+               endif
+c  Initial testing for sharp interface and reverse void profile.
+               if (iand(jc(i),1) .eq. 0) then
+                 if (chngno(18)) then
+                   scrach = voidg(l) - voidg(k)
+                   if (scrach .ne. 0.0) then
+                     irt = .true.
+                     if (scrach .lt. 0.0) then
+                       scrach = -scrach
+                       if (iand(jc(i),ishft(1,27)) .eq. 0) irt =
+     &                 .false.
+                     else
+                       if (iand(jc(i),ishft(1,27)) .ne. 0) irt =
+     &                 .false.
+                     endif
+c  Sharp interface.
+                     if (irt) then
+                       if (scrach .le. 0.5) then
+                         fic = fij(i)
+                         fij(i) = fic*(2.0*scrach)**2
+                       endif
+c  Reverse void profile.
+                     else
+                       if (scrach .gt. 0.0010) then
+                         delz = rho(k)
+                         if (iand(jc(i),4) .ne. 0) delz = -delz
+                         delzz = rho(l)
+                         if (iand(jc(i),8) .ne. 0) delzz = -delzz
+                         delz = gravcn*(hydzc(kf2)*delz +
+     &                   hydzc(lf2)*delzz)
+                         scrach = (scrach - 0.0010)*min(1.0,0.6*
+     &                   abs(delz)/max(1.0e-10,abs(p(k) - p(l) -
+     &                   delz)) - 0.2)
+                         if (scrach .gt. 0.0) then
+                           fic = fij(i)
+                           fabrup = min(20.*scrach,1.0)
+                           fij(i) = fic/sqrt(1.0e3*(scrach*100. +
+     &                     1.0)*scrach + 1.0)
+                           fabrup = 0.693 - 0.642*fabrup
+                           if (fij(i) .gt. fijo(i)) fij(i) =
+     &                     min(fij(i),max(fic,fijo(i)))
+                         endif
+                       endif
+                     endif
+                   endif
+                 endif
+               endif
+$if def,selap
+$if def,debth,1
+             endif
+$endif
+             endif
+$if def,makemap,1
+             go to 444
+c  Time smoothing of fij.
+c  Set old interphase drag, interpolating factor and distribution
+c  coefficient to calculated values if first time step.
+  700        if (fijo(i) .eq. 0.0) then
+               fijo(i) = fij(i)
+               fxjo(i) = fxj(i)
+               c0jo(i) = c0j(i)
+             endif
+             if( ilev.eq.0 ) then
+             if (iand(jc(i),1) .ne. 0) then
+               kup = kf
+               kupx = kx
+               if (velgjo(i) .lt. 0.0) then
+                 kup = lf
+                 kupx = lx
+               endif
+               timjnv = sqrt(max(gravcn,0.516*dstar(kupx))/
+     &         diamv(kup))
+               tcourj = 0.0
+               if (dl(kup) .gt. 0.0)
+     &         tcourj = 0.7*min(abs(velg(kup)),abs(velf(kup)))/
+     &         dl(kup)
+             else
+               timjnv = sqrt(max(gravcn,0.516*dstar(kx))/diamv(kf))
+               tcourj = 0.0
+               if (dl(kf) .gt. 0.0)
+     &         tcourj = 0.7*min(abs(velg(kf)),abs(velf(kf)))/dl(kf)
+               scrach = sqrt(max(gravcn,0.516*dstar(lx))/diamv(lf))
+               termj = 0.0
+               if (dl(lf) .gt. 0.0)
+     &         termj = 0.7*min(abs(velg(lf)),abs(velf(lf)))/dl(lf)
+               rvx = 1.0/(v(k) + v(l))
+               timjnv = rvx*(v(k)*timjnv + v(l)*scrach)*dt
+               tcourj = rvx*(v(k)*tcourj + v(l)*termj)*dt
+             endif
+             termj = max(0.0513,(1.0e-7 +
+     &       min(abs(velgj(i)),abs(velfj(i))))/
+     &       max(abs(velgj(i)),abs(velfj(i)),1.0e-7) - 0.3)
+c
+             rvx = min(0.90,exp(-min(fabrup,max(tcourj,min(timjnv,
+     &       termj)))))
+c
+             if (fij(i) .gt. fijo(i)) then
+               fij(i) = fij(i)*(fijo(i)/fij(i))**rvx
+             else
+               fij(i) = rvx*fijo(i) + (1.0-rvx)*fij(i)
+             endif
+cc           fij(i) = 4.0
+             if (chngno(12)) then
+               fij(i) = min(fij(i)/(max(1.0e-10,min(1.0,(voidgj(i) -
+     &         0.001)*1.111111111e2)))**3,1.0e10)
+             endif
+c  Time smooth distribution coefficient and interpolating factor.
+c  Time smoothing factor is applied as a multiplier as coefficients can
+c  be zero.
+             c0j(i) = rvx*c0jo(i) + (1.0 - rvx)*c0j(i)
+             fxj(i) = rvx*fxjo(i) + (1.0 - rvx)*fxj(i)
+             endif
+$if def,makemap,1
+  444        continue
+c  Store items in jcex, florgj, and iregj.
+             jcex(i) = ior(iand(jcex(i),not(ishft(63,3))),
+     &       ishft(flompj(ix),3))
+             florgj(i) = flompj(ix)
+             iregj(i) = ireg(ix)
+             if (iregj(i).eq.11.0 .or. iregj(i).eq.15.0) then
+               alpg = max(voidj(i),0.01)
+               rfg = max(rhofj(i) - rhogj(i),1.0e-5)
+               jgp = (sigma(kk)*gravcn*rfg/(rhofj(i)*rhofj(i)))**0.25
+               jgp = alpg*abs(velgjt)/jgp
+               rat = max(0.0,min(1.0,(jgp-0.5)/1.268))
+               iregj(i) = iregj(i) + rat
+             endif
+c  Calculate void gradient term in difference momentum equation.
+             fkk = 1.0
+             fll = 1.0
+             dxkk = dl(k)
+             dzk = hydzc(k) + hydzc(k+1)
+             if (dl(k) .eq. 0.0) then
+               cphik = 1.0
+               sphik = 0.0
+               if (iand(imap(k),63) .eq. 2) then
+                 hflagk = 1.0
+                 irt = .true.
+               else
+                 cthek = (1.0 - 2.0*voidg(k))*diamv(k)
+                 dcthek = - 2.0*diamv(k)
+                 hflagk = 0.0
+                 cphik = 0.0
+                 sphik = 1.0
+                 irt = .false.
+               endif
+             elseif (.not.((iand(imap(k),63).eq.2) .or.
+     &       (((iand(imap(k),63).eq.4) .or.
+     &       (iand(imap(k),63).eq.5)) .and.
+     &       (abs(dzk/dl(k)).le.0.707106781)))) then
+               cthek = (1.0 - 2.0*voidg(k))*abs(dzk)
+               dcthek = - 2.0*abs(dzk)
+               cphik = 1.0
+               sphik = 0.0
+               hflagk = 0.0
+               irt = .false.
+c  For variable gravity, this needs to be modified.
+             else
+               hflagk = 1.0
+               sphik = dzk
+               if (iand(jc(i),4) .ne. 0) sphik = -sphik
+               sphik = sphik/dl(k)
+               cphik = sqrt(max(0.0,1.0 - sphik*sphik))
+               irt = .true.
+             endif
+             if (irt) then
+               cthek = costhe(vctrls(k))
+               if( abs(cthek).ne.1.0 ) then
+                 dcthek = - pi / (2.0*sin(acos(cthek)))
+               else
+                 dcthek = 0.0
+               endif
+               if (jk.ne.0 .and. dl(k).ne.0.0) then
+                 fkk = cphik
+                 cphik = 1.0
+                 sphik = 0.0
+               endif
+             else
+               if (jk.eq.0 .and. hydzc(k).ne.0.0) then
+                 sphik = dzk
+                 if (iand(jc(i),4) .ne. 0) sphik = -sphik
+                 sphik = sphik/dl(k)
+                 cphik = sqrt(max(0.0,1.0-sphik*sphik))
+               endif
+             endif
+             dxll = dl(l)
+             dzl = hydzc(l) + hydzc(l+1)
+             if (dl(l) .eq. 0.0) then
+               cphil = 1.0
+               sphil = 0.0
+               if (iand(imap(l),63) .eq. 2) then
+                 hflagl = 1.0
+                 irt = .true.
+               else
+                 cthel = (1.0 - 2.0*voidg(l))*diamv(l)
+                 dcthel = - 2.0*diamv(l)
+                 hflagl = 0.0
+                 cphil = 0.0
+                 sphil = 1.0
+                 irt = .false.
+               endif
+             elseif (.not.((iand(imap(l),63).eq.2) .or.
+     &       (((iand(imap(l),63).eq.4) .or. (iand(imap(l),63).eq.5))
+     &       .and. (abs(dzl/dl(l)).le.0.707106781)))) then
+               cthel = (1.0 - 2.0*voidg(l))*abs(dzl)
+               dcthel = - 2.0*abs(dzl)
+               cphil = 1.0
+               sphil = 0.0
+               hflagl = 0.0
+               irt = .false.
+             else
+c  For variable gravity, this needs to be modified.
+               hflagl = 1.0
+               sphil = dzl
+               if (iand(jc(i),8) .ne. 0) sphil = -sphil
+               sphil = sphil/dl(l)
+               cphil = sqrt(max(0.0,1.0 - sphil*sphil))
+               irt = .true.
+             endif
+             if (irt) then
+               cthel = costhe(vctrls(l))
+               if( abs(cthel).ne.1.0 ) then
+                 dcthel = - pi / ( 2.0*sin(acos(cthel)) )
+               else
+                 dcthel = 0.0
+               endif
+               if (jl.ne.0 .and. dl(l).ne.0.0) then
+                 fll = cphil
+                 cphil = 1.0
+                 sphil = 0.0
+               endif
+             else
+               if (jl.eq.0 .and. hydzc(l).ne.0.0) then
+                 sphil = dzl
+                 if (iand(jc(i),8) .ne. 0) sphil = -sphil
+                 sphil = sphil/dl(l)
+                 cphil = sqrt(max(0.0,1.0-sphil*sphil))
+               endif
+             endif
+             dxxx = dxkk + dxll
+             diams = min(diamv(k),diamv(l))*sqrt(ajun(i)*athrot(i)/
+     &       min(avol(k),avol(l)))
+             if (dxxx .le. 0.0) then
+               if (iand(vctrl(k),1).ne.0 .and. fkk.gt.0.0) dxkk = 1.0
+               if (iand(vctrl(l),1).ne.0 .and. fll.gt.0.0) dxll = 1.0
+               dxxx = dxkk + dxll
+             endif
+             if (dxxx .ne. 0.0) then
+               dxxx = 1.0/dxxx
+               vodfa = (dxkk*voidf(k) + dxll*voidf(l))*dxxx
+               vodga = (dxkk*voidg(k) + dxll*voidg(l))*dxxx
+$if def,mmfld,4
+               if (lpdat(issys)%lnonmf .ne. 0) then
+                 voidma(ix) = (dxkk*voidm(k) + dxll*voidm(l))*dxxx
+                 rhoma(ix) = (dxkk*rhomt(k) + dxll*rhomt(l))*dxxx
+               endif
+               rhofaa=(dxkk*rhof(k) + dxll*rhof(l))*dxxx
+               rhogaa=(dxkk*rhog(k) + dxll*rhog(l))*dxxx
+               dpstfk(ix) = 0.5*gravcn*(rhofaa - rhogaa)*
+     &         (dxkk*dxxx*(rhogaa - rhofaa))/(rhofaa*rhogaa)
+               dpstfl(ix) = 0.5*gravcn*(rhofaa - rhogaa)*
+     &         (dxll*dxxx*(rhogaa - rhofaa))/(rhofaa*rhogaa)
+c  Restrict levels to open diameter for horiz. vols.
+               if (hflagk .eq. 1.0 .and. fkk .gt. 0.0) then
+                 if( cthek*diamv(k).lt.-diams ) then
+                     cthek = - diams
+                     dcthek = 0.0
+                 elseif( cthek*diamv(k).gt.diams ) then
+                     cthek = diams
+                     dcthek = 0.0
+                 else
+                     dcthek = dcthek*diamv(k)
+                     cthek = cthek*diamv(k)
+                 endif
+               endif
+cc   &         cthek = min(diams,max(-diams,cthek*diamv(k)))
+               if (hflagl.eq.1.0 .and. fll.gt.0.0) then
+                 if( cthel*diamv(l).lt.-diams ) then
+                   cthel = -diams
+                   dcthel = 0.0
+                 elseif( cthel*diamv(l).gt.diams ) then
+                   cthel = diams
+                   dcthel = 0.0
+                 else
+                   dcthel = dcthel*diamv(l)
+                   cthel = cthel*diamv(l)
+                 endif
+               endif
+cc   &         cthel = min(diams,max(-diams,cthel*diamv(l)))
+               cthek = fkk*cthek
+               cthel = fll*cthel
+               dcthek = fkk*dcthek
+               dcthel = fll*dcthel
+               diams = 0.5*diams*(fkk + fll)
+               dxkk = abs(sphik)
+               dxll = abs(sphil)
+c  Calculate basic level difference (cthe =2*level w.r.t. centreline).
+               diamva = cthek*cphik - cthel*cphil
+               diamvk = dcthek*cphik
+               diamvl = - dcthel*cphil
+c  Add extra terms if slopes differ.
+               if (dxkk .ne. dxll) then
+                 if (dxkk .lt. dxll) then
+                   dxkk = dxkk*cphil-dxll*cphik
+                   if (sphil .gt. 0.0) then
+                     diamva = diamva + cthek*dxkk
+                     diamvk = diamvk + dcthek*dxkk
+                   endif
+                   if (sphil .lt. 0.0) diamva = diamva - diams*dxkk
+                 else
+                   dxll = dxkk*cphil - dxll*cphik
+                   if (sphik .gt .0.0) diamva = diamva - diams*dxll
+                   if (sphik .lt .0.0) then
+                     diamva = diamva + cthel*dxll
+                     diamvl = diamvl + dcthel*dxll
+                   endif
+                 endif
+               endif
+c  Test for 3D volumes.
+               if(cmptyp(n).eq.16) then
+                 if (iand(imap(k),ishft(1,17)).ne.0 .and.
+     &           iand(imap(l),ishft(1,17)).ne.0 .and.
+     &           iand(jc(i),ishft(1,26)).eq.0 .and.
+     &           (floreg(k).eq.13.0 .and. floreg(l).eq.13.0) .or.
+     &           (floreg(k).eq.12.0 .and. floreg(l).eq.12.0))
+     &           diamva = (dl(k+2) + dl(l+2))*(voidg(l) - voidg(k))
+                 diamvl = (dl(k+2) + dl(l+2))
+                 diamvk = - diamvl
+               endif
+c  Compute final term (dpstf) used in vexplt.
+               dpstf(ix) = 0.5*gravcn*(rhofaa - rhogaa)*
+     &         (vodfa*rhofaa + vodga*rhogaa)/(rhogaa*rhofaa)
+               dpstfk(ix) = dpstfk(ix)*diamva + dpstf(ix)*diamvk
+               dpstfl(ix) = dpstfl(ix)*diamva + dpstf(ix)*diamvl
+               dpstf(ix) = diamva*dpstf(ix)
+$if def,mmfld
+               if (lpdat(issys)%lnonmf .ne. 0) then
+                 if (voidma(ix) .ne. 0.) then
+                   dpstm(ix) = diamva*0.5*gravcn*(rhoma(ix) - rhogaa)*
+     &             voidma(ix)*vodga*(voidma(ix)*rhoma(ix) + vodga*
+     &             rhogaa)/(voidma(ix)*rhoma(ix) - vodga*rhogaa)
+                   dpstf(ix) = 0.
+                 endif
+               endif
+$endif
+             endif
+           endif
+   10    continue
+       endif
+c
+c  Diagnostic printout.
+$if def,dbgprnt
+       if (help .ne. 0) then
+         if(iand(ihlppr(1),ishft(1,19)).ne.0) then
+           call helphd ('phantj',6)
+           write (output,5300)
+ 5300  format('0junction drag terms'/1x,132('=')/7x,
+     & 'junno(i)',3x,'fij(i)',7x,'c0j(i)',7x,'fxj(i)',7x,'sinbt(ix)',4x,
+     & 'diamj(i)',5x,'faaj(i)',6x,'ireg(ix)',5x,'voidj(i)',5x,
+     & 'avkx(ix)'/7x,'jc(i)',6x,'fijo(i)',6x,'c0jo(i)',6x,'fxjo(i)',
+     & 6x,'vgjj(i)',6x,'athrot(i)',4x,'jcex(i)',6x,'dpstf(ix)',
+     & 4x,'flompj(ix)',3x,'avlx(ix)'/1x,132('='))
+           lj = ljs
+           do 5310 m = 1,nj
+             lj = lj + 1
+             i = lvptr(lj)
+             ix = jcnxs(i)
+             izz = iand(jc(i),not(128))
+             if(iand(jcex(i),ishft(1,20)).ne.0) then
+               write(output,5301) junno(i),fij(i),c0j(i),fxj(i),
+     &         sinbt(ix),diamj(i),faaj(i),ireg(ix),voidj(i),avkx(ix),
+     &         izz,fijo(i),c0jo(i),fxjo(i),vgjj(i),athrot(i),jcex(i),
+     &         dpstf(ix),flompj(ix),avlx(ix)
+             endif
+ 5301  format (6x,i10.9,1p,6g13.5,i13,2g13.5,/,6x,i10,5g13.5,
+     & i13,g13.5,i13,g13.5)
+ 5310      continue
+         endif
+       endif
+$endif
+       return
+       end

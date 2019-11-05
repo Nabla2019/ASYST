@@ -1,0 +1,728 @@
+*mlist
+       subroutine rrkinp
+!  Processes point reactor kinetics feedback data.
+!
+!  Cognizant engineer: rjw.
+!
+*in32 idin
+*in32 iscr
+*in32end
+!
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'rkinc.h'
+       include 'rrkinc.h'
+       include 'ufiles.h'
+!
+!  Local variables.
+       real scr(350)
+       integer iscr(350),l3d(7),l3e(9),l3f(11),l3h(9),l3i(9)
+       integer nden(4)
+       logical bflg,tfail,tfail2,tfail3
+       equivalence (scr(1),iscr(1))
+       character labl1(2,2)*8,labl2(2)*14,labl3(4)*22,labl1a(2,2)*8,
+     & labl3a(4)*22,labl4a(2)*13,labl4b(2)*2
+       integer i,id1,id2,id3,id4,inp10,j,k,kl,l,lcntgs,ll,lxpsav,m,
+     & n3,n4,nd2,nd3,nd4
+       real cden,degf1,degf2,sum
+!
+!  Data statements.
+       data labl1/'(K)','(degf)','(kg/m3)','(lb/ft3)'/
+       data labl1a/'(K)','(degf)',' ',' '/
+       data labl2/'(dollars/k)','(dollars/degf)'/
+       data labl4a/'(dollars-m3/ ','(dollars-ft3/'/
+       data labl4b/'kg','lb'/
+       data labl3/'    Moderator density ',
+     & 'Moderator temperature ','     Fuel temperature ',
+     & '        Boron density '/
+       data labl3a/'        Void fraction ',
+     & 'Moderator temperature ','     Fuel temperature ',
+     & '  Boron concentration '/
+       data l3d/30000700,0,0,1,0,1,0/
+       data l3e/30000501,-30000599,0,200,0,1,2,1,1/
+       data l3f/30000701,0,4,202,0,1,0,0,2,1,1/
+       data l3h/30001801,-30001899,2,20,0,1,2,1,1/
+       data l3i/30002001,0,2,100,0,1,2,0,1/
+       data degf1/1.8/, degf2/255.3722222222/, cden/16.01846337396014/
+$if def hp,1
+       save ll
+!
+       if (fberr) go to 200
+       if (iand(rknumi,32) .ne. 0) go to 300
+!  Separable type feedback.
+!  Process density reactivity table.
+       rkdnpt(lx) = 0
+       m = 1
+       if (.not.unito) m = m + m
+       l = lcntgs(filid(21),1)
+       call ftbsft (filid(21),l,3,lx)
+       lim = lx + l
+       if (l .ge. filsiz(21) + 203) go to 72
+       write (output,2034)
+ 2034  format ('0******** Insufficient space to process density reactivi
+     &ty data, cards 30000501-30000599.')
+       filsiz(1) = inp10(fa(filndx(1)),30000501,30000599)
+       go to 73
+   72  l3e(1) = 30000501
+       l3e(2) = -l3e(1) - 98
+       l3e(6) = 1
+       call inp2 (fa(filndx(1)),rkdenr(lxp),l3e)
+       if (l3e(6)) 73,74,75
+   73  fail = .true.
+       l3e(6) = 0
+       go to 74
+   75  if (mod(l3e(6),2) .ne. 0) then
+         write (output,2028)
+ 2028  format ('0******** Number of entries in density reactivity table
+     &is not a multiple of 2, last entry being dropped.')
+         l3e(6) = l3e(6) - 1
+       endif
+       n4 = lxp + l3e(6) - 1
+       tfail = .false.
+       tfail2 = .false.
+       sum = rkdenr(lxp)
+       k = 0
+       do 76 i = lxp,n4,2
+         tfail = tfail .or. rkdenr(i).lt.0.0
+         tfail2 = tfail2 .or. rkdenr(i).lt.sum
+         sum = rkdenr(i)
+         if (.not.uniti) rkdenr(i) = rkdenr(i)*cden
+         k = k + 2
+         scr(k-1) = rkdenr(i)
+         if (.not.unito) scr(k-1) = scr(k-1)/cden
+         scr(k) = rkdenr(i+1)
+   76  continue
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2027) labl1(m,2),labl1(m,2),(scr(i),i=1,k)
+ 2027  format ('0Density reactivity table'/
+     & 5x,'density',10x,'reactivity',17x,'density',10x,'reactivity'/
+     & 5x,a8,9x,'(dollars)',18x,a8,9x,'(dollars)',1p/(2g17.6,10x,
+     & 2g17.6))
+       fail = fail .or. tfail .or. tfail2
+       if (tfail) write (output,2029)
+ 2029  format ('0******** Negative density ratio in density reactivity t
+     &able.')
+       if (tfail2) write (output,2059)
+ 2059  format ('0******** Density ratios in density reactivity table are
+     & not in increasing order.')
+       rkdeni(lxp) = 2
+       rkdeni(lxp+1) = l3e(6)
+       rkdeni(lxp+2) = 1
+       rkdnpt(lx) = lxp - lx
+       l3e(6) = l3e(6) + 3
+       lxp = lxp + l3e(6)
+       filsiz(21) = filsiz(21) + l3e(6)
+!  Process doppler reactivity table.
+   74  rkdppt(lx) = 0
+       l = lcntgs(filid(21),1)
+       call ftbsft (filid(21),l,3,lx)
+       lim = lx + l
+       if (l .ge. filsiz(21) + 203) go to 82
+       write (output,2030)
+ 2030  format ('0******** Insufficient space to process doppler reactivi
+     &ty data, cards 30000601-30000699.')
+       filsiz(1) = inp10(fa(filndx(1)),30000601,30000699)
+       go to 83
+   82  l3e(1) = 30000601
+       l3e(2) = -l3e(1) - 98
+       l3e(6) = 1
+       call inp2 (fa(filndx(1)),rkdopr(lxp),l3e)
+       if (l3e(6)) 83,84,85
+   83  fail = .true.
+       l3e(6) = 0
+       go to 84
+   85  if (mod(l3e(6),2) .eq. 0) go to 87
+       write (output,2031)
+ 2031  format ('0******** Number of entries in doppler reactivity table
+     &is not a multiple of 2, last entry being dropped.')
+       l3e(6) = l3e(6) - 1
+   87  n4 = lxp + l3e(6) - 1
+       tfail = .false.
+       tfail2 = .false.
+       sum = rkdopr(lxp)
+       k = 0
+       do 86 i = lxp,n4,2
+         tfail = tfail .or. rkdopr(i).le.0.0
+         tfail2 = tfail2 .or. rkdopr(i).lt.sum
+         sum = rkdopr(i)
+         if (.not.uniti) rkdopr(i) = rkdopr(i)/degf1 + degf2
+         k = k + 2
+         scr(k-1) = rkdopr(i)
+         if (.not.unito) scr(k-1) = (scr(k-1)-degf2)*degf1
+         scr(k) = rkdopr(i+1)
+   86  continue
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2032) labl1(m,1),labl1(m,1),(scr(i),i=1,k)
+ 2032  format ('0Doppler reactivity table'/
+     & 5x,'temperature',6x,'reactivity',17x,'temperature',6x,'reactivity
+     &'/5x,a8,9x,'(dollars)',18x,a8,9x,'(dollars)',1p/(2g17.6,10x,
+     & 2g17.6))
+       fail = fail .or. tfail .or. tfail2
+       if (tfail) write (output,"('0******** Bad temperature in Doppler 
+     &reactivity table.')")
+       if (tfail2) write (output,"('0******** Temperatures in Doppler re
+     &activity table are not in increasing order.')")
+       rkdopi(lxp) = 2
+       rkdopi(lxp+1) = l3e(6)
+       rkdopi(lxp+2) = 1
+       rkdppt(lx) = lxp - lx
+       l3e(6) = l3e(6) + 3
+       lxp = lxp + l3e(6)
+       filsiz(21) = filsiz(21) + l3e(6)
+!  Process volume weighting factors.
+   84  bflg = .false.
+       l3d(1) = 30000700
+       l3d(6) = 1
+       call inp2 (fa(filndx(1)),iscr,l3d)
+       if (l3d(6) .lt. 0) then
+         fail = .true.
+       elseif (l3d(6) .ne. 0) then
+         if (iscr(1).lt.0 .or. iscr(1).gt.1) then
+           write (output,"('0******** Illegal value on Card 30000700.')"
+     &)
+           fail = .true.
+         else
+           bflg = iscr(1) .ne. 0
+         endif
+       endif
+       rknvfb(lx) = 0
+       l = lcntgs(filid(21),1)
+       call ftbsft (filid(21),l,3,lx)
+       lim = lx + l
+       l3f(1) = 30000701
+       if (.not.bflg) then
+         l3f(3) = 4
+         l3f(4) = 202
+       else 
+         l3f(3) = 5
+         l3f(4) = 302
+       endif
+       j = lxp
+       k = 0
+  100  call inplnk (l3f(1),ix,n3,n4,fa(filndx(1)))
+       if (n4 .ne. 0) go to 101
+  104  if (ix.ge.30000800 .or. ix.eq.-1) go to 107
+       l3f(1) = ix
+       go to 100
+  101  l3f(6) = 1
+       call inp2 (fa(filndx(1)),scr,l3f)
+       if (l3f(6) .le. 0) then
+         fail = .true.
+         go to 104
+       endif
+       if (.not.bflg) then
+         if (mod(l3f(6),2) .ne. 0) then
+           write (output,"('0******** Number of entries in volume weight
+     &ing cards is not a multiple of 2, last item being dropped.')")
+           fail = .true.
+           l3f(6) = l3f(6) - 1
+         endif
+       else
+         if (mod(l3f(6)-2,3) .ne. 0) then
+           write (output,"('0******** Number of entries in volume weight
+     &ing cards is not a multiple of 3, last item being dropped.')")
+           fail = .true.
+           l3f(6) = l3f(6) - 1
+         endif
+       endif
+  106  if ((l3f(6)-2)*5 + lx .ge. lim) then
+         filsiz(1) = inp10(fa(filndx(1)),30000701,30000799)
+         go to 107
+       endif
+       rkvoln(j) = iscr(1)
+       rkvoln(j+1) = 0
+       tfail = .false.
+       tfail2 = .false.
+       i = 3
+  102  if (rkvoln(j).lt.0 .or. rkvoln(j).gt.999999999) then
+         rkvoln(j) = 0
+         tfail = .true.
+       endif
+       rkvwf(j) = scr(i)
+       rkvta(j) = scr(i+1)
+       tfail2 = tfail2 .or. scr(i) .le. 0.0
+       if (.not.bflg) then
+         rkvbf(j) = 0.0
+       else
+         rkvbf(j) = scr(i+2)
+       endif
+       k = k + 1
+       j = j + 5
+       i = i + 2
+       if (bflg) i = i + 1
+       if (i .gt. l3f(6)) go to 104
+       rkvoln(j) = rkvoln(j-5) + iscr(2)
+       rkvoln(j+1) = 0
+       go to 102
+!
+  107  rknvfb(lx) = k
+       rknvfb(lx+1) = lxp - lx
+       if (k .ne. 0) then
+         n4 = j - 1
+         if (iand(ihlppr(2),ishft(1,22)) .ne. 0) write (output,
+     &"('0Volume weighting factors, temperature coefficients, and boron 
+     &coefficients'/'0  vol no.',5x,'weight factor',5x,'temp.coef',8x,
+     & 'boron coef'/33x,a14,3x,a13/50x,a2)")
+     &   labl2(m),labl4a(m),labl4b(m)
+         tfail3 = .false.
+         do i = lxp,n4,5
+           if (.not.uniti) rkvta(i) = rkvta(i)*degf1
+           scr(1) = rkvta(i)
+           if (.not.unito) scr(1) = scr(1)/degf1
+           if (.not.uniti) rkvbf(i) = rkvbf(i)/cden
+           scr(2) = rkvbf(i)
+           if (.not.unito) scr(2) = scr(2)*cden
+           if (iand(ihlppr(2),ishft(1,22)) .ne. 0)
+     &     write (output,"(i10.9,1p,3g17.6)") rkvoln(i),rkvwf(i),
+     &     scr(1:2)
+           if (i.eq.lxp .or. rkvoln(i).eq.0 .or. tfail3) cycle
+           kl = i - 5
+           do k = lxp,kl,5
+             if (rkvoln(i) .ne. rkvoln(k)) cycle
+             tfail3 = .true.
+             exit
+           enddo
+         enddo
+         fail = fail .or. tfail .or. tfail2 .or. tfail3
+         if (tfail) write (output,2026)
+ 2026  format ('0******** Illegal volume number entered, set to zero.')
+         if (tfail2) write (output,2037)
+ 2037  format ('0******** Volume density weighting factor less than or e
+     &qual to zero.')
+         if (tfail3) write (output,2045)
+ 2045  format ('0******** Volume numbers duplicated in above list.')
+       filsiz(21) = filsiz(21) + j - lxp
+         lxp = j
+       endif
+!  Process heat structure weighting factors.
+       l = lcntgs(filid(21),1)
+       call ftbsft (filid(21),l,3,lx)
+       lim = lx + l
+       l3f(1) = 30000801
+       j = lxp
+       k = 0
+  130  call inplnk (l3f(1),ix,n3,n4,fa(filndx(1)))
+       if (n4 .ne. 0) go to 121
+  124  if (ix.ge.30000900 .or. ix.eq.-1) go to 127
+       l3f(1) = ix
+       go to 130
+  121  l3f(6) = 1
+       call inp2 (fa(filndx(1)),scr,l3f)
+       if (l3f(6) .gt. 0) go to 123
+       fail = .true.
+       go to 124
+  123  if (mod(l3f(6),2) .eq. 0) go to 126
+       write (output,2038)
+ 2038  format ('0******** Number of entries in heat structure weighting
+     &cards is not a multiple of 2, last item being dropped.')
+       fail = .true.
+       l3f(6) = l3f(6) - 1
+  126  if ((l3f(6)-2)*4 + lx .lt. lim) go to 125
+       filsiz(1) = inp10(fa(filndx(1)),30000801,30000899)
+       go to 127
+  125  rkhtno(j) = iscr(1)
+       rkhtno(j+1) = 0
+       tfail = .false.
+       tfail2 = .false.
+       i = 3
+  122  if (rkhtno(j).ge.0 .and. rkhtno(j).le.9999999) go to 129
+       rkhtno(j) = 0
+       tfail = .true.
+  129  rkfwf(j) = scr(i)
+       rkfta(j) = scr(i+1)
+         tfail2 = tfail2 .or. scr(i) .le. 0.0
+       k = k + 1
+       j = j + 4
+       i = i + 2
+       if (i .gt. l3f(6)) go to 124
+       rkhtno(j) = rkhtno(j-4) + iscr(2)
+       rkhtno(j+1) = 0
+       go to 122
+!
+  127  rknsfb(lx) = k
+       rknsfb(lx+1) = lxp - lx
+       if (k .eq. 0) go to 200
+       n4 = j - 1
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2039) labl2(m)
+ 2039  format ('0Heat structure weighting factors and temperature coeffi
+     &cients'/'0 str. no.',5x,'weight factor',4x,'temp.coef.'/32x,a)
+       tfail3 = .false.
+       do 128 i = lxp,n4,4
+         if (.not.uniti) rkfta(i) = rkfta(i)*degf1
+         scr(1) = rkfta(i)
+         if (.not.unito) scr(1) = scr(1)/degf1
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2044) rkhtno(i),rkfwf(i),scr(1)
+ 2044  format (i10.7,1p,2g17.6)
+         if (i.eq.lxp .or. rkhtno(i).eq.0 .or. tfail3) go to 128
+         kl  = i - 4
+         do 131 k = lxp,kl,4
+           if (rkhtno(i) .ne. rkhtno(k)) go to 131
+           tfail3 = .true.
+           go to 128
+  131    continue
+  128  continue
+       fail = fail .or. tfail .or. tfail2 .or. tfail3
+       if (tfail) write (output,2040)
+ 2040  format ('0******** Illegal heat structure number entered, set to
+     &zero.')
+       if (tfail2) write (output,2041)
+ 2041  format ('0******** Doppler weighting factor less than or equal to
+     & zero.')
+       if (tfail3) write (output,2046)
+ 2046  format ('0******** Heat structure number duplicated in above list
+     &.')
+       filsiz(21) = filsiz(21) + j - lxp
+       go to 200
+!  Multi-dimensional table type feedback.
+!  Process volume weighting factors.
+  300  rknvfb(lx) = 0
+       l = lcntgs(filid(21),1)
+       call ftbsft (filid(21),l,3,lx)
+       lim = lx + l
+       l3f(1) = 30001701
+       l3f(3) = 3
+       j = lxp
+       k = 0
+  311  call inplnk (l3f(1),ix,n3,n4,fa(filndx(1)))
+       if (n4 .ne. 0) go to 301
+  304  if (ix.ge.30001800 .or. ix.eq.-1) go to 307
+       l3f(1) = ix
+       go to 311
+  301  l3f(6) = 1
+       call inp2 (fa(filndx(1)),scr,l3f)
+       if (l3f(6) .le. 0) then
+         fail = .true.
+         go to 304
+       endif
+       if ((l3f(6)-2)*5 + lxp  .ge. lim) then
+         filsiz(1)  = inp10(fa(filndx(1)),30001701,30001799)
+         call ftbsft (2.0,filsiz(1),1,filndx(1))
+         go to 307
+       endif
+       rkvoln(j) = iscr(1)
+       rkvoln(j+1) = 0
+       tfail = .false.
+       tfail2 = .false.
+       i = 3
+  302  if (rkvoln(j).lt.0 .or. rkvoln(j).gt.999999999) then
+         rkvoln(j) = 0
+         tfail = .true.
+       endif
+       rkvwf(j) = scr(i)
+       if (scr(i) .le. 0.0) tfail2 = .true.
+       k = k + 1
+       j = j + 5
+       i = i + 1
+       if (i .gt. l3f(6)) go to 304
+       rkvoln(j) = rkvoln(j-5) + iscr(2)
+       rkvoln(j+1) = 0
+       go to 302
+!
+  307  rknvfb(lx) = k
+       rknvfb(lx+1) = lxp - lx
+       if (k .eq. 0) then
+         write (output,2062)
+ 2062  format ('0******** No volume weighting factors for table reactivi
+     &ty feedback.')
+         fail = .true.
+         go to 320
+       endif
+       n4 = j - 1
+       if (iand(ihlppr(2),ishft(1,22)) .ne. 0)
+     & write (output,2063) (rkvoln(i),rkvwf(i),i=lxp,n4,5)
+ 2063  format ('0Volume weighting factors'/
+     & '0  vol.no.',5x,'weight factor',12x,'vol.no.',5x,'weight factor',
+     &1p/(i10.9,g17.6,i20.9,g17.6))
+       tfail3  = .false.
+       lp01: do i = lxp,n4,5
+         if (i.eq.lxp .or. rkvoln(i).eq.0) cycle lp01
+         kl = i - 5
+         do k = lxp,kl,5
+           if (rkvoln(i) .eq. rkvoln(k)) go to 312
+         enddo
+       enddo lp01
+       go to 313
+  312  tfail3  = .true.
+  313  fail = fail .or. tfail .or. tfail2 .or. tfail3
+       if (tfail) write (output,2026)
+       if (tfail2) write (output,2037)
+       if (tfail3) write (output,2045)
+       filsiz(21) = filsiz(21) + j - lxp
+       lxp = j
+!  Process heat structure weighting factors.
+  320  rknsfb(lx) = 0
+       l = lcntgs(filid(21),1)
+       call ftbsft (filid(21),l,3,lx)
+       lim = lx + l
+       l3f(1) = 30001801
+       j = lxp
+       k = 0
+  330  call inplnk (l3f(1),ix,n3,n4,fa(filndx(1)))
+       if (n4 .ne. 0) go to 321
+  324  if (ix.ge.30001900 .or. ix.eq.-1) go to 327
+       l3f(1) = ix
+       go to 330
+  321  l3f(6) = 1
+       call inp2 (fa(filndx(1)),scr,l3f)
+       if (l3f(6) .le. 0) then
+         fail = .true.
+         go to 324
+       endif
+       if ((l3f(6)-2)*3 + lxp  .ge. lim) then
+         filsiz(1)  = inp10(fa(filndx(1)),30001801,30001899)
+         call ftbsft (2.0,filsiz(1),1,filndx(1))
+         go to 327
+       endif
+       rkhtno(j) = iscr(1)
+       rkhtno(j+1) = 0
+       tfail = .false.
+       tfail2 = .false.
+       i = 3
+  322  if (rkhtno(j).lt.0 .or. rkhtno(j).gt.999999999) then
+         rkhtno(j) = 0
+         tfail  = .true.
+       endif
+       rkfwf(j)  = scr(i)
+       if (scr(i) .le. 0.0) tfail2 = .true.
+       k = k + 1
+       j = j + 3
+       i = i + 1
+       if (i .gt. l3f(6)) go to 324
+       rkhtno(j) = rkhtno(j-3) + iscr(2)
+       rkhtno(j+1) = 0
+       go to 322
+!
+  327  rknsfb(lx) = k
+       rknsfb(lx+1) = lxp - lx
+       if (k .eq. 0) then
+         write (output,2064)
+ 2064  format ('0******** No heat structure weighting data for table rea
+     &ctivity feedback.')
+         fail =  .true.
+         go  to 340
+       endif
+       n4 = j - 1
+       if (iand(ihlppr(2),ishft(1,22)) .ne. 0)
+     & write (output,2065) (rkhtno(i),rkfwf(i),i=lxp,n4,3)
+ 2065  format ('0Heat structure weighting factors'/
+     & '0 str. no.',5x,'weight factor',11x,'str. no.',5x,'weight factor'
+     &,1p/(i10.7,g17.6,i20.7,g17.6))
+       tfail3 = .false.
+       do 328 i = lxp,n4,3
+         if (i.eq.lxp .or. rkhtno(i).eq.0) go to 328
+         kl = i - 3
+         do k = lxp,kl,3
+           if (rkhtno(i) .eq. rkhtno(k)) go to 332
+         enddo
+  328  continue
+       go to 333
+  332  tfail3  = .true.
+  333  fail = fail .or. tfail .or. tfail2 .or. tfail3
+       if (tfail) write (output,2040)
+       if (tfail2) write (output,2041)
+        if (tfail3) write (output,2046)
+       filsiz(21) = filsiz(21) + j - lxp
+       lxp = j
+!  Process coordinate data cards.
+  340  rkdnpt(lx) = 0
+       l = lcntgs(filid(21),1)
+       call ftbsft (filid(21),l,3,lx)
+       lim = lx + l
+       if (lxp + 92 .ge. lim) then
+         filsiz(1) = inp10(fa(filndx(1)),30001911,30002999)
+         call ftbsft (2.0,filsiz(1),1,filndx(1))
+         go to 200
+       endif
+       l3h(1) = 30001911
+       do 408 i = 1,4
+         nden(i) = 1
+  408  continue
+       tfail3 = iand(rknumi,512) .eq. 0
+       n3 = iand(ishft(rknumi,-2),7)
+       do 402 k = 1,n3
+         l3h(2) = -l3h(1) - 8
+         l3h(6) = j
+         call inp2 (fa(filndx(1)),rkdenr,l3h)
+         if (l3h(6) .le. 0) then
+           fberr = .true.
+           go to 407
+         endif
+         rkdeni(j) = 1
+         rkdeni(j+1) = l3h(6)
+         rkdeni(j+2) = 1
+         nden(k) = l3h(6)
+         n4 = j + l3h(6) - 1
+         lim = j + 1
+         kl  = 1
+         if (k.eq.1 .or. k.eq.4) kl = 2
+         m = 0
+         do 410 l = j,n4
+           m = m + 1
+           if (kl .ne. 1) then
+             if (tfail3 .and. .not.uniti) rkdenr(l) = rkdenr(l)*cden
+             scr(m) = rkdenr(l)
+             if (tfail3 .and. .not.unito) scr(m) = scr(m)/cden
+           else
+             if (.not.uniti) rkdenr(l) = rkdenr(l)/degf1 + degf2
+             scr(m) = rkdenr(l)
+             if (.not.unito) scr(m) = (scr(m) - degf2)*degf1
+           endif
+  410    continue
+         ll = 1
+         if (.not.unito) ll = 2
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+         if (tfail3) then
+           write (output,2080) labl3(k),labl1(ll,kl)
+ 2080  format (a24,'feedback coordinates',1x,a)
+         else
+           write (output,2081) labl3a(k),labl1a(ll,kl)
+ 2081  format (a24,'feedback coordinates',1x,a)
+         endif
+           write (output,2066) (scr(l),l=1,m)
+ 2066  format (1p,(6g17.6))
+         endif
+         do 404 l = lim,n4
+           if (rkdenr(l) .le. rkdenr(l-1)) then
+             l3h(2) = -l3h(2)
+             write (output,2067) l3h(1),l3h(2)
+ 2067  format ('0******** Coordinate data for feedback table on cards'
+     & ,i10,'-',i10,' are not in ascending order.')
+           fail = .true.
+           go to 405
+         endif
+  404    continue
+  405    j = n4 + 4
+  407    l3h(1) = l3h(1) + 10
+  402  continue
+       lxpsav = lxp
+       rkdnpt(lx) = lxp - lx
+       filsiz(21) = filsiz(21) + j - lxp
+       lxp = j
+!  Process feedback table data.
+       rkdppt(lx) = 0
+       if (.not.fberr) go to 420
+       write (output,2070)
+ 2070  format ('0******** Reactivity feedback table cannot be processed
+     &because of table coordinate error.')
+  406  fail = .true.
+       filsiz(1) = inp10(fa(filndx(1)),30002001,30002999)
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+       go to 200
+  420  l = lcntgs(filid(21),1)
+       call ftbsft (filid(21),l,3,lx)
+       lim = lx + l
+       nd2 = nden(1)*nden(2)
+       nd3 = nd2*nden(3)
+       nd4 = nd3
+       if (iand(rknumi,16) .ne. 0) nd4 = nd4*nden(4)
+       j = lxp + nd4
+       ll = ishft(2,n3)
+       l = j + nd4 + ll
+       if (l .ge. lim) then
+         write (output,2068)
+ 2068  format ('0******** Insufficient space to process feedback table.'
+     & )
+         go to 406
+       endif
+       l = l - ll - 1
+       do 422 i = j,l
+         rkdeni(i) = -1
+  422  continue
+       n4 = j - 1
+       do 423 i = lxp,n4
+         rktabl(i) = 0.0
+  423  continue
+       tfail = .false.
+       tfail2 = .false.
+       l3i(1)  = 30002001
+  424  call inplnk (l3i(1),ix,n3,n4,fa(filndx(1)))
+       if (n4 .ne. 0) go to 425
+  426  if (ix.ge.30003000 .or. ix.eq.-1) go to 427
+       l3i(1) = ix
+       go to 424
+  425  l3i(6) = 1
+       call inp2 (fa(filndx(1)),scr,l3i)
+       if (l3i(6) .le. 0) then
+         fail = .true.
+         go to 426
+       endif
+       if (mod(l3i(6),2) .ne. 0) then
+         write (output,2069) l3i(1)
+ 2069  format ('0******** Number of entries in card number',i10,' is not
+     & a multiple of 2, last item is being dropped.')
+         fail = .true.
+         l3i(6) = l3i(6) - 1
+       endif
+       lim = l3i(6)
+       do 430 i = 1,lim,2
+         if (iscr(i) .lt. 0) then
+           tfail = .true.
+         else
+           id1 = iscr(i)/1000000
+           id4 = iscr(i) - id1*1000000
+           id2 = id4/10000
+           id4 = id4 - id2*10000
+           id3 = id4/100
+           id4 = id4 - id3*100
+           if (id1.ge.nden(1) .or. id2.ge.nden(2) .or. id3.ge.nden(3)
+     &     .or. id4.ge.nden(4)) then
+             tfail = .true.
+           else
+             n3 = id1 + id2*nden(1) + id3*nd2 + id4*nd3
+             n4 = j + n3
+             if (rkdeni(n4) .ge. 0) then
+               tfail2 = .true.
+             else
+               rkdeni(n4) = iscr(i)
+               rktabl(lxp+n3) = scr(i+1)
+             endif
+           endif
+         endif
+  430  continue
+       go to 426
+  427  if (tfail) write (output,2071)
+ 2071  format ('0******** Illegal index code entered in feedback table.'
+     & )
+       if (tfail2) write (output,2072)
+ 2072  format ('0******** Multiple specification of an index in feedback
+     & table.')
+       tfail = tfail .or. tfail2
+       fail = fail .or. tfail
+       do 440 i = j,l
+         if (rkdeni(i) .lt.  0) tfail = .true.
+  440  continue
+       fail = fail .or. tfail
+       if (tfail) write (output,2073)
+ 2073  format ('0******** Not all feedback table positions are entered,
+     &missing are indicated by a code of ********.')
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2074) (rkdeni(j+i-1),rktabl(lxp+i-1),i=1,nd4)
+ 2074  format ('0Reactivity feedback table',1p/(4(i12.8,g17.6)))
+       rkdppt(lx) = lxp - lx
+       filsiz(21) = filsiz(21) + j - lxp + ll
+       rkdeni(lxpsav) = j - lx
+       j = j + ll/2
+       rkfdcd(j) = 0
+       rknden(j+1) = 1
+       rknden(j+2) = nden(1)
+       rknden(j+3) = rknden(j+2) + rknden(j+1)
+       rknden(j+4) = nd2
+       rknden(j+5) = rknden(j+4) + rknden(j+1)
+       rknden(j+6) = rknden(j+4) + rknden(j+2)
+       rknden(j+7) = rknden(j+4) + rknden(j+3)
+       if (iand(rkopt(lx),16) .eq. 0) go to 200
+       rknden(j+8) = nd3
+       rknden(j+9) = rknden(j+8) + rknden(j+1)
+       rknden(j+10) = rknden(j+8) + rknden(j+2)
+       rknden(j+11) = rknden(j+8) + rknden(j+3)
+       rknden(j+12) = rknden(j+8) + rknden(j+4)
+       rknden(j+13) = rknden(j+8) + rknden(j+5)
+       rknden(j+14) = rknden(j+8) + rknden(j+6)
+       rknden(j+15) = rknden(j+8) + rknden(j+7)
+  200  call ftbsft (filid(21),filsiz(21),2,filndx(21))
+       return
+       end

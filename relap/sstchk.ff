@@ -1,0 +1,723 @@
+*mlist
+       subroutine sstchk (kndr,ssdtim)
+c
+c  Tests for steady state.
+c
+c  Cognizant engineer: rjw.
+c
+       use sscntrc
+       implicit none
+       integer kndr
+       real ssdtim
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  local variables
+       logical skip,stedy1,stedy2,stedy3,stedyy,ostdya,frstst,
+     & avgon,lprint,rsetab
+       character nwords*130,scr*130,mwords*80
+       character kwordo*10,lwordo*10
+       character lrh(2)*10,ldrh(2)*14,ldrh2(2)*15,ldrh3(2)*15,lm(2)*5
+       integer i,icol,indr,irow,iss,ivol,jndr,kindr,kjndr,kounta,kountc,
+     & kounto,kntss,ksteps,l,m,maxvol,minvol,mnvrho,
+     & mnvol,mxvrho,mxvol
+       real sumfti(4),sumti(4,4),ycoef(4),zcoef(4)
+       real sumrha(4),sumt(4,4),osmrha(4),osumt(4,4)
+       real a1,a2,amaseo,amaser,b1,b2,c1mase,c2mase,c3mase,cmaser,
+     & comase,conv1,conv2,conv3,convm,convrh,cxmase,d2yfun,d2ydt2,
+     & delt1,drhavg,drhdt,drhmax,drhmin,drhrms,dvrhdt,dxdt,dxdtfn,
+     & dxxc,dydt,e1drhs,e1drha,e1rha,e1rhs,e2drha,e2drhs,e2rha,
+     & e2rhs,e3drhs,e3rha,e3rhs,e3drha,edrhav,edrhsq,edrhst,emas1,
+     & emas2,emas3,emavg,emnrho,emrms,emxrho,erhavg,erhrms,erhstd,
+     & firsti,fluct1,fluct2,fluct3,fti,osdrha,osdrhs,osmstd,osmvar,
+     & osrhav,rdt,rh11,rh13,rh21,rh22,rh32,rh33,rhavg,rherr,rhoerr,
+     & rhohi,rhov,rmas1,rmas2,rmas3,rvrms,rvtotl,samase,sdrhav,
+     & sdrhsq,sedrha,sedrhs,serha,serhs,smaseo,smaser,srhav,ssmase,
+     & stderf,stdrhe,sumstd,sumvar,time1,time2,time3,timexx,
+     & tinum,titerm,tstart,txa,txb,txc,unew,vavg,vols,vrms,vtotal,
+     & y,yfun,ylog
+       save
+c
+       data skip/.false./
+       data sumfti/4*0.0/, sumti/16*0.0/, ycoef/4*0.0/, zcoef/4*0.0/
+       data sumrha/4*0.0/, sumt/16*0.0/, osmrha/4*0.0/, osumt/16*0.0/
+       data lrh/' (j/m3)',' (btu/ft3)'/
+       data ldrh/' (j/m3-sec)',' (btu/ft3-sec)'/
+       data ldrh2/' (j/m3-sec2)',' (btu/ft3-sec2)'/
+       data ldrh3/' (j/m3-sec3)',' (btu/ft3-sec3)'/
+       data lm/' (kg)',' (lb)'/
+       data sumvar/0.0/, srhav/0.0/,  sdrhav/0.0/, sdrhsq/0.0/,
+     &      amaser/0.0/, smaser/0.0/, cxmase/0.0/
+       data osmvar/0.0/, osrhav/0.0/, osdrha/0.0/, osdrhs/0.0/,
+     &      amaseo/0.0/, smaseo/0.0/, comase/0.0/
+       data sumstd/0.0/, osmstd/0.0/
+       data serha/0.0/,  serhs/0.0/,  sedrha/0.0/, sedrhs/0.0/,
+     &      samase/0.0/, ssmase/0.0/, cmaser/0.0/
+        data convm/1.0/, convrh/1.0/, ostdya/.false./,
+     &       frstst/.true./, avgon/.false./, time2/0.0/, time3/0.0/,
+     &       ksteps/0/, kntss/0/, kounta/0/, kounto/0/, kountc/0/,
+     &       kindr/0/, kjndr/0/, vrms/0.0/, vtotal/0.0/, vols/0.0/,
+     &       stderf/6.0e-6/, rsetab/.false./
+c
+c  Inline functions.
+       yfun(txa) = ycoef(1) + txa*(ycoef(2) + txa*(ycoef(3) +
+     & txa*ycoef(4)))
+       dxdtfn(txb) = ycoef(2) + txb*(2.0*ycoef(3) +
+     & 3.0*txb*ycoef(4))
+       d2yfun(dxxc,txc) = dxxc*dxxc + 2.0*ycoef(3) + 6.0*txc*ycoef(4)
+c
+c  Initial values.
+       if (succes .ne. 0) return
+       if (.not.skip) then
+         skip = .true.
+         l = 1
+         if (.not.unito) then
+           l = 2
+           convm = 2.204623054
+           convrh = 2.6839198e-5
+         endif
+         tstart = timehy
+         kwordo = 'undefined'
+         lwordo = 'undefined'
+         iss  = 1
+         i = filndx(4)
+         do m = 1,nvols(i)
+           if (iand(vctrl(i),1) .eq. 0) then
+             vtotal = vtotal + v(i)
+             vrms = vrms + v(i)*v(i)
+             vols = vols + 1.0
+             rhoo(i) = rho(i)
+             sscntr(iss)%uo = quals(i)*ug(i) + (1.0 - quals(i))*uf(i)
+             iss = iss + 1
+           endif
+           i = i + ivskp
+         enddo
+         rvtotl = 1.0/vtotal
+         rvrms = 1.0/vrms
+         vrms = sqrt(vrms/vols)
+         vavg = vtotal/vols
+         vols   = vols/max(1.0, (vols - 1.0))
+       endif
+       timexx = timehy - tstart
+       stedy3 = .false.
+       stedyy = .false.
+       if (timexx .le. 0.0) return
+c
+c  Current system terms and uncertainties.
+       lprint = iand(kndr,2).ne.0 .or. done.ne.0 .or. help.ne.0 .or.
+     & ostdya .or. fail
+       ksteps = ksteps + 1
+       if (ksteps .eq. 1) time1 = timexx
+       drhmax = 0.0
+       emxrho = 0.0
+       drhmin = 1.0e+75
+       emnrho = 1.0e+75
+       maxvol = 0
+       mxvrho = 0
+       minvol = 0
+       mnvrho = 0
+       drhavg = 0.0
+       drhrms = 0.0
+       emavg = 0.0
+       emrms = 0.0
+       erhavg = 0.0
+       erhstd = 0.0
+       erhrms = 0.0
+       rhavg  = 0.0
+       rdt = 1.0/dt
+c
+       iss = 1
+       i = filndx(4)
+       do 205 m = 1,nvols(i)
+         if (iand(vctrl(i),1) .eq. 0) then
+c  Volume terms.
+           unew = quals(i)*ug(i) + (1.0 - quals(i))*uf(i)
+           rhov = v(i)*rho(i)
+           rhoerr = v(i)*(rho(i) - rhom(i))
+           rherr = rhoerr*unew
+           stdrhe = stderf*rhov*unew
+           rhohi = rhov*unew + v(i)*p(i)
+           drhdt = rdt*( rho(i)*(unew - sscntr(iss)%uo) +
+     &     sscntr(iss)%uo*(rho(i) - rhoo(i)) + p(i) - po(i))
+           dvrhdt = v(i)*drhdt
+c sums
+           rhavg  = rhavg  + rhohi*rvtotl
+           emavg  = emavg  + rhoerr*rvtotl
+           emrms  = emrms  + rhoerr*rhoerr*rvrms
+           erhavg = erhavg + rherr*rvtotl
+           erhrms = erhrms + rherr*rherr*rvrms
+           erhstd = erhstd + stdrhe*stdrhe*rvrms
+           drhavg = drhavg + dvrhdt*rvtotl
+           drhrms = drhrms + dvrhdt*dvrhdt*rvrms
+           rhoerr = rho(i) - rhom(i)
+           if (abs(drhdt).lt.abs(drhmax) .and. maxvol.ne.0) go to 201
+           drhmax = drhdt
+           maxvol = i
+           mxvol  = iss
+           if (minvol .ne. 0) go to 202
+  201      if (abs(drhdt).gt.abs(drhmin) .and. minvol.ne.0) go to 202
+           drhmin = drhdt
+           minvol = i
+           mnvol  = iss
+           if (mxvrho .ne. 0) go to 203
+  202      if (abs(rhoerr).lt.abs(emxrho) .and. mxvrho.ne.0) go to 203
+           emxrho = rhoerr
+           mxvrho = iss
+           if (mnvrho .ne. 0) go to 204
+  203      if (abs(rhoerr).gt.abs(emnrho) .and. mnvrho.ne.0) go to 204
+           emnrho = rhoerr
+           mnvrho = iss
+  204      sscntr(iss)%uo = unew
+           rhoo(i) = rho(i)
+           iss = iss + 1
+         endif
+         i = i + ivskp
+  205  continue
+       sscntr(mxvol)%smxdrh(2) = sscntr(mxvol)%smxdrh(2)  + 1
+       sscntr(mxvol)%smxrho(2) = sscntr(mxvol)%smxrho(2) + 1
+       sscntr(mxvol)%smndrh(2) = sscntr(mxvol)%smndrh(2)  + 1
+       sscntr(mxvol)%smnrho(2) = sscntr(mxvol)%smnrho(2) + 1
+       edrhav = rdt*erhavg
+       edrhsq = rdt*rdt*erhrms
+       edrhst = rdt*rdt*erhstd
+       drhrms = sqrt(drhrms)
+c
+c  Sums for the interval uncertainties and fitted functions.
+       firsti = 1.0
+       fti = log(max(1.0e-30, drhrms))
+       sumvar = sumvar + dt*erhrms
+       srhav  = srhav  + dt*erhavg
+       smaser = smaser + dt*emrms
+       amaser = amaser + dt*emavg
+       sdrhsq = sdrhsq + dt*edrhsq
+       sumstd = sumstd + dt*edrhst
+       sdrhav = sdrhav + dt*edrhav
+       cxmase = cxmase + emavg
+       do irow = 1,4
+         if (irow .le. 3) then
+           sumrha(irow) = sumrha(irow) + rhavg*firsti
+         else
+           sumrha(irow) = sumrha(irow) + rhavg*rhavg
+         endif
+         sumfti(irow) = sumfti(irow) + fti*firsti
+         titerm   = firsti
+         do icol = 1,4
+           sumt(irow,icol) = sumt(irow,icol) + titerm
+           sumti(irow,icol) = sumti(irow,icol) + titerm
+           titerm = titerm*timexx
+         enddo
+         firsti = firsti*timexx
+       enddo
+c
+c  Check test time intervals.
+       if (((timexx.lt.time2 .or. timexx.lt.time3) .and.
+     & done .eq. 0) .or. nrepet .ne. 0) return
+       if ((ksteps.lt.10 .and. done.eq.0) .or.
+     & ksteps.lt.4) return
+c
+c  Fit the overall convergence function.
+       mwords = ' '
+       mwords(1:10) = 'divergent'
+       mwords(31:40) = 'transient'
+       mwords(61:70) = 'undefined'
+       serha  = serha  + (srhav  - osrhav)
+       serhs  = serhs  + (sumvar - osmvar)
+       sedrha = sedrha + (sdrhav - osdrha)
+       sedrhs = sedrhs + (sdrhsq - osdrhs)
+       samase = samase + (amaser - amaseo)
+       ssmase = ssmase + (smaser - smaseo)
+       cmaser = cmaser + (cxmase - comase)
+       indr = 4
+       call cramer(indr,sumti(1,1),sumfti(1),ycoef(1))
+c
+c  Check for indeterminant solution.
+       if (indr .le. 0) then
+         kindr  = kindr + 1
+         if (kindr.le.1 .or. fail) then
+           write (output,9000) kindr,timehy,dt,ncount,help,succes,
+     &     fail,done
+ 9000  format ('0******** Indeterminant curve fit, steady state checking
+     & subroutine sstchk (count =',i6,')'/
+     & '0',4x,'timehy =',1p,g15.7,' (sec), dt =',g13.5,' (sec), ncount
+     & =',i10,', help =',i3,', succes =',i3,', fail =',l2,', done =',i3)
+         endif
+         dydt   = 0.0
+         d2ydt2 = 0.0
+         go to 503
+       endif
+c
+c  Get the rms convergence criteria and its first two derivatives.
+       kindr = 0
+       ylog = yfun(timexx)
+       dxdt = dxdtfn(timexx)
+       dydt = ylog + log(abs(dxdt))
+       d2ydt2 = d2yfun(dxdt,timexx)
+       y = exp(min(ylog,673.5))
+       dydt = sign(1.0,dxdt)*exp(min(dydt,673.5))
+       d2ydt2 = sign(1.0, d2ydt2)*exp(min(673.5,
+     & (ylog + log(abs(d2ydt2)))))
+       stedyy = dydt .le. 1.0e-4
+c
+c  Print overall state and convergence test results.
+       if (stedyy) mwords(1:10) = 'convergent'
+       if (lprint) then
+         write (output,1000) timehy,dt,ncount,succes,fail,done
+ 1000  format ('1steady state edit, timehy =',1p,g15.7,' (sec), dt =',
+     & g13.5,' (sec), ncount =',i9,', succes =',i3,', fail =',l2,
+     & ', done =',i3)
+         delt1 = 1.0/timexx
+         write (output,5000) rhavg*convrh,lrh(l),
+     &   drhavg*convrh,ldrh(l),drhrms*convrh,ldrh(l),
+     &   erhavg*convrh,lrh(l),edrhav*convrh,ldrh(l),
+     &   sqrt(erhrms)*convrh,lrh(l),
+     &   sqrt(edrhsq)*convrh,ldrh(l),emavg*vavg*convm,lm(l),
+     &   sqrt(emrms)*vrms*convm,lm(l),
+     &   drhmax*convrh,ldrh(l),volno(maxvol),
+     &   drhmin*convrh,ldrh(l),volno(minvol),
+     &   y*convrh,ldrh(l),dydt*convrh,ldrh2(l),
+     &   d2ydt2*convrh,ldrh3(l),mwords(1:10),
+     &   ycoef(1) + log(convrh),(ycoef(icol),icol=2,4),tstart,
+     &   timehy,delt1*serha*convrh,lrh(l),
+     &   delt1*sedrha*convrh,ldrh(l),
+     &   sqrt(delt1*serhs)*convrh,lrh(l),
+     &   sqrt(delt1*sedrhs)*convrh,ldrh(l),
+     &   delt1*samase*vavg*convm,lm(l),
+     &   sqrt(delt1*ssmase)*vrms*convm,lm(l),
+     &   cmaser*vtotal*convm,lm(l)
+ 5000  format ('0',2x,'Overall state and steady state convergence test r
+     &esults'/'0',4x,'mean (rho*h) =',1p,g13.5,a10,' mean d(rho*h)/dt ='
+     &,g13.5,a14,' rms d(rho*h)/dt =',g13.5,a14/'0',
+     &4x,'uncertainties...(rho*h), mean =',g13.5,a10,' d(rho*h)/dt, mea
+     &n =',g13.5,a14/' ',30x,'rms =',g13.5,a10,15x,'rms =',g13.5,a14/
+     & ' ',20x,'mass,    mean =',g13.5,a5,20x,
+     &'rms =',g13.5,a5/'0',4x,'extreme rates...d(rho*h)/dt, maximum =',
+     & g13.5,a14,' vol. no. =',i10/' ',33x,'minimum =',g13.5,a14,
+     & ' vol. no. =',i10/'0',4x,'convergence function, rms d(rho*h)/dt =
+     & y = exp(ay(1) + ay(2)*timehy + ay(3)*timehy**2 + ay(4)*timehy**3)
+     &'/'0',6x,'y =',g13.5,a14,
+     &' dy/dt =',g13.5,a15,' d2y/dt2 =',g13.5,a15,1x,a10/
+     & '0',6x,'coefficients'/' ',8x,'ay(1) =',g13.5,' ay(2) =',
+     & g13.5,' ay(3) =',g13.5,' ay(4) =',g13.5/'0',4x,'overall uncertain
+     &ties, integrated from timehy =',g13.5,' to ',g13.5,'
+     &(sec)'/'0',6x,'(rho*h), mean =',g13.5,a10,' d(rho*h)/dt, mean =',
+     & g13.5,a14/' ',16x,'rms =',g13.5,a10,15x,'rms =',
+     & g13.5,a14/' ',6x,'mass,    mean =',g13.5,a5,20x,'rms =',g13.5,a5,
+     & 10x,'cumulative =',g13.5,a5)
+       endif
+c  Check for approach to convergence.
+  503  if (.not.avgon) then
+         if (.not.stedyy) then
+           delt1  = 0.5*(timexx - time1)
+           do i = 1,3
+             time2  = timexx + delt1
+             if (yfun(time2) .le. ylog) go to 622
+             delt1 = 2.0*delt1
+           enddo
+           go to 622
+         endif
+         avgon = .true.
+         time2 = timexx + min((100.0*ssdtim),
+     &   max((10.0*ssdtim),(0.1*rhavg/max(1.0,y))))
+         go to 622
+       endif
+      avgon = .true.
+      rsetab = .false.
+c
+c  Fit the time average lines.
+  505  jndr = 2
+       call cramer (jndr,sumt(1,1),sumrha(1),zcoef(1))
+c
+c  Check for indeterminant solution.
+       if (jndr .le. 0) then
+         kjndr = kjndr + 1
+         if (kjndr .gt. 1) fail = .true.
+         write (output, 9000) kjndr, timehy, dt, ncount, help, succes,
+     &   fail, done
+         if (rsetab) go to 623
+         time3  = min((timexx + 100.0*ssdtim),
+     &   max((timexx + 1.12*(timexx - time1)),(timexx + 10.0*ssdtim)))
+         lprint = .true.
+         if (frstst) then
+           time2 = time3
+           go to 996
+         endif
+         frstst = .true.
+         go to 356
+       endif
+c
+c  Define line c.
+       kjndr = 0
+       rh13 = zcoef(1) + zcoef(2)*time1
+       rh33 = zcoef(1) + zcoef(2)*timexx
+       delt1 = 1.0/(timexx - time1)
+       e3rha = delt1*srhav
+       e3drha = delt1*sdrhav
+       emas3 = delt1*amaser*vavg
+       e3rhs  = sqrt(delt1*sumvar)
+       e3drhs = sqrt(delt1*sdrhsq)
+       rmas3  = sqrt(delt1*smaser)*vrms
+       c3mase = vtotal*cxmase
+       fluct3 = sqrt(max(0.0,((sumrha(4) - zcoef(2)*(2.0*sumrha(2) -
+     & zcoef(2)*sumt(2,2)) + 2.0*zcoef(1)*zcoef(2)*sumt(1,2) -
+     & zcoef(1)*(2.0*sumrha(1) - zcoef(1)*sumt(1,1)))))/sumt(1,1))
+       conv3 = sqrt(0.5*delt1*(sdrhsq + sumstd))
+       stedy3 = abs(zcoef(2)) .lt. conv3
+c
+c  Check for first time through.
+       if (rsetab) go to 640
+       if (.not.frstst) go to 354
+       time2 = timexx
+       time3 = min((timexx + 100.0*ssdtim),
+     & max((timexx + 1.12*(time2 - time1)),(timexx + 10.0*ssdtim)))
+       mwords(61:70) = 'set'
+       mwords(71:80) = 'line a'
+       go to 640
+  359  mwords(61:70) = 'reset'
+       mwords(71:80) = 'combined'
+       time2  = timexx
+       time3 = max((timexx + 1.12*(timexx - time1)),
+     & (timexx + 10.0*ssdtim))
+  640  continue
+c
+c  Define line a.
+       a1 = zcoef(1)
+       b1 = zcoef(2)
+       rh11 = rh13
+       rh21 = rh33
+       e1rha = e3rha
+       e1drha = e3drha
+       emas1 = emas3
+       e1rhs = e3rhs
+       e1drhs = e3drhs
+       rmas1 = rmas3
+       c1mase = c3mase
+       fluct1 = fluct3
+       conv1 = conv3
+       stedy1 = stedy3
+       go to 630
+c
+c  Define line b...least squares from lines a and c.
+  354  delt1 = 1.0/(timexx - time2)
+       b2 = zcoef(2) - 1.5*((a1 - zcoef(1)) +
+     & (b1 - zcoef(2))*time2)*delt1
+       a2 = a1 + (b1 - b2)*time2
+       tinum = sumt(1,1) - osumt(1,1)
+       rh22 = a2 + b2*time2
+       rh32 = a2 + b2*timexx
+       e2rha = delt1*(srhav - osrhav)
+       e2drha = delt1*(sdrhav - osdrha)
+       emas2 = delt1*(amaser - amaseo)*vavg
+       e2rhs = sqrt(delt1*(sumvar - osmvar))
+       e2drhs = sqrt(delt1*(sdrhsq - osdrhs))
+       rmas2 = sqrt(delt1*(smaser - smaseo))*vrms
+       c2mase = vtotal*(cxmase - comase)
+       fluct2 = sqrt(max(0.0,(((sumrha(4) - osmrha(4)) -
+     & b2*(2.0*(sumrha(2) - osmrha(2)) - b2*(sumt(2,2) - osumt(2,2))) +
+     & 2.0*a2*b2*(sumt(1,2) - osumt(1,2)) -
+     & a2*(2.0*(sumrha(1) - osmrha(1)) - a2*tinum))))/tinum)
+       conv2 = sqrt(0.5*delt1*((sdrhsq - osdrhs) + sumstd - osmstd))
+       stedy2 = abs(b2) .lt. conv2
+  356  if (lprint) then
+c
+c  Print time average steady state test results.
+         write (output,5100)
+ 5100  format('0',2x,'Time average steady state test results')
+c  Line a results.
+         write (output,5200) 'first',('a',icol = 1,4),time1+tstart,
+     &   'a', rh11*convrh, lrh(l), time2+tstart, 'a', rh21*convrh,
+     &   lrh(l), 'a', b1*convrh, ldrh(l),
+     &   conv1*convrh, ldrh(l), e1rha*convrh, lrh(l),
+     &   e1rhs*convrh, lrh(l), fluct1*convrh, lrh(l), e1drha*convrh,
+     &   ldrh(l),e1drhs*convrh,ldrh(l),emas1*convm,lm(l),
+     &   rmas1*convm, lm(l), c1mase*convm, lm(l)
+ 5200 format('0',4x,a10,' Test interval (line ',a1,', mean rho*enthalpy
+     &= h',a1,' = a',a1,' * time + b',a1,')'/
+     & '0',6x,'interval start time =',1p,g13.5,' (sec), h',a1,' =',
+     & g13.5,a10/
+     & ' ',17x,'end time =',g13.5,' (sec), h',a1,' =',g13.5,a10/
+     & '0',6x,'line rate of change, a',a1,' =',g13.5,a14,
+     & ' convergence criteria =',g13.5,a14/
+     & '0',6x,'goodness of fit (integrated over time interval)'/
+     & '0',8x,'rho*h,',7x,'mean dev =',g13.5,a10,4x,' rms dev =',
+     & g13.5,a10,4x,' fluctuation =',g13.5,a10/
+     & ' ',8x,'d(rho*h)/dt, mean dev =',g13.5,a14,' rms dev =',
+     & g13.5,a14/
+     & ' ',8x,'mass,',8x,'mean dev =',g13.5,a5,9x,' rms dev =',
+     & g13.5,a5,11x,'cumulative =',g13.5,a5)
+       endif
+       if (frstst) then
+         frstst = .false.
+         go to 996
+       endif
+       if (lprint) then
+c
+c  Line b results.
+         write (output,5200) 'second',('b',icol = 1,4),time2+tstart,
+     &   'b', rh22*convrh, lrh(l), timexx+tstart, 'b', rh32*convrh,
+     &   lrh(l), 'b', b2*convrh, ldrh(l),
+     &   conv2*convrh, ldrh(l), e2rha*convrh, lrh(l),
+     &   e2rhs*convrh, lrh(l), fluct2*convrh, lrh(l), e2drha*convrh,
+     &   ldrh(l),e2drhs*convrh,ldrh(l),emas2*convm,lm(l),
+     &   rmas2*convm, lm(l), c2mase*convm, lm(l)
+c  Line c results.
+         write (output, 5200) 'combined',('c', icol = 1, 4),
+     &   time1+tstart,'c', rh13*convrh, lrh(l), timexx+tstart, 'c',
+     &   rh33*convrh, lrh(l),'c',zcoef(2)*convrh,ldrh(l),
+     &   conv3*convrh,ldrh(l),e3rha*convrh,lrh(l),
+     &   e3rhs*convrh, lrh(l), fluct3*convrh, lrh(l), e3drha*convrh,
+     &   ldrh(l),e3drhs*convrh,ldrh(l),emas3*convm,lm(l),
+     &   rmas3*convm, lm(l), c3mase*convm, lm(l)
+       endif
+c
+c  Test for constant rate.
+       if (sqrt(0.5*(((b1 - zcoef(2))**2) + ((b2 - zcoef(2))**2)))
+     & .le. e3drhs) go to 600
+  602  kounta = 0
+c
+c  Test if line segments are convergent.
+       mwords(41:50) = ' '
+       if (abs(b1) .gt. abs(zcoef(2))) go to 610
+       kounto = 0
+       kountc = 0
+c  Test if line segments are divergent.
+       if (abs(b2) .gt. abs(zcoef(2))) go to 620
+c  Both abs(b1 and b2) .lt. abs(zcoef(2))...test b1 and b2.
+       if (abs(b2) .gt. abs(b1)) go to 620
+c  Line segments are convergent.
+       go to 610
+c  Line segments are at constant rate of change.
+  600  kounto = 0
+       kountc = 0
+       mwords(1:10) = 'convergent'
+       mwords(31:40) = 'constant'
+       mwords(41:50) = 'rate'
+       if (.not.stedy3) then
+         kounta = 0
+         if (stedy2) go to 357
+         go to 602
+       endif
+c
+c  Test if constant rate of change meets criteria three successive
+c  times.
+       mwords(51:60) = '(steady)'
+       kounta = kounta + 1
+       go to 359
+c
+c  Line segments leveling off...converging condition.
+  610  mwords(1:10) = 'convergent'
+       if (abs(zcoef(2)) .gt. abs(b2)) go to 611
+c
+c  Line segments indicate oscillation.
+       mwords(11:20) = 'oscillatin'
+       mwords(21:30) = 'g'
+       mwords(31:40) = 'varying'
+       if (.not. stedy3) go to 359
+c
+c  Test if oscillating line segments meet criteria three successive
+c  times.
+       kounto = kounto + 1
+       mwords(31:40) = 'steady'
+       go to 359
+c
+c  Test convergent line segments.
+  611  kounto = 0
+       if (.not.stedy3) then
+         kountc = 0
+         mwords(31:40) = 'varying'
+         go to 357
+       endif
+c
+c  Test if convergent segments meet criteria three successive times.
+       kountc = kountc + 1
+       mwords(31:40) = 'steaady'
+       go to 359
+c
+c  Line segments indicate divergence.
+  620  mwords(1:10) = 'divergent'
+       mwords(31:40) = 'varying'
+       if (stedy1 .and. stedy2 .and. stedy3) go to 600
+       if (stedy3 .and. stedy2) go to 357
+       if ((dydt .lt. 0.0) .or. (d2ydt2 .lt. 0.0)) go to 357
+       mwords(31:40) = 'transient'
+  623  mwords(61:70) = 'delete'
+c
+c  System mean rho * h is diverging...reset and restart testing.
+  621  avgon  = .false.
+       go to 503
+c
+  622  frstst = .true.
+       stedy1 = .false.
+       time1  = timexx
+       stedy2 = .false.
+       stedy3 = .false.
+       time3  = time2
+       sumvar = 0.0
+       srhav  = 0.0
+       sdrhav = 0.0
+       sdrhsq = 0.0
+       sumstd = 0.0
+       amaser = 0.0
+       smaser = 0.0
+       cxmase = 0.0
+       osmvar = 0.0
+       osrhav = 0.0
+       osdrha = 0.0
+       osdrhs = 0.0
+       osmstd = 0.0
+       amaseo = 0.0
+       smaseo = 0.0
+       comase = 0.0
+       do 371 irow = 1,4
+         sumrha(irow) = 0.0
+         osmrha(irow) = 0.0
+         do 372 icol = 1,4
+           sumt(irow, icol)  = 0.0
+           osumt(irow, icol) = 0.0
+  372    continue
+  371  continue
+       go to 996
+c
+c  Reset left hand line to right hand line and continue testing.
+  357  mwords(61:70) = 'reset'
+       mwords(71:80)  = 'line b'
+       time1 = time2
+       time2 = timexx
+       time3 = max((timexx + 1.12*(time2 - time1)),
+     & (timexx + 10.0*ssdtim))
+       sumvar = sumvar - osmvar
+       srhav  = srhav  - osrhav
+       sdrhav = sdrhav - osdrha
+       sdrhsq = sdrhsq - osdrhs
+       sumstd = sumstd - osmstd
+       amaser = amaser - amaseo
+       smaser = smaser - smaseo
+       cxmase = cxmase - comase
+       do 310 irow = 1,4
+         sumrha(irow) = sumrha(irow) - osmrha(irow)
+         do 311 icol = 1,4
+           sumt(irow,icol) = sumt(irow,icol) - osumt(irow,icol)
+  311    continue
+  310  continue
+       rsetab = .true.
+       go to 505
+c
+c  Set old sums to sums at timexx.
+  630  osmvar = sumvar
+       osrhav = srhav
+       osdrha = sdrhav
+       osdrhs = sdrhsq
+       osmstd = sumstd
+       amaseo = amaser
+       smaseo = smaser
+       comase = cxmase
+       do irow = 1,4
+         osmrha(irow) = sumrha(irow)
+         do icol = 1,4
+           osumt(irow,icol) = sumt(irow,icol)
+         enddo
+       enddo
+       if (frstst) go to 356
+c
+c  Print conclusions.
+  996  stedy3 = (kounta + kountc + kounto) .gt. 0
+       if (lprint) write (output, 5300)
+ 5300  format ('0',2x,'Steady state conclusions and next course of actio
+     &n.')
+       write (nwords(1:120),6000) mwords(11:40),mwords(41:60)
+ 6000  format ('Steady state test results indicate a',a,' mode and ',
+     & a,' state ')
+       icol = 120
+       call rmblnk (nwords,scr,icol,0)
+       if (lprint) write (output,5310) ' ',nwords(1:icol)
+ 5310  format (a1,a)
+       if (ostdya .or. stedy3) then
+         if (ostdya .or. .not.stedy3) then
+           if (ostdya .and. .not.stedy3) go to 993
+           kntss = kntss + 1
+           mwords(1:10) = 'maintained'
+           go to 994
+         endif
+  992    continue
+         kntss  = 1
+         mwords(1:10) = 'achieved'
+  994    write (nwords(1:50),6010) mwords(1:10),kntss
+ 6010  format (a10,' for ',i10,' test time intervals')
+         icol = 50
+         go to 997
+  993    kntss = 0
+         write (nwords(1:80),6020) kwordo,lwordo
+ 6020  format (' The system has deviated from the previous ',2a10,
+     & ' state ')
+         icol = 80
+  997    call rmblnk (nwords,scr,icol,0)
+         if (lprint) write (output,5310) ' ',nwords(1:icol)
+       endif
+       ostdya = stedy3
+       write (nwords(1:50),6040) mwords(61:70)
+ 6040  format (' Time average line a results are ',a10)
+       icol = 50
+       if (mwords(61:70).eq.'delete' .or. mwords(61:70).eq.'undefined')
+     & go to 995
+       write (nwords(51:90),6050) mwords(71:80)
+ 6050  format (' to the ',a10,' test interval.')
+       icol = 90
+  995  call rmblnk (nwords,scr,icol,0)
+       if (lprint) write (output,5310) '0',nwords(1:icol)
+c
+c  Print time of next test..
+       kwordo = mwords(31:40)
+       lwordo = mwords(71:80)
+       if (lprint) write (output,6030) time3 + tstart
+ 6030  format ('0The next test for steady state will begin at timehy .ge
+     &.',1p,g15.7,' (sec).')
+c
+c  Check for nonsteady termination.
+       if (done .ne. 0) write (output, 5400)
+ 5400 format ('0',4x,'Nonsteady state termination of the problem')
+       if (kntss .ge. 3) then
+         if (help.eq.0 .and. done.ne.-3 .and. .not.fail .and.
+     &   iand(print,256).eq.0) done = -5
+         if (done .eq. -5) then
+c  Final steady state.
+           write (output,5410)
+ 5410  format('0',4x,'The system has achieved final steady state')
+           kndr = 15
+         endif
+       endif
+  691  if (.not.lprint .and. done .eq. 0) return
+c
+c  Print steady state statistics.
+       write (output,5500)
+ 5500  format('0',2x,'steady state statistics counters'/'0',2x,'vol.no.
+     & ',3x,'max d(rho*h)/dt',3x,'min d(rho*h)/dt',3x,'max mass error',
+     & 4x,'min mass error'/' ',10x,4(4x,'edit',3x,'total',2x))
+       i = 1
+       ivol = filndx(4)
+       do m = 1,nvols(ivol)
+         if (iand(vctrl(ivol),1) .eq. 0) then
+           sscntr(i)%smxdrh(1) = sscntr(i)%smxdrh(1) +
+     &     sscntr(i)%smxdrh(1)
+           sscntr(i)%smxrho(1) = sscntr(i)%smxrho(1) +
+     &     sscntr(i)%smxrho(2)
+           sscntr(i)%smndrh(1) = sscntr(i)%smndrh(1) +
+     &     sscntr(i)%smndrh(2)
+           sscntr(i)%smnrho(1) = sscntr(i)%smnrho(1) +
+     &     sscntr(i)%smnrho(2)
+           write (output,5510) volno(ivol),sscntr(i)%smxdrh(2),
+     &     sscntr(i)%smxdrh(1),sscntr(i)%smndrh(2),sscntr(i)%smndrh(1),
+     &     sscntr(i)%smxrho(2),sscntr(i)%smxrho(1),sscntr(i)%smnrho(2),
+     &     sscntr(i)%smnrho(1)
+ 5510 format(' ',i10,4(2x,i6,2x,i6,2x))
+           sscntr(i)%smxdrh(2) = 0
+           sscntr(i)%smxrho(2) = 0
+           sscntr(i)%smndrh(2) = 0
+           sscntr(i)%smnrho(2) = 0
+           i = i + 1
+         endif
+         ivol = ivol + ivskp
+       enddo
+       return
+       end

@@ -1,0 +1,701 @@
+*mlist
+*if def,selap
+       subroutine rbla
+!  Reads data from a scdap input deck for the bwr control blade and
+!  channel box component (type 8). Also calls subroutines to print the
+!  input data and initialize other control blade and channel box
+!  variables.
+!
+!  The following unit conversions are used in rbla:
+!           0.3048 m/ft
+!           f=(k*1.8)-459.67
+!           5.678263 [w/(m2*k)]/[btu/(h*ft2*f)]
+!
+!  Cognizant engineer: fpg
+*in32 idat
+*in32 idatax
+*in32 idatcm
+*in32end
+!
+!*****************************************************************
+!
+!     rbla              30-april-93
+!
+!     The BWR control blade/channel box modules were developed at
+!     ORNL by L.J. Ott under the auspices of the NRC sponsored
+!     Boiling Water Reactor Severe Accident Technologies programs.
+!     The modules were integrated into SCDAP by F.P. Griffin.
+!
+!     for information or assistance, call
+!          F.P. Griffin  (615)576-4684
+!          L.J. Ott      (615)574-0324
+!
+!*****************************************************************
+!
+       use scdmod
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+!
+!  scdap common blocks
+!
+       include 'scddat.h'
+       include 'fast.h'
+       include 'comctl.h'
+       include 'scdout.h'
+       include 'ndxara.h'
+       include 'tblsp.h'
+       include 'ufiles.h'
+       include 'blageo.h'
+       include 'miscon.h'
+       include 'contrl.h'
+       include 'debcom.h'
+!
+!  bwr blade/box common blocks.
+!
+       include 'axtrns.h'
+       include 'cboilx.h'
+       include 'za.h'
+!
+!  local variables
+       real(kr) cmft,ckf1,ckf2,cwm2k,fsum
+       real(kr) tx1(ndax),tx2(ndax)
+       real(kr) rdat(10),rdatax(4*ndax),rdatcm(2*ndcomp)
+       real(kr) voidra
+       real(kr) foxy,tsol,tliq,dum1,dum2,tkroom,aden,cden,sden
+       integer kax,kaxini,ibs,icrd,irad,j,mcrd,nazi,ncrd
+       integer l1(7),l2(14),l3(10),l4a(8)
+       integer l4(6+4*ndax),l5(9),l6(6+3*ndax)
+       integer l7(6+2*ndcomp),l8(6+2*ndcomp)
+       integer l30(8),l31(9),l32(10)
+       integer idat(10),idatax(4*ndax),idatcm(2*ndcomp)
+       equivalence(rdat(1),idat(1)),(rdatax(1),idatax(1))
+       equivalence(rdatcm(1),idatcm(1))
+!  card format data
+       data cmft,ckf1,ckf2,cwm2k/0.3048,1.8,459.67,5.678263/
+       data l1 /0,0,1,1,0,1,0/
+       data l2 /0,0,8,8,0,1,0,1,1,1,1,1,1,1/
+       data l3 /0,0,4,4,0,1,1,1,1,1/
+       data l4a/0,0,2,2,0,1,0,0/
+       data l5 /0,0,0,3,0,1,1,1,1/
+       data l30/0,0,0,2,0,1,1,1/
+       data l31/0,0,0,3,0,1,1,0,0/
+       data l32/0,0,0,4,0,1,1,1,1,1/
+       data voidra / 0.5/
+!
+!  initialize blade/box sequence index and index used in nvhyd
+!  for the second surface (interstitial side of box)
+       j = iblabx(icomp)
+       ibs = ndcomp + nsh
+!  initialize variables associated with number and heights of
+!  axial nodes
+       nazi = naz
+       ndz(j) = nazi
+       rl(icomp) = 0.0
+       do 10 kax=1,nazi
+         rl(icomp) = rl(icomp) + dzcond((icomp-1)*ndax+kax)
+         hdz(kax,j) = dzcond((icomp-1)*ndax+kax)/cmft
+   10  continue
+       islbot(icomp) = 0
+!  bwr blade/box global parameters.  these parameters apply globally
+!  to all blade/box components.
+       if(j.eq.1) then
+!  initialize misc. global variables
+         iglobl=0
+         voidmx=voidra
+         iu=1
+         if (.not.unito) iu=0
+!  melting temperatures and densities from matpro
+!  use conversions of f = (k*1.8) - 459.67
+!  and lbm/ft**3 = kg/m**3 / 16.01846
+         foxy = 0.0
+         tkroom = 298.0
+!  zircaloy
+         if (chngno(70)) then
+           call chyprpr (foxy,tsol,tliq,dum1,dum2)
+         else
+           call chyprp (foxy,tsol,tliq,dum1,dum2)
+         endif
+         tmelbx = (tliq*1.8) - 459.67
+         rhocld = cden(tkroom)/16.01846
+         rocldl = cden(tliq)/16.01846
+!  stainless steel
+         call shyprp(tsol,tliq)
+         tmelss = (tliq*1.8) - 459.67
+         rhoss  = sden(tkroom)/16.01846
+         rhossl = sden(tliq)/16.01846
+!  b4c (70% theoretical density)
+         rhob4c = 0.70*aden(2,tkroom)/16.01846
+!  card 40003000, bwr blade/box eutectic liquefaction temperatures
+!  data l30/0,0,0,2,0,1,1,1/
+         l30(1) = 40003000
+         l30(6) = 1
+         call inp2(fa(filndx(1)),rdat,l30)
+         if(l30(6).lt.0)then
+           fail=.true.
+         else
+           tmelcb = (1505.0 *ckf1)-ckf2
+           tmlszr = (1523.0 *ckf1)-ckf2
+           if(l30(6).ge.1) iglobl=1
+           if(uniti) then
+!            rdat in si units (k)
+             if(l30(6).ge.1) tmelcb = (rdat(1)*ckf1)-ckf2
+             if(l30(6).ge.2) tmlszr = (rdat(2)*ckf1)-ckf2
+           else
+!            rdat in british units (f)
+             if(l30(6).ge.1) tmelcb = rdat(1)
+             if(l30(6).ge.2) tmlszr = rdat(2)
+           endif
+           tkmszr=(tmlszr+ckf2)/ckf1
+!  range checking
+           if(tmelcb.lt.1831.0 .or. tmelcb.gt.(tmelss+1.0)) then
+             fail=.true.
+             write(output,2100) l30(1),'B4C/SS eutectic ',
+     #       'liquefaction temperature (word 1) is out of range'
+           endif
+           if(tmlszr.lt.1741.0 .or. tmlszr.gt.(tmelbx+1.0)) then
+             fail=.true.
+             write(output,2100) l30(1),'Zr-lean SS/Zircaloy eutectic ',
+     #       'liquefaction temperature (word 2) is out of range'
+           endif
+         endif
+!  card 40003100, bwr blade/box metal/water reactions
+!  data l31/0,0,0,3,0,1,1,0,0/
+         l31(1) = 40003100
+         l31(6) = 1
+         call inp2(fa(filndx(1)),rdat,l31)
+         if(l31(6).lt.0)then
+           fail=.true.
+         else
+           fb4cmx = 0.1
+           mw1    = 1
+           mw2    = 1
+           if(l31(6).ge.1) iglobl=1
+           if(l31(6).ge.1) fb4cmx = rdat(1)
+           if(l31(6).ge.2) mw1    = idat(2)
+           if(l31(6).ge.3) mw2    = idat(3)
+!  range checking
+           if(fb4cmx.lt.0.0) then
+             fail=.true.
+             write(output,2100) l31(1),'B4C maximum fraction ',
+     #       '(word 1) is out of range'
+           endif
+           if(fb4cmx.gt.0.1) then
+             fb4cmx = 0.1
+             write(output,2200) l31(1),'B4C maximum fraction ',
+     #       '(word 1) is out of range, default value 0.1 is used'
+           endif
+           if(mw1.lt.1 .or. mw1.gt.3) then
+             mw1 = 1
+             write(output,2200) l31(1),'Low T oxidation flag ',
+     #       '(word 2) is out of range, default value 1 is used'
+           endif
+           if(mw2.lt.1 .or. mw2.gt.3) then
+             mw2 = 3
+             write(output,2200) l31(1),'Medium T oxidation flag ',
+     #       '(word 3) is out of range, default value 3 is used'
+           endif
+         endif
+!  card 40003200, bwr blade/box relocation parameters
+!  data l32/0,0,0,4,0,1,1,1,1,1/
+         l32(1) = 40003200
+         l32(6) = 1
+         call inp2(fa(filndx(1)),rdat,l32)
+         if(l32(6).lt.0)then
+           fail=.true.
+         else
+           fwssss = 0.5
+           fwzrzr = 0.5
+           hsmshr = 3400.0/cwm2k
+           hzmbhr = 3400.0/cwm2k
+           if(l32(6).ge.1) iglobl=1
+           if(l32(6).ge.1) fwssss = rdat(1)
+           if(l32(6).ge.3) fwzrzr = rdat(3)
+!          hsmshr and hzmbhr in units of btu/(h*ft2*f)
+           if(uniti) then
+!            rdat in si units (w/(m2*k))
+             if(l32(6).ge.2) hsmshr = rdat(2)/cwm2k
+             if(l32(6).ge.4) hzmbhr = rdat(4)/cwm2k
+           else
+!            rdat in british units (btu/(s*ft2*f))
+             if(l32(6).ge.2) hsmshr = rdat(2)*3600.0
+             if(l32(6).ge.4) hzmbhr = rdat(4)*3600.0
+           endif
+!  range checking
+           if(fwssss.lt.0.0 .or. fwssss.gt.1.0) then
+             fail=.true.
+             write(output,2100) l32(1),'SS oxide mass fraction ',
+     #       '(word 1) is out of range'
+           endif
+           if(fwzrzr.lt.0.0 .or. fwzrzr.gt.1.0) then
+             fail=.true.
+             write(output,2100) l32(1),'ZrO2 mass fraction ',
+     #       '(word 3) is out of range'
+           endif
+           if(hsmshr.lt.299.0 .or. hsmshr.gt.1200.0) then
+             write(output,2200) l32(1),'SS heat transfer coef. ',
+     #       '(word 2) is outside range of normal use'
+           endif
+           if(hzmbhr.lt.299.0 .or. hzmbhr.gt.1200.0) then
+             write(output,2200) l32(1),'Zircaloy heat transfer coef. ',
+     #       '(word 4) is outside range of normal use'
+           endif
+         endif
+       endif
+!  card 4ccc0100, number of individual bwr blade/box structures
+!  data l1 /0,0,1,1,0,1,0/
+       l1(1) = scd1(icomp)%cmpno*10000 + 40000100
+       l1(6) = 1
+       call inp2(fa(filndx(1)),rdat,l1)
+       if(l1(6).lt.0)then
+         fail=.true.
+         nsigl(icomp) = 1
+       else
+         nsigl(icomp) = idat(1)
+!  range checking
+         if(nsigl(icomp).lt.1) then
+           fail=.true.
+           nsigl(icomp) = 1
+           write(output,2100) l1(1),'Number of blade/box structures ',
+     #     '(word 1) is out of range'
+         endif
+       endif
+!  card 4ccc0200, control blade and channel box radial dimensions
+!  data l2 /0,0,8,8,0,1,0,1,1,1,1,1,1,1/
+       l2(1) = scd1(icomp)%cmpno*10000 + 40000200
+       l2(6) = 1
+       call inp2(fa(filndx(1)),rdat,l2)
+       if(l2(6).lt.0)then
+         fail=.true.
+       else
+         nabrod(j) = idat(1)
+         if(uniti) then
+!          rdat in si units (m)
+           diab4c(j) = rdat(2)/cmft
+           thkssi(j) = rdat(3)/cmft
+           thkgap(j) = rdat(4)/cmft
+           thksso(j) = rdat(5)/cmft
+           xboxcb(j) = rdat(6)/cmft
+           xbox(j)   = rdat(7)/cmft
+           drrcan(j) = rdat(8)/cmft
+         else
+!          rdat in british units (ft)
+           diab4c(j) = rdat(2)
+           thkssi(j) = rdat(3)
+           thkgap(j) = rdat(4)
+           thksso(j) = rdat(5)
+           xboxcb(j) = rdat(6)
+           xbox(j)   = rdat(7)
+           drrcan(j) = rdat(8)
+         endif
+!  range checking
+         if(nabrod(j).lt.1) then
+           fail=.true.
+           write(output,2100) l2(1),'Number of absorber tubes ',
+     #     '(word 1) is out of range'
+         endif
+         if(diab4c(j).lt.0.0 .or. thkssi(j).lt.0.0 .or.
+     #     thkgap(j) .lt.0.0 .or. thksso(j).lt.0.0 .or.
+     #     xboxcb(j) .lt.0.0 .or. xbox(j)  .lt.0.0 .or.
+     #     drrcan(j) .lt.0.0) then
+           fail=.true.
+           write(output,2100) l2(1),'Linear dimensions ',
+     #     '(words 2 through 8) are out of range'
+         endif
+         if(diab4c(j)*cmft.gt.0.0070 .or.
+     #     thkssi(j)*cmft .gt.0.0013 .or.
+     #     thkgap(j)*cmft .gt.0.0003 .or.
+     #     thksso(j)*cmft .gt.0.0030 .or.
+     #     xboxcb(j)*cmft .gt.0.0100 .or.
+     #     xbox(j)  *cmft .gt.0.0050 .or.
+     #     drrcan(j)*cmft .gt.0.0080) then
+           write(output,2200) l2(1),'Linear dimensions ',
+     #     '(words 2 through 8) are out of range'
+         endif
+       endif
+!  card 4ccc0300, control blade and channel box lengths and view factors
+!  data l3 /0,0,4,4,0,1,1,1,1,1/
+       l3(1) = scd1(icomp)%cmpno*10000 + 40000300
+       l3(6) = 1
+       call inp2(fa(filndx(1)),rdat,l3)
+       if(l3(6).lt.0)then
+         fail=.true.
+       else
+         if(uniti) then
+!          rdat in si units (m)
+           boxl(1,j) = rdat(1)/cmft
+           boxl(2,j) = rdat(2)/cmft
+         else
+!          rdat in british units (ft)
+           boxl(1,j) = rdat(1)
+           boxl(2,j) = rdat(2)
+         endif
+         fccbr(1,j)   = rdat(3)
+         fccbr(2,j)   = rdat(4)
+!  range checking
+         if(boxl(1,j).lt.0.0 .or. boxl(2,j).lt.0.0) then
+           fail=.true.
+           write(output,2100) l3(1),'Linear dimensions ',
+     #     '(words 1 and 2) are out of range'
+         endif
+         if(fccbr(1,j).lt.0.0 .or. fccbr(1,j).gt.1.0 .or.
+     #     fccbr(2,j) .lt.0.0 .or. fccbr(2,j).gt.1.0) then
+           fail=.true.
+           write(output,2100) l3(1),'Geometric view factors ',
+     #     '(words 3 and 4) are out of range'
+         endif
+       endif
+       cbl(j)    = boxl(1,j)
+       blawd(icomp) = boxl(1,j)*cmft
+       slbwd(icomp) = (boxl(1,j)+boxl(2,j))*cmft
+!  card 4ccc0400, upper and lower volume numbers
+!  data l4a/0,0,2,2,0,1,0,0/
+       l4a(1) = scd1(icomp)%cmpno*10000 + 40000400
+       l4a(6) = 1
+       call inp2(fa(filndx(1)),rdat,l4a)
+       if(l4a(6).lt.0)then
+         fail=.true.
+       else
+         voluh(icomp) = idat(1)
+         vollh(icomp) = idat(2)
+       endif
+!  cards 4ccc0401-99, fuel bundle and interstitial volume numbers
+!  first  surface = fuel bundle side of channel box
+!  second surface = control blade and interstitial side of channel box
+       l4(1) = scd1(icomp)%cmpno*10000 + 40000401
+       l4(2) = -l4(1) - 98
+       l4(3) = 4
+       l4(4) = 4*nazi
+       l4(5) = 0
+       l4(6) = 1
+       do 20 kax=1,ndax
+         l4(4*kax+3) = 0
+         l4(4*kax+4) = 0
+         l4(4*kax+5) = 0
+         l4(4*kax+6) = 0
+   20  continue
+       call inp2(fa(filndx(1)),rdatax,l4)
+       if(l4(6).lt.0)then
+         fail=.true.
+       else
+         ncrd = l4(6)/4
+         mcrd = mod(l4(6),4)
+         if(mcrd.ne.0) then
+           write(output,2000) l4(1),-l4(2)
+           fail=.true.
+         elseif(idatax(4*ncrd).ne.nazi) then
+           write(output,2000) l4(1),-l4(2)
+           fail=.true.
+         else
+           do 30 icrd=1,ncrd
+             if(icrd.eq.1) then
+               kaxini = 1
+             else
+               kaxini = idatax(4*icrd-4) + 1
+             endif
+             if(kaxini.lt.1 .or. idatax(4*icrd).gt.nazi .or.
+     #       kaxini.gt.idatax(4*icrd)) then
+               write(output,2000) l4(1),-l4(2)
+               fail=.true.
+             else
+               do 40 kax=kaxini,idatax(4*icrd)
+                 if(kax.eq.kaxini) then
+                   nvhyd(icomp,kax) = idatax(4*icrd-3)
+                   nvhyd(ibs,  kax) = idatax(4*icrd-2)
+                 else
+                   nvhyd(icomp,kax) = nvhyd(icomp,kax-1) +
+     #             idatax(4*icrd-1)
+                   nvhyd(ibs,  kax) = nvhyd(ibs,  kax-1) +
+     #             idatax(4*icrd-1)
+                 endif
+   40          continue
+             endif
+   30      continue
+         endif
+       endif
+!  card 4ccc0500, initial oxide thicknesses
+!  data l5 /0,0,0,3,0,1,1,1,1/
+       l5(1) = scd1(icomp)%cmpno*10000 + 40000500
+       l5(6) = 1
+       call inp2(fa(filndx(1)),rdat,l5)
+       if(l5(6).lt.0)then
+         fail=.true.
+       else
+         xboxzi(j) = 0.0
+         xboxzo(j) = 0.0
+         xcbdo(j)  = 0.0
+         if(uniti) then
+!          rdat in si units (m)
+           if(l5(6).ge.1) xboxzi(j) = rdat(1)/cmft
+           if(l5(6).ge.2) xboxzo(j) = rdat(2)/cmft
+           if(l5(6).ge.3) xcbdo(j)  = rdat(3)/cmft
+         else
+!          rdat in british units (ft)
+           if(l5(6).ge.1) xboxzi(j) = rdat(1)
+           if(l5(6).ge.2) xboxzo(j) = rdat(2)
+           if(l5(6).ge.3) xcbdo(j)  = rdat(3)
+         endif
+!  range checking
+         if(xboxzi(j).lt.0.0) then
+           xboxzi(j) = 0.0
+           write(output,2200) l5(1),'Initial ZrO2 thickness ',
+     #     '(word 1) is out of range, default value 0.0 m is used'
+         endif
+         if(xboxzo(j).lt.0.0) then
+           xboxzo(j) = 0.0
+           write(output,2200) l5(1),'Initial ZrO2 thickness ',
+     #     '(word 2) is out of range, default value 0.0 m is used'
+         endif
+         if(xcbdo(j).lt.0.0) then
+           xcbdo(j) = 0.0
+           write(output,2200) l5(1),'Initial SS oxide thickness ',
+     #     '(word 3) is out of range, default value 0.0 m is used'
+         endif
+         if(xboxzi(j).gt.0.5*xbox(j)) then
+           fail=.true.
+           write(output,2100) l5(1),'Initial ZrO2 thickness ',
+     #     '(word 1) is out of range'
+         endif
+         if(xboxzo(j).gt.0.5*xbox(j)) then
+           fail=.true.
+           write(output,2100) l5(1),'Initial ZrO2 thickness ',
+     #     '(word 2) is out of range'
+         endif
+         if(xcbdo(j).gt.min(thkssi(j),0.5*thksso(j))) then
+           fail=.true.
+           write(output,2100) l5(1),'Initial SS oxide thickness ',
+     #     '(word 3) is out of range'
+         endif
+       endif
+!  cards 4ccc0601-99, initial temperatures of control blade
+!  and channel box
+       l6(1) = scd1(icomp)%cmpno*10000 + 40000601
+       l6(2) = -l6(1) - 98
+       l6(3) = 3
+       l6(4) = 3*nazi
+       l6(5) = 0
+       l6(6) = 1
+       do 50 kax=1,ndax
+         l6(3*kax+4) = 1
+         l6(3*kax+5) = 1
+         l6(3*kax+6) = 0
+   50  continue
+       call inp2(fa(filndx(1)),rdatax,l6)
+       if(l6(6).lt.0)then
+         fail=.true.
+       else
+         ncrd = l6(6)/3
+         mcrd = mod(l6(6),3)
+         if(mcrd.ne.0) then
+           write(output,2000) l6(1),-l6(2)
+           fail=.true.
+         elseif(idatax(3*ncrd).ne.nazi) then
+           write(output,2000) l6(1),-l6(2)
+           fail=.true.
+         else
+           do 60 icrd=1,ncrd
+             if(icrd.eq.1) then
+               kaxini = 1
+             else
+               kaxini = idatax(3*icrd-3) + 1
+             endif
+             if(kaxini.lt.1 .or. idatax(3*icrd).gt.nazi .or.
+     #       kaxini.gt.idatax(3*icrd)) then
+               write(output,2000) l6(1),-l6(2)
+               fail=.true.
+             else
+               do 70 kax=kaxini,idatax(3*icrd)
+!                tx1 and tx2 are in si units (k)
+                 if(uniti) then
+!                  rdatax in si units (k)
+                   tx1(kax) = rdatax(3*icrd-2)
+                   tx2(kax) = rdatax(3*icrd-1)
+                 else
+!                  rdatax in british units (f)
+                   tx1(kax) = (rdatax(3*icrd-2)+ckf2)/ckf1
+                   tx2(kax) = (rdatax(3*icrd-1)+ckf2)/ckf1
+                 endif
+   70          continue
+!  range checking
+               if(tx1(kaxini).lt.300.0 .or. tx2(kaxini).lt.300.0 .or.
+     #         tx1(kaxini).gt.(tmelcb+ckf2)/ckf1 .or.
+     #         tx2(kaxini).gt.(tmlszr+ckf2)/ckf1 ) then
+                 fail=.true.
+                 write(output,2110) l6(1),-l6(2),'Initial temperatures',
+     #           ' (words 1 and 2) are out of range'
+               endif
+             endif
+   60      continue
+         endif
+       endif
+!  initialize other variables
+       do 80 kax=1,nazi
+         nrods2(kax,icomp) = 14
+         wpsur1((icomp-1)*ndax+kax)=slbwd(icomp)
+         wpsur2((icomp-1)*ndax+kax)=slbwd(icomp)+blawd(icomp)
+         tcbi(kax)= (tx1(kax)*ckf1)-ckf2
+         tcani(kax)=(tx2(kax)*ckf1)-ckf2
+         do 90 irad=2,13
+           tcond3(irad,kax,icomp) = 0.
+   90    continue
+         tcond3(2,kax,icomp) = tx1(kax)
+         tcond3(3,kax,icomp) = tx1(kax)
+         tcond3(4,kax,icomp) = tx1(kax)
+         tcond3(6,kax,icomp) = tx2(kax)
+         tcond3(12,kax,icomp) = tx2(kax)
+         tcond3(1,kax,icomp) = (tcond3(4,kax,icomp)*blawd(icomp)+
+     #   tcond3(6,kax,icomp)*blawd(icomp)+
+     #   tcond3(12,kax,icomp)*(slbwd(icomp)-blawd(icomp)))/
+     #   (slbwd(icomp)+blawd(icomp))
+         tcond3(14,kax,icomp) = (tcond3(6,kax,icomp)*blawd(icomp)+
+     #   tcond3(12,kax,icomp)*(slbwd(icomp)-blawd(icomp)))/
+     #   slbwd(icomp)
+   80  continue
+!  cards 4ccc0701-99, components receiving molten material from
+!  channel box segment 1
+       l7(1) = scd1(icomp)%cmpno*10000 + 40000701
+       l7(2) = -l7(1) - 98
+       l7(3) = 0
+       l7(4) = 2*(ndcomp-1)
+       l7(5) = 0
+       l7(6) = 1
+       do 100 kax=1,ndcomp
+         l7(2*kax+5) = 0
+         l7(2*kax+6) = 1
+  100  continue
+       call inp2(fa(filndx(1)),rdatcm,l7)
+       if(l7(6).lt.0)then
+         fail=.true.
+       else
+         ncrd = l7(6)/2
+         mcrd = mod(l7(6),2)
+         if(mcrd.ne.0) then
+           write(output,2000) l7(1),-l7(2)
+           fail=.true.
+         else
+           numfs(1,icomp)=ncrd
+           if(ncrd.ge.1) then
+             fsum = 0.0
+             do 110 icrd=1,ncrd
+               cmpfs(1,icrd,icomp)  = idatcm(2*icrd-1)
+               fboxfs(1,icrd,icomp) = rdatcm(2*icrd)
+!  range checking
+               fsum = fsum + fboxfs(1,icrd,icomp)
+               if(fboxfs(1,icrd,icomp).lt.0.0000005 .or.
+     #         fboxfs(1,icrd,icomp).gt.1.0000005) then
+                 fail=.true.
+                 write(output,2110) l7(1),-l7(2),'Individual mass',
+     #           ' fractions must be >= 1.0e-6 and <= 1.0'
+               endif
+  110        continue
+             if(fsum.lt.0.9999995 .or. fsum.gt.1.0000005) then
+               fail=.true.
+               write(output,2110) l7(1),-l7(2),'Sum of mass fractions',
+     #         ' must = 1.0'
+             endif
+           endif
+         endif
+       endif
+!  cards 4ccc0801-99, components receiving molten material from
+!  channel box segment 2
+       l8(1) = scd1(icomp)%cmpno*10000 + 40000801
+       l8(2) = -l8(1) - 98
+       l8(3) = 0
+       l8(4) = 2*(ndcomp-1)
+       l8(5) = 0
+       l8(6) = 1
+       do 120 kax=1,ndcomp
+         l8(2*kax+5) = 0
+         l8(2*kax+6) = 1
+  120  continue
+       call inp2(fa(filndx(1)),rdatcm,l8)
+       if(l8(6).lt.0)then
+         fail=.true.
+       else
+         ncrd = l8(6)/2
+         mcrd = mod(l8(6),2)
+         if(mcrd.ne.0) then
+           write(output,2000) l8(1),-l8(2)
+           fail=.true.
+         else
+           numfs(2,icomp)=ncrd
+           if(ncrd.ge.1) then
+             fsum = 0.0
+             do 130 icrd=1,ncrd
+               cmpfs(2,icrd,icomp)  = idatcm(2*icrd-1)
+               fboxfs(2,icrd,icomp) = rdatcm(2*icrd)
+!  range checking
+               fsum = fsum + fboxfs(2,icrd,icomp)
+               if(fboxfs(2,icrd,icomp).lt.0.0000005 .or.
+     #         fboxfs(2,icrd,icomp).gt.1.0000005) then
+                 fail=.true.
+                 write(output,2110) l8(1),-l8(2),'Individual mass',
+     #           ' fractions must be >= 1.0e-6 and <= 1.0'
+               endif
+  130        continue
+             if(fsum.lt.0.9999995 .or. fsum.gt.1.0000005) then
+               fail=.true.
+               write(output,2110) l8(1),-l8(2),'Sum of mass fractions',
+     #         ' must = 1.0'
+             endif
+           endif
+         endif
+       endif
+!  print general bwr control rod input data
+       if(unito) then
+         write (output,1000) nsigl(icomp),nazi,rl(icomp),' m'
+       else
+         write (output,1000) nsigl(icomp),nazi,rl(icomp)/cmft,' ft'
+       endif
+ 1000  format(t5,'Number of individual BWR ',
+     #    'blade/box structures in component =',i8/
+     # t5,'Number of axial nodes =',i45/
+     # t5,'Total axial height of blade/box =',e35.6,a)
+!  print volume numbers for hydraulic volumes
+       write (output,1010) vollh(icomp)
+ 1010  format(/t5,'**** BWR Control Blade/Channel Box ',
+     # 'Hydraulic Volumes ****'//
+     # t8,'Axial        Fuel-bundle        Interstitial'/
+     # t8,' node           volume             volume'//
+     # t8,'Below',i18)
+       write (output,1020)
+     #    (kax,nvhyd(icomp,kax),nvhyd(ibs,kax),kax=1,nazi)
+ 1020  format(t8,i4,2i19)
+       write (output,1030) voluh(icomp)
+ 1030  format(t8,'Above',i18)
+!  print components that can receive molten material
+       write (output,1040)
+ 1040  format(/t5,'**** BWR Control Blade/Channel Box ',
+     # 'Radial Spreading ****')
+       write (output,1050) '1'
+ 1050  format(t8,'Fuel or simulator rods receiving molten material ',
+     # 'from channel box segment ',a)
+       if(numfs(1,icomp).ge.1) then
+         write (output,1060) (cmpfs(1,icrd,icomp),
+     #   icrd=1,numfs(1,icomp))
+ 1060    format(t11,'Comp. number ',i9,8i11)
+         write (output,1070) (fboxfs(1,icrd,icomp),
+     #   icrd=1,numfs(1,icomp))
+ 1070    format(t11,'Mass fraction',9f11.6)
+       else
+         write (output,1080)
+ 1080    format(t11,'None')
+       endif
+       write (output,1050) '2'
+       if(numfs(2,icomp).ge.1) then
+         write (output,1060) (cmpfs(2,icrd,icomp),
+     #   icrd=1,numfs(2,icomp))
+         write (output,1070) (fboxfs(2,icrd,icomp),
+     #   icrd=1,numfs(2,icomp))
+       else
+         write (output,1080)
+       endif
+!  do initializations, check input data
+       call boilnt(j)
+       call icheck(j)
+       return
+ 2000  format('0******** illegal format on cards',i10,' through',i10)
+ 2100  format('0******** Card',i10,' - ',a,a)
+ 2110  format('0******** Cards',i10,' through',i10,' - ',a,a)
+ 2200  format('0$$$$$$$$ Card',i10,' - ',a,a)
+       end
+*endif

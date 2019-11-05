@@ -1,0 +1,80 @@
+*mlist
+       subroutine iturbst
+!  Evaluates the turbine stage performance factors, power, and torque at
+!  ilevel processing.
+!
+!  Cognizant engineer: jat.
+!
+!  This subroutine is very similar to turbst which is used during
+!  transient advancement.
+!
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'turbin.h'
+       include 'voldat.h'
+!
+!  The turbine efficiency formulas are from "Steam Turbines And Their
+!  Cycles" by Salisbury 1974 Reprint Of 1950 Original Edition:
+!     Two-row impulse stage - see ch 6 equation 5a;
+!     General impulse/reaction stage - see ch 6 equation 14.
+!     (See general remarks on bottom of page 172.)
+!     The efficiency formulas assume homogenous flows.
+!
+!  Local variables.
+       integer i,k,l,m,n,nflag
+       real term,vel2,whirl
+!
+       n = filndx(3)
+       do m = 1,ncmps(n)
+         if (cmptyp(n) .eq. 14) then
+           if (turdef(n) .eq. 0.0) then
+             tureff(n) = 0.0
+             turpow(n) = 0.0
+             turtrq(n) = 0.0
+           else
+!
+             nflag = ishft(cmpopt(n),-3)
+             i = njco(n) + filndx(5)
+             k = ij1nx(i)
+             l = ij2nx(i)
+             vel2 = max(1.0e-30,velgj(i)*velgj(i))
+             whirl = turrds(n)*max(1.0e-15,turvel(n))
+             term = 0.5*(rho(k) + rho(l))
+             pideal(n) = mflowj(i)*(p(k) - p(l))/term
+             select case (nflag)
+!  General impulse/reaction stage (reaction fraction is turx).
+             case (1)
+               term = sqrt(1.0 - turx(n))*velgj(i) - whirl
+               term = term + sqrt(term*term + turx(n)*vel2)
+               tureff(n) = 2.0*turdef(n)*term*whirl/vel2
+!  Two-row impulse stage.
+             case (0)
+               term = velgj(i) - 2.0*whirl
+               if (term .le. 0.0) then
+                 tureff(n) = 0.0
+               else
+                 tureff(n) = min(8.0*turdef(n)*term*whirl/vel2,
+     &           turdef(n))
+               endif
+!  Constant efficiency stage.
+             case (2)
+               tureff(n) = turdef(n)
+             end select
+             turpow(n) = tureff(n)*pideal(n)
+             turtrq(n) = turpow(n)/
+     &       sign(max(abs(turvel(n)),1.0e-10),turvel(n))
+           endif
+!  Calculate frictional torque.
+           term = turfr(n)*turvel(n)
+           turtrq(n) = turtrq(n) - sign(term,turvel(n))
+           turfru(n) = abs(term*turvel(n))
+         endif
+         n = n + cmplen(n)
+       enddo
+       return
+       end

@@ -1,0 +1,1683 @@
+*mlist
+*if def,selap
+      subroutine bkmelt(i,k,j,dtm)
+!  bkmelt performs structural melting/freezing calculations for
+!  an interstitial blockage (includes the remnants of the control
+!  blade, relocated material, canister and relocated material on
+!  the canister) and the materials interaction between zircaloy
+!  and stainless steel.
+!
+!  Cognizant engineer: ewc (ljo fpg).
+!
+!******************************************************************
+!
+!     bkmelt             1-April-96
+!
+!     the BWR canister/control blade modules were developed at ORNL
+!     by L.J.Ott under the auspices of the NRC sponsored Boiling
+!     Water Reactor Severe Accident Technologies programs.
+!
+!     for information or assistance, call
+!                 L.J.Ott (fts)-624-0324 or (615)-574-0324
+!                 F.P.Griffin (fts)-626-4684 or (615)-576-4684
+!
+!******************************************************************
+!
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+!
+       real(kr) cpsmel,scp,ccp,ccpr,cpzmel,delt,dhsszr,
+     * dtm   , dubox , ducb  , dumel1, dumel4, dumelx,
+     * dusscb, dusscn, dusszr, frac  , fss(11)       ,
+     * fwssoo, fwsszr, fwzrro, mfesol, sum(4), sum1  ,
+     * sumsox, sumss1, sumss2, sumss3, sumss4, sumss5,
+     * sumss6, smss6o, swf   , tmelt , tnew  , w1t2  ,
+     * w1t3  , w1t3z , w2t1  , w2t7z , w3t1  , w3t1z ,
+     * w4t5  , w4t5z , w5t4  , w5t4z , w6t7  , w6t7z ,
+     * w7t6  , wcrtm , wfetm , wfss  , wfz1  , wmelt ,
+     * wnitm , woxtm , wsscbo(11,2)  , wssi  , wsszr ,
+     * wzravl, wzrrx , wzrss , wzr1rx, xsszrx
+!
+      integer i,ifsszr,j,k,kc,l,m
+!
+!-----common blocks
+!
+       include 'scddat.h'
+       include 'contrl.h'
+       include 'axtrns.h'
+       include 'blinit.h'
+       include 'blkage.h'
+       include 'cboilx.h'
+       include 'cr2.h'
+!
+!  use conversions of k = (f + 459.67)/1.8
+!  and btu/(lbm*f) = j/(kg*k) / 4186.8
+         if (chngno(70)) then
+           cpzmel = ccpr((tmlszr+459.67)/1.8)/4186.8
+         else
+           cpzmel = ccp((tmlszr+459.67)/1.8)/4186.8
+         endif
+         cpsmel=scp((tmelcb+459.67)/1.8)/4186.8
+         fwzrro=(1.0/(1.0-fwzrzr)-1.0)
+         fwssoo=(1.0/(1.0-fwssss)-1.0)
+!  note that wsszr=0.83 below must correspond to wzr=0.83 in
+!  subroutine SSZRRX
+         wsszr=0.83
+         fwsszr=(1.0/wsszr-1.0)
+!
+!-**-relocated material on fuel-side of canister
+!    (ie, node 6 of blockage model)
+!
+      if(nbl(i,k,j).ge.6)then
+!
+!    if wzcan(i,k,j,-) and/or sum of wsscan(i,k,j,-,-) is ne 0.0,
+!    then check for solidification or melting of material on can.
+!
+            sum(1)=0.0
+            sum(2)=0.0
+            sum(3)=0.0
+            sum(4)=0.0
+            sum(1)=sum(1)+wzcan(i,k,j,4)+wzcan(i,k,j,6)
+            sum(2)=sum(2)+wzcan(i,k,j,5)+wzcan(i,k,j,7)
+            do 20 m=1,2
+               do 20 l=1,11
+   20             sum(m+2)=sum(m+2)+wsscan(i,k,j,l,m)
+            sumss4=wsscan(i,k,j,1,2)+wsscan(i,k,j,2,2)+wsscan(i,k,j,3,2)
+            sumss3=wsscan(i,k,j,1,1)+wsscan(i,k,j,2,1)+wsscan(i,k,j,3,1)
+            if(abs(sum(1)+sum(2)+sum(3)+sum(4)).ge.1.0e-20)then
+                  if(abs(sum(3)+sum(4)).lt.1.0e-20)then
+                     delt=tblk(i,k,j,6)-tmelbx
+                     if(delt.gt.0.0)then
+                        dusscn=(sum(1)+sum(2))*cpzmel*delt
+                        dumelx=wzcan(i,k,j,4)*hfzirc
+                        if(abs(sum(1)).lt.1.0e-20)then
+                           twscan(i,k,j)=tblk(i,k,j,6)
+                        else if(dusscn.gt.dumelx.or.
+     *                             wzcan(i,k,j,4).lt.1.0e-15)then
+                           wzcan(i,k,j,5)=wzcan(i,k,j,5)+wzcan(i,k,j,4)
+                           wzcan(i,k,j,4)=0.0
+                           wzcan(i,k,j,7)=wzcan(i,k,j,7)+wzcan(i,k,j,6)
+                           wzcan(i,k,j,6)=0.0
+                           dusscn=dusscn-dumelx
+                           if(sum(1)+sum(2).ge.1.0e-20)then
+                              delt=dusscn/((sum(1)+sum(2))*cpzmel)
+                              twscan(i,k,j)=
+     *                      max(min(tmelbx+delt,tblk(i,k,j,6)),tmelbx)
+                           else
+                              twscan(i,k,j)=tblk(i,k,j,6)
+                           end if
+                           tblk(i,k,j,6)=twscan(i,k,j)
+                        else
+                           w4t5=dusscn/hfzirc
+                           w4t5z=min(w4t5,wzcan(i,k,j,4))
+                           wzcan(i,k,j,5)=wzcan(i,k,j,5)+w4t5z
+                           wzcan(i,k,j,4)=
+     *                                   max(wzcan(i,k,j,4)-w4t5z,0.0)
+                           w6t7=min(fwzrro*w4t5z,wzcan(i,k,j,6))
+                           wzcan(i,k,j,7)=wzcan(i,k,j,7)+w6t7
+                           wzcan(i,k,j,6)=max(wzcan(i,k,j,6)-w6t7,0.0)
+                           twscan(i,k,j)=tmelbx
+                           tblk(i,k,j,6)=twscan(i,k,j)
+                        end if
+                     else
+                        delt=-delt
+                        dusscn=(sum(1)+sum(2))*cpzmel*delt
+                        dumelx=wzcan(i,k,j,5)*hfzirc
+                        if(abs(sum(2)).lt.1.0e-20)then
+                           twscan(i,k,j)=tblk(i,k,j,6)
+                        else if(dusscn.gt.dumelx.or.
+     *                             wzcan(i,k,j,5).lt.1.0e-15)then
+                           wzcan(i,k,j,4)=wzcan(i,k,j,4)+wzcan(i,k,j,5)
+                           wzcan(i,k,j,5)=0.0
+                           wzcan(i,k,j,6)=wzcan(i,k,j,6)+wzcan(i,k,j,7)
+                           wzcan(i,k,j,7)=0.0
+                           dusscn=dusscn-dumelx
+                           if(sum(1)+sum(2).ge.1.0e-20)then
+                              delt=dusscn/((sum(1)+sum(2))*cpzmel)
+                              twscan(i,k,j)=
+     *                      min(max(tmelbx-delt,tblk(i,k,j,6)),tmelbx)
+                           else
+                              twscan(i,k,j)=tblk(i,k,j,6)
+                           end if
+                           tblk(i,k,j,6)=twscan(i,k,j)
+                        else
+                           w5t4=dusscn/hfzirc
+                           w5t4z=min(w5t4,wzcan(i,k,j,5))
+                           wzcan(i,k,j,4)=wzcan(i,k,j,4)+w5t4z
+                           wzcan(i,k,j,5)=
+     *                                   max(wzcan(i,k,j,5)-w5t4z,0.0)
+                           w7t6=min(fwzrro*w5t4z,wzcan(i,k,j,7))
+                           wzcan(i,k,j,6)=wzcan(i,k,j,6)+w7t6
+                           wzcan(i,k,j,7)=max(wzcan(i,k,j,7)-w7t6,0.0)
+                           twscan(i,k,j)=tmelbx
+                           tblk(i,k,j,6)=twscan(i,k,j)
+                        end if
+                     end if
+                  else
+                     if(wsscan(i,k,j,1,2).ge.1.0e-20)then
+!
+!     reaction of stainless steel and zircaloy (fuel side)
+!
+                        mfesol=wsscan(i,k,j,1,2)
+                        call sszrrx(2,i,k,j,dtm,mfesol,dhsszr)
+                        qsszrx(i,k,j)=qsszrx(i,k,j)+
+     *                             dhsszr/(dtm/60.0)/hdz(i,j)
+!
+                     endif
+                     delt=tblk(i,k,j,6)-tmlszr
+                     if(delt.gt.0.0)then
+                        dusscn=((sum(1)+sum(2))*cpzmel+
+     *                           (sum(3)+sum(4))*cpsmel)*delt
+                        dumelx=wzcan(i,k,j,4)*hfzirc+sumss4*hfssb
+                        if(abs(sum(1)+sum(4)).lt.1.0e-20)then
+                           twscan(i,k,j)=tblk(i,k,j,6)
+                        else if(dusscn.ge.dumelx.or.
+     *                           (wzcan(i,k,j,4)+sumss4).lt.1.0e-15)then
+                           do 30 l=1,11
+                              wsscan(i,k,j,l,1)=wsscan(i,k,j,l,1)+
+     *                                          wsscan(i,k,j,l,2)
+   30                         wsscan(i,k,j,l,2)=0.0
+                           wzcan(i,k,j,5)=wzcan(i,k,j,5)+wzcan(i,k,j,4)
+                           wzcan(i,k,j,4)=0.0
+                           wzcan(i,k,j,7)=wzcan(i,k,j,7)+wzcan(i,k,j,6)
+                           wzcan(i,k,j,6)=0.0
+                           dusscn=dusscn-dumelx
+                          if(sum(1)+sum(2)+sum(3)+sum(4).ge.1.0e-20)then
+                              delt=dusscn/((sum(1)+sum(2))*cpzmel+
+     *                                      (sum(3)+sum(4))*cpsmel)
+                              twscan(i,k,j)=
+     *                        max(min(tmlszr+delt,tblk(i,k,j,6)),tmlszr)
+                           else
+                              twscan(i,k,j)=tblk(i,k,j,6)
+                           end if
+                           tblk(i,k,j,6)=twscan(i,k,j)
+                        else
+                           wfss=sumss4/(sumss4+wzcan(i,k,j,4))
+                           wfz1=1.0-wfss
+                           w2t1=dusscn/(wfss*hfssb+wfz1*hfzirc)
+                           do 40 l=1,3
+                              fss(l)=wsscan(i,k,j,l,2)/
+     *                               (sumss4+wzcan(i,k,j,4))
+                              wssi=min(fss(l)*w2t1,wsscan(i,k,j,l,2))
+                              wsscan(i,k,j,l,1)=wsscan(i,k,j,l,1)+wssi
+                              wsscan(i,k,j,l,2)=
+     *                                max(wsscan(i,k,j,l,2)-wssi,0.0)
+   40                         continue
+                           w4t5=wfz1*w2t1
+                           w4t5z=min(w4t5,wzcan(i,k,j,4))
+                           wzcan(i,k,j,5)=wzcan(i,k,j,5)+w4t5z
+                           wzcan(i,k,j,4)=
+     *                                   max(wzcan(i,k,j,4)-w4t5z,0.0)
+                           w6t7=min(fwzrro*w4t5z,wzcan(i,k,j,6))
+                           wzcan(i,k,j,7)=wzcan(i,k,j,7)+w6t7
+                           wzcan(i,k,j,6)=max(wzcan(i,k,j,6)-w6t7,0.0)
+                           woxtm=fwssoo*w2t1*wfss
+                           sumsox=sum(4)-sumss4
+                           if(sumsox.gt.0.0)then
+                              if(woxtm.ge.sumsox)then
+                                 do 50 l=4,11
+                                    wsscan(i,k,j,l,1)=wsscan(i,k,j,l,1)+
+     *                                                wsscan(i,k,j,l,2)
+   50                               wsscan(i,k,j,l,2)=0.0
+                              else
+                                 do 60 l=4,11
+                                    fss(l)=wsscan(i,k,j,l,2)/sumsox
+                                    wssi=
+     *                             min(fss(l)*woxtm,wsscan(i,k,j,l,2))
+                                    wsscan(i,k,j,l,1)=
+     *                                            wsscan(i,k,j,l,1)+wssi
+                                    wsscan(i,k,j,l,2)=
+     *                                 max(wsscan(i,k,j,l,2)-wssi,0.0)
+   60                               continue
+                              end if
+                           end if
+                           twscan(i,k,j)=tmlszr
+                           tblk(i,k,j,6)=twscan(i,k,j)
+                        end if
+                     else
+                        delt=-delt
+                        dusscn=((sum(1)+sum(2))*cpzmel+
+     *                           (sum(3)+sum(4))*cpsmel)*delt
+                        dumelx=wzcan(i,k,j,5)*hfzirc+sumss3*hfssb
+                        if(abs(sum(2)+sum(3)).lt.1.0e-20)then
+                           twscan(i,k,j)=tblk(i,k,j,6)
+                        else if(dusscn.ge.dumelx.or.
+     *                           (wzcan(i,k,j,5)+sumss3).lt.1.0e-15)then
+                           do 70 l=1,11
+                              wsscan(i,k,j,l,2)=wsscan(i,k,j,l,2)+
+     *                                          wsscan(i,k,j,l,1)
+   70                         wsscan(i,k,j,l,1)=0.0
+                           wzcan(i,k,j,4)=wzcan(i,k,j,4)+wzcan(i,k,j,5)
+                           wzcan(i,k,j,5)=0.0
+                           wzcan(i,k,j,6)=wzcan(i,k,j,6)+wzcan(i,k,j,7)
+                           wzcan(i,k,j,7)=0.0
+                           dusscn=dusscn-dumelx
+                          if(sum(1)+sum(2)+sum(3)+sum(4).ge.1.0e-20)then
+                              delt=dusscn/((sum(1)+sum(2))*cpzmel+
+     *                                      (sum(3)+sum(4))*cpsmel)
+                              twscan(i,k,j)=
+     *                        min(max(tmlszr-delt,tblk(i,k,j,6)),tmlszr)
+                           else
+                              twscan(i,k,j)=tblk(i,k,j,6)
+                           end if
+                           tblk(i,k,j,6)=twscan(i,k,j)
+                        else
+                           wfss=sumss3/(sumss3+wzcan(i,k,j,5))
+                           wfz1=1.0-wfss
+                           w1t2=dusscn/(wfss*hfssb+wfz1*hfzirc)
+                           do 80 l=1,3
+                              fss(l)=wsscan(i,k,j,l,1)/
+     *                               (sumss3+wzcan(i,k,j,5))
+                              wssi=min(fss(l)*w1t2,wsscan(i,k,j,l,1))
+                              wsscan(i,k,j,l,2)=wsscan(i,k,j,l,2)+wssi
+                              wsscan(i,k,j,l,1)=
+     *                                max(wsscan(i,k,j,l,1)-wssi,0.0)
+   80                         continue
+                           w5t4=wfz1*w1t2
+                           w5t4z=min(w5t4,wzcan(i,k,j,5))
+                           wzcan(i,k,j,4)=wzcan(i,k,j,4)+w5t4z
+                           wzcan(i,k,j,5)=
+     *                                   max(wzcan(i,k,j,5)-w5t4z,0.0)
+                           w7t6=min(fwzrro*w5t4z,wzcan(i,k,j,7))
+                           wzcan(i,k,j,6)=wzcan(i,k,j,6)+w7t6
+                           wzcan(i,k,j,7)=max(wzcan(i,k,j,7)-w7t6,0.0)
+                           woxtm=fwssoo*w1t2*wfss
+                           sumsox=sum(3)-sumss3
+                           if(sumsox.gt.0.0)then
+                              if(woxtm.ge.sumsox)then
+                                 do 90 l=4,11
+                                    wsscan(i,k,j,l,2)=wsscan(i,k,j,l,2)+
+     *                                                wsscan(i,k,j,l,1)
+   90                               wsscan(i,k,j,l,1)=0.0
+                              else
+                                 do 100 l=4,11
+                                    fss(l)=wsscan(i,k,j,l,1)/sumsox
+                                    wssi=
+     *                             min(fss(l)*woxtm,wsscan(i,k,j,l,1))
+                                    wsscan(i,k,j,l,2)=
+     *                                            wsscan(i,k,j,l,2)+wssi
+                                    wsscan(i,k,j,l,1)=
+     *                                 max(wsscan(i,k,j,l,1)-wssi,0.0)
+  100                               continue
+                              end if
+                           end if
+                           twscan(i,k,j)=tmlszr
+                           tblk(i,k,j,6)=twscan(i,k,j)
+                        end if
+                     end if
+                  end if
+            end if
+      end if
+!
+!-**-canister (ie, node 5 of blockage model)
+!
+      if(nbl(i,k,j).eq.5)then
+            sum(1)=0.0
+            sum(2)=0.0
+            sum(3)=0.0
+            sum(4)=0.0
+            do 110 l=1,7
+  110         sum(1)=sum(1)+wzcan(i,k,j,l)
+            do 120 m=1,2
+               do 120 l=1,11
+  120             sum(m+2)=sum(m+2)+wsscan(i,k,j,l,m)
+            sumss4=wsscan(i,k,j,1,2)+wsscan(i,k,j,2,2)+wsscan(i,k,j,3,2)
+            sumss3=wsscan(i,k,j,1,1)+wsscan(i,k,j,2,1)+wsscan(i,k,j,3,1)
+            sumss6=wsscbb(i,j,1,2)+wsscbb(i,j,2,2)+wsscbb(i,j,3,2)
+            smss6o=wsscno(i,j,1,2)+wsscno(i,j,2,2)+wsscno(i,j,3,2)
+!
+!     reaction of stainless steel and zircaloy (interstitial side)
+!
+            if(k.ne.2)then
+              if(wsscbb(i,j,1,2).ge.1.0e-20)then
+                mfesol=wsscbb(i,j,1,2)
+                call sszrrx(1,i,k,j,dtm,mfesol,dhsszr)
+                qsszrx(i,k,j)=qsszrx(i,k,j)+dhsszr/(dtm/60.0)/hdz(i,j)
+              endif
+            else
+              if(wsscno(i,j,1,2).ge.1.0e-20)then
+                mfesol=wsscno(i,j,1,2)
+                call sszrrx(1,i,k,j,dtm,mfesol,dhsszr)
+                qsszrx(i,k,j)=qsszrx(i,k,j)+dhsszr/(dtm/60.0)/hdz(i,j)
+              endif
+            endif
+!
+            if(fsszr(i,k,j).ge.0.98)then
+               tmelt=tmlszr
+               ifsszr=1
+            else
+               tmelt=tmelbx
+               ifsszr=0
+            end if
+            xsszrx=xsszri(i,k,j)+xsszro(i,k,j)
+            if(scn(i,k,j).ne.0.0)then
+               if(xsszrx.ge.1.0e-10)then
+                  delt=tblk(i,k,j,5)-teutec
+                  if(delt.gt.0.0)then
+                     dusscn=((sum(1)+sum(2))*cpzmel+
+     *                        (sum(3)+sum(4))*cpsmel)*delt
+                     wzrrx=xsszrx*hdz(i,j)*boxl(k,j)/30.48*rhocld
+                     wzravl=wzcan(i,k,j,1)+wzcan(i,k,j,3)
+                     wzr1rx=max(wzrrx-wzcan(i,k,j,3),0.0)
+                     if(wzcan(i,k,j,1).lt.1.0e-20.and.
+     *                       wzcan(i,k,j,3).ge.1.0e-20)then
+                     else if(wzrrx.ge.wzravl.or.
+     *                       wzr1rx.ge.wzcan(i,k,j,1))then
+                        dusszr=wzcan(i,k,j,1)*(1.0+fwsszr)*hfsszr
+                        if(dusscn.ge.dusszr)then
+                           wzcan(i,k,j,3)=wzcan(i,k,j,3)+wzcan(i,k,j,1)
+                           wzcan(i,k,j,1)=0.0
+                           dusscn=max(dusscn-dusszr,0.0)
+                        else
+                           w1t3=dusscn/((1.0+fwsszr)*hfsszr)
+                           w1t3=min(w1t3,wzcan(i,k,j,1))
+                           wzcan(i,k,j,3)=wzcan(i,k,j,3)+w1t3
+                           wzcan(i,k,j,1)=max(wzcan(i,k,j,1)-w1t3,0.0)
+                           dusscn=0.0
+                        end if
+                        if(dusscn.eq.0.0)then
+                           tblk(i,k,j,5)=teutec
+                        else
+                          if(sum(1)+sum(2)+sum(3)+sum(4).ge.1.0e-20)then
+                              delt=dusscn/((sum(1)+sum(2))*cpzmel+
+     *                                      (sum(3)+sum(4))*cpsmel)
+                              tblk(i,k,j,5)=
+     *                        max(min(teutec+delt,tblk(i,k,j,5)),teutec)
+                           end if
+                        end if
+                     else
+                        dusszr=wzr1rx*(1.0+fwsszr)*hfsszr
+                        if(dusscn.ge.dusszr)then
+                           w1t3=min(wzr1rx,wzcan(i,k,j,1))
+                           wzcan(i,k,j,1)=max(wzcan(i,k,j,1)-w1t3,0.0)
+                           wzcan(i,k,j,3)=wzcan(i,k,j,3)+w1t3
+                           dusscn=max(dusscn-dusszr,0.0)
+                        else
+                           w1t3=dusscn/((1.0+fwsszr)*hfsszr)
+                           w1t3=min(w1t3,wzcan(i,k,j,1))
+                           wzcan(i,k,j,3)=wzcan(i,k,j,3)+w1t3
+                           wzcan(i,k,j,1)=max(wzcan(i,k,j,1)-w1t3,0.0)
+                           dusscn=0.0
+                        end if
+                        if(dusscn.eq.0.0)then
+                           tblk(i,k,j,5)=teutec
+                        else
+                          if(sum(1)+sum(2)+sum(3)+sum(4).ge.1.0e-20)then
+                              delt=dusscn/((sum(1)+sum(2))*cpzmel+
+     *                                      (sum(3)+sum(4))*cpsmel)
+                              tblk(i,k,j,5)=
+     *                      max(min(teutec+delt,tblk(i,k,j,5)),teutec)
+                           end if
+                        end if
+                     end if
+                  else
+                     if(wzcan(i,k,j,3).ge.1.0e-20)then
+                        delt=-delt
+                        dusscn=((sum(1)+sum(2))*cpzmel+
+     *                           (sum(3)+sum(4))*cpsmel)*delt
+                        dumelx=wzcan(i,k,j,3)*(1.0+fwsszr)*hfsszr
+                        if(dusscn.ge.dumelx)then
+                           wzcan(i,k,j,1)=wzcan(i,k,j,1)+wzcan(i,k,j,3)
+                           wzcan(i,k,j,3)=0.0
+                           dusscn=max(dusscn-dumelx,0.0)
+                        else
+                           w3t1=dusscn/((1.0+fwsszr)*hfsszr)
+                           w3t1=min(w3t1,wzcan(i,k,j,3))
+                           wzcan(i,k,j,1)=wzcan(i,k,j,1)+w3t1
+                           wzcan(i,k,j,3)=max(wzcan(i,k,j,3)-w3t1,0.0)
+                           dusscn=0.0
+                        end if
+                        if(sum(1)+sum(2)+sum(3)+sum(4).ge.1.0e-20)then
+                           delt=dusscn/((sum(1)+sum(2))*cpzmel+
+     *                                   (sum(3)+sum(4))*cpsmel)
+                           tblk(i,k,j,5)=
+     *                      min(max(teutec-delt,tblk(i,k,j,5)),teutec)
+                        end if
+                     end if
+                  end if
+                  if((tblk(i,k,j,5).ge.tmlszr.and.ifsszr.eq.1).and.
+     *                iblkc(i,k,j).ne.2)then
+                     twscan(i,k,j)=tblk(i,k,j,5)
+                     wzcan(i,k,j,5)=wzcan(i,k,j,5)+wzcan(i,k,j,4)+
+     *                            wzcan(i,k,j,3)+wzcan(i,k,j,1)
+                     wzrrx=wzcan(i,k,j,3)+wzcan(i,k,j,1)
+                     wzrss=wzrrx*fwsszr
+                     wzcan(i,k,j,4)=0.0
+                     wzcan(i,k,j,3)=0.0
+                     wzcan(i,k,j,1)=0.0
+                     wzcan(i,k,j,7)=wzcan(i,k,j,7)+wzcan(i,k,j,6)+
+     *                              wzcan(i,k,j,2)
+                     wzcan(i,k,j,6)=0.0
+                     wzcan(i,k,j,2)=0.0
+                     if(k.ne.2)then
+                        if(sumss6.ge.1.0e-20)then
+                           do 92 m=1,3
+                              fss(m)=wsscbb(i,j,m,2)/sumss6
+                              wssi=min(fss(m)*wzrss,wsscbb(i,j,m,2))
+                              wsscan(i,k,j,m,1)=wsscan(i,k,j,m,1)+wssi
+                              wsscbb(i,j,m,2)=
+     *                                   max(wsscbb(i,j,m,2)-wssi,0.0)
+   92                         continue
+                        end if
+                     else
+                        if(smss6o.ge.1.0e-20)then
+                           do 93 m=1,3
+                              fss(m)=wsscno(i,j,m,2)/smss6o
+                              wssi=min(fss(m)*wzrss,wsscno(i,j,m,2))
+                              wsscan(i,k,j,m,1)=wsscan(i,k,j,m,1)+wssi
+                              wsscno(i,j,m,2)=
+     *                                   max(wsscno(i,j,m,2)-wssi,0.0)
+   93                         continue
+                        end if
+                     end if
+                     sum(1)=0.0
+                     sum(2)=0.0
+                     sum(3)=0.0
+                     sum(4)=0.0
+                     do 94 l=1,7
+   94                   sum(1)=sum(1)+wzcan(i,k,j,l)
+                     do 95 m=1,2
+                        do 95 l=1,11
+   95                      sum(m+2)=sum(m+2)+wsscan(i,k,j,l,m)
+                     sumss4=wsscan(i,k,j,1,2)+wsscan(i,k,j,2,2)+
+     *                      wsscan(i,k,j,3,2)
+                     sumss3=wsscan(i,k,j,1,1)+wsscan(i,k,j,2,1)+
+     *                      wsscan(i,k,j,3,1)
+                     sumss6=wsscbb(i,j,1,2)+wsscbb(i,j,2,2)+
+     *                      wsscbb(i,j,3,2)
+                     smss6o=wsscno(i,j,1,2)+wsscno(i,j,2,2)+
+     *                      wsscno(i,j,3,2)
+                  end if
+               end if
+            end if
+            if(abs(sum(1)+sum(2)+sum(3)+sum(4)).ge.1.0e-20)then
+                  if(abs(sum(3)+sum(4)).lt.1.0e-20)then
+                     delt=tblk(i,k,j,5)-tmelt
+                     if(delt.gt.0.0)then
+                        dusscn=sum(1)*cpzmel*delt
+                        dumelx=(wzcan(i,k,j,1)+wzcan(i,k,j,4))*hfzirc
+                        if(ifsszr.eq.1)then
+                           dumelx=dumelx+fwsszr*
+     *                            (wzcan(i,k,j,1)+wzcan(i,k,j,4))*hfssb
+                        end if
+                       if(abs(wzcan(i,k,j,1)+wzcan(i,k,j,4)).lt.1.0e-20)
+     *                     then
+                           twscan(i,k,j)=tblk(i,k,j,5)
+                        else if(dusscn.gt.dumelx.or.
+     *                       (wzcan(i,k,j,1)+wzcan(i,k,j,4)).lt.1.0e-15)
+     *                       then
+                           w2t1=fwsszr*(wzcan(i,k,j,1)+wzcan(i,k,j,4))
+                           wzcan(i,k,j,3)=wzcan(i,k,j,3)+wzcan(i,k,j,1)
+                           wzcan(i,k,j,1)=0.0
+                           wzcan(i,k,j,5)=wzcan(i,k,j,5)+wzcan(i,k,j,4)+
+     *                                    wzcan(i,k,j,3)
+                           wzcan(i,k,j,3)=0.0
+                           wzcan(i,k,j,4)=0.0
+                           wzcan(i,k,j,7)=wzcan(i,k,j,7)+wzcan(i,k,j,6)+
+     *                                    wzcan(i,k,j,2)
+                           wzcan(i,k,j,2)=0.0
+                           wzcan(i,k,j,6)=0.0
+                           if(k.ne.2)then
+                             if(ifsszr.eq.1.and.sumss6.ge.1.0e-20)then
+                                do 96 m=1,3
+                                   fss(m)=wsscbb(i,j,m,2)/sumss6
+                                   wssi=
+     *                               min(fss(m)*w2t1,wsscbb(i,j,m,2))
+                                   wsscan(i,k,j,m,1)=wsscan(i,k,j,m,1)+
+     *                                               wssi
+                                   wsscbb(i,j,m,2)=
+     *                                   max(wsscbb(i,j,m,2)-wssi,0.0)
+   96                              continue
+                             end if
+                           else
+                            if(ifsszr.eq.1.and.smss6o.ge.1.0e-20)then
+                                do 97 m=1,3
+                                   fss(m)=wsscno(i,j,m,2)/smss6o
+                                   wssi=
+     *                                min(fss(m)*w2t1,wsscno(i,j,m,2))
+                                   wsscan(i,k,j,m,1)=wsscan(i,k,j,m,1)+
+     *                                               wssi
+                                   wsscno(i,j,m,2)=
+     *                                   max(wsscno(i,j,m,2)-wssi,0.0)
+   97                              continue
+                            end if
+                           end if
+                           dusscn=dusscn-dumelx
+                           if(sum(1).ge.1.0e-20)then
+                              delt=dusscn/(sum(1)*cpzmel)
+                              twscan(i,k,j)=
+     *                      max(min(tmelt+delt,tblk(i,k,j,5)),tmelt)
+                           else
+                              twscan(i,k,j)=tblk(i,k,j,5)
+                           end if
+                           tblk(i,k,j,5)=twscan(i,k,j)
+                        else
+                           dumel4=wzcan(i,k,j,4)*hfzirc
+                           if(ifsszr.eq.1)then
+                              dumel4=dumel4+fwsszr*wzcan(i,k,j,4)*hfssb
+                              w2t1=fwsszr*wzcan(i,k,j,4)
+                           end if
+                           if(dusscn.gt.dumel4)then
+                              wzcan(i,k,j,5)=wzcan(i,k,j,5)+
+     *                                       wzcan(i,k,j,4)
+                              wzcan(i,k,j,7)=wzcan(i,k,j,7)+
+     *                                       wzcan(i,k,j,6)
+                              wzcan(i,k,j,4)=0.0
+                              wzcan(i,k,j,6)=0.0
+                              w1t3=(dusscn-dumel4)/hfzirc
+                              if(ifsszr.eq.1)then
+                                 wmelt=(dusscn-dumel4)/
+     *                                 (wsszr*hfzirc+(1.0-wsszr)*hfssb)
+                                 w1t3=wsszr*wmelt
+                                 w2t1=wmelt-w1t3+w2t1
+                              end if
+                              w1t3z=min(w1t3,wzcan(i,k,j,1))
+                              wzcan(i,k,j,3)=wzcan(i,k,j,3)+w1t3z
+                              wzcan(i,k,j,1)=
+     *                                  max(wzcan(i,k,j,1)-w1t3z,0.0)
+                              w2t7z=min(fwzrro*w1t3z,wzcan(i,k,j,2))
+                              wzcan(i,k,j,7)=wzcan(i,k,j,7)+w2t7z
+                              wzcan(i,k,j,2)=
+     *                                  max(wzcan(i,k,j,2)-w2t7z,0.0)
+                              wzcan(i,k,j,5)=wzcan(i,k,j,5)+
+     *                                       wzcan(i,k,j,3)
+                              wzcan(i,k,j,3)=0.0
+                              if(wzcan(i,k,j,1).lt.1.0e-20)then
+                                 wzcan(i,k,j,7)=wzcan(i,k,j,7)+
+     *                                          wzcan(i,k,j,2)
+                                 wzcan(i,k,j,2)=0.0
+                              end if
+                              if(k.ne.2)then
+                                 if(ifsszr.eq.1.and.sumss6.ge.1.0e-20)
+     *                           then
+                                    do 122 m=1,3
+                                       fss(m)=wsscbb(i,j,m,2)/sumss6
+                                       wssi=
+     *                                 min(fss(m)*w2t1,wsscbb(i,j,m,2))
+                                       wsscan(i,k,j,m,1)=
+     *                                         wsscan(i,k,j,m,1)+wssi
+                                       wsscbb(i,j,m,2)=
+     *                                   max(wsscbb(i,j,m,2)-wssi,0.0)
+  122                                  continue
+                                 end if
+                              else
+                                if(ifsszr.eq.1.and.smss6o.ge.1.0e-20)
+     *                          then
+                                   do 124 m=1,3
+                                      fss(m)=wsscno(i,j,m,2)/smss6o
+                                      wssi=
+     *                                min(fss(m)*w2t1,wsscno(i,j,m,2))
+                                      wsscan(i,k,j,m,1)=
+     *                                         wsscan(i,k,j,m,1)+wssi
+                                      wsscno(i,j,m,2)=
+     *                                   max(wsscno(i,j,m,2)-wssi,0.0)
+  124                                 continue
+                                end if
+                              end if
+                           else
+                              w4t5=dusscn/hfzirc
+                              if(ifsszr.eq.1)then
+                                 wmelt=dusscn/
+     *                                 (wsszr*hfzirc+(1.0-wsszr)*hfssb)
+                                 w4t5=wsszr*wmelt
+                                 w2t1=wmelt-w4t5
+                              end if
+                              w4t5z=min(w4t5,wzcan(i,k,j,4))
+                              wzcan(i,k,j,5)=wzcan(i,k,j,5)+w4t5z
+                              wzcan(i,k,j,4)=
+     *                                  max(wzcan(i,k,j,4)-w4t5z,0.0)
+                              w6t7z=min(fwzrro*w4t5z,wzcan(i,k,j,6))
+                              wzcan(i,k,j,7)=wzcan(i,k,j,7)+w6t7z
+                              wzcan(i,k,j,6)=
+     *                                  max(wzcan(i,k,j,6)-w6t7z,0.0)
+                              if(k.ne.2)then
+                                 if(ifsszr.eq.1.and.sumss6.ge.1.0e-20)
+     *                           then
+                                    do 125 m=1,3
+                                       fss(m)=wsscbb(i,j,m,2)/sumss6
+                                       wssi=
+     *                               min(fss(m)*w2t1,wsscbb(i,j,m,2))
+                                       wsscan(i,k,j,m,1)=
+     *                                         wsscan(i,k,j,m,1)+wssi
+                                       wsscbb(i,j,m,2)=
+     *                                   max(wsscbb(i,j,m,2)-wssi,0.0)
+  125                                  continue
+                                 end if
+                              else
+                                if(ifsszr.eq.1.and.smss6o.ge.1.0e-20)
+     *                          then
+                                   do 126 m=1,3
+                                      fss(m)=wsscno(i,j,m,2)/smss6o
+                                      wssi=
+     *                                min(fss(m)*w2t1,wsscno(i,j,m,2))
+                                      wsscan(i,k,j,m,1)=
+     *                                        wsscan(i,k,j,m,1)+wssi
+                                      wsscno(i,j,m,2)=
+     *                                   max(wsscno(i,j,m,2)-wssi,0.0)
+  126                                 continue
+                                end if
+                              end if
+                           end if
+                           twscan(i,k,j)=tmelt
+                           tblk(i,k,j,5)=twscan(i,k,j)
+                        end if
+                     else
+                        if(tblk(i,k,j,5).ge.teutec.and.wzcan(i,k,j,3)
+     *                     .ge.1.0e-20)go to 228
+                        delt=-delt
+                        dusscn=sum(1)*cpzmel*delt
+                        dumelx=(wzcan(i,k,j,3)+wzcan(i,k,j,5))*hfzirc
+                       if(abs(wzcan(i,k,j,3)+wzcan(i,k,j,5)).lt.1.0e-20)
+     *                     then
+                           twscan(i,k,j)=tblk(i,k,j,5)
+                        else if(dusscn.gt.dumelx.or.
+     *                       (wzcan(i,k,j,3)+wzcan(i,k,j,5)).lt.1.0e-15)
+     *                        then
+                           wzcan(i,k,j,1)=wzcan(i,k,j,1)+wzcan(i,k,j,3)
+                           wzcan(i,k,j,3)=0.0
+                           wzcan(i,k,j,4)=wzcan(i,k,j,4)+wzcan(i,k,j,5)
+                           wzcan(i,k,j,5)=0.0
+                           wzcan(i,k,j,6)=wzcan(i,k,j,6)+wzcan(i,k,j,7)
+                           wzcan(i,k,j,7)=0.0
+                           dusscn=dusscn-dumelx
+                           if(sum(1).ge.1.0e-20)then
+                              delt=dusscn/(sum(1)*cpzmel)
+                              tblk(i,k,j,5)=
+     *                      min(max(tmelt-delt,tblk(i,k,j,5)),tmelt)
+                           end if
+                           twscan(i,k,j)=tblk(i,k,j,5)
+                        else
+                           dumel1=wzcan(i,k,j,3)*hfzirc
+                           if(dusscn.gt.dumel1)then
+                              wzcan(i,k,j,1)=wzcan(i,k,j,1)+
+     *                                       wzcan(i,k,j,3)
+                              wzcan(i,k,j,3)=0.0
+                              w5t4=(dusscn-dumel1)/hfzirc
+                              w5t4z=min(w5t4,wzcan(i,k,j,5))
+                              wzcan(i,k,j,4)=wzcan(i,k,j,4)+w5t4z
+                              wzcan(i,k,j,5)=
+     *                                  max(wzcan(i,k,j,5)-w5t4z,0.0)
+                              w7t6=min(fwzrro*w5t4z,wzcan(i,k,j,7))
+                              wzcan(i,k,j,6)=wzcan(i,k,j,6)+w7t6
+                              wzcan(i,k,j,7)=
+     *                                  max(wzcan(i,k,j,7)-w7t6,0.0)
+                           else
+                              w3t1=dusscn/hfzirc
+                              w3t1z=min(w3t1,wzcan(i,k,j,3))
+                              wzcan(i,k,j,1)=wzcan(i,k,j,1)+w3t1z
+                              wzcan(i,k,j,3)=
+     *                                  max(wzcan(i,k,j,3)-w3t1z,0.0)
+                           end if
+                           twscan(i,k,j)=tmelt
+                           tblk(i,k,j,5)=twscan(i,k,j)
+                        end if
+                     end if
+                  else
+                     if(wsscan(i,k,j,1,2).ge.1.0e-20)then
+!
+!     reaction of stainless steel and zircaloy (fuel side)
+!
+                        mfesol=wsscan(i,k,j,1,2)
+                        call sszrrx(2,i,k,j,dtm,mfesol,dhsszr)
+                        qsszrx(i,k,j)=qsszrx(i,k,j)+
+     *                             dhsszr/(dtm/60.0)/hdz(i,j)
+!
+                     endif
+                     if(fsszr(i,k,j).ge.0.98)then
+                        ifsszr=1
+                     else
+                        ifsszr=0
+                     end if
+                     delt=tblk(i,k,j,5)-tmlszr
+                     if(delt.gt.0.0)then
+                        dusscn=(sum(1)*cpzmel+
+     *                           (sum(3)+sum(4))*cpsmel)*delt
+                        dumelx=(wzcan(i,k,j,1)+wzcan(i,k,j,4))*hfzirc+
+     *                          sumss4*hfssb
+                        dumel4=wzcan(i,k,j,4)*hfzirc+sumss4*hfssb
+                        if(abs(sum(1)+sum(4)).lt.1.0e-20)then
+                           twscan(i,k,j)=tblk(i,k,j,5)
+                        else if(dusscn.ge.dumelx.or.
+     *                       (wzcan(i,k,j,1)+wzcan(i,k,j,4)).lt.
+     *                       1.0e-15)then
+                           do 130 l=1,11
+                              wsscan(i,k,j,l,1)=wsscan(i,k,j,l,1)+
+     *                                          wsscan(i,k,j,l,2)
+  130                         wsscan(i,k,j,l,2)=0.0
+                           w2t1=wzcan(i,k,j,1)
+                           wzcan(i,k,j,3)=wzcan(i,k,j,3)+wzcan(i,k,j,1)
+                           wzcan(i,k,j,1)=0.0
+                           wzcan(i,k,j,5)=wzcan(i,k,j,5)+wzcan(i,k,j,4)+
+     *                                    wzcan(i,k,j,3)
+                           wzcan(i,k,j,3)=0.0
+                           wzcan(i,k,j,4)=0.0
+                           wzcan(i,k,j,7)=wzcan(i,k,j,7)+wzcan(i,k,j,6)+
+     *                                    wzcan(i,k,j,2)
+                           wzcan(i,k,j,2)=0.0
+                           wzcan(i,k,j,6)=0.0
+                           if(k.ne.2)then
+                              if(ifsszr.eq.1.and.sumss6.ge.1.0e-20)
+     *                        then
+                                 do 131 m=1,3
+                                    fss(m)=wsscbb(i,j,m,2)/sumss6
+                                    wssi=
+     *                              min(fss(m)*w2t1,wsscbb(i,j,m,2))
+                                    wsscan(i,k,j,m,1)=wsscan(i,k,j,m,1)+
+     *                                              wssi
+                                    wsscbb(i,j,m,2)=
+     *                                max(wsscbb(i,j,m,2)-wssi,0.0)
+  131                               continue
+                              end if
+                           else
+                             if(ifsszr.eq.1.and.smss6o.ge.1.0e-20)
+     *                       then
+                                do 132 m=1,3
+                                   fss(m)=wsscno(i,j,m,2)/smss6o
+                                   wssi=
+     *                             min(fss(m)*w2t1,wsscno(i,j,m,2))
+                                   wsscan(i,k,j,m,1)=wsscan(i,k,j,m,1)+
+     *                                             wssi
+                                   wsscno(i,j,m,2)=
+     *                                 max(wsscno(i,j,m,2)-wssi,0.0)
+  132                              continue
+                             end if
+                           end if
+                           dusscn=dusscn-dumelx
+                           if(sum(1)+sum(3)+sum(4).ge.1.0e-20)then
+                              delt=dusscn/(sum(1)*cpzmel+
+     *                                     (sum(3)+sum(4))*cpsmel)
+                              twscan(i,k,j)=
+     *                        max(min(tmlszr+delt,tblk(i,k,j,5)),tmlszr)
+                           else
+                              twscan(i,k,j)=tblk(i,k,j,5)
+                           end if
+                           tblk(i,k,j,5)=twscan(i,k,j)
+                        else if(dusscn.lt.dumel4)then
+                           wfss=sumss4/(sumss4+wzcan(i,k,j,4))
+                           wfz1=1.0-wfss
+                           w2t1=dusscn/(wfss*hfssb+wfz1*hfzirc)
+                           do 140 l=1,3
+                              fss(l)=wsscan(i,k,j,l,2)/
+     *                               (sumss4+wzcan(i,k,j,4))
+                              wssi=min(fss(l)*w2t1,wsscan(i,k,j,l,2))
+                              wsscan(i,k,j,l,1)=wsscan(i,k,j,l,1)+wssi
+                              wsscan(i,k,j,l,2)=
+     *                                max(wsscan(i,k,j,l,2)-wssi,0.0)
+  140                         continue
+                           w4t5=wfz1*w2t1
+                           w4t5z=min(w4t5,wzcan(i,k,j,4))
+                           wzcan(i,k,j,5)=wzcan(i,k,j,5)+w4t5z
+                           wzcan(i,k,j,4)=
+     *                                   max(wzcan(i,k,j,4)-w4t5z,0.0)
+                           w6t7=min(fwzrro*w4t5z,wzcan(i,k,j,6))
+                           wzcan(i,k,j,7)=wzcan(i,k,j,7)+w6t7
+                           wzcan(i,k,j,6)=max(wzcan(i,k,j,6)-w6t7,0.0)
+                           woxtm=fwssoo*w2t1*wfss
+                           sumsox=sum(4)-sumss4
+                           if(sumsox.gt.0.0)then
+                              if(woxtm.ge.sumsox)then
+                                 do 150 l=4,11
+                                    wsscan(i,k,j,l,1)=wsscan(i,k,j,l,1)+
+     *                                                wsscan(i,k,j,l,2)
+  150                               wsscan(i,k,j,l,2)=0.0
+                              else
+                                 do 160 l=4,11
+                                    fss(l)=wsscan(i,k,j,l,2)/sumsox
+                                    wssi=
+     *                             min(fss(l)*woxtm,wsscan(i,k,j,l,2))
+                                    wsscan(i,k,j,l,1)=
+     *                                            wsscan(i,k,j,l,1)+wssi
+                                    wsscan(i,k,j,l,2)=
+     *                                 max(wsscan(i,k,j,l,2)-wssi,0.0)
+  160                               continue
+                              end if
+                           end if
+                           twscan(i,k,j)=tmlszr
+                           tblk(i,k,j,5)=twscan(i,k,j)
+                        else
+                           do 170 l=1,11
+                              wsscan(i,k,j,l,1)=wsscan(i,k,j,l,1)+
+     *                                          wsscan(i,k,j,l,2)
+  170                         wsscan(i,k,j,l,2)=0.0
+                           wzcan(i,k,j,5)=wzcan(i,k,j,5)+wzcan(i,k,j,4)
+                           wzcan(i,k,j,4)=0.0
+                           wzcan(i,k,j,7)=wzcan(i,k,j,7)+wzcan(i,k,j,6)
+                           wzcan(i,k,j,6)=0.0
+                           w1t3=(dusscn-dumel4)/hfzirc
+                           w1t3z=min(w1t3,wzcan(i,k,j,1))
+                           wzcan(i,k,j,3)=wzcan(i,k,j,3)+w1t3z
+                           wzcan(i,k,j,1)=
+     *                                  max(wzcan(i,k,j,1)-w1t3z,0.0)
+                           w2t7z=min(fwzrro*w1t3z,wzcan(i,k,j,2))
+                           wzcan(i,k,j,7)=wzcan(i,k,j,7)+w2t7z
+                           wzcan(i,k,j,2)=
+     *                                  max(wzcan(i,k,j,2)-w2t7z,0.0)
+                           wzcan(i,k,j,5)=wzcan(i,k,j,5)+
+     *                                    wzcan(i,k,j,3)
+                           wzcan(i,k,j,3)=0.0
+                           if(wzcan(i,k,j,1).lt.1.0e-20)then
+                              wzcan(i,k,j,7)=wzcan(i,k,j,7)+
+     *                                       wzcan(i,k,j,2)
+                              wzcan(i,k,j,2)=0.0
+                           end if
+                           w2t1=fwsszr*w1t3z
+                           if(k.ne.2)then
+                              if(ifsszr.eq.1.and.sumss6.ge.1.0e-20)
+     *                        then
+                                 do 172 m=1,3
+                                    fss(m)=wsscbb(i,j,m,2)/sumss6
+                                    wssi=
+     *                               min(fss(m)*w2t1,wsscbb(i,j,m,2))
+                                    wsscan(i,k,j,m,1)=wsscan(i,k,j,m,1)+
+     *                                              wssi
+                                    wsscbb(i,j,m,2)=
+     *                                  max(wsscbb(i,j,m,2)-wssi,0.0)
+  172                               continue
+                              end if
+                           else
+                              if(ifsszr.eq.1.and.smss6o.ge.1.0e-20)
+     *                        then
+                                 do 173 m=1,3
+                                    fss(m)=wsscno(i,j,m,2)/smss6o
+                                    wssi=
+     *                               min(fss(m)*w2t1,wsscno(i,j,m,2))
+                                    wsscan(i,k,j,m,1)=wsscan(i,k,j,m,1)+
+     *                                              wssi
+                                    wsscno(i,j,m,2)=
+     *                                   max(wsscno(i,j,m,2)-wssi,0.0)
+  173                               continue
+                              end if
+                           end if
+                           twscan(i,k,j)=tmlszr
+                           tblk(i,k,j,5)=twscan(i,k,j)
+                        end if
+                     else
+                        if(tblk(i,k,j,5).ge.teutec.and.wzcan(i,k,j,3).
+     *                     ge.1.0e-20)go to 228
+                        delt=-delt
+                        dusscn=(sum(1)*cpzmel+
+     *                           (sum(3)+sum(4))*cpsmel)*delt
+                        dumelx=wzcan(i,k,j,5)*hfzirc+sumss3*hfssb
+                        if(abs(wzcan(i,k,j,5)+sum(3)).lt.1.0e-20)then
+                           twscan(i,k,j)=tblk(i,k,j,5)
+                        else if(dusscn.ge.dumelx.or.
+     *                       (wzcan(i,k,j,5)+sumss3).lt.1.0e-15)then
+                           do 180 l=1,11
+                              wsscan(i,k,j,l,2)=wsscan(i,k,j,l,2)+
+     *                                          wsscan(i,k,j,l,1)
+  180                         wsscan(i,k,j,l,1)=0.0
+                           wzcan(i,k,j,4)=wzcan(i,k,j,4)+wzcan(i,k,j,5)
+                           wzcan(i,k,j,5)=0.0
+                           wzcan(i,k,j,6)=wzcan(i,k,j,6)+wzcan(i,k,j,7)
+                           wzcan(i,k,j,7)=0.0
+                           dusscn=dusscn-dumelx
+                           if(sum(1)+sum(3)+sum(4).ge.1.0e-20)then
+                              delt=dusscn/(sum(1)*cpzmel+
+     *                                     (sum(3)+sum(4))*cpsmel)
+                              twscan(i,k,j)=
+     *                        min(max(tmlszr-delt,tblk(i,k,j,5)),tmlszr)
+                           else
+                              twscan(i,k,j)=tblk(i,k,j,5)
+                           end if
+                           tblk(i,k,j,5)=twscan(i,k,j)
+                        else
+                           wfss=sumss3/(sumss3+wzcan(i,k,j,5))
+                           wfz1=1.0-wfss
+                           w1t2=dusscn/(wfss*hfssb+wfz1*hfzirc)
+                           do 190 l=1,3
+                              fss(l)=wsscan(i,k,j,l,1)/
+     *                               (sumss3+wzcan(i,k,j,5))
+                              wssi=min(fss(l)*w1t2,wsscan(i,k,j,l,1))
+                              wsscan(i,k,j,l,2)=wsscan(i,k,j,l,2)+wssi
+                              wsscan(i,k,j,l,1)=
+     *                                max(wsscan(i,k,j,l,1)-wssi,0.0)
+  190                         continue
+                           w5t4=wfz1*w1t2
+                           w5t4z=min(w5t4,wzcan(i,k,j,5))
+                           wzcan(i,k,j,4)=wzcan(i,k,j,4)+w5t4z
+                           wzcan(i,k,j,5)=
+     *                                   max(wzcan(i,k,j,5)-w5t4z,0.0)
+                           w7t6=min(fwzrro*w5t4z,wzcan(i,k,j,7))
+                           wzcan(i,k,j,6)=wzcan(i,k,j,6)+w7t6
+                           wzcan(i,k,j,7)=max(wzcan(i,k,j,7)-w7t6,0.0)
+                           woxtm=fwssoo*w1t2*wfss
+                           sumsox=sum(3)-sumss3
+                           if(sumsox.gt.0.0)then
+                              if(woxtm.ge.sumsox)then
+                                 do 200 l=4,11
+                                    wsscan(i,k,j,l,2)=wsscan(i,k,j,l,2)+
+     *                                                wsscan(i,k,j,l,1)
+  200                               wsscan(i,k,j,l,1)=0.0
+                              else
+                                 do 210 l=4,11
+                                    fss(l)=wsscan(i,k,j,l,1)/sumsox
+                                    wssi=
+     *                             min(fss(l)*woxtm,wsscan(i,k,j,l,1))
+                                    wsscan(i,k,j,l,2)=
+     *                                            wsscan(i,k,j,l,2)+wssi
+                                    wsscan(i,k,j,l,1)=
+     *                                 max(wsscan(i,k,j,l,1)-wssi,0.0)
+  210                               continue
+                              end if
+                           end if
+                           twscan(i,k,j)=tmlszr
+                           tblk(i,k,j,5)=twscan(i,k,j)
+                        end if
+                     end if
+                  end if
+            end if
+            tbox(i,k,j)=tblk(i,k,j,5)
+      else if(nbl(i,k,j).gt.5)then
+            sum(1)=0.0
+            sum(2)=0.0
+            sum(3)=0.0
+            sum(4)=0.0
+            sum(1)=sum(1)+wzcan(i,k,j,1)+wzcan(i,k,j,2)
+            sum(2)=sum(2)+wzcan(i,k,j,3)
+            do 220 m=1,2
+               do 220 l=1,11
+  220             sum(m+2)=sum(m+2)+wsscan(i,k,j,l,m)
+            sumss5=wzcan(i,k,j,4)+wzcan(i,k,j,6)+wzcan(i,k,j,5)+
+     *             wzcan(i,k,j,7)
+            sumss6=wsscbb(i,j,1,2)+wsscbb(i,j,2,2)+wsscbb(i,j,3,2)
+            smss6o=wsscno(i,j,1,2)+wsscno(i,j,2,2)+wsscno(i,j,3,2)
+!
+!     reaction of stainless steel and zircaloy (interstitial side)
+!
+            if(k.ne.2)then
+              if(wsscbb(i,j,1,2).ge.1.0e-20)then
+                mfesol=wsscbb(i,j,1,2)
+                call sszrrx(1,i,k,j,dtm,mfesol,dhsszr)
+                qsszrx(i,k,j)=qsszrx(i,k,j)+dhsszr/(dtm/60.0)/hdz(i,j)
+              endif
+            else
+              if(wsscno(i,j,1,2).ge.1.0e-20)then
+                mfesol=wsscno(i,j,1,2)
+                call sszrrx(1,i,k,j,dtm,mfesol,dhsszr)
+                qsszrx(i,k,j)=qsszrx(i,k,j)+dhsszr/(dtm/60.0)/hdz(i,j)
+              endif
+            endif
+!
+            if(fsszr(i,k,j).ge.0.98)then
+               tmelt=tmlszr
+               ifsszr=1
+            else
+               tmelt=tmelbx
+               ifsszr=0
+            end if
+            xsszrx=xsszri(i,k,j)+xsszro(i,k,j)
+            if(scn(i,k,j).ne.0.0)then
+               if(xsszrx.ge.1.0e-10)then
+                  delt=tblk(i,k,j,5)-teutec
+                  if(delt.gt.0.0)then
+                     dusscn=((sum(1)+sum(2))*cpzmel+
+     *                        (sum(3)+sum(4))*cpsmel)*delt
+                     wzrrx=xsszrx*hdz(i,j)*boxl(k,j)/30.48*rhocld
+                     wzravl=wzcan(i,k,j,1)+wzcan(i,k,j,3)
+                     wzr1rx=max(wzrrx-wzcan(i,k,j,3),0.0)
+                     if(wzcan(i,k,j,1).lt.1.0e-20.and.
+     *                       wzcan(i,k,j,3).ge.1.0e-20)then
+                     else if(wzrrx.ge.wzravl.or.
+     *                       wzr1rx.ge.wzcan(i,k,j,1))then
+                        dusszr=wzcan(i,k,j,1)*(1.0+fwsszr)*hfsszr
+                        if(dusscn.ge.dusszr)then
+                           wzcan(i,k,j,3)=wzcan(i,k,j,3)+wzcan(i,k,j,1)
+                           wzcan(i,k,j,1)=0.0
+                           dusscn=max(dusscn-dusszr,0.0)
+                        else
+                           w1t3=dusscn/((1.0+fwsszr)*hfsszr)
+                           w1t3=min(w1t3,wzcan(i,k,j,1))
+                           wzcan(i,k,j,3)=wzcan(i,k,j,3)+w1t3
+                           wzcan(i,k,j,1)=max(wzcan(i,k,j,1)-w1t3,0.0)
+                           dusscn=0.0
+                        end if
+                        if(dusscn.eq.0.0)then
+                           tblk(i,k,j,5)=teutec
+                        else
+                          if(sum(1)+sum(2)+sum(3)+sum(4).ge.1.0e-20)then
+                              delt=dusscn/((sum(1)+sum(2))*cpzmel+
+     *                                      (sum(3)+sum(4))*cpsmel)
+                              tblk(i,k,j,5)=
+     *                        max(min(teutec+delt,tblk(i,k,j,5)),teutec)
+                           end if
+                        end if
+                     else
+                        dusszr=wzr1rx*(1.0+fwsszr)*hfsszr
+                        if(dusscn.ge.dusszr)then
+                           w1t3=min(wzr1rx,wzcan(i,k,j,1))
+                           wzcan(i,k,j,1)=max(wzcan(i,k,j,1)-w1t3,0.0)
+                           wzcan(i,k,j,3)=wzcan(i,k,j,3)+w1t3
+                           dusscn=max(dusscn-dusszr,0.0)
+                        else
+                           w1t3=dusscn/((1.0+fwsszr)*hfsszr)
+                           w1t3=min(w1t3,wzcan(i,k,j,1))
+                           wzcan(i,k,j,3)=wzcan(i,k,j,3)+w1t3
+                           wzcan(i,k,j,1)=max(wzcan(i,k,j,1)-w1t3,0.0)
+                           dusscn=0.0
+                        end if
+                        if(dusscn.eq.0.0)then
+                           tblk(i,k,j,5)=teutec
+                        else
+                          if(sum(1)+sum(2)+sum(3)+sum(4).ge.1.0e-20)then
+                              delt=dusscn/((sum(1)+sum(2))*cpzmel+
+     *                                      (sum(3)+sum(4))*cpsmel)
+                              tblk(i,k,j,5)=
+     *                        max(min(teutec+delt,tblk(i,k,j,5)),teutec)
+                           end if
+                        end if
+                     end if
+                  else
+                     if(wzcan(i,k,j,3).ge.1.0e-20)then
+                        delt=-delt
+                        dusscn=((sum(1)+sum(2))*cpzmel+
+     *                           (sum(3)+sum(4))*cpsmel)*delt
+                        dumelx=wzcan(i,k,j,3)*(1.0+fwsszr)*hfsszr
+                        if(dusscn.ge.dumelx)then
+                           wzcan(i,k,j,1)=wzcan(i,k,j,1)+wzcan(i,k,j,3)
+                           wzcan(i,k,j,3)=0.0
+                           dusscn=max(dusscn-dumelx,0.0)
+                        else
+                           w3t1=dusscn/((1.0+fwsszr)*hfsszr)
+                           w3t1=min(w3t1,wzcan(i,k,j,3))
+                           wzcan(i,k,j,1)=wzcan(i,k,j,1)+w3t1
+                           wzcan(i,k,j,3)=max(wzcan(i,k,j,3)-w3t1,0.0)
+                           dusscn=0.0
+                        end if
+                        if(sum(1)+sum(2)+sum(3)+sum(4).ge.1.0e-20)then
+                           delt=dusscn/((sum(1)+sum(2))*cpzmel+
+     *                                   (sum(3)+sum(4))*cpsmel)
+                           tblk(i,k,j,5)=
+     *                      min(max(teutec-delt,tblk(i,k,j,5)),teutec)
+                        end if
+                     end if
+                  end if
+                  if((tblk(i,k,j,5).ge.tmlszr.and.ifsszr.eq.1).and.
+     *                iblkc(i,k,j).ne.2)then
+                     twscan(i,k,j)=tblk(i,k,j,5)
+                     wzcan(i,k,j,5)=wzcan(i,k,j,5)+wzcan(i,k,j,4)+
+     *                            wzcan(i,k,j,3)+wzcan(i,k,j,1)
+                     wzrrx=wzcan(i,k,j,3)+wzcan(i,k,j,1)
+                     wzrss=wzrrx*fwsszr
+                     wzcan(i,k,j,4)=0.0
+                     wzcan(i,k,j,3)=0.0
+                     wzcan(i,k,j,1)=0.0
+                     wzcan(i,k,j,7)=wzcan(i,k,j,7)+wzcan(i,k,j,6)+
+     *                              wzcan(i,k,j,2)
+                     wzcan(i,k,j,6)=0.0
+                     wzcan(i,k,j,2)=0.0
+                     if(k.ne.2)then
+                        if(sumss6.ge.1.0e-20)then
+                           do 221 m=1,3
+                              fss(m)=wsscbb(i,j,m,2)/sumss6
+                              wssi=min(fss(m)*wzrss,wsscbb(i,j,m,2))
+                              wsscan(i,k,j,m,1)=wsscan(i,k,j,m,1)+wssi
+                              wsscbb(i,j,m,2)=
+     *                                   max(wsscbb(i,j,m,2)-wssi,0.0)
+  221                         continue
+                        end if
+                     else
+                        if(smss6o.ge.1.0e-20)then
+                           do 223 m=1,3
+                              fss(m)=wsscno(i,j,m,2)/smss6o
+                              wssi=min(fss(m)*wzrss,wsscno(i,j,m,2))
+                              wsscan(i,k,j,m,1)=wsscan(i,k,j,m,1)+wssi
+                              wsscno(i,j,m,2)=
+     *                                   max(wsscno(i,j,m,2)-wssi,0.0)
+  223                         continue
+                        end if
+                     end if
+                     sum(1)=0.0
+                     sum(2)=0.0
+                     sum(3)=0.0
+                     sum(4)=0.0
+                     sum(1)=sum(1)+wzcan(i,k,j,1)+wzcan(i,k,j,2)
+                     sum(2)=sum(2)+wzcan(i,k,j,3)
+                     do 225 m=1,2
+                        do 225 l=1,11
+  225                      sum(m+2)=sum(m+2)+wsscan(i,k,j,l,m)
+                     sumss5=wzcan(i,k,j,4)+wzcan(i,k,j,6)+wzcan(i,k,j,5)
+     *                     +wzcan(i,k,j,7)
+                     sumss6=wsscbb(i,j,1,2)+wsscbb(i,j,2,2)+
+     *                      wsscbb(i,j,3,2)
+                     smss6o=wsscno(i,j,1,2)+wsscno(i,j,2,2)+
+     *                      wsscno(i,j,3,2)
+                  end if
+               end if
+            end if
+            delt=tblk(i,k,j,5)-tmelt
+            if(delt.gt.0.0)then
+               dubox=(sum(1)+sum(2))*cpzmel*delt
+               dumelx=wzcan(i,k,j,1)*hfzirc
+               if(ifsszr.eq.1)then
+                  dumelx=dumelx+fwsszr*wzcan(i,k,j,1)*hfssb
+               end if
+               if(abs(sum(1)).lt.1.0e-20)then
+                  tbox(i,k,j)=tblk(i,k,j,5)
+               else if(dubox.gt.dumelx.or.wzcan(i,k,j,1).lt.1.0e-15)then
+                  w2t1=wzcan(i,k,j,1)
+                  wzcan(i,k,j,3)=wzcan(i,k,j,3)+wzcan(i,k,j,1)
+                  wzcan(i,k,j,1)=0.0
+                  wzcan(i,k,j,5)=wzcan(i,k,j,5)+wzcan(i,k,j,4)+
+     *                           wzcan(i,k,j,3)
+                  wzcan(i,k,j,3)=0.0
+                  wzcan(i,k,j,4)=0.0
+                  wzcan(i,k,j,7)=wzcan(i,k,j,7)+wzcan(i,k,j,2)+
+     *                           wzcan(i,k,j,6)
+                  wzcan(i,k,j,2)=0.0
+                  wzcan(i,k,j,6)=0.0
+                  fboxm(i,k,j)=1.0
+                  if(k.ne.2)then
+                     if(ifsszr.eq.1.and.sumss6.ge.1.0e-20)then
+                        do 226 m=1,3
+                           fss(m)=wsscbb(i,j,m,2)/sumss6
+                           wssi=min(fss(m)*w2t1,wsscbb(i,j,m,2))
+                           wsscan(i,k,j,m,1)=wsscan(i,k,j,m,1)+wssi
+                           wsscbb(i,j,m,2)=
+     *                             max(wsscbb(i,j,m,2)-wssi,0.0)
+  226                      continue
+                     end if
+                  else
+                     if(ifsszr.eq.1.and.smss6o.ge.1.0e-20)then
+                        do 227 m=1,3
+                           fss(m)=wsscno(i,j,m,2)/smss6o
+                           wssi=min(fss(m)*w2t1,wsscno(i,j,m,2))
+                           wsscan(i,k,j,m,1)=wsscan(i,k,j,m,1)+wssi
+                           wsscno(i,j,m,2)=max(wsscno(i,j,m,2)-wssi,0.0)
+  227                      continue
+                     end if
+                  end if
+                  dubox=dubox-dumelx
+                  if(sum(1)+sum(2).ge.1.0e-20)then
+                     delt=dubox/((sum(1)+sum(2))*cpzmel)
+                  else
+                     delt=0.0
+                  end if
+                  if(abs(sumss5+sum(3)+sum(4)).lt.1.0e-20)then
+                     twscan(i,k,j)=
+     *                  max(min(tmlszr+delt,tblk(i,k,j,5)),tmlszr)
+                  else
+                     tnew=(twscan(i,k,j)*(sumss5*cpzmel+(sum(3)+sum(4))*
+     *                cpsmel)+(tmlszr+delt)*(sum(1)+sum(2))*cpzmel)/
+     *                    ((sum(3)+sum(4))*cpsmel+
+     *                    (sum(1)+sum(2)+sumss5)*cpzmel)
+                     twscan(i,k,j)=
+     *                  max(min(tnew,tblk(i,k,j,5)),tmlszr)
+                  end if
+                  tblk(i,k,j,6)=twscan(i,k,j)
+                  tbox(i,k,j)=twscan(i,k,j)
+                  tblk(i,k,j,5)=tbox(i,k,j)
+               else
+                  w1t3=dubox/hfzirc
+                  if(ifsszr.eq.1)then
+                     wmelt=dubox/(wsszr*hfzirc+(1.0-wsszr)*hfssb)
+                     w1t3=wsszr*wmelt
+                     w2t1=wmelt-w1t3
+                  end if
+                  w1t3z=min(w1t3,wzcan(i,k,j,1))
+                  wzcan(i,k,j,3)=wzcan(i,k,j,3)+w1t3z
+                  wzcan(i,k,j,1)=max(wzcan(i,k,j,1)-w1t3z,0.0)
+                  w2t7z=min(fwzrro*w1t3z,wzcan(i,k,j,2))
+                  wzcan(i,k,j,7)=wzcan(i,k,j,7)+w2t7z
+                  wzcan(i,k,j,2)=max(wzcan(i,k,j,2)-w2t7z,0.0)
+                  wzcan(i,k,j,5)=wzcan(i,k,j,5)+wzcan(i,k,j,3)
+                  wzcan(i,k,j,3)=0.0
+                  if(wzcan(i,k,j,1).lt.1.0e-20)then
+                     wzcan(i,k,j,7)=wzcan(i,k,j,7)+wzcan(i,k,j,2)
+                     wzcan(i,k,j,2)=0.0
+                     fboxm(i,k,j)=1.0
+                  end if
+                  if(k.ne.2)then
+                     if(ifsszr.eq.1.and.sumss6.ge.1.0e-20)then
+                        do 222 m=1,3
+                           fss(m)=wsscbb(i,j,m,2)/sumss6
+                           wssi=min(fss(m)*w2t1,wsscbb(i,j,m,2))
+                           wsscan(i,k,j,m,1)=wsscan(i,k,j,m,1)+wssi
+                           wsscbb(i,j,m,2)=
+     *                                   max(wsscbb(i,j,m,2)-wssi,0.0)
+  222                      continue
+                     end if
+                  else
+                     if(ifsszr.eq.1.and.smss6o.ge.1.0e-20)then
+                        do 224 m=1,3
+                           fss(m)=wsscno(i,j,m,2)/smss6o
+                           wssi=min(fss(m)*w2t1,wsscno(i,j,m,2))
+                           wsscan(i,k,j,m,1)=wsscan(i,k,j,m,1)+wssi
+                           wsscno(i,j,m,2)=
+     *                                   max(wsscno(i,j,m,2)-wssi,0.0)
+  224                      continue
+                     end if
+                  end if
+                  if(abs(sumss5+sum(3)+sum(4)).lt.1.0e-20)then
+                     twscan(i,k,j)=tmlszr
+                  else
+                     tnew=(twscan(i,k,j)*(sumss5*cpzmel+(sum(3)+sum(4))*
+     *                    cpsmel)+tmlszr*(w1t3z+w2t7z)*cpzmel)/
+     *                    ((sum(3)+sum(4))*cpsmel+
+     *                    (w1t3z+w2t7z+sumss5)*cpzmel)
+                     twscan(i,k,j)=
+     *                  max(min(tnew,tblk(i,k,j,5)),tmlszr)
+                  endif
+                  tblk(i,k,j,6)=twscan(i,k,j)
+                  tbox(i,k,j)=twscan(i,k,j)
+                  tblk(i,k,j,5)=tbox(i,k,j)
+               end if
+            else
+               if(tblk(i,k,j,5).ge.teutec.and.wzcan(i,k,j,3).ge.1.0e-20)
+     *            go to 228
+               delt=-delt
+               dubox=(sum(1)+sum(2))*cpzmel*delt
+               dumelx=wzcan(i,k,j,3)*hfzirc
+               if(abs(sum(2)).lt.1.0e-20)then
+                  tbox(i,k,j)=tblk(i,k,j,5)
+               else if(dubox.gt.dumelx.or.wzcan(i,k,j,3).lt.1.0e-15)then
+                  wzcan(i,k,j,1)=wzcan(i,k,j,1)+wzcan(i,k,j,3)
+                  wzcan(i,k,j,3)=0.0
+                  if(sum(1)+sum(2).ge.1.0e-20)then
+                     delt=(dubox-dumelx)/((sum(1)+sum(2))*cpzmel)
+                  else
+                     delt=0.0
+                  end if
+                  tbox(i,k,j)=
+     *                  min(max(tmlszr-delt,tblk(i,k,j,5)),tmlszr)
+                  tblk(i,k,j,5)=tbox(i,k,j)
+               else
+                  w3t1=dubox/hfzirc
+                  wzcan(i,k,j,1)=wzcan(i,k,j,1)+
+     *                           min(w3t1,wzcan(i,k,j,3))
+                  wzcan(i,k,j,3)=max(wzcan(i,k,j,3)-w3t1,0.0)
+                  tbox(i,k,j)=tmlszr
+                  tblk(i,k,j,5)=tbox(i,k,j)
+               end if
+            end if
+      end if
+!
+!-**-interstitial relocated material (node 4 of blockage model)
+!
+  228 if(k.eq.2)go to 308
+      swf=0.0
+      if(icb(i,1,j).eq.0)swf=swf+wf(1,j)
+      if(icb(i,2,j).eq.0)swf=swf+wf(2,j)
+      if(icb(i,3,j).eq.0)swf=swf+wf(3,j)
+      swf=1.0-swf
+      do 229 m=1,2
+         do 229 l=1,11
+  229       wsscbo(l,m)=wsscbb(i,j,l,m)
+      call bkmlt2(i,k,j,4,swf,wsscbo)
+!
+!-**- control blade (nodes 1-3 of blockage)
+!
+      sum(1)=0.0
+      sum(2)=0.0
+      do 230 m=1,2
+         do 230 l=1,7
+  230       sum(m)=sum(m)+wsscb(i,j,l,m)
+      sum(1)=sum(1)+wfe3o(i,j)+wfe3i(i,j)
+      sum(2)=sum(2)+wfe2o(i,j)+wfe2i(i,j)
+      sumss1=wsscb(i,j,1,1)+wsscb(i,j,2,1)+wsscb(i,j,3,1)+
+     *       wfe3o(i,j)+wfe3i(i,j)
+      sumss2=wsscb(i,j,1,2)+wsscb(i,j,2,2)+wsscb(i,j,3,2)+
+     *       wfe2o(i,j)+wfe2i(i,j)
+      sumss3=wb4c(i,j)+wb2o3(i,j)+wb(i,j)+wc(i,j)
+!
+!----control blade outer stainless steel sheath (node 3)
+!
+      if(icb(i,3,j).eq.0)then
+         call bkmlt2(i,k,j,3,wf(3,j),wsscbo)
+      else
+         delt=tblk(i,k,j,3)-tmelcb
+         if(delt.le.0.0)then
+            tcb3(i,j)=tblk(i,k,j,3)
+         else
+            ducb=sum(1)*cpsmel*delt
+            dumelx=sumss1*hfssb
+            if(ducb.ge.dumelx.or.sumss1.lt.1.0e-15)then
+               do 240 l=1,7
+                  wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wsscb(i,j,l,1)
+  240             wsscb(i,j,l,1)=0.0
+               wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfe3o(i,j)+wfe3i(i,j)
+               wfe3o(i,j)=0.0
+               wfe3i(i,j)=0.0
+               ducb=ducb-dumelx
+               if(sum(1).ge.1.0e-20)then
+                  delt=ducb/(sum(1)*cpsmel)
+               else
+                  delt=0.0
+               end if
+               tcb3(i,j)=max(min(tmelcb+delt,tblk(i,k,j,3)),tmelcb)
+               tblk(i,k,j,3)=tcb3(i,j)
+               icb(i,3,j)=0
+            else
+               w1t3=ducb/hfssb
+               fss(1)=(wsscb(i,j,1,1)+wfe3o(i,j)+wfe3i(i,j))/sumss1
+               fss(2)=wsscb(i,j,2,1)/sumss1
+               fss(3)=wsscb(i,j,3,1)/sumss1
+               wfetm=fss(1)*w1t3
+               if(wfetm.le.wfe3o(i,j))then
+                  wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfetm
+                  wfe3o(i,j)=max(wfe3o(i,j)-wfetm,0.0)
+               else
+                  wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfe3o(i,j)
+                  wfetm=wfetm-wfe3o(i,j)
+                  wfe3o(i,j)=0.0
+                  if(wfetm.le.wfe3i(i,j))then
+                     wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfetm
+                     wfe3i(i,j)=max(wfe3i(i,j)-wfetm,0.0)
+                  else
+                     wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfe3i(i,j)
+                     wfetm=wfetm-wfe3i(i,j)
+                     wfe3i(i,j)=0.0
+                     if(wfetm.le.wsscb(i,j,1,1))then
+                        wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfetm
+                        wsscb(i,j,1,1)=max(wsscb(i,j,1,1)-wfetm,0.0)
+                     else
+                        wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wsscb(i,j,1,1)
+                        wsscb(i,j,1,1)=0.0
+                     end if
+                  end if
+               end if
+               wcrtm=fss(2)*w1t3
+               if(wcrtm.le.wsscb(i,j,2,1))then
+                  wsscbb(i,j,2,1)=wsscbb(i,j,2,1)+wcrtm
+                  wsscb(i,j,2,1)=max(wsscb(i,j,2,1)-wcrtm,0.0)
+               else
+                  wsscbb(i,j,2,1)=wsscbb(i,j,2,1)+wsscb(i,j,2,1)
+                  wsscb(i,j,2,1)=0.0
+               end if
+               wnitm=fss(3)*w1t3
+               if(wnitm.le.wsscb(i,j,3,1))then
+                  wsscbb(i,j,3,1)=wsscbb(i,j,3,1)+wnitm
+                  wsscb(i,j,3,1)=max(wsscb(i,j,3,1)-wnitm,0.0)
+               else
+                  wsscbb(i,j,3,1)=wsscbb(i,j,3,1)+wsscb(i,j,3,1)
+                  wsscb(i,j,3,1)=0.0
+               end if
+               woxtm=fwssoo*w1t3
+               sumsox=sum(1)-sumss1
+               if(sumsox.gt.0.0)then
+                  if(woxtm.ge.sumsox)then
+                     do 250 l=4,7
+                        wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wsscb(i,j,l,1)
+  250                   wsscb(i,j,l,1)=0.0
+                  else
+                     do 260 l=4,7
+                        fss(l)=wsscb(i,j,l,1)/sumsox
+                        wssi=min(fss(l)*woxtm,wsscb(i,j,l,1))
+                        wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wssi
+  260                   wsscb(i,j,l,1)=max(wsscb(i,j,l,1)-wssi,0.0)
+                  end if
+               end if
+!              sum1=0.0
+!              do 270 l=1,7
+! 270             sum1=sum1+wsscb(i,j,l,1)
+!              if(sum1.lt.1.0e-15)then
+!                 icb(i,3,j)=0
+!              end if
+               tcb3(i,j)=tmelcb
+               tblk(i,k,j,3)=tcb3(i,j)
+            end if
+         end if
+      end if
+!
+!----control blade absorber tube stainless steel sheath (node 2)
+!
+      if(icb(i,2,j).eq.0)then
+         call bkmlt2(i,k,j,2,wf(2,j),wsscbo)
+      else
+         delt=tblk(i,k,j,2)-tmelcb
+         if(delt.le.0.0)then
+            tcb2(i,j)=tblk(i,k,j,2)
+         else
+            ducb=sum(2)*cpsmel*delt
+            dumelx=sumss2*hfssb
+            icb(i,2,j)=2
+            if(ducb.ge.dumelx.or.sumss2.lt.1.0e-15)then
+               do 280 l=1,7
+                  wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wsscb(i,j,l,2)
+  280             wsscb(i,j,l,2)=0.0
+               wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfe2o(i,j)+wfe2i(i,j)
+               wfe2o(i,j)=0.0
+               wfe2i(i,j)=0.0
+               icb(i,2,j)=0
+               fcbm(i,j)=1.0
+               ducb=ducb-dumelx
+               if(sum(2).ge.1.0e-20)then
+                  delt=ducb/(sum(2)*cpsmel)
+               else
+                  delt=0.0
+               end if
+               tblk(i,k,j,2)=max(min(tmelcb+delt,tblk(i,k,j,2)),tmelcb)
+               tcb2(i,j)=tblk(i,k,j,2)
+            else
+               w1t3=ducb/hfssb
+               fss(1)=(wsscb(i,j,1,2)+wfe2o(i,j)+wfe2i(i,j))/sumss2
+               fss(2)=wsscb(i,j,2,2)/sumss2
+               fss(3)=wsscb(i,j,3,2)/sumss2
+               wfetm=fss(1)*w1t3
+               if(wfetm.le.wfe2o(i,j))then
+                  wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfetm
+                  wfe2o(i,j)=max(wfe2o(i,j)-wfetm,0.0)
+               else
+                  wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfe2o(i,j)
+                  wfetm=wfetm-wfe2o(i,j)
+                  wfe2o(i,j)=0.0
+                  if(wfetm.le.wfe2i(i,j))then
+                     wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfetm
+                     wfe2i(i,j)=max(wfe2i(i,j)-wfetm,0.0)
+                  else
+                     wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfe2i(i,j)
+                     wfetm=wfetm-wfe2i(i,j)
+                     wfe2i(i,j)=0.0
+                     if(wfetm.le.wsscb(i,j,1,2))then
+                        wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfetm
+                        wsscb(i,j,1,2)=max(wsscb(i,j,1,2)-wfetm,0.0)
+                     else
+                        wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wsscb(i,j,1,2)
+                        wsscb(i,j,1,2)=0.0
+                     end if
+                  end if
+               end if
+               wcrtm=fss(2)*w1t3
+               if(wcrtm.le.wsscb(i,j,2,2))then
+                  wsscbb(i,j,2,1)=wsscbb(i,j,2,1)+wcrtm
+                  wsscb(i,j,2,2)=max(wsscb(i,j,2,2)-wcrtm,0.0)
+               else
+                  wsscbb(i,j,2,1)=wsscbb(i,j,2,1)+wsscb(i,j,2,2)
+                  wsscb(i,j,2,2)=0.0
+               end if
+               wnitm=fss(3)*w1t3
+               if(wnitm.le.wsscb(i,j,3,2))then
+                  wsscbb(i,j,3,1)=wsscbb(i,j,3,1)+wnitm
+                  wsscb(i,j,3,2)=max(wsscb(i,j,3,2)-wnitm,0.0)
+               else
+                  wsscbb(i,j,3,1)=wsscbb(i,j,3,1)+wsscb(i,j,3,2)
+                  wsscb(i,j,3,2)=0.0
+               end if
+               woxtm=fwssoo*w1t3
+               sumsox=sum(2)-sumss2
+               if(sumsox.gt.0.0)then
+                  if(woxtm.ge.sumsox)then
+                     do 290 l=4,7
+                        wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wsscb(i,j,l,2)
+  290                   wsscb(i,j,l,2)=0.0
+                  else
+                     do 300 l=4,7
+                        fss(l)=wsscb(i,j,l,2)/sumsox
+                        wssi=min(fss(l)*woxtm,wsscb(i,j,l,2))
+                        wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wssi
+  300                   wsscb(i,j,l,2)=max(wsscb(i,j,l,2)-wssi,0.0)
+                  end if
+               end if
+               tcb2(i,j)=tmelcb
+               tblk(i,k,j,2)=tcb2(i,j)
+            end if
+         end if
+      end if
+!
+!----control blade absorber material (node 1)
+!
+      if(icb(i,1,j).eq.0)then
+         call bkmlt2(i,k,j,1,wf(1,j),wsscbo)
+      else
+         delt=tblk(i,k,j,1)-tmelcb
+         if(delt.le.0.0)then
+            tcb1(i,j)=tblk(i,k,j,1)
+         else
+            ducb=sumss3*cpsmel*delt
+            dumelx=sumss3*hfssb
+            if(ducb.ge.dumelx .or. sumss3.lt.1.0e-15)then
+               icb(i,1,j)=0
+               wsscbb(i,j,8,1)=wsscbb(i,j,8,1)+wb4c(i,j)
+               wsscbb(i,j,9,1)=wsscbb(i,j,9,1)+wb2o3(i,j)
+               wsscbb(i,j,10,1)=wsscbb(i,j,10,1)+wb(i,j)
+               wsscbb(i,j,11,1)=wsscbb(i,j,11,1)+wc(i,j)
+               wb4c(i,j)=0.0
+               wb2o3(i,j)=0.0
+               wb(i,j)=0.0
+               wc(i,j)=0.0
+               ducb=ducb-dumelx
+               if(sumss3.ge.1.0e-20)then
+                  delt=ducb/(sumss3*cpsmel)
+               else
+                  delt=0.0
+               end if
+               tblk(i,k,j,1)=max(min(tmelcb+delt,tblk(i,k,j,1)),tmelcb)
+               tcb1(i,j)=tblk(i,k,j,1)
+            else
+               w1t3=ducb/hfssb
+               fss(1)=wb4c(i,j)/sumss3
+               fss(2)=wb2o3(i,j)/sumss3
+               fss(3)=wb(i,j)/sumss3
+               fss(4)=wc(i,j)/sumss3
+               wssi=min(fss(1)*w1t3,wb4c(i,j))
+               wsscbb(i,j,8,1)=wsscbb(i,j,8,1)+wssi
+               wb4c(i,j)=max(wb4c(i,j)-wssi,0.0)
+               wssi=min(fss(2)*w1t3,wb2o3(i,j))
+               wsscbb(i,j,9,1)=wsscbb(i,j,9,1)+wssi
+               wb2o3(i,j)=max(wb2o3(i,j)-wssi,0.0)
+               wssi=min(fss(3)*w1t3,wb(i,j))
+               wsscbb(i,j,10,1)=wsscbb(i,j,10,1)+wssi
+               wb(i,j)=max(wb(i,j)-wssi,0.0)
+               wssi=min(fss(4)*w1t3,wc(i,j))
+               wsscbb(i,j,11,1)=wsscbb(i,j,11,1)+wssi
+               wc(i,j)=max(wc(i,j)-wssi,0.0)
+               tblk(i,k,j,1)=tmelcb
+               tcb1(i,j)=tblk(i,k,j,1)
+            end if
+         end if
+      end if
+      return
+!
+!-**-radial node 6 (tip of control blade, relocated material only)
+!
+  308 sum(3)=0.0
+      sum(4)=0.0
+      do 310 m=1,2
+         do 310 l=1,11
+            wsscbo(l,m)=wsscno(i,j,l,m)
+  310       sum(m+2)=sum(m+2)+wsscno(i,j,l,m)
+      sumss4=wsscno(i,j,1,2)+wsscno(i,j,2,2)+wsscno(i,j,3,2)
+      sumss3=wsscno(i,j,1,1)+wsscno(i,j,2,1)+wsscno(i,j,3,1)
+      do 400 kc=4,1,-1
+      frac=wf(kc,j)
+      if(abs(sum(3)+sum(4)).ge.1.0e-20)then
+         delt=tblk(i,k,j,kc)-tmelcb
+         if(delt.gt.0.0)then
+            dusscb=(sum(3)+sum(4))*cpsmel*delt*frac
+            dumelx=sumss4*hfssb*frac
+            if(abs(sum(4)).lt.1.0e-20)then
+            else if(dusscb.ge.dumelx.or.sumss4.lt.1.0e-15)then
+               do 320 l=1,11
+                  wssi=min(frac*wsscbo(l,2),wsscno(i,j,l,2))
+                  wsscno(i,j,l,1)=wsscno(i,j,l,1)+wssi
+  320             wsscno(i,j,l,2)=max(wsscno(i,j,l,2)-wssi,0.0)
+               dusscb=dusscb-dumelx
+               if(sum(3)+sum(4).ge.1.0e-20)then
+                  delt=dusscb/((sum(3)+sum(4))*cpsmel*frac)
+               else
+                  delt=0.0
+               end if
+               tnew=max(min(tmelcb+delt,tblk(i,k,j,kc)),tmelcb)
+               tblk(i,k,j,kc)=tnew
+            else
+               w2t1=dusscb/hfssb
+               do 330 l=1,3
+                  fss(l)=wsscbo(l,2)/sumss4
+                  wssi=
+     *            min(fss(l)*w2t1,wsscbo(l,2)*frac,wsscno(i,j,l,2))
+                  wsscno(i,j,l,1)=wsscno(i,j,l,1)+wssi
+                  wsscno(i,j,l,2)=max(wsscno(i,j,l,2)-wssi,0.0)
+  330             continue
+               woxtm=fwssoo*w2t1
+               sumsox=(sum(4)-sumss4)*frac
+               if(sumsox.gt.0.0)then
+                  if(woxtm.ge.sumsox)then
+                     do 340 l=4,11
+                        wssi=min(frac*wsscbo(l,2),wsscno(i,j,l,2))
+                        wsscno(i,j,l,1)=wsscno(i,j,l,1)+wssi
+  340                  wsscno(i,j,l,2)=max(wsscno(i,j,l,2)-wssi,0.0)
+                  else
+                     do 350 l=4,11
+                        fss(l)=wsscbo(l,2)*frac/sumsox
+                        wssi=
+     *            min(fss(l)*woxtm,wsscno(i,j,l,2),wsscbo(l,2)*frac)
+                        wsscno(i,j,l,1)=wsscno(i,j,l,1)+wssi
+                       wsscno(i,j,l,2)=max(wsscno(i,j,l,2)-wssi,0.0)
+  350                   continue
+                  end if
+               end if
+               tblk(i,k,j,kc)=tmelcb
+            end if
+         else
+            delt=-delt
+            dusscb=(sum(3)+sum(4))*cpsmel*delt*frac
+            dumelx=sumss3*hfssb*frac
+            if(abs(sum(3)).lt.1.0e-20)then
+            else if(dusscb.ge.dumelx.or.sumss3.lt.1.0e-15)then
+               do 360 l=1,11
+                  wssi=min(frac*wsscbo(l,1),wsscno(i,j,l,1))
+                  wsscno(i,j,l,2)=wsscno(i,j,l,2)+wssi
+  360             wsscno(i,j,l,1)=max(wsscno(i,j,l,1)-wssi,0.0)
+               dusscb=dusscb-dumelx
+               if(sum(3)+sum(4).ge.1.0e-20)then
+                  delt=dusscb/((sum(3)+sum(4))*cpsmel*frac)
+               else
+                  delt=0.0
+               end if
+               tnew=min(max(tmelcb-delt,tblk(i,k,j,kc)),tmelcb)
+               tblk(i,k,j,kc)=tnew
+            else
+               w1t2=dusscb/hfssb
+               do 370 l=1,3
+                  fss(l)=wsscbo(l,1)/sumss3
+                  wssi=
+     *            min(fss(l)*w1t2,wsscno(i,j,l,1),wsscbo(l,1)*frac)
+                  wsscno(i,j,l,2)=wsscno(i,j,l,2)+wssi
+                  wsscno(i,j,l,1)=max(wsscno(i,j,l,1)-wssi,0.0)
+  370             continue
+               woxtm=fwssoo*w1t2
+               sumsox=(sum(3)-sumss3)*frac
+               if(sumsox.gt.0.0)then
+                  if(woxtm.ge.sumsox)then
+                     do 380 l=4,11
+                        wssi=min(frac*wsscbo(l,1),wsscno(i,j,l,1))
+                        wsscno(i,j,l,2)=wsscno(i,j,l,2)+wssi
+  380                  wsscno(i,j,l,1)=max(wsscno(i,j,l,1)-wssi,0.0)
+                  else
+                     do 390 l=4,11
+                        fss(l)=wsscbo(l,1)*frac/sumsox
+                        wssi=
+     *            min(fss(l)*woxtm,wsscno(i,j,l,1),wsscbo(l,1)*frac)
+                        wsscno(i,j,l,2)=wsscno(i,j,l,2)+wssi
+                       wsscno(i,j,l,1)=max(wsscno(i,j,l,1)-wssi,0.0)
+  390                   continue
+                  end if
+               end if
+               tblk(i,k,j,kc)=tmelcb
+            end if
+         end if
+      end if
+  400 continue
+      twscbb(i,k,j)=tblk(i,k,j,4)
+      return
+      end
+*endif

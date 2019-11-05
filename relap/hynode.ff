@@ -1,0 +1,349 @@
+       module hynmod
+!  Contains data base for generating hydrodynamic noding information.
+!
+!  Any changes to the database will probably require changes to the
+!  contained subroutines that read and write this data to the rstplt
+!  file.
+!
+!  Section for geometry data defining volume and junction network for
+!  each hydrodynamic system.
+       integer, parameter, private :: kr=selected_real_kind(12,200)
+       type node
+! Space coordinates of volumes and junctions.
+         real cxr(3)
+! Pixel coordinates of volumes and junctions.
+         integer wxr(3)
+! Index to data for volumes and junctions.
+         integer indx
+! Flags for this data.
+         integer opt
+!  Bit 1 (1)   0 if volume, 1 if junction.
+!  Bit 2 (2)   0 if no closure, 1 if closure.
+!  Bit 3 (4)   0 if no error in closure, 1 if error in closure.
+!  Bit 4 (8)   0 if node not highlighted, 1 if it is highlighted.
+       end type node
+!
+       type hynode
+! Minimum coordinate value in system.
+         real mins
+! Maximum coordinate value in system.
+         real maxs
+! Number of entries in glr array in system.
+         integer ntries
+         type (node), pointer :: glr(:)
+       end type hynode
+!
+!  Number of hydrodynamic systems.
+       integer hynnsys
+!  Save indexes of voldat and jundat files.
+       integer vindxold,jindxold
+!  Node information.
+       type (hynode), allocatable :: hyn(:)
+!
+!  Section for intercommunication between subroutines.
+       real hx,mvmatrix(16),projmatrix(16),sinc(0:1),size(0:1),
+     & tx(0:1),ty(0:1),tz(0:1),viewa(0:1),viewe(0:1),viewt(0:1),
+     & vjconv,wconv,wx
+       integer :: chindx,displno=0,fnum,intyp,ihx,isq,isvv,itemindx,
+     & itemnum,iwx,ncounto,runflg,viewport(4),vjdatax,vjflag,
+     & vjnum,wptr
+       logical gstop,gtype,onestep,valuep(0:1)
+       character bcd*80,chfld2*10,vala(0:1)*8,vjlabl*64,
+     & wchfld*20,wlabl*64
+!
+!  displno  Display number.
+!  itemindx Index to data for quantity in itemnum.
+!  itemnum  Number of some quantity to be displayed such as volume
+!           number.
+!  ncounto  Advancement count at last display.
+!  runflg   0 if paused, 1 if running, 2 if completed.
+!  vjflag bit usage.
+!  Bit 1  (1)     0 if volume, 1 if junction.
+!  Bit 2  (2)     0 if no display value, 1 if display value or one is
+!                 being entered.
+!  Bit 3  (4)     0 if no display label exists, 1 if display label
+!                 exists.
+!  Bit 4  (8)     0 if display is not volno or junno, 1 if it is.
+!  Bit 5  (16)    0 if highlight was entered, 1 if find and highlight 
+!                 was entered.
+!  Bit 6  (32)    0 if neither hightlight or find and highlight on, 1 if
+!                 either on.
+!  Bit 7  (64)    0 if blank or comma has not been entered for watch
+!                 variable, 1 if it has.
+!  Bit 8  (128)   0 if no watch variable, 1 if watch variable has been
+!                 entered or is being entered.
+!  Bit 9  (256)   0 if no watch variable units defined to print, 1 if
+!                 watch variable units defined for printing.
+!  Bit 10 (512)   0 if the display variable is not volerr, 1 if it is.
+!  gstop    True if gui trip logic indicates a stop, false otherwise.
+!  gtype    False if called from input processing (rnewp) or true if
+!           called during advancements (trnctl).
+!  onestep  True if code stop after each advancement, false otherwise.
+!  vala     Holds name of variable being displayed.
+!
+!  Section for couple logic.
+       integer cplindx,cplindx2,cplmaxi,cplmaxj,cplmaxnp,cplsiz,cplvalt
+       real cplmins,cplmaxs,cpluconv
+       real(kr), allocatable :: cplr(:),cplz(:),cpler(:,:),cplez(:,:)
+       integer, allocatable :: cplimin(:),cplimax(:),cplnod(:,:),
+     & cplww(:,:),cpleww(:,:,:)
+       character cpllabl*64
+!  cplindx   Index for variable display.
+!  cplindx2  Index for Couple node temperatures.
+!  cplmaxi  Number of nodes in x direction is square mesh.
+!  cplmaxj  Number of nodes in y direction is square mesh.
+!  cplmaxnp Number of nodes.
+!  cplsiz   Number of words in write of couple mesh information.
+!  cpluconv Units conversion constant.
+!  cplvalt  Variable code for value display.
+!  cplr     Radius of node in actual mesh.
+!  cplz     Elevation of node in actual mesh.
+!  cpler    Radius of finite element in actual mesh.
+!  cplez    Elevation of finite element in actual mesh.
+!  cplmins  Minimum value over both radius and elevations of actual
+!           mesh.
+!  cplmaxs  Maximum value over both radius and elevations of actual
+!           mesh.
+!  cplimin  Minimum used value of i for given j in square mesh.
+!  cplimax  Maximum used value of i for given j in square mesh.
+!  In Scdap applications, all i values are used, and all cplimin values
+!  are 1 and all cplimax values are the cplmaxi.
+!  cplnod   Contains node number at i,j mesh if node is used, 0 if node
+!           is not used. In Scdap applications, all nodes are used.
+!  cplww    Raster coordinates of node.
+!  cpleww   Raster coordinates of element center.
+!
+!  Section for guitrip logic.
+       type gtrip
+         real con,gtimeof
+         integer gnum(2),gtrpnum,op,opt,vptr(2),vtyp(2)
+         logical val
+         character bcd*80
+       end type gtrip
+!
+       integer, parameter :: mxtrps=20
+       integer :: ngtrips=0
+       type (gtrip) gtrp(mxtrps+1)
+       character :: chop(9)*3=
+     & (/'lt','le','eq','ne','ge','gt','and','or','xor'/)
+!
+       integer fholdi,fhoption,fhoption2,fhsnum,fhsnum2,mmenu(0:6),
+     & nwmeshpts,smenu(16),swmenu(0:11),winno(3),gmenu(1),gsmenu(12),
+     & gmmenu(3),grwin(10),gdmenu(11)
+!  gmenu -> interactive graph menu counter.
+!  gmmenu -> interactive graph main menus counter.
+!  gsmenu -> interactive graph submenus counter.
+!  grwin -> interactive graph windows.
+!  gdmenu -> interactive graph default variables menu.
+       integer, allocatable :: fhsmenu(:),snmenu(:),scdmenu(:),
+     & scdcmp(:),scdgmn(:),scdgmx(:),scdgma(:,:,:),scdgmr(:,:,:),
+     & rldgmv(:,:),rldgmj(:,:)
+!  scdmenu -> scdap system for tables
+!  scdcmp -> scdap components menu for tables
+!  scdgmn -> scdap nodal var. menu for 2d-graph
+!  scdgmx -> scdap axially var. menu for 2d-graph
+!  scdgma -> scdap axial nodes number menu for 2d-graph
+!  scdgmr -> scdap radial nodes menu for 2d-graph
+!  rldgmv -> relap volume number menu for 2d-graph
+       integer, allocatable :: scdc(:),scda(:,:,:),scdaux1(:)
+!  scdc -> scdap default quantities component menu for 2d-graph
+!  scda -> scdap default quantities axial nodes menu for 2d-graph
+!  scdaux1 -> scdap default quantities auxiliar varible 2d-graph menus
+       logical :: infoonce=.true.
+       character hycommand*80,vnohold*10
+       character, parameter :: cpltblv(10)*8=(/'ijnode  ','nnode   ',
+     & 'enode   ','tmpcou  ','afbulk  ','fracml  ','pore    ',
+     & 'powdb   ','oxthk   ','tmltel  '/)
+!
+       real(kr) instrh,instrw
+       real(kr) windw3w,windw3h
+!  instrh  height of instruction window.
+!  instrw  width of instruction window.
+!  windw3h  height of extension window.
+!  windw3w  width of extension window.
+!
+!  SCDAP
+       integer, allocatable :: scdcmpno(:)
+       logical shroud
+!  scdcmpno: SCDAP component numbers (ID).
+!  shroud: flag for shroud components.
+!
+!  Global data for plotting 2d graph
+       integer :: wwg(10), whg(10)
+       integer :: nag, npoints, ntvar = 0
+       integer, target :: ngrvar(10) = 0
+!  wwg -> width of the window
+!  whg -> height of the window   
+!  ipl -> flag for setting interactive plot data
+!  nag -> number of active graphs
+!  npoints -> number of points in the graph (restart-plot records)
+!  ntvar -> number of total required variables for plotting
+!  ngrvar -> number of current plotted variables in each graph
+!
+       real*4, target, allocatable :: idata(:,:,:,:)
+       character, target, allocatable :: lablx(:)*25,lably(:,:)*25,
+     & labll(:,:)*20
+!  Max. values for the x (if no time in the x axe) and y axis 
+       real*4, allocatable :: maxy(:,:), miny(:,:)
+       real*4, target, allocatable :: maxx(:,:), minx(:,:)
+!  maxy(nag,1:2) -> max. of y values for the graph nag and left(1)/right(2) axis.
+!
+!  Variables for setdata
+       character, allocatable :: inames(:,:)*8
+       integer, allocatable :: itabno(:,:), itabl(:,:)
+!  inames -> names of variable
+!  itabno -> type of graph (usually eq to 1)
+!  itabl -> volum, junction or component number
+       logical :: nullvar(10) =.false., newvar =.false.
+!  nullvar -> flag for variables not included in the restart-plot file.
+!  newvar -> flag to indicate when a new variable is added in a graph
+       logical :: ipltf = .false.
+       integer :: rpinx
+!  ipltf -> flag to indicate the first pass throught iplotmd routine
+!  rpinx  -> index of restart-plot file, stored in the first pass throught iplotmd routine
+!
+       type igdt
+         real(4), pointer :: igd
+       end type igdt
+       type lablegend
+         character, pointer :: leg*20
+       end type lablegend
+       type igraph
+         type (igdt), allocatable :: igdata(:,:,:)
+         character, pointer :: labla*25, labll*25, lablr*25 
+         type (lablegend) legend(10)
+       end type igraph
+!  labla -> label abcisa of the graph
+!  labll -> left label ordinates of the graph
+!  lablr -> right label ordinates of the graph
+!  legend -> legend of each variable
+!  igdata -> interactive graph data: pair of values for each variable plotted in
+!            the graph.
+       type (igraph) :: iplotd(10)
+!
+!  Global variables for SCDAP component schemes
+       real :: maxv, minv
+       integer :: mloc
+!  maxv, minv -> max. and min. value for the plotted variables
+!  mloc -> axial node at which are located the max. value of plotted variable
+!
+       contains
+!
+       subroutine hynodread (cpy)
+!  Reads noding display information from restart-plot file.
+!
+       implicit none
+       logical cpy
+       include 'ufiles.h'
+!
+       integer i,iwrd,len
+       type (node), pointer :: glrx(:)
+       character*8 bcdread
+!
+       call hynodclear (-1)
+       read (rstplt) len,iwrd
+       read (rstplt) bcdread,hynnsys,vindxold,jindxold,cplmaxnp
+       if (cpy) then
+         write (stripf) len,iwrd
+         write (stripf) bcdread,hynnsys,vindxold,jindxold,cplmaxnp
+       endif
+       allocate (hyn(hynnsys))
+       read (rstplt) len,iwrd
+       read (rstplt) (hyn(i)%mins,hyn(i)%maxs,hyn(i)%ntries,
+     & i=1,hynnsys)
+       if (cpy) then
+         write (stripf) len,iwrd
+         write (stripf) (hyn(i)%mins,hyn(i)%maxs,hyn(i)%ntries,
+     &   i=1,hynnsys)
+       endif
+       do i = 1,hynnsys
+         allocate (hyn(i)%glr(1:hyn(i)%ntries))
+       enddo
+       do i = 1,hynnsys
+         read (rstplt) len,iwrd
+         glrx => hyn(i)%glr
+         read (rstplt) glrx
+         if (cpy) then
+           write (stripf) len,iwrd
+           write (stripf) glrx
+         endif
+       enddo
+       if (cplmaxnp .ne. 0) then
+         read (rstplt) len,iwrd
+         read (rstplt) cplmaxi,cplmaxj,cplsiz,cplmins,cplmaxs
+         if (cpy) then
+           write (stripf) len,iwrd
+           write (stripf) cplmaxi,cplmaxj,cplsiz,cplmins,cplmaxs
+         endif
+         allocate (cplr(cplmaxnp),cplz(cplmaxnp),
+     &   cpler(cplmaxi-1,cplmaxj-1),cplez(cplmaxi-1,cplmaxj-1),
+     &   cplww(2,cplmaxnp),cpleww(2,cplmaxi-1,cplmaxj-1),
+     &   cplimin(cplmaxj),cplimax(cplmaxj),cplnod(cplmaxi,cplmaxj))
+         read (rstplt) len,iwrd
+         read (rstplt) cplr,cplz,cpler,cplez,cplimin,cplimax,cplnod,
+     &   cplww,cpleww
+         if (cpy) then
+           write (stripf) len,iwrd
+           write (stripf) cplr,cplz,cpler,cplez,cplimin,cplimax,cplnod,
+     &     cplww,cpleww
+         endif
+       endif
+       return
+       end subroutine hynodread
+!
+       subroutine hynodwrite
+!  Writes noding display information to restart-plot file.
+!
+       implicit none
+       include 'ufiles.h'
+!
+       integer i,iwrd,len
+       character*8 :: bcdread='hynode'
+!
+       iwrd = 4
+       inquire (iolength=len) bcdread,hynnsys,vindxold,jindxold,cplmaxnp
+       write (rstplt) len,iwrd
+       write (rstplt) bcdread,hynnsys,vindxold,jindxold,cplmaxnp
+       inquire (iolength=len) (hyn(i)%mins,hyn(i)%maxs,hyn(i)%ntries,
+     & i=1,hynnsys)
+       write (rstplt) len,iwrd
+       write (rstplt) (hyn(i)%mins,hyn(i)%maxs,hyn(i)%ntries,
+     & i=1,hynnsys)
+       do i = 1,hynnsys
+         inquire (iolength=len) hyn(i)%glr
+         write (rstplt) len,iwrd
+         write (rstplt) hyn(i)%glr
+       enddo
+       if (cplmaxnp .ne. 0) then
+         inquire (iolength=len) cplmaxi,cplmaxj,cplsiz,cplmins,cplmaxs
+         write (rstplt) len,iwrd
+         write (rstplt) cplmaxi,cplmaxj,cplsiz,cplmins,cplmaxs
+         inquire (iolength=len) cplr,cplz,
+     &   cpler,cplez,cplimin,cplimax,cplnod,cplww,cpleww
+         write (rstplt) len,iwrd
+         write (rstplt) cplr,cplz,
+     &   cpler,cplez,cplimin,cplimax,cplnod,cplww,cpleww
+       endif
+       return
+       end subroutine hynodwrite
+!
+       subroutine hynodclear (iopt)
+!  Deallocates space for noding data.
+!
+       implicit none
+       integer iopt
+       integer i
+!
+       if (allocated(hyn)) then
+         do i = 1,hynnsys
+           deallocate (hyn(i)%glr)
+         enddo
+         deallocate (hyn)
+       endif
+       if (iopt .eq. -1) then
+         if (allocated(cplr)) deallocate (cplr,cplz,cpler,cplez,cplww,
+     &   cpleww,cplimin,cplimax,cplnod)
+       endif
+       return
+       end subroutine hynodclear
+       end module hynmod

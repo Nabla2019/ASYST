@@ -1,0 +1,423 @@
+*mlist
+*if def,selap
+       subroutine oxdebr (ix, ihsave, igavol, imme, nidtop, ielem,
+     * jelem, elemij, tz, vole, evol, z, afzirc, afu, afss, afsil,
+     * afbc,  afuo2, afzo2, afalu, aflif, afcad, afsoil, wurcel,
+     * wuocel, walcel, woxel2, eoxelm, h2elem, oxdthk, delt, genz,
+     * pors, r, neltop, ncev, numel, maxj, ncevr5, npp)
+c
+c
+c  Cognizant engineer: ewc (krk).
+c
+c  oxdebr calculates the rate of oxidation at the top surface of the
+c  debris bed for molten aluminum or aluminum/uranium debris in contact
+c  with steam c  or water.
+c
+c  Cognizant engineer: ewc (krk).
+c
+c This is a COUPLE ROUTINE
+*in32 ix
+*in32 ihsave
+*in32 igavol
+*in32 imme
+*in32 nidtop
+*in32 ielem
+*in32 jelem
+*in32 elemij
+*in32end
+c
+         implicit none
+c
+c  Calculate rate of oxidation at the top surface of debris
+c  bed for molten aluminum or aluminum/uranium debris in
+c  contact with steam or water.  compute rate of heat generation
+c  due to reaction, the change in thickness of the oxide layer,
+c  and the amount of hydrogen released by the reaction.
+c  note:  subroutine assumes r,z geometry option, npp = 0.
+c
+c  subroutine oxdebr called from subroutine couple.
+c
+c  k.r.katsma, february, 1991
+c
+c  ix       = array of node numbers for each element (1-4),
+c             and if debris node (5)
+c  ihsave   = array of convective nodes adjacent to elements
+c  igavol   = array of offsets to obtain relap5 volumes for
+c             release of debris bed noncondensibles  (gaman)
+c  imme     = array secifying if element is empty, partially
+c             full, or full of debris (0,1,2)
+c  nidtop   = array of elements where top of debris bed is
+c             located
+c  ielem    = value of ith coordinate for lower left node of
+c                     element
+c  jelem    = value of jth coordinate for lower left node of
+c                     element
+c  elemij   = array of element numbers associated with lower
+c                     left coordinates
+c  tz       = temperature at corner nodes of each element
+c  vole     = volume associated with each node of element
+c  evol(n)  = volume per radian of element n (m**3)
+c  z(j)     = height of node j (m)
+c  afzirc   = atomic fraction zirc in element
+c  afu      = atomic fraction uranium in element
+c  afss     = atomic fraction stainless steel in element
+c  afsil    = atomic fraction silver in element
+c  afbc     = atomic fraction of boron-carbide in element
+c  afuo2    = atomic fraction of uranium dioxide in element
+c  afzo2    = atomic fraction of zirc oxide in element
+c  afalu    = atomic fraction of aluminum in element
+c  aflif    = atomic fraction of lithium in element
+c  afcad    = atomic fraction of cadmium in element
+c  afsoil   = atomic fraction of soil in element
+c  wurcel   = mass of uranium in element
+c  wuocel   = mass of uranium oxide in element
+c  walcel   = mass of aluminum in element
+c  woxel2   = total mass of aluminum oxidized in element
+c  eoxelm   = heat generation due to oxidation at top surface
+c             of i-th stack of debris elements
+c  h2elem   = rate of production of hydrogen at top surface
+c             of i-th stack of debris elements
+c  oxdthk   = aluminum oxide thickness of element (m)
+c  delt     = couple time step (sec)
+c  genz      = element heat generation array
+c  pors     = porosity of material in element
+c  r(j)     = radius of node j (m)
+c  neltop   = number of elements through which top of debris
+c             bed passes (number of stacks)
+c  ncev     = number of nodes in convective set * amult
+c  numel    = number of elements in debris bed
+c  maxj     = maximun number of nodes in j direction
+c  ncevr5   = number of nodes in convection set
+c  npp      = geometric code: 0 = r,z; 1 = x,y
+c
+       integer ix(5,*), ihsave(*), igavol(*),
+     #         imme(*), nidtop(*), ielem(*), jelem(*), elemij(*),
+     #         neltop,  ncev, numel, maxj, ncevr5, npp,
+     #         ikk
+       real  tz(*), delt, vole(4,*), evol(*), z(*), afzirc(*),
+     #       afu(*), afss(*), afsil(*), afbc(*), afuo2(*),
+     #       afzo2(*), afalu(*), aflif(*), afcad(*), afsoil(*),
+     #       wurcel(*), wuocel(*), walcel(*), woxel2(*),
+     #       eoxelm(*), h2elem(*), oxdthk(*),
+     #       genz(4,*), pors(*), r(*)
+*call fast
+*call contrl
+*call comctl
+*call fpfast
+*call statec
+*call voldat
+*call ufiles
+*call cons
+*call scntl
+c
+       external  aloxd, zuden1
+c
+       integer l, n, icor, jcor, kcor, lcor, i1, j1, idyn, nl, jj,
+     #         i, ne, iga, nk, nln
+c
+       real  topa, oxdh, h2oxd, tsum, tave, vsum, delz,
+     * totthk, totmas, almas, dtoxwg, wmass, zuden1, height, almass,
+     * fmasox, gmasox, stmlim, alwlim, elden, elmass, width, xlen,
+     # sroxd, woxold, alo2d, frac, uo, co, do, zmax, zmin
+       real rftemp
+c
+c      data for hydrogen from RELAP/MOD3 manual, page 3.2-8
+       data   uo/1.827834e5/, co/10310.75/, do/0.52257/
+c
+       save
+c
+c      calculate buildup of oxidation layer from top element down for
+c      each stack of elements.  compute heat of reaction and release
+c      of hydrogen, and consumption of steam.
+c
+c      loop over the stack of elements containing debris.  number of
+c      stacks given by 'neltop', and the top element of each stack is
+c      stored in array 'nidtop'.
+c
+       if (neltop .eq. 0) return
+c
+       rftemp=300.0
+       do 1000 l = 1,neltop
+       n     = nidtop(l)
+c      check that element contains debris
+       if ( (ix(5,n).ne.1) .or. (imme(n).lt.1) ) go to 1000
+c
+c      calculate area exposed to fluid.
+       icor  = ix(1,n)
+       jcor  = ix(2,n)
+       kcor  = ix(3,n)
+       lcor  = ix(4,n)
+       zmax  = max(z(icor),z(jcor),z(kcor),z(lcor))
+       zmin  = min(z(icor),z(jcor),z(kcor),z(lcor))
+       delz  = zmax - zmin
+       if (delz .le. 0.0) go to 1000
+       topa  = evol(n)/delz
+       if (npp .eq. 0) topa = twopi*topa
+c
+c      check to see that debris is at least 50 per cent aluminum
+       wmass = wurcel(n) + wuocel(n) + walcel(n)
+       if (wmass.gt.1.0e-3 .and. walcel(n).gt.1.0e-3) then
+          if ((walcel(n)/wmass) .lt. 0.50) go to 1000
+       else
+          go to 1000
+       endif
+c
+c      obtain coordinates (i,j) of lower left node of this top
+c      element
+c
+       i1  = ielem(n)
+       j1  = jelem(n)
+c
+c      get offset for relap5 volume for (gaman) noncondensible
+c      source term
+c
+       iga = 0
+       do 100 i = 1,ncevr5
+       if(igavol(i) .eq. 0) go to 100
+       if (ihsave(i) .eq. ix(4,n)) then
+          iga = igavol(i)
+          go to 110
+       endif
+  100  continue
+  110  continue
+c
+c
+c      for this stack, need to know the current oxide thickness (m)
+c      and the mass of aluminum (kg) available for reaction this time
+c      step. Assume that if oxide thickness in an element is < 1.0e-10,
+c      that all mass in element is available.
+c
+       totthk = 0.0
+       totmas = 0.0
+       do 150 jj = j1,1,-1
+       if (jj .eq. j1) then
+          ne = n
+       else
+          idyn = (maxj-1)*i1 + jj
+          ne = elemij(idyn)
+       endif
+       if (imme(ne) .lt. 1)go to 150
+       if (oxdthk(ne) .gt. 1.0e-15) then
+          totthk = totthk + oxdthk(ne)
+       endif
+       if (imme(ne) .eq. 2) then
+c         element is full, al mass - mass already oxidized
+          almass = walcel(ne) - woxel2(ne)
+          lcor = ix(4,ne)
+          kcor = ix(3,ne)
+          jcor = ix(2,ne)
+       icor  = ix(1,ne)
+       zmax  = max(z(icor),z(jcor),z(kcor),z(lcor))
+       zmin  = min(z(icor),z(jcor),z(kcor),z(lcor))
+       delz  = zmax - zmin
+          if (delz .le. 0.0) go to 150
+          totmas = totmas + (1.0 - oxdthk(ne)/delz)*almass
+       else
+c         element partially full.  find density to obtain
+c         approximate height of debris in element
+          icor  = ix(1,ne)
+          jcor  = ix(2,ne)
+c         tave based on bottom 2 nodes of element
+          tsum  = tz(icor)*vole(1,ne) + tz(jcor)*vole(2,ne)
+          vsum  = vole(1,ne) + vole(2,ne)
+          tave  = tsum/vsum
+          elden  = zuden1 (afzirc(ne),    afu(ne),   afss(ne),
+     #                      afsil(ne),   afbc(ne),  afuo2(ne),
+     #                      afzo2(ne),  afalu(ne),  aflif(ne),
+c*** #                      afcad(ne), afsoil(ne),       tave)
+     #                      afcad(ne), afsoil(ne),     rftemp)
+          height = (walcel(ne)+wuocel(ne)+wurcel(ne))/(elden*topa)
+          if (height .gt. 1.0e-7) then
+             almass = walcel(ne) - woxel2(ne)
+             totmas = totmas + (1.0 - oxdthk(ne)/height)*almass
+          endif
+       endif
+  150  continue
+c
+c
+c      loop over the elements in this stack, top-down, that
+c      contain debris
+c
+       do 300  jj =  j1,1,-1
+c
+c      working on top element
+       if (jj .eq. j1) then
+          ne  = n
+c
+c      working on lower element, find element number
+       else
+          idyn = (maxj-1)*i1 + jj
+          ne   = elemij(idyn)
+          if (imme(ne) .lt. 1) go to 300
+       endif
+c
+c      get corners of nth  debris element
+       icor  = ix(1,ne)
+       jcor  = ix(2,ne)
+       kcor  = ix(3,ne)
+       lcor  = ix(4,ne)
+c      test to see if element is full or partially full of
+c      debris (if it is top element of stack).  then check
+c      to see if the current oxide thickness is greater than
+c      height of debris in element (testing to see if all
+c      aluminum in element is oxidized).
+       if (ne .eq. n) then
+c         top element in stack, may not be full
+          if (imme(ne) .lt. 2) then
+c            element partially full
+c            average temperature based on bottom two nodes of element
+             tsum  = tz(icor)*vole(1,ne) + tz(jcor)*vole(2,ne)
+             vsum  = vole(1,ne) + vole(2,ne)
+             tave  = tsum/vsum
+c            delz = mass/density/area
+             elmass = walcel(ne) + wurcel(ne) + wuocel(ne)
+             elden  = zuden1 (afzirc(ne),    afu(ne),   afss(ne),
+     #                         afsil(ne),   afbc(ne),  afuo2(ne),
+     #                         afzo2(ne),  afalu(ne),  aflif(ne),
+c*** #                         afcad(ne), afsoil(ne),       tave)
+     #                         afcad(ne), afsoil(ne),     rftemp)
+             delz = elmass/elden/topa
+          else
+c            element full
+       zmax  = max(z(icor),z(jcor),z(kcor),z(lcor))
+       zmin  = min(z(icor),z(jcor),z(kcor),z(lcor))
+       delz  = zmax - zmin
+             if (delz .le. 0.0) go to 300
+c            set average temperature based on top two nodes
+             tsum  = tz(kcor)*vole(3,ne) + tz(lcor)*vole(4,ne)
+             vsum  = vole(3,ne) + vole(4,ne)
+             tave  = tsum/vsum
+          endif
+c
+c         if top element is all oxidized, try next lower element
+          if (oxdthk(ne) .ge. delz) then
+             go to 300
+          else
+             go to 250
+          endif
+c
+       else
+c         next element down in stack
+       zmax  = max(z(icor),z(jcor),z(kcor),z(lcor))
+       zmin  = min(z(icor),z(jcor),z(kcor),z(lcor))
+       delz  = zmax - zmin
+           if (delz .le. 0.0) go to 300
+          if (oxdthk(ne) .ge. delz) go to 300
+       endif
+c
+  250  continue
+c      do preliminary calculations for call to 'aloxd'
+c
+c      find limits for steam or fluid (kg/m2)
+       ikk = iga + filndx(4)
+       fmasox = hyarf(ikk)*v(ikk)
+       gmasox = hyarg(ikk)*v(ikk)
+       stmlim = max(fmasox,gmasox)/topa
+c
+c      set limit of aluminum available for reaction (kg/m2)
+       alwlim = totmas/topa
+c      old time step value of mass reacted / area (kg/m2)
+       woxold = woxel2(ne)/topa
+c
+c      need to define a width and length for the top surface area of
+c      the element for call to aloxd
+       width = r(jcor) - r(icor)
+       if (width .le. 0.0) then
+          width = r(kcor) - r(lcor)
+       endif
+       if (width .le. 0.0) then
+          width = r(kcor) - r(icor)
+       endif
+       xlen  = topa/width
+c
+c      call subroutine 'aloxd' that will compute the aluminum oxidized
+c      along with heat of oxidation, release of oxygen, and steam
+c      reacted
+c
+       call aloxd(woxold, woxold, alwlim, stmlim, delt, tave,
+     #        width, xlen, dtoxwg, woxel2(ne), oxdh, h2oxd, sroxd)
+c
+c
+c      store data for next time step, mass in kg, thickness in meters
+c      using constant density for aluminum oxide of 3965.0 kg/m3
+c      (handbook of chem & physics, 1987-88, 68th ed)
+       woxel2(ne) = woxel2(ne)*topa
+       alo2d = 3965.
+c      Note. Factor of 1.8889 is ratio of moleclular weight of
+c            of Al2O3 divided by molecular weight of Al2.
+       oxdthk(ne) = oxdthk(ne) + 1.8889*dtoxwg/alo2d
+c      reduce mass of un-reacted aluminum
+       walcel(ne) = walcel(ne) - dtoxwg*topa
+c
+c      test to see if we should now get out of loop.  working in
+c      element ne.
+       if (oxdthk(ne) .gt. delz) then
+c         compute next element down
+          go to 300
+       else
+c         no more to oxidize this time step
+          go to 310
+       endif
+c
+  300  continue
+  310  continue
+c
+c      working on element ne, in 1000 loop
+c
+c      compute heat of reaction (al + U) and put into couple array
+c      genz for element (watts)
+c      add ienergy proportion due to uranium available, although the
+c      mass of uranium oxidized is not computed
+       almas      = dtoxwg*topa
+       frac       = wurcel(ne)/(walcel(ne)+wurcel(ne))
+       eoxelm(ne) = ((1.0-frac)*4.1447e6 + frac*2.50e6)*almas/delt
+c      CAUTION.  If transient decay heat modeled by RELAP5 reactor
+c                kinetics, then genz(3,ne), etc. are multiplied by
+c                ratio of current reactor power to reactor power
+c                at time that debris from core slumped into COUPLE
+c                mesh.  So in this case, nodal power (bg(i), where
+c                i is node number, should have oxidation power
+c                added in wherever they are calculated.
+       genz(3,ne)  =  genz(3,ne) + 0.5*eoxelm(ne)
+       genz(4,ne)  =  genz(4,ne) + 0.5*eoxelm(ne)
+c
+c
+c      set hydrogen released due to reaction, returned from
+c      aloxd (kg/sec)
+       h2elem(ne) = h2oxd
+c
+c      compute mass of steam reacted for the reaction
+c      this is returned in (sroxd) from call to aloxd
+c
+c      add non-condensible hydrogen to fluid vapor term
+c      gaman(nl+i) = gaman(nl+i) + h2oxd/vol
+c      where i corresponds to offset for Hy
+c      offset (iga) set in 100 loop above.
+c      units of gaman are kg/(m3-s), h2oxd in kg/sec
+c
+       if (iga .eq. 0) go to 400
+       nl = filndx(4) + iga
+c
+c      match up with relap5 nocondensible specie
+c
+       if(.not.scntrl(8))then
+         do 375 nk = 1,noncn
+         nln = nl + nk - 1
+         if (nk .ne. nonhy) go to 375
+         gaman(nln) = gaman(nln) + h2oxd/v(nl)
+         enthn(nln) = uo + co*tave + 0.5*do*(tave-tao)**2
+         go to 400
+  375    continue
+       endif
+  400  continue
+c
+c      subtract steam reacted from the relap5 volume.
+c      This is done in subroutine vexplt in terms 'sourcm'
+c        see subroutine vexplt
+c
+c     now do next stack
+ 1000 continue
+c
+      return
+      end
+*endif

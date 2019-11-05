@@ -1,0 +1,176 @@
+*mlist
+*if def,selap
+       subroutine zsf1dr (fcn, z, fval, rparm, iparm, info)
+c
+c
+c  Cognizant engineer: ewc.
+c
+c  zsf1dr calls the subroutines required to solve for the roots of a
+c  general real-valued equation of one real variable: f(x) = 0.
+c
+c  ...1...  arguments / parameters / constants  .......
+c  ...2...  notes / remarks  .......
+c
+       implicit none
+      external fcn
+      integer iparm(6), info
+      real fcn, fval(1), z(1), rparm(2)
+c
+c  ...1...  function / purpose  .......
+c       calls the subroutines required to solve for the roots
+c       of a general real-valued equation of one real variable
+c                           f(x) = 0
+c  ...2...  arguments / parameters / constants  .......
+c     ..a..  input arguments  .....
+c          fcn  e  - user supplied function subprogram which evaluates
+c              f(z) for any z; must be declared external in the
+c              calling program
+c          z  r:lz  - real vector,
+c              z(1),...,z(known) contain the known roots
+c              z(known+1),...,z(known+guess) contain estimates of roots
+c              to be found
+c          rparm  r:2  - real parameters
+c              (1)/ep1 - relative convergence criterion for a root,
+c                  i.e root(k) is accepted as a root when
+c                  ((root(k)-root(k-1))/root(k) is less than ep1.
+c              (2)/ep2 - absolute function convergence criterion
+c          iparm  i:6  - integer parameters
+c              (1)/known - the number of roots already known
+c              (2)/nmore - the number of roots to be found
+c                  (i.e. in addition to those already known)
+c              (3)/lz - length of the arrays fval and z; lz must be
+c                  set to at least (known+nmore).
+c              (4)/guess - the number of roots for which the user is
+c                  supplying estimates; must be .le. nmore
+c              (5)/maxits - maximum number of function calls allowed
+c                  for finding each root
+c     ..b..  output arguments  .....
+c          z - vector of roots in first nfound positions;
+c              if info=31, z(nfound+1) contains the last approximation
+c              to the root which caused termination
+c          fval  r:lz  - vector containing the function values
+c              associated with the vector z
+c          iparm - integer parameters
+c              (6)/nfound - number of roots now known and stored in z
+c          info  i:1  - error condition / message code
+c              =0,  normal completion
+c                 << type 1 - nominal >>
+c              =11, all roots were found, but some of the input 'known'
+c                   roots were recalculated
+c                 << type 3 - terminal >>
+c              =31, maximum number of iterations has been reached
+c                 << type 4 - fatal >>
+c              =41, illegal input, known .lt. 0
+c              =42, illegal input, nmore .lt. 1
+c              =43, illegal input, lz .lt. known + nmore
+c              =44, illegal input, guess .gt. nmore
+c              =45, illegal input, maxits .lt. 0
+c              =46, illegal input, ep1 .lt. 0.0
+c              =47, illegal input, ep2 .lt. 0.0
+c     ..c..  internal / local variables  .....
+      integer guess, i, k, known, lz, maxits, nfound, nmore
+      real ep1, ep1def, ep2, ep2def
+       integer ii,nn
+c     ..d..  external / subprogram references  .....
+c          minerva subroutines - zsf1sl
+c          intrinsic function - abs
+       external zsf1df,zsf1sl
+c     ..e..  constants  .....
+        integer itsdef
+       parameter (itsdef=100)
+      data ep1def /0.5e-5/, ep2def /1.0e-6/
+c  ...3...  notes / remarks  .......
+c     ..a..  usage  .....
+c          (1) if the function value for one of the 'known'
+c          roots is not 'small' the value of known is reset
+c          to the last index of a root with a small function
+c          value, the remaining 'known' roots are recalculated,
+c          and nmore and guess are reset.
+c          (2) ep2 is also used by subroutine zsf1df to determine if a
+c          current approximation is 'close' to a root already identified
+c          (3) form of fcn:
+c              real function fcn (z)
+c              real z
+c              calculate the function at z
+c              return
+c              end
+c     ..b..  algorithm  .....
+c          muller's method
+c     ..c..  portability  .....
+c     ..d..  references  .....
+c          (1) d.e. muller, a method of solving algebraic equations
+c          using an automatic computer, math tables aids comp 10(1956),
+c          pp208-215.
+c          (2) i. barrodale and k.b. wilson, a fortran program for
+c          solving a nonlinear equation by muller's method,
+c          j. comput. appl. math. 4(1978), pp159-166.
+c     ..e..  history  .....
+c          origin - roots - (2)
+c          modified - header, structure - e.s. marwil, 12/1/81
+c
+      info = 0
+      nfound = 0
+c  1  check input for error, set defaults
+      known = iparm(1)
+      if (known .ge. 0) go to 10
+         info = 41
+         go to 100
+   10 continue
+      nmore = iparm(2)
+      if (nmore .gt. 0) go to 20
+         info = 42
+         go to 100
+   20 continue
+      lz = iparm(3)
+      if (lz .ge. known + nmore) go to 30
+         info = 43
+         go to 100
+   30 continue
+      guess = iparm(4)
+      if (guess .le. nmore) go to 40
+         info = 44
+         go to 100
+   40 continue
+      maxits = iparm(5)
+         if (maxits .ge. 0) go to 50
+         info = 45
+         go to 100
+   50 continue
+      if (maxits .eq. 0) maxits = itsdef
+      ep1 = rparm(1)
+      if (ep1 .ge. 0.0) go to 60
+         info = 46
+         go to 100
+   60 continue
+      if (ep1 .eq. 0.0) ep1 = ep1def
+      ep2 = rparm(2)
+      if (ep2 .ge. 0.0) go to 70
+         info = 47
+         go to 100
+   70 continue
+c  2  check known roots
+      if (known .eq. 0) go to 90
+         k = known
+         do 80 i = 1, k
+            fval(i) = fcn (z(i))
+            if (abs(fval(i)) .le. ep2) go to 80
+               info = 11
+               known = i - 1
+               nmore = nmore + k - known
+               guess = guess + k - known
+               go to 90
+   80       continue
+   90 continue
+       nn = known + nmore - guess
+       if (nn .gt. 0) then
+         do 91 ii = 1,nn
+           z(ii+guess) = 0.0
+   91    continue
+       endif
+      call zsf1sl (fcn, z, fval, known, nmore, maxits, nfound,
+     *             ep1, ep2, info)
+  100 continue
+      iparm(6) = nfound
+      return
+      end
+*endif

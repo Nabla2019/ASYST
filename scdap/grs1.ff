@@ -1,0 +1,287 @@
+*mlist
+*if def,selap
+       subroutine grs1 (rd,savg,cik,prfk,acaen,jx,ilq,itran)
+c
+c  Calculates the bubble diffusion coefficients, migration velocities,
+c  coalescence probabilities, gas-atom re-solution rates and the
+c  diffusion rates of fission gas from the grain lattice to the grain
+c  faces and from the grain faces to the grain edges as well as the
+c  maximum size for bubbles pinned to structural defects.
+c
+c  Cognizant engineer: ewc.
+c
+       implicit none
+c
+c  Local variables.
+       integer i,ilq,itran,jr,js,jx,l,ll,ln,m,n,nopt
+       real acaen,cik(15),pbk(2,2),prfk,q(13),rd(4),savg(4),tmp
+       real erf
+$if def,erf,1
+       external erf
+       include 'grsparg.h'
+       include 'grsprg.h'
+       include 'grsgra1.h'
+       include 'grsgra2.h'
+       include 'grsgra7.h'
+       equivalence (pbk(1,1),pb(1))
+       character*4 icla(2)
+       data q/4.552  ,6.935e-2,-4.552  ,2.167e-2,3.778e1,7.614e-2,
+     & -3.872e1,8.456e-3,8.704e1,8.656e-2,9.102e-2,1.008e-1,1.083e-1/
+       data icla/'face','edge'/
+c
+c     in J. Rest's model, the concentration of gas atoms, Cg, within
+c     the spherical grain satisfies a diffusion equation; the
+c     spherical grain is divided into two concentric spheres of aprrox.
+c     equal vol, i.e. regions 1 and 2.
+c     for region 1, Cg = c1*(0.64-a**2)/0.48 + c2*(a**2-0.16)/0.48
+c     for region 2, Cg = 5*c2*(10a**2-19a+9)+10c3*(18a-10a**2-8)
+c     J. Rest uses the backward Euler approx. to convert the
+c     diffusion eq. to an ode, and then he uses Euler's theorem to set
+c     the first variation to zero.  Thus he obtains an integral
+c     which is a functional of Cg.  The expressions for Cg for
+c     regions 1 and 2 are substituted in that integral and an
+c     extremum is found by differentiating w.r.t. c1, c2, and c3
+c     in turn.  A set of three linear eqs. is obtained.  The
+c     solution of this set of eqs. gives: c1 = (x1-f2*c2)/f1, ...
+c     etc, where f1 = q1*b/d/d + q2*dt, f2 = q3*b/d/d + q4/dt,
+c     and x1 = k*q5 + (c1(t0)*q2 + c2(t0)*q4)/dt, where k is the
+c     rate of generation of gas atoms, b is the gas atom diffusion
+c     coef., and d is the grain diameter.  The qi's are integrals
+c     which when directly evaluated give the values listed in the
+c     data statements.
+c     The flux of gas atoms to the bdry is calc. here once Cg is
+c     determined and this term is one term in the expression for
+c     the rate at which gas atoms are lost, which is one of the
+c     terms, i.e. yb(i) in the systems of ode's solved in grs2.
+c
+       t1=tfpv*rescon
+       do l = 1,nr41
+         rtrs(l) = t1
+       enddo
+      dcie=0.
+      if(tfpv.le.0.  ) go to 30
+      dcie=badc3*tfpv*exp(-badc4/tki)
+c  Calc. re-solution rates.
+      do 29 l=1,nr41
+      radn=rd(l+1)
+      if(radn.le.red2) go to 29
+      rad2=radn*radn
+      a1=(redis-rad2/redis)*.125
+      a2=16.  *redis
+      x(1)=radn
+      x(2)=radn-redis
+      do 28 n=1,2
+   28 f(n)=(x(n)/6.  +x(n)**2/a2+a1)*x(n)**2
+      rtrs(l)=t1*3.  /(rad2*radn)*(f(1)-f(2))
+   29 if(l.gt.1) rtrs(l)=rtrs(l)*gbr(l-1)
+   30 fbden=piz*y(3)*rd(3)**2
+      tgr1= abs(tgrad/(tki*tki))
+      fcsdt=fcsd*tgr1
+      fcect=fcec*tgr1
+      dcsdt=dcsd*exp(-dcsdt1/tki)
+      tmp=min(evcdt2/tki,500.)
+      evcdtd=evcdt1*exp(-tmp)/ sqrt(tki)
+      gbsf=0.
+      gbse=0.
+      byag=grd/acon
+      if(nr4.eq.4) go to 500
+      flux(8)=0.
+      prf3=0.
+      eprf=0.
+      egre=0.
+      alpha=0.
+      dvol=1.93e-8*tki
+      bvvol=dvol*qvstar*tgr1/boltz
+      bdvl=dvol*atmvol/pi43
+      if(nr4.eq.2) go to 527
+      if(nr4.eq.3) rd(4)=rd(3)
+  500 rtk=rcv*tki
+      nopt=0
+      if(nopt.eq.0) go to 522
+      if(nopt.ne.3) go to 520
+      f(3)=fbden/rd(3)
+      f(4)=piz*rd(4)*y(4)
+      u=grd*xxk1(jx)*exp(xxk2(jx)/tki)
+      jr=4
+      if(rd(3).gt.rd(4)) jr=3
+      js=7-jr
+      t1=.25  *grd*byag
+      sin2p(jr)=1.  /(u/rd(jr)**3+t1*(f(jr)+f(js)*(rd(js)/rd(jr))**3))
+      if(sin2p(jr).lt.1.  ) go to 512
+      sin2p(jr)=1.
+      sin2p(js)=min(1.  /(u/rd(js)**3+t1*f(js)),1.  )
+      go to 517
+  512 sin2p(js)=sin2p(jr)*(rd(js)/rd(jr))**3
+  517 vgb=max(gamma*atm4(jx)*exp(-xk4(jx)/tki)/(tki*boltz*grd)*
+     +(1.  -t1*(sin2p(3)*f(3)+sin2p(4)*f(4))),0.  )
+      grd=grd+vgb*h
+      gbs=3.  *vgb/grd
+      if(sin2p(3).eq.1.  ) gbsf=gbs
+      if(sin2p(4).eq.1.  ) gbse=gbs
+      go to 522
+  520 ck=xk1(jx)*exp(-xk2(jx)/tki)
+      grd=grd+ck*h/grd
+      gbs=3.  *ck/grd**2
+  522 byag=grd/acon
+      rbgr=rb1/grd
+      if(dtdt.le.0.  ) go to 526
+      t1=max(min(grd*1.e4,14.5  ),2.  )
+      a0=aq(1)+(aq(2)+aq(3)*t1)*t1
+      a1=aq(4)+(aq(5)+aq(6)*t1)*t1
+      a2=aq(7)+(aq(8)+aq(9)*t1)*t1
+      tks=max(min(tki,2073.  ),1773.  )
+      tpd1=tkio*du1(1)*9.8e5* exp(a0+(a1+a2/tks)/tks)/(3.  *gamma*dtdt)
+      go to 527
+  526 tpd1=1.e25
+      betab=0.
+      badc7=badc5
+      badc8=badc2
+  527 if(kprint.le.1) go to 530
+  530 ln=0
+      l=0
+   31 l=l+1
+      n=0
+   32 n=n+1
+      ln=ln+1
+      radn=rd(ln)
+      rad2=radn*radn
+      rad3=radn*rad2
+      fatom=fcsdt*rad3
+      fevcd=fcect*rad3
+      bdsurf=dcsdt/rad2
+      if(radn*piz.gt.rlams) bdsurf=bdsurf* sin(rlam2/radn)**2
+      bvsurf=fatom*bdsurf
+      bdevcd=evcdtd/savg(ln)
+      bvevcd=fevcd*bdevcd
+      if(l.eq.2) go to 41
+      if(nr4.ne.2) go to 540
+      bdatom=0.
+      bvatom=0.
+      pbkgby(n)=0.
+      if(n.eq.2) go to 535
+      bdltce(1)=dvol
+      bvltce(1)=dvol*fatom
+      go to 38
+  535 bdvol=bdvl/rad3
+      bdltce(2)=max(bdevcd,bdvol)
+      bvliq=bv1*rad2
+      bvltce(2)=max(bvliq,bvevcd,bvvol)
+      flux(7)=bvltce(2)*area
+      go to 38
+  540 if(n.eq.2) go to 33
+      bdatom=aadc1*exp(-aadc2/rtk)
+      go to 35
+   33 if(dtdt.le.0.  ) go to 34
+c     calc. nonequilibrium parameter
+      betab=1.  - exp(-radn/tpd1)
+c     calc. intragranular bubble diffusivities.
+      badc7=badc5+(4.  -badc5)*betab
+      badc8=badc2+(qsurf-badc2)*betab
+   34 bdatom=badc1*exp(-badc8/rtk)/(radn*badc6)**badc7
+   35 bvatom=fatom*bdatom
+      bvltce(ln)=max(bvevcd,min(bvsurf,bvatom))
+      if(n.eq.2) go to 36
+      if(l.eq.2) go to 46
+      bvltce(1)=bvltce(1)+fatom*dcie
+      bdltce(1)=dcie+bdatom
+      go to 37
+   36 bdltce(2)=max(bdevcd,min(bdsurf,bdatom))
+c        calculate coalescence probabilities in ltce
+   37 pbkgby(n)=bvltce(n)/byag+gbs
+   38 do 39 m=1,n
+      radnm=radn+rd(m)
+   39 pbk(m,n)=(4.  *(bdltce(n)+bdltce(m))+( abs(bvltce(n)-bvltce(m))
+     ++xoalp(n)*bvltce(n))*radnm)*radnm*piz
+      go to 52
+   41 bdface(n)=bdsurf
+      if(n.eq.1) go to 43
+      pface(2)=(2.  *bdsurf+xoblp(2,1)*bvsurf*.63662  *radn)*grd*acon/
+     +8.23
+      go to 51
+   43 if(ilq) 33,47,44
+   44 if(ilq.le.2) go to 47
+      bdvol=bdvl/rad3
+      bdface(1)=max(bdevcd,bdvol)
+      bvliq=bv1*rad2
+      bvface=max(bvliq,bvevcd,bvvol)
+      go to 49
+   46 bvface=bvltce(ln)
+      bdface(1)=max(bdevcd,min(bdsurf,bdatom))
+      go to 48
+   47 bvface=bvsurf*.63662
+   48 flux(8)=bvface*rbgr
+      egre=(1.  - erf((astar/byag-fbden)*sbc25))/(h+h)
+   49 pface(1)=(2.  *(bdface(1))+xoblp(1,nlq)*bvface*radn)*byag
+      flux(7)=bvface*area
+   51 if(kprint.le.1) go to 52
+   52 if(ln.gt.1) taun(ln-1)=rad2/max(du(l+2),1.e-35)
+      if(ln.eq.nr4) go to 53
+      if(n.eq.1) go to 32
+      if(l.eq.1) go to 31
+   53 pb(1)=pb(1)*fn
+      grdh=h/grd**2
+      dgdgh=bdltce(1)*grdh
+      do 65 ll=1,6
+      if(5-ll) 55,65,56
+   55 nn2=15
+      dgdgh=bdltce(2)*grdh
+      go to 57
+   56 nn2=ll*3
+      flx0(ll+1)=pbkgby(1)
+   57 nn1=nn2-1
+      nn =nn1-1
+      m=0
+      do 58 i=1,9,2
+      m=m+1
+   58 f(m)=q(i)*dgdgh+q(i+1)
+      x(1)=q(2)*cik(nn)+q(4)*cik(nn1)
+      x(2)=q(4)*cik(nn)+q(6)*cik(nn1)+q(8)*cik(nn2)
+      x(3)=q(8)*cik(nn1)+q(10)*cik(nn2)
+      if(ll.eq.6.or.gsin(ll).eq.0.  ) go to 61
+      hkg=h*gsin(ll)
+      do 59 i=1,3
+   59 x(i)=q(i+10)*hkg+x(i)
+   61 t1=f(2)/f(1)
+      t2=f(4)/f(5)
+      cin(nn1)=max((t1*x(1)+t2*x(3)-x(2))/(t1*f(2)+t2*f(4)-f(3)),0.  )
+      cin(nn )=max((x(1)-f(2)*cin(nn1))/f(1),0.  )
+      cin(nn2)=max((x(3)-f(4)*cin(nn1))/f(5),0.  )
+      flux(ll)=(240.  *cin(nn2)-60.  *cin(nn1))*dgdgh/h
+   65 continue
+      flux(5)=0.
+      if(y(2).le.0.  ) go to 78
+      t1=flux(6)/y(2)
+      flux(5)=t1*vfn(2)*y(8)
+      do 77 n=1,3
+   77 flux(n+1)=t1*vfn(n)*y(n+4)+flux(n+1)*(1.  -vfn(n))
+   78 if(nr4.eq.2) go to 95
+      flx0(4)=bvltce(1)/byag+gbs*gbscse
+      do 80 n=1,3
+   80 flx0(n+1)=pbkgby(2)*vfn(n)+flx0(n+1)*(1.  -vfn(n))
+      flx0(5)=flx0(3)
+      if(nr4.eq.3) go to 95
+      if(ilq.lt.0) go to 90
+      t1=pi43*rad3*y(4)
+      prf3=.5  *(1.  - erf((pr1-t1)*zig2))
+      if(t1.ge.bvcrit) prf3=max(prfk,prf3)
+c
+      if(itran.eq.0) go to 91
+ccc   if(mcrk.ne.0)goto91
+c  Invoke micro cracking model.
+      if (y(3) .le. 0.0) go to 90
+      dgmc=dgm0*dtdt*(tki/gamma)**2/gamma
+      dgmin=dgmc*savg(2)**2/(rd(2)* sqrt(byag*y(3)))
+      if(dgmin.gt.bdface(1)) acaen=acaen+aca1*fbden*h
+   90  alpha =min(byag*acaen*0.5,1.0)
+       egre = max(egre,alpha)
+       prf3 = max(prf3,alpha)
+   91  if (prfk .eq. 0.0) prfk = prf3
+       prf3 = (prf3 + prfk)*0.5
+       eprf = 0.
+       if (prf3.gt.prfk .and. prfk.lt.1.) eprf = (prf3 - prfk)/
+     & ((1.0 - prfk)*h)
+   95  flfl = flux(8) + egre
+       flxeg = flfl + flux(7)/volume
+       return
+       end
+*endif

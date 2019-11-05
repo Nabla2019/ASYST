@@ -1,0 +1,758 @@
+      SUBROUTINE OUTIN(
+     &  BETAT,BETATLAM,AVBU,
+     &  VOLU,FNSWT,FNPPOT,FNPPPOT,SW,TNF,SIGDSN,XHIP,SEXT,SCW,
+     &  SCAT,ITRR,WOM,WOMOLD,LSEXTZ,LSEXTR,FNSHIFT,SWPPOT)
+C     
+C     THIS SUBROUTINE PERFORMS OUTER-INNER ITERATIONS UTILIZING        
+C     FDM OR NEM OPTION FOR STEADY-STATE SOLUTION
+C
+      use     rk3dcode, only:fcallss   !vmq
+      use iss_rk3d_int,   ONLY: rel2rk3d !vmq
+      use     rkinc
+      
+      include 'param.fcb'
+      include 'veloc.fcb'
+      include 'conv.fcb'
+      include 'crhs.fcb'
+      include 'nemcnt.fcb'
+      include 'power.fcb'
+      include 'opti.fcb'
+      include 'burn.fcb'
+      include 'geom.fcb'
+      include 'soln2.fcb'
+      include 'cntl.fcb'
+      include 'start.fcb'
+      include 'crod.fcb'
+      include 'crit.fcb'
+      include 'tim.fcb'
+      include 'xsec1.fcb'
+      include 'xeopt.fcb'
+      include 'che.fcb'
+      include 'extsor.fcb'
+      include 'spectral.fcb'
+      include 'cheby.fcb'
+      include 'flamdold.fcb'
+      include 'varlen.fcb'
+      include 'varlens.fcb'
+      include 'array.fcb'
+      include 'depletepc.fcb'
+      
+      DIMENSION
+     &  SCW(NXYL,NZ,*)                        ,SCAT(NXYL,NZ,*)        ,
+     &  BETAT(NXYL,*)                         ,BETATLAM(NXYL,NZ,*)    ,
+     &  SW(NXYL,NZ,*)                         ,AVBU(*)                ,
+     &  VOLU(NXYL,*)                          ,FNSHIFT(NXYL,NZ,*)     ,
+     &  LSEXTZ(*)                             ,LSEXTR(*)              ,
+     &  FNSWT(NXYL,*)                         ,FNPPOT(NXYL,*)         ,
+     &  FNPPPOT(NXYL,*)                       ,TNF(NXYL,NZ,*)         ,
+     &  SIGDSN(NXYL,NZ,NG,*)                  ,XHIP(NXYL,NZ,*)        ,
+     &  SEXT(*)                               ,ITRR(*)                ,
+     &  WOM(*),WOMOLD(*),SWPPOT(NXYL,NZ,*)
+      
+      CHARACTER*8 NNEW
+
+      IF (repeat) THEN   !vmq 
+       MAOUTERUP=KSST !vmq
+       NCNT=-1 !vmq
+       MODIFY=0 !vmq
+       IBSRCH=1
+       IFDBK=1
+       IF(ASRCH .EQ. 'Y') IBSRCH=2
+C  !vmq always anfdbk     IF(ANFDBK.EQ.'Y' )IFDBK=2
+       IFDBK=2
+       repeat = .false. !vmq
+       IEXIT=0
+      ELSE !
+       TSTARTTH=TTHST
+       TSTARTXS=TXSFDST
+       TSTARTLS=TLSST
+       IBSRCH=1
+       IFDBK=1
+       IF(ASRCH .EQ. 'Y') IBSRCH=2
+C !vmq always anfdbk       IF(ANFDBK.EQ.'Y' )IFDBK=2
+       IFDBK=2
+       RTRECST=0.
+       KKCST=0
+       INEM = 0
+       ICOUNTPC=0
+       MAOUTERUP=1
+       MODIFY=0 !vmq
+       RTOUT1=0.0
+       RTOUT2=0.0
+C     
+C======SETTING THE CRITICALITY SEARCH CRITERIA
+C     
+        IF(IWHICH.EQ.1)EPSILKEF=1.0E+01*EPSK
+       IF(IWHICH.EQ.2)EPSILKEF=1.0E+01*EPSK
+       IF(IWHICH.EQ.3)EPSILKEF=1.0E+02*EPSK
+       IF(IWHICH.EQ.4)EPSILKEF=1.0E+01*EPSK
+C     
+C     ====== SETTING THE POWER SEARCH CRITERIA
+C     
+       IF(IWHICH.EQ.2)EPSILPWR=1.0E-03
+       IF(IWHICH.EQ.3)EPSILPWR=1.0E-03
+       IF(IWHICH.EQ.4)EPSILPWR=1.0E-03
+      
+       IF(NPC.EQ.'Y') THEN
+        WRITE(55,998)
+        WRITE (55,1021) AVBU(IBU)
+        WRITE(55,880)
+        WRITE(55,881) (IG,WOM(IG),ITRR(IG),IG=1,NG)
+       ENDIF
+      
+       CALL GTIME(RTOUT1)
+      
+       NCNT=-1
+       ISRCH=0
+      
+       IF(ITYPE.EQ.'EVP')THEN
+        DO 119 IG=1,NG
+         SEXT(IG)=0.0
+ 119   CONTINUE
+       
+       ELSEIF (ITYPE.EQ.'FSP')THEN
+        FLAMDA = 1.0000
+       ENDIF
+       
+C.....INITIALIZE THE NEM VARIABLES
+C     
+       NCALNON = 0
+       KNEM = 0
+       TNCPU = 0.0
+       RESIDUALOLD = 0.0
+       NUMNEMITER = 0 !vmq
+
+      ENDIF !vmq
+C     
+C-----OUTER   ITERATIONS   START----------------------
+C     
+10000  CONTINUE
+
+      KSST = KSST+1
+      
+      IF(KSST.EQ.KITR .OR. NPC.EQ.'Y') THEN
+       IF(NEWCP.EQ.1) WRITE(55,*)
+       WRITE(55,1020) KSST
+      ENDIF  
+C !vmq      IF(CRTON.EQ.'Y') THEN        
+C !vmq       IF(NEWCP.EQ.1) WRITE(6,*)
+C !vmq       WRITE(*,1020) KSST
+C !vmq       WRITE(6,*)'--------------------------'
+C !vmq      ENDIF
+C     
+C------SET FISSION SOURCE(N), FISSION SOURCE(N-1),
+C------SET FISSION SOURCE(N-2)
+C     
+      DO 32 IZ = 1, NZ
+       DO 31 IXY = 1, NXYL
+        FNPPPOT(IXY,IZ)=FNPPOT(IXY,IZ)
+        FNPPOT(IXY,IZ)=FNSWT(IXY,IZ)
+ 31    CONTINUE
+ 32   CONTINUE
+
+C !vmq no weil      IF(IOUTER.EQ.2) THEN
+C !vmq no weil       IF(OMEGAEXT.NE.0.0) THEN
+C !vmq no weil        DO 24 IZ = 1, NZ
+C !vmq no weil         DO 21 IXY = 1, NXYL
+C !vmq no weil          DO 20 IG=1,NG
+C !vmq no weil           SWPPOT(IXY,IZ,IG)=SW(IXY,IZ,IG)
+C !vmq no weil 20       CONTINUE
+C !vmq no weil 21      CONTINUE
+C !vmq no weil 24     CONTINUE
+C !vmq no weil       ENDIF
+C !vmq no weil      ENDIF	  
+      
+      DO 25 IZ = 1, NZ
+       DO 23 IXY = 1, NXYL
+        DO 22 IG = 1, NG
+         SCW(IXY,IZ,IG)= ( (1.0 - BETAT(IXY,IZ))*
+     &     XHIP(IXY,IZ,IG) + BETATLAM(IXY,IZ,IG) )
+     &     *(FNPPOT(IXY,IZ)/FLAMDA)-FNSHIFT(IXY,IZ,IG)*SW(IXY,IZ,IG)
+     &     +DBLE(LSEXTR(IXY))*DBLE(LSEXTZ(IZ))*SEXT(IG)*VOLU(IXY,IZ)
+ 22     CONTINUE
+ 23    CONTINUE
+ 25   CONTINUE
+C     
+C-----INNER   ITERATIONS   START------------------------
+C     
+      CALL GTIME(RTREC1)
+      
+C     
+C-------FAST GROUPS SOLUTION----------------------
+C     
+C     NGF : NUMBER OF FAST GROUPS
+C     
+      INERF = 0
+      IF(NGF.GT.0) THEN
+       DO 400 IGF = 1,NGF
+        DO 391 IZ=1,NZ
+         DO 390 IXY=1,NXYL
+          SCAT(IXY,IZ,IGF) = 0.0
+          DO 385 IGP=1,NG
+           IF(IGP.EQ.IGF) GOTO 385
+           IGPP=IGP
+           IF(IGP.GT.IGF) IGPP=IGP-1
+           SCAT(IXY,IZ,IGF) = SCAT(IXY,IZ,IGF)
+     *       +SIGDSN(IXY,IZ,IGF,IGPP)*SW(IXY,IZ,IGP)
+ 385      CONTINUE
+          SCAT(IXY,IZ,IGF)=SCAT(IXY,IZ,IGF)*VOLU(IXY,IZ)
+ 390     CONTINUE
+ 391    CONTINUE
+        DO 40 KC1=1,ITRR(IGF)
+         CALL LSORB(IGF,
+     &     A(LSWN),A(LCWN),A(LWOMN),A(LWOMON),AINT(LIRPLANN),
+     &     AINT(LIBPLANN),AINT(LIRPLN),AINT(LIBPLN),AINT(LIYPLANN),
+     &     AINT(LIYPLN),A(LXCWVN),A(LXSWSVN) )
+ 40     CONTINUE
+        INERF = INERF + ITRR(IGF)
+ 400   CONTINUE
+      ENDIF
+      INERTOTF = INERF
+      
+C     
+C-------THERMAL GROUPS SOLUTION-------------------
+C     
+C     NGT : NUMBER OF THERMAL GROUPS
+C     N_THRMITR : INPUT VALUE OF NUMBER OF THERMAL ITERATIONS
+C     I_THRMITR : COUNTER OF THERMAL ITERATIONS
+C     
+      I_THRMITR = 0
+      
+ 501  CONTINUE
+      
+      INERH = 0
+      DO 500 IGT = NGF+1,NG
+       DO 491 IZ=1,NZ
+        DO 490 IXY=1,NXYL
+         SCAT(IXY,IZ,IGT) = 0.0
+         DO 485 IGP=1,NG
+          IF(IGP.EQ.IGT) GOTO 485
+          IGPP=IGP
+          IF(IGP.GT.IGT) IGPP=IGP-1
+          SCAT(IXY,IZ,IGT) = SCAT(IXY,IZ,IGT)
+     *      +SIGDSN(IXY,IZ,IGT,IGPP)*SW(IXY,IZ,IGP)
+ 485     CONTINUE
+         SCAT(IXY,IZ,IGT)=SCAT(IXY,IZ,IGT)*VOLU(IXY,IZ)
+ 490    CONTINUE
+ 491   CONTINUE
+       DO 50 KC2=1,ITRR(IGT)
+        CALL LSORB(IGT,
+     &    A(LSWN),A(LCWN),A(LWOMN),A(LWOMON),AINT(LIRPLANN),
+     &    AINT(LIBPLANN),AINT(LIRPLN),AINT(LIBPLN),AINT(LIYPLANN),
+     &    AINT(LIYPLN),A(LXCWVN),A(LXSWSVN) )
+ 50    CONTINUE
+       INERH = INERH + ITRR(IGT)
+ 500  CONTINUE
+      
+      INERTOTH = INERH
+      
+      
+      I_THRMITR = I_THRMITR + 1
+      IF (I_THRMITR.LT.N_THRMITR) GOTO 501
+      
+      
+C     
+C-----INNER   ITERATIONS   END--------------------------
+C     
+      CALL GTIME(RTREC2)
+      
+      RTRECST=RTRECST+(RTREC2-RTREC1)
+      KKCST=KKCST+INERTOTF+INERTOTH
+      
+      DO 413 IZ=1,NZ
+       DO 412 IXY=1,NXYL
+        FNSWT(IXY,IZ) = 0.00000
+        DO 411 IG=1,NG
+         FNSWT(IXY,IZ)=FNSWT(IXY,IZ)+TNF(IXY,IZ,IG)*SW(IXY,IZ,IG)
+ 411    CONTINUE
+        FNSWT(IXY,IZ)=FNSWT(IXY,IZ)*VOLU(IXY,IZ) 
+ 412   CONTINUE
+ 413  CONTINUE
+C     
+C-----EXTRAPOLATE   THE   FISSION   SOURCE ---------------
+C-----CALCULATE   THE   ERRORS   -------------------------
+C-----(1) EIGENVALUE           -------------------------
+C-----(2) FISSION SOURCE       -------------------------
+C-----(3) POINT FISSION SOURCE -------------------------
+C     
+      CCKE = CKE
+      
+C !vmq no weil      IF(IOUTER.EQ.1) THEN
+       CALL CHEBY1(KSST,MAOUTERUP,CCKE,IRETRN,
+     &   A(LFNSWTN),A(LFNPPOTN),A(LFNPPPOTN),AINT(LNCOLXYN),
+     &   AINT(LNCOLZN),RESIDUAL)
+C !vmq no weil      ELSEIF(IOUTER.EQ.2.AND.WEILANDTEI.GT.0.0) THEN
+C !vmq no weil       CALL WEILANDT1(KSST,CCKE,IRETRN,
+C !vmq no weil     &   A(LFNSWTN),A(LFNPPOTN),AINT(LNCOLXYN),AINT(LNCOLZN),
+C !vmq no weil     &   A(LSWN),A(LSWPPOTN),RESIDUAL )
+C !vmq no weil      ENDIF
+      
+      CKE = CCKE
+      
+      POWERFRACOLD = POWERFRAC
+      POWER_OLD=POWERFRAC !vmq
+      SCALEV=1.00
+      
+      CALL RELPOWER(SCALEV,
+     &  A(LPWRDNN),A(LRELPWRN),A(LZETAN),A(LDIN),
+     &  A(LALPHATN),A(LVOLUN),A(LSWN),A(LTPFN),
+     &  AINT(LNCOLXYN),AINT(LNCOLZN),A(LFRACTBN),
+     $  A(LRELPWRSN),A(LSWSN),A(LTPFSN))
+      
+      DIFPOW = ABS( POWERFRAC - POWERFRACOLD )/POWERFRAC
+      
+      IF(ITYPE.EQ.'FSP')THEN
+       WRITE(*,676)POWERFRAC*100.00
+      ENDIF
+
+      IF(INEM.EQ.0) RESIDUALOLD=RESIDUAL 
+C     
+C     
+C-----CHECK   THE   OUTER   LOOP   CONVERGENCE -------------
+C-----
+C-----NOT CONVERGED                    (IRETRN=1)
+C-----NOT CONVERGED AND EXCEEDED LIMIT (IRETRN=2)
+C-----CONVERGED                        (IRETRN=3)
+C-----
+C     
+      GOTO (1111,222,200), IRETRN
+C     
+C...  SET FLAG .EQ. 0 IF JUST ENDED A OUTER CYCLE
+C     
+ 1111 IF(NORDCP.GT.0 .AND. NEWCP.EQ.1) NCNT=NCNT+1
+      
+ 8889 GOTO (111,111,3333,6666,6666,111), IXE(IBU)
+ 6666 MODIFY=0
+      GOTO 111
+      
+ 3333 IF(NCNT.EQ.0) THEN
+       CALL SXENON
+     &   ( A(LSWN),A(LXXEABN),A(LXSMABN),A(LVOLUN),A(LGIN),A(LGXN),
+     &   A(LGPN),A(LRNUN),A(LDXEN),A(LDION),A(LDPMN),A(LDSMN),A(LTNFN),
+     &   A(LTPFN),AINT(LNCOLXYN),AINT(LNCOLZN),A(LFRACTBN) )
+       MODIFY=1
+      ENDIF
+      
+ 111  IF(IBSRCH.EQ.2.AND.NCNT.EQ.0) THEN
+
+       IF(ITYPE.EQ.'EVP')THEN
+        IF(ABS(DIFKEF).LE.EPSK)THEN
+         ISRCH=ISRCH+1
+         CALL KSEARCH( A(LZBN) )
+         IF(IWHICH.EQ.4) THEN
+          CALL CNTROD( A(LZBN),A(LDISTN),A(LFRACTN),AINT(LLRODN) )
+         ENDIF
+         MODIFY=1
+        ENDIF
+       ELSEIF(ITYPE.EQ.'FSP')THEN
+        EPSPOW = EPSINF
+        IF(DIFPOW.LT.EPSPOW)THEN
+         ISRCH=ISRCH+1
+         CALL PSEARCH( A(LZBN) )
+         IF(IWHICH.EQ.4) THEN
+          CALL CNTROD( A(LZBN),A(LDISTN),A(LFRACTN),AINT(LLRODN) )
+         ENDIF
+         MODIFY=1
+        ENDIF
+       ENDIF
+      ENDIF
+      
+      IF(IMETHOD.EQ.2)THEN
+       INEM = INEM + 1
+      ENDIF
+      
+      IF(NCNT.EQ.0.OR.KSST.EQ.1.OR.IFDBK.EQ.1) THEN
+       
+C     
+C...  DETERMINE RELATIVE RESIDUAL ERROR REDUCTION FROM LAST NEM UPDATE
+C     
+       IF(RESIDUALOLD.EQ.0.0) THEN
+        EPSREL=1E+06
+       ELSE  
+        EPSREL=ABS(RESIDUAL/RESIDUALOLD)
+       ENDIF
+C     
+C-----OUTPUT TO THE SCREEN EVERY OUTER ITERATION
+C     
+C !vmq       IF(CRTON.EQ.'Y'.AND.IMETHOD.EQ.2) WRITE(*,870) EPSREL,EPSNEM
+       IF(NPC.EQ.'Y'.AND.IMETHOD.EQ.2)  WRITE(55,871) EPSREL
+       
+       KNEM = KNEM + 1
+       
+       IF (((KNEM.EQ.NNEM).OR.(EPSREL.LE.EPSNEM))
+     &   .AND.(IMETHOD.EQ.2)) THEN
+        
+        DO 5492 IG=1,NG
+         DO 5491 IZ=1,NZ
+          DO 5490 IXY=1,NXYL
+           SCAT(IXY,IZ,IG) = 0.0
+           DO 5485 IGP=1,NG
+            IF(IGP.EQ.IG) GOTO 5485
+            IGPP=IGP
+            IF(IGP.GT.IG) IGPP=IGP-1
+            SCAT(IXY,IZ,IG) = SCAT(IXY,IZ,IG)
+     *        +SIGDSN(IXY,IZ,IG,IGPP)*SW(IXY,IZ,IGP)
+ 5485      CONTINUE
+           SCAT(IXY,IZ,IG)=SCAT(IXY,IZ,IG)*VOLU(IXY,IZ)
+ 5490     CONTINUE
+ 5491    CONTINUE
+ 5492   CONTINUE
+C     
+C...  START OF THE NON-LINEAR NEM ROUTINES
+C================================================
+C     
+C !vmq        IF(CRTON.EQ.'Y') THEN
+C !vmq         NUMNEMITER=NUMNEMITER+1
+C !vmq         PRINT *,'>>>>>>>  PERFORMING NON-LINEAR NEM UPDATE ',
+C !vmq     $     NUMNEMITER
+C !vmq        ENDIF
+        CALL GTIME(TIMENEM1)
+
+C !vmq no hexa        IF(NSHAP.EQ.'CART')  THEN
+         
+         CALL NONNEMC(
+     &     A(LADFSVN),A(LADFSVRDN),A(LDCLN),A(LDLNN),A(LDCWN),
+     &     A(LDLLN),A(LDLWN),A(LDCNN),
+     &     A(LTLXN),A(LTLYN),
+     &     A(LTLZN),A(LPLMX1N),A(LPLMX2N),A(LPLMY1N),A(LPLMY2N),
+     &     A(LPLMZ1N),A(LPLMZ2N),A(LDXN),A(LDYN),A(LDZN),A(LSWN),
+     &     A(LFRACTN),AINT(LNBCN),AINT(LNXSTARTN),AINT(LNXENDN),
+     &     AINT(LNDNUMN),AINT(LNYSTARTN),AINT(LNYENDN),
+     &     A(LRLN),A(LRLPN),A(LRM1N),A(LRMP1N),A(LRM2N),A(LRMP2N),
+     &     A(LDFN),A(LDFPN),A(LJNEMN),A(LSEFVEN) )
+         
+C !vmq no hexa        ENDIF
+        
+C !vmq no hex         IF(NSHAP.EQ.'HEXA')  THEN
+C !vmq no hex C     
+C !vmq no hex C-----CALCULATE FLUX VOLUME WEIGHTED CROSS SECTION
+C !vmq no hex C     
+C !vmq no hex           CALL XSMOD(A(LSWN),A(LSWSN),A(LTXTN),A(LTNFN),A(LTXTSN),
+C !vmq no hex      $     A(LTNFSN),A(LTXTON),A(LTNFON),A(LSRCMOMN),
+C !vmq no hex      $     AINT(LNCOLXYN),AINT(LNCOLZN),
+C !vmq no hex      $     A(LAKN),A(LCSH0N),A(LSNH1N),A(LCSH2N),A(LTCDN),A(LBETATN),
+C !vmq no hex      $     A(LXHIPN),A(LBETATLAMN),N2)         
+C !vmq no hex          IF(HEXBUGRAD.EQ.'Y')THEN
+C !vmq no hex           CALL XSMODKSF(A(LSWN),A(LSWSN),A(LTPFN),A(LTPFSN),A(LTPFON),
+C !vmq no hex      $     A(LTEMPXSN),AINT(LNCOLXYN),AINT(LNCOLZN))
+C !vmq no hex          ENDIF
+C !vmq no hex          
+C !vmq no hex          CALL NONNEMH(
+C !vmq no hex      &     A(LFRACTN),A(LDZN),A(LSWN),A(LSWSN),A(LDCLN),
+C !vmq no hex      &     A(LDCWN),A(LDCNVN),A(LDCNUN),A(LDLLN),A(LDLWN),
+C !vmq no hex      &     A(LDLNVN),A(LDLNUN),A(LADFSVN),A(LADFSVRDN),
+C !vmq no hex      &     A(LTLXN),A(LTLVN),A(LTLUN),A(LTLZN),
+C !vmq no hex      &     A(LPLMZX1N),A(LPLMZV1N),A(LPLMZU1N),A(LPLMXY1N),
+C !vmq no hex      &     A(LPLMXY2N),AINT(LNBCN),AINT(LNXSTARTN),AINT(LNXENDN),
+C !vmq no hex      &     AINT(LNDNUMN),
+C !vmq no hex      &     A(LRLN),A(LRLPN),A(LRM1N),A(LRMP1N),A(LRM2N),A(LRMP2N),
+C !vmq no hex      &     A(LDFN),A(LDFPN),A(LJNEMN),
+C !vmq no hex      &     AINT(LLZN),AINT(LLZ1N),AINT(LLPZN),AINT(LLPZ1N),A(LSEFVEN),
+C !vmq no hex      $     A(LCURNXN),A(LCURNVN),A(LCURNUN),A(LPLMZX2N),
+C !vmq no hex      $     A(LPLMZV2N),A(LPLMZU2N),A(LSRCMOMN),A(LSWSHETN))
+C !vmq no hex         ENDIF
+        
+        CALL GTIME(TIMENEM2)
+        TNCPU = TNCPU + TIMENEM2-TIMENEM1
+        KNEM = 0
+        INEM = 0
+        NCALNON = NCALNON + 1
+        MODIFY=1
+       ENDIF
+       
+C !vmq always anfdbk       IF(ANFDBK.EQ.'Y') THEN
+C !vmq        IF(CRTON.EQ.'Y') THEN
+C !vmq         PRINT *,'>>>>>>>  PERFORMING T-H UPDATE '
+C !vmq        ENDIF
+        
+C        CALL GTIME(TIN) !vmq
+
+        !vmq
+                
+C        CALL THFDBKS(A(LPWRDNN),A(LRELPWRN),A(LGGMKN),
+C     &    A(LAREAN),A(LWTFRRIN),A(LVOLUN),A(LRHOWN),A(LTAVFN),
+C     $    A(LHEFFN),
+C     &    A(LDOPLN),AINT(LNCOLXYN),AINT(LNCOLZN),A(LTCOLCN),A(LTFREFN),
+C     &    A(LUNEWN))
+     
+
+!        call rel2rk3d !vmq
+C        CALL GTIME(TOUT) !vmq
+C        TTHST=TTHST+(TOUT-TIN) !vmq
+         NEWCP = 1 !vmq
+         repeat = .true. !vmq
+         ICOUNTPC=ICOUNTPC + 1
+        RETURN !vmq
+C !vmq alway anfdbk       ENDIF
+C       ICOUNTPC=ICOUNTPC + 1
+       IF(IBURN.EQ.'Y'.AND.ICOUNTPC.EQ.NDELPC
+     &   .AND.ADEPL.EQ.'CORR') THEN
+C !vmq        IF(CRTON.EQ.'Y') THEN
+C !vmq         PRINT *,'>>>>>>>  PERFORMING DEPLETION UPDATE '
+C !vmq        ENDIF
+        ALOGPC='CORRECTOR'
+        ASAVPC='N'
+        CALL DEPLETE(A(LUPUDENN),A(LDELBUN),A(LBUNODEN),
+     &    A(LDU38N),A(LDPU39N),A(LDPU40N),
+     &    A(LDPU41N),A(LDU35N),A(LDLFP1N),A(LDLFP2N),A(LDPU42N),
+     &    A(LFU5N),A(LFU8N),A(LFPU9N),
+     &    A(LFPU0N),A(LFPU1N),A(LFPU2N),A(LRELPWRN),
+     &    A(LSWN),A(LCARON),A(LRNFRON),A(LPFRON),
+     &    A(LBUBOSN),
+     &    A(LU5AN),A(LU8AN),A(LP9AN),A(LP0AN),A(LP1AN),A(LP2AN),
+     &    A(LFLN),A(LRNUU5N),A(LRNUU8N),A(LRNUP9N),A(LRNUP0N),
+     & A(LRNUP1N),A(LRNUP2N),AINT(LNCOLXYN),AINT(LNCOLZN),AINT(LNMAXN),
+     &    A(LFRACTBN),A(LRELPWROLDN),A(LSWOLDN),A(LVOLUN),A(LTPFN),
+     &    A(LDU35OLDN),A(LDU38OLDN),A(LDPU39OLDN),A(LDPU40OLDN),
+     &    A(LDPU41OLDN),A(LDPU42OLDN),A(LDLFP1OLDN),A(LDLFP2OLDN),
+     &    A(LFUFRN),
+     &    A(LFU5PYRON),A(LFU8PYRON),A(LFPU9PYRON),A(LFPU0PYRON),
+     &    A(LFPU1PYRON),A(LFPU2PYRON),A(LU5APYRON),A(LU8APYRON),
+     &    A(LP9APYRON),A(LP0APYRON),A(LP1APYRON),A(LP2APYRON),
+     &    A(LRFPA1PYRON),A(LRFPA2PYRON),
+     &    A(LFU5PYRIN),A(LFU8PYRIN),A(LFPU9PYRIN),A(LFPU0PYRIN),
+     &    A(LFPU1PYRIN),A(LFPU2PYRIN),A(LU5APYRIN),A(LU8APYRIN),
+     &    A(LP9APYRIN),A(LP0APYRIN),A(LP1APYRIN),A(LP2APYRIN),
+     &    A(LRFPA1PYRIN),A(LRFPA2PYRIN),
+     &    A(LRHOWN),A(LRHOWREFN),
+     &    A(LTCOLCN),A(LTCOLREFN),A(LDOPLN),A(LRNFRIN),
+     &    A(LPFRIN),A(LCARIN),A(LFRACTN),A(LTTCOLINN),
+     &    A(LDBPN),A(LDBPOLDN),A(LBPAPYRON),A(LBPAPYRIN),A(LBPAN),
+     &    A(LFU6N),A(LU6AN),A(LDU36N),A(LDU36OLDN),A(LRNUU6N),
+     &    A(LFU6PYRON),A(LU6APYRON),A(LFU6PYRIN),A(LU6APYRIN),
+     &    A(LFU4N),A(LU4AN),A(LDU34N),A(LDU34OLDN),A(LRNUU4N),
+     &    A(LFU4PYRON),A(LU4APYRON),A(LFU4PYRIN),A(LU4APYRIN),
+     &    A(LRHOWMREFN),
+     &    A(LANUMDENN),
+     $    AINT(LINITNDN),A(LREFBN),A(LDAM41N),
+     $    A(LDAM41OLDN),A(LFAM1PYRON),A(LFAM1PYRIN),A(LA1APYRON),
+     $    A(LA1APYRIN),A(LFAM1N),A(LA1AN),A(LRNUA1N),A(LDSMN))
+
+C !vmq no hexa      IF(NSHAP.EQ.'HEXA'.AND.HEXBUGRAD.EQ.'Y')THEN
+C !vmq no hexa       CALL DEPLETES(A(LDU34SN),A(LDU35SN),A(LDU36SN),A(LDU38SN),
+C !vmq no hexa     $  A(LDPU39SN),A(LDPU40SN),A(LDPU41SN),A(LDPU42SN),A(LDAM41SN),
+C !vmq no hexa     $  A(LDBPSN),A(LANUMDENSN),A(LDU34OLDSN),A(LDU35OLDSN),
+C !vmq no hexa     $  A(LDU36OLDSN),A(LDU38OLDSN),A(LDPU39OLDSN),A(LDPU40OLDSN),
+C !vmq no hexa     $  A(LDPU41OLDSN),A(LDPU42OLDSN),A(LDAM41OLDSN),A(LDBPOLDSN),
+C !vmq no hexa     $  A(LFU4PYROSN),A(LFU5PYROSN),A(LFU6PYROSN), A(LFU8PYROSN), 
+C !vmq no hexa     $  A(LFPU9PYROSN),A(LFPU0PYROSN), A(LFPU1PYROSN), 
+C !vmq no hexa     $  A(LFPU2PYROSN),A(LFAM1PYROSN), 
+C !vmq no hexa     $  A(LFU4PYRISN),A(LFU5PYRISN),
+C !vmq no hexa     $  A(LFU6PYRISN),A(LFU8PYRISN), A(LFPU9PYRISN), 
+C !vmq no hexa     $  A(LFPU0PYRISN),A(LFPU1PYRISN), A(LFPU2PYRISN), 
+C !vmq no hexa     $  A(LFAM1PYRISN),A(LSWN), A(LSWSN), A(LSWOLDSN),
+C !vmq no hexa     $  A(LFU4SN),A(LFU5SN),A(LFU6SN),A(LFU8SN),A(LFPU9SN),A(LFPU0SN),
+C !vmq no hexa     $  A(LFPU1SN),A(LFPU2SN),A(LFAM1SN),A(LU4AN),A(LU5AN),A(LU6AN),
+C !vmq no hexa     $  A(LU8AN),A(LP9AN),A(LP0AN),A(LP1AN),A(LP2AN),A(LA1AN),
+C !vmq no hexa     $  A(LFLN),A(LCAROSN),A(LCARISN),A(LRNFROSN),A(LRNFRISN),
+C !vmq no hexa     $ A(LPFROSN),A(LPFRISN),AINT(LNCOLXYN),AINT(LNMAXN),AINT(LNCOLZN),
+C !vmq no hexa     $  A(LDELBUN),A(LDLFP1N),A(LDLFP2N),A(LDLFP1OLDN),A(LDLFP2OLDN),
+C !vmq no hexa     $  A(LRELPWRSN),A(LRELPWROLDSN),A(LU4APYRON),A(LU5APYRON),
+C !vmq no hexa     $  A(LU6APYRON),A(LU8APYRON),A(LP9APYRON),A(LP0APYRON),
+C !vmq no hexa     $  A(LP1APYRON),A(LP2APYRON),A(LA1APYRON),A(LU4APYRIN),
+C !vmq no hexa     $  A(LU5APYRIN),A(LU6APYRIN),A(LU8APYRIN),A(LP9APYRIN),
+C !vmq no hexa     $  A(LP0APYRIN),A(LP1APYRIN),A(LP2APYRIN),A(LA1APYRIN),
+C !vmq no hexa     $  A(LFUFRN),A(LFRACTBN),A(LFRACTN),A(LRHOWN),A(LRHOWREFN),
+C !vmq no hexa     $  A(LTCOLCN),A(LTCOLREFN),A(LREFBN),A(LDOPLN),A(LTTCOLINN),
+C !vmq no hexa     $  A(LRHOWMREFN),A(LVOLUN),A(LRNUU4N),A(LRNUU5N),A(LRNUU6N),
+C !vmq no hexa     $  A(LRNUU8N),A(LRNUP9N),A(LRNUP0N),A(LRNUP1N),A(LRNUP2N),
+C !vmq no hexa     $  A(LRNUA1N),A(LTPFN),A(LRFPA1PYRON),A(LRFPA2PYRON),
+C !vmq no hexa     $  A(LRFPA1PYRIN),A(LRFPA2PYRIN),A(LBPAPYRON),A(LBPAPYRIN),
+C !vmq no hexa     $  A(LBPAN),A(LBUSURFN))
+C !vmq no hexa
+C !vmq no hexa      ENDIF        
+        ICOUNTPC=0
+        MODIFY=1
+       ENDIF
+       
+       IF(IFDBK.EQ.2) THEN
+        
+C     
+C...  START OF THE MULTIPLE SCALING PROCEDURE
+C================================================
+C     
+        IEXIT = 0
+        IF(NEWCP.EQ.1.AND.KSST.GE.ISC.AND.ITYPE.EQ.'FSP') THEN
+         CALL GTIME(TIN)
+         CALL MFST(IEXIT)
+         CALL GTIME(TOUT)
+         TSCALST=TSCALST+(TOUT-TIN)
+        ENDIF 
+        
+        IF(ITYPE.EQ.'FSP')THEN
+         SCALE=1.00
+         IF(IEXIT.NE.1) THEN
+          
+          CALL RELPOWER(SCALE,
+     &      A(LPWRDNN),A(LRELPWRN),A(LZETAN),A(LDIN),
+     &      A(LALPHATN),A(LVOLUN),A(LSWN),A(LTPFN),
+     &      AINT(LNCOLXYN),AINT(LNCOLZN),A(LFRACTBN) ,
+     $      A(LRELPWRSN),A(LSWSN),A(LTPFSN))
+
+C !vmq          IF(CRTON.EQ.'Y') THEN
+C !vmq           PRINT *,'>>>>>>>  PERFORMING T-H UPDATE '
+C !vmq          ENDIF
+          
+C          CALL GTIME(TIN)        !vmq
+          
+C          CALL THFDBKS(A(LPWRDNN),A(LRELPWRN),A(LGGMKN),
+C     &      A(LAREAN),A(LWTFRRIN),A(LVOLUN),A(LRHOWN),A(LTAVFN),
+C     &    A(LHEFFN),A(LDOPLN),AINT(LNCOLXYN),AINT(LNCOLZN),A(LTCOLCN),
+C     &      A(LTFREFN),A(LUNEWN))
+C          CALL GTIME(TOUT) !vmq
+C          TTHST=TTHST+(TOUT-TIN) !vmq
+         ENDIF
+         RETURN !vmq
+        ENDIF
+       ENDIF 
+      ENDIF
+      
+C !vmq always anfdbk      IF(ANFDBK.EQ.'N'.AND.NEWCP.EQ.1.AND.ITYPE.EQ.'FSP'
+C !vmq always anfdbk     &  .AND.KSST.GE.ISC) THEN
+C !vmq always anfdbk       CALL GTIME(TIN)
+C !vmq always anfdbk       CALL SFST
+C !vmq always anfdbk       CALL GTIME(TOUT)
+C !vmq always anfdbk       TSCALST=TSCALST+(TOUT-TIN)
+C !vmq always anfdbk      ENDIF 
+      
+      IF(MODIFY .EQ. 1) THEN
+       
+       CALL GTIME(TIN)
+       
+       LTHSHORT = 0
+       CALL XSFDBK(
+     &   A(LDCLN),A(LDLNN),A(LDCWN),A(LDCNVN),A(LDCNUN),A(LDLLN),
+     &   A(LDLWN),A(LDCNN),A(LDLNVN),A(LDLNUN),A(LRIVELON),A(LRNURON),
+     $   A(LRNURIN),
+     &   A(LB2N),A(LDOPLN),
+     &   A(LRHOWN),A(LDXEN),A(LDSMN),A(LDXN),A(LDYN),
+     &   A(LDZN),A(LVOLUN),A(LAWXN),A(LAWUN),A(LAWVN),A(LAWZN),
+     $   A(LAWYN),
+     &   A(LBWYN),A(LBWXN),A(LBWUN),A(LBWVN),A(LBWZN),A(LAQN),A(LTCDN),
+     &   A(LTCAN),A(LTCRN),A(LTNFN),A(LTPFN),A(LTXTN),A(LSIGDSNN),
+     &   A(LBETAN),
+     &   A(LBETAMIN),A(LXHIPN),A(LXHIPMIN),A(LBETATN),A(LXHIDMIN),
+     &   A(LBETATLAMN),A(LFU5N),A(LFU8N),A(LFPU9N),A(LFPU0N),A(LFPU1N),
+     &   A(LFPU2N),A(LSWN),A(LDU38N),A(LDPU39N),A(LDPU40N),A(LDPU41N),
+     &   A(LDU35N),A(LDPU42N),A(LRNUU5N),A(LRNUU8N),A(LRNUP9N),
+     &   A(LRNUP0N),A(LRNUP1N),A(LRNUP2N),AINT(LNCOLXYN),AINT(LNCOLZN),
+     &   AINT(LNBCN),AINT(LNXSTARTN),AINT(LNXENDN),AINT(LNDNUMN),
+     &   AINT(LNMAXN),
+     &   A(LXXEABN),A(LXSMABN),A(LRNUN),A(LTCOLCN),A(LFRACTN),
+     &   A(LRHOWREFN),A(LTCOLREFN),
+     &   A(LGIN),A(LGXN),A(LGPN),A(LGINMIN),
+     &   A(LGXNMIN),A(LGPNMIN),A(LFU5PYRON),A(LFU8PYRON),A(LFPU9PYRON),
+     &   A(LFPU0PYRON),A(LFPU1PYRON),A(LFPU2PYRON),
+     &   A(LFU5PYRIN),A(LFU8PYRIN),A(LFPU9PYRIN),
+     &   A(LFPU0PYRIN),A(LFPU1PYRIN),A(LFPU2PYRIN),
+     &   LTHSHORT,A(LTTCOLINN),A(LFU6N),A(LDU36N),A(LRNUU6N),
+     &   A(LFU6PYRON),A(LFU6PYRIN),A(LFU4N),A(LDU34N),A(LRNUU4N),
+     &   A(LFU4PYRON),A(LFU4PYRIN),A(LRHOWMREFN),A(LREFBN),
+     &   A(LDAM41N),A(LFAM1N),A(LFAM1PYRON),A(LFAM1PYRIN),A(LRNUA1N),
+     &   A(LALAMDATN),A(LALAMDAMIN),A(LBFACTN),
+     $   A(LTXTON),A(LTNFON),A(LTPFON))
+       
+       CALL GTIME(TOUT)
+       TXSFDST=TXSFDST+(TOUT-TIN)
+       
+      ENDIF
+      
+      IF(MODIFY.EQ.1.OR.(IOUTER.EQ.2.AND.NCNT.EQ.0)) THEN  
+
+C !vmq no wei       IF(IOUTER.EQ.2.AND.(WEILANDTEI*WSCALE).GT.0.0) THEN
+C !vmq no wei        
+C !vmq        IF(CRTON.EQ.'Y') THEN
+C !vmq         WRITE(*,180) WEILANDTEI*WSCALE
+C !vmq 180     FORMAT(' >>>>>>>  PERFORMING WEILANDT SHIFT UPDATE WITH ',
+C !vmq     &     'SHIFT = ',E12.5)         
+C !vmq        ENDIF
+C !vmq no wei        CALL WSHIFT(A(LTNFN),
+C !vmq no wei     &    A(LSWN),A(LFNSWTN),A(LFNSHIFTN),A(LBETATN),
+C !vmq no wei     &    A(LXHIPN),A(LBETATLAMN),A(LFILAMDT1N))
+C !vmq no wei        
+C !vmq no wei       ENDIF
+       
+       CALL TRIDIA0( A(LRBWXVN),A(LBBWXVN),
+     &   A(LRBFVN),A(LBBFVN),A(LRQWVN),A(LBQWVN),
+     &   A(LYBWXVN),A(LYBFVN),A(LYQWVN),A(LAWZN),
+     &   A(LBWZN),A(LAQN),AINT(LIRPLANN),AINT(LIBPLANN),
+     &   AINT(LIYPLANN),A(LBFN),A(LQWN),A(LFNSHIFTN) )
+       
+       LWOMFLAG=0
+       DO 185 IG=1,NG
+        IF(WOM(IG).GT.0.0) THEN
+         RELWOM=ABS((WOM(IG)-WOMOLD(IG))/WOM(IG))
+        ELSE
+         RELWOM=1.0
+        ENDIF
+        WOMOLD(IG)=WOM(IG)
+        IF(RELWOM.GE.0.01.OR.KSST.LE.20) LWOMFLAG=1
+ 185   CONTINUE
+       IF(LWOMFLAG.EQ.1) THEN
+        CALL GTIME(TIN)	  
+        CALL LSORB0(A(LSSWN),AINT(LITRRN),A(LWOMN),
+     &    A(LWOMON),A(LFLUXN) )
+        CALL GTIME(TOUT)
+        TLSST=TLSST+(TOUT-TIN)
+        IF(NPC.EQ.'Y') THEN
+         WRITE(55,880)
+         WRITE(55,881) (IG,WOM(IG),ITRR(IG),IG=1,NG)
+        ENDIF
+       ENDIF
+       
+       NCNT=-1
+       NEWCP = 1
+       MAOUTERUP=KSST
+       MODIFY=0
+       
+      ENDIF
+      
+      GOTO 10000
+C     
+C-----PRINT CONVERGENCE STATUS -------------------------
+C     
+ 222  CONTINUE
+      CALL GTIME(RTOUT2)
+      OUTOTST=(RTOUT2-RTOUT1)
+      RTOUTST=(RTOUT2-RTOUT1)-(TXSFDST-TSTARTXS)-(TTHST-TSTARTTH)
+     *  -(TSCALST+TNCPU+RTRECST)-(TLSST-TSTARTLS)
+      RTRECST=RTRECST+TLSST
+      WRITE(55,1050)
+      CONVRG='NO'
+      NNEW = 'N'
+      fcallss = .true. !vmq
+      IF(ITRAN .EQ. 'Y') trnfsc = .true. !vmq
+      repeattr = .false.!vmq
+      repeat = .false. !vmq
+      RETURN
+      
+ 200  CONTINUE
+      CALL GTIME(RTOUT2)
+      OUTOTST=(RTOUT2-RTOUT1)
+      RTOUTST=(RTOUT2-RTOUT1)-(TXSFDST-TSTARTXS)-(TTHST-TSTARTTH)
+     *  -(TSCALST+TNCPU+RTRECST)-(TLSST-TSTARTLS)
+      RTRECST=RTRECST+TLSST
+      CONVRG='YES'
+      NNEW = 'Y'
+      fcallss = .true.
+      IF(ITRAN .EQ. 'Y') THEN   !vmq
+        trnfsc = .true.  !vmq
+        fcallss = .false. !vmq
+      ENDIF   !vmq
+      convrk3d = .true. !vmq
+      
+ 870  FORMAT(/T2,'NEM: L_2 TRUE REL RESID KICKOUT CRIT: ',
+     &  2X,E12.5,2X,E12.5)
+ 871  FORMAT(6X,'NEM: L_2 RELATIVE RESIDUAL         =',E12.5/)
+ 880  FORMAT(//1X,'ENERGY',
+     *  /1X,'GROUP  ',9X,'OMEGA',7X,'INNER IT./OUTER IT.')
+ 881  FORMAT(3X,I2,6X,E13.5,11X,I3)
+ 1020 FORMAT('***  OUTER ITERATION STEP = ',I3)
+ 998  FORMAT(1H1,//T55,'(( ITERATION EDIT ))',//)
+ 1021 FORMAT (T2,'AVERAGE BURNUP : ',F10.2,' MWD/MTU')
+ 676  FORMAT(10X,'CORE RELATIVE POWER (%) =  ',F11.5)
+ 1050 FORMAT('***WARNING*** OUTER ITERATION LOOP (W/ OR W/O',
+     *  '  CRITICALITY SEARCH) FAILED TO CONVERGE')
+      
+      RETURN
+      END

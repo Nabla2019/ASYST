@@ -1,0 +1,193 @@
+*deck uptoscs
+PROCEDURE convert_upd_to_scu_directives, conutsd (
+  update_source, us: file = $required
+  scu_source, scus: file = $required
+  status)
+ 
+"*************************************************************
+"*       CONVERT_UPDATE_TO_SCU_DIRECTIVES                    *
+"*       ==================================                  *
+"*                                                           *
+"* Purpose:                                                  *
+"* This procedure replaces UPDATE-directives in sourcefile   *
+"* in equivalent SCU directives.                             *
+"*                                                           *
+"* Author:                                                   *
+"* Tom de Groot                                              *
+"* Netherlands Energy Research Foundation ECN                *
+"*************************************************************
+ 
+  "$FORMAT=OFF
+  VAR
+    invoer: string = $string($value(update_source))
+    uitvoer: string = $string($value(scu_source))
+  VAREND
+  "$FORMAT=ON"
+ 
+  EDIT_FILE file=$fname(invoer) prolog=$null output=$null
+    "$FORMAT=OFF
+    VAR
+      stat: status
+    VAREND
+    "$FORMAT=ON"
+ 
+    "Skip commentaar na kolom 72 by stuurkaarten
+    set_search_margin margin_columns=1
+    locate_text text='*' l=all n=1 status=stat
+    WHILE stat.normal DO
+      delete_characters column=73..max line=current
+      position_forward n=1 status=stat
+      IF stat.normal THEN
+        locate_next status=stat
+      IFEND
+    WHILEND
+    stat.normal = true
+ 
+    "This part replaces in the update source file the text     "
+    "'*COMDECK name rubbish' by '*deck name expand=false'      "
+    stat.normal = true
+    position_cursor line=1 column=1
+    set_search_margin margin_columns= 1..8
+    locate_text text='*COMDECK' upper_case=true word=false ..
+          status= stat
+    WHILE stat.normal DO
+      deckname = $substring($line_text, 9, 60)
+      first = $scan_not_any(' ', deckname)
+      length = 61 - first
+      deckname = $substring(deckname, first, length)
+      length = $scan_any(' ', deckname) - 1
+      regel = '*deck ' // $substring(deckname, 1, length) // ..
+            ' expand=false'
+      replace_lines new_text=regel number=1 line=current
+      locate_next status= stat
+    WHILEND
+ 
+    "This part replaces '*ENDIF rubbish' by '*ifend'
+    position_cursor line=1 column=1
+    stat.normal = true
+    set_search_margin margin_columns= 1..6
+    locate_text text='ENDIF' word=false status=stat
+    WHILE stat.normal DO
+      regel = '*ifend'
+      replace_lines new_text=regel line=current number=1
+      locate_next status=stat
+    WHILEND
+ 
+    "This part replaces de different update IF DEF, statements by
+    "SCU equivalents.
+    "Replaced in one single loop are:
+    " IF +DEF,NAME rubbish
+    " IF -DEF,NAME rubbish
+    " IF +DEF,NAAM , number    rubbish (*ifend is added after number
+    "lines)
+    " IF -DEF,NAAM , number    rubbish (*ifend is added after number
+    "lines)
+    position_cursor line=1 column=1
+    stat.normal = true
+    set_search_margin margin_columns=1..12
+    locate_text text='DEF,' upper_case=true word=false status=stat
+  mainloop: ..
+    WHILE stat.normal DO
+      rlengte = 72 ..
+            "after position rlengte everything will be discarded
+      regel = $substring($line_text, 1, rlengte)
+      regelnr = $current_line
+      IF $scan_string('-DEF,', regel) = 0 THEN
+        direct1 = ''
+        direct2 = ''
+      ELSE
+        direct1 = '$not('
+        direct2 = ')'
+      IFEND
+      komma1 = $current_column + 3
+      lengte = rlengte - komma1
+      deknaam = $substring(regel, komma1+1, lengte)
+      "Staat er een tweede komma in de regel
+      komma2 = $scan_string(',', deknaam)
+      "Find deckname en replace DEF statement
+      eerste_letter = $substring(deknaam, 1, 1) ..
+            "is first letter a space ?
+    scanloop: ..
+      WHILE eerste_letter = ' ' DO
+        lengte = lengte - 1
+        deknaam = $substring(deknaam, 2, lengte)
+        eerste_letter = $substring(deknaam, 1, 1)
+      WHILEND scanloop
+      lengte = $scan_any(' ,', deknaam) - 1
+      deknaam = $substring(deknaam, 1, lengte)
+      delete_lines line=current
+      nieuwe_regel = '*if '//direct1//'$variable(' // deknaam // ..
+        ',defined)' // direct2
+      insert_lines new_text=nieuwe_regel insertion_location=current ..
+            placement=before
+      IF komma2 <> 0 THEN
+        "calculate after how many lines '*ifend' must be inserted"
+        lengte = rlengte - komma1 - komma2
+        getaldeel = $substring(regel, komma1+komma2+1, lengte)
+        cyfer1 = $scan_any('0123456789', getaldeel)
+        getaldeel = $substring(getaldeel, cyfer1, lengte+1-cyfer1)
+        lengte = $scan_any(' ,', getaldeel) - 1
+        getaldeel = $substring(getaldeel, 1, lengte)
+        getal = $integer(getaldeel)
+        "insert *ifend
+        position_forwards number=getal
+        insert_lines new_text='*ifend' insertion_location=current ..
+              placement=after
+        position_cursor lines=regelnr columns=komma1
+      IFEND
+      locate_next status=stat
+    WHILEND mainloop
+ 
+    "This part of the procedure replaces the text "
+    " '*CALL name rubbish' by '*copy name'                   "
+    position_cursor line=1 column=1
+    stat.normal = true
+    set_search_margin margin_columns= 1..5
+    locate_text text='*CALL' upper_case=true word=false status= stat
+    WHILE stat.normal DO
+      deckname = $substring($line_text, 6, 60)
+      first = $scan_not_any(' ', deckname)
+      length = 61 - first
+      deckname = $substring(deckname, first, length)
+      length = $scan_any(' ', deckname) - 1
+      regel = '*copy ' // $substring(deckname, 1, length)
+      replace_lines new_text=regel line=current number=1
+      locate_next status= stat
+    WHILEND
+ 
+ 
+    "This part deletes lines with CTIME and NTIME in columns 2..6  "
+    set_search_margin margin_columns= 2..6
+    delete_lines text='NTIME' lines=all number=all status=stat
+    stat.normal = true
+    delete_lines text='CTIME' lines=all number=all status=stat
+    stat.normal = true
+ 
+    "This part of the procedure replaces $$ in first 2 columns by
+    "'*$' "
+    position_cursor line=1 column=1..2
+    stat.normal = true
+    set_search_margin margin_columns= 1
+    locate_text text='$$' word=false status= stat
+    WHILE stat.normal DO
+      regel = 'c' // $substring($line_text, 2, 71)
+      replace_lines new_text=regel line=current number=1
+      locate_next status= stat
+    WHILEND
+ 
+ 
+    "This part of the procedure replaces $ in first column by 'c'  "
+    position_cursor line=1 column=1
+    stat.normal = true
+    set_search_margin margin_columns= 1
+    locate_text text='$' word=false status= stat
+    WHILE stat.normal DO
+      regel = 'c' // $substring($line_text, 2, 71)
+      replace_lines new_text=regel line=current number=1
+      locate_next status= stat
+    WHILEND
+ 
+    write_file file=$fname(uitvoer)
+  QUIT write_file=no
+ 
+PROCEND convert_upd_to_scu_directives

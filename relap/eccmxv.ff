@@ -1,0 +1,571 @@
+*mlist
+       subroutine eccmxv (hife,i, jm1, l, ix, n)
+c
+c  This subroutine calculates the mixing of ecc liquid with cold
+c  leg flow and steam condensation in different flow regimes in the
+c  ecc mixing component, eccmxv.  It is called in phantv, using
+c  volume index, i, junction index, jm1, inverted junction index,
+c  l and scrach volume index, m, as arguments.
+c
+c  Cognizant engineer: rar,ras (szr).
+c
+c  These local variables had their names changed (4/12/95 gam)
+c  hifc => hifcc
+c                                                       SZR, 19890428.
+c
+c     References cited in this subroutine:
+c
+c *** Ref 1= T.N. Tandon, H.K. Varma and C.P.Gupta, "A New Flow Regime
+c            Map for Condensation Inside Horizontal Tubes,"  Journal of
+c            Heat Transfer, vol 104, pp763-768, (Nov. 1982).
+c
+c     Ref 2= R.A. Dimenna et al., "RELAP5/MOD2 Models and
+c            Correlations" NUREG/CR-5194(August 1988).
+c
+c     Ref 3= H.C. Unal, Maximum Bubble Diameter, Maximum Bubble-Growth
+c            Time and Bubble-Growth Rate During the Subcooled Nucleate
+c            Flow Boiling of Water up to 17.7 MN/m2, "Int.  J. Heat
+c            Mass Transfer," vol.19, pp 643-649, 1975.
+c
+c     Ref 3a= R.A. Riemke, Modification to Unal's Subcooled Flow Boiling
+c             Bubble Model, "Nuclear Technology," vol.102, pp 416-417,
+c             1993.
+c
+c     Ref 4= I.S. Lim et al., "Cocurrent Steam/Water Flow in a
+c            Horizontal Channel," NUREG/CR-2289, Aug. 1981.
+c
+c     Ref 5= Z. Rouhani et al., "TRAC-BF1 Models and Correlations,"
+c            Feb. 1988
+c
+c  Cognizant engineer: szr, (March 1989).
+c
+       use invtbl
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'cons.h'
+       include 'contrl.h'
+       include 'eccmxc.h'
+       include 'jundat.h'
+       include 'scrtch.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+      external hifbub, htheta
+      integer  i, jm1, jm2, jm3, k1, k2, k3, km, l, ix, mflag,
+     & n, nh, nmx
+      real  fwfb(6), fwgb(6), fwgcm(11), fwfcm(11), hifb(6), hifmv(11)
+c
+      real    acirc, ajax, alfaf, alfdc, alff,
+     1    alfmin, alpbub, alphab, alphac, amixer, aplug,
+     2    cjtm, contar, cpmg, cpml, ddmax, ddmin, ddrop, ddropa,
+     3    deltaf, deltf, deltfm, dendr, denob, denoh, dia, dif, djet,
+     4    drarea, drom, dstarr, dtsubm, dvel,  eljet, elm, enom,
+     5    entf, enthl, enthvm,
+     6    falf, farea, fidivd, fijet, filmf, filmt, firsti,
+     7    fxp, galf, gm, hafang, hafp, hfgm, hifbm, hifcc,
+     8    hifd, hife, hifff, hnufm, hnuplg, htheta,
+     &    pb, pdiff, pmv,
+     9    pp, prlm, prgm, psw, rdbub, rebub, refms, regw,
+     a    relent, relf, retb, reyfm, reygm, roml, romv, sbubb, sig,
+     b    slugc, stargj, starj, svoid, svslg, tcgm, tclm,
+     c    tjm, tmg, tml, tmsat, tv1, van, vbs,
+     d    vdrop, vff, vfgbb, vfres, vgg, vjg, vlclm, voidb,
+     e    voider, vscg, vscl, vsmsq, wlinj, wsteam, wstm1,
+     f    wstm2, xent
+      logical reflod
+c
+c                   ================================
+c     calculations
+c                     @@@ temporary value for nmx
+      reflod = .false.
+      fijet = cmpphi(n)
+      nmx = i
+c
+      jm2 = invj(l+1)%invvnx
+      jm3 = invj(l+2)%invvnx
+c
+c  Definition of connecting volume indexes.
+      km = i
+      k1 =ij1nx(jm1)
+      k2 =ij1nx(jm2)
+      k3 =ij1nx(jm3)
+      if(k2 .eq. km) k2 =ij2nx(jm2)
+      if(k3 .eq. km) k3 =ij2nx(jm3)
+c
+c  Defining short names for the indexed variables and other prameters.
+      amixer = avol(km)
+      cpmg   = csubpg(km)
+      cpml   = csubpf(km)
+      dia    = diamv(km)
+      djet   = diamj(jm1)
+      elm    = dl(km)
+      enthvm = hsteam(km)
+      falf   = voidf(km)
+      galf   = voidg(km)
+      pmv    = p(km)
+      roml   = rhof(km)
+      romv   = rhog(km)
+      sig    = sigma(km)
+      tcgm   = thcong(km)
+      tclm   = thconf(km)
+      tmg    = tempg(km)
+      tml    = tempf(km)
+      tmsat  = satt(km)
+      vgg    = velg(km)
+      vff    = velf(km)
+      vscl   = viscf(km)
+      vscg   = viscg(km)
+      prgm   = vscg*cpmg/tclm
+      prlm   = vscl*cpml/tclm
+      drom   = roml - romv
+      dtsubm = tmsat - tml
+      enthl  = uf(km) + pmv/roml
+      hfgm    = enthvm - enthl
+      fidivd = 1.0/max(1.0e-8,sin(fijet))
+      acirc  = piovr4*dia*dia
+c
+c *** reset hifmv and other variables for all flow patterns
+c
+       do  10  nh=1, 11
+               hifmv(nh) = 0.0
+               fwgcm(nh) = 0.0
+               fwfcm(nh) = 0.0
+   10  continue
+c
+      wlinj = ajun(jm1)*voidfj(jm1)*rhofj(jm1)*velfj(jm1)
+      wstm1 = ajun(jm2)*voidgj(jm2)*rhogj(jm2)*velgj(jm2)
+      wstm2 = ajun(jm3)*voidgj(jm3)*rhogj(jm3)*velgj(jm3)
+      wsteam = 0.5*abs(wstm1 + wstm2)
+      gm     = 0.5*abs(voidfj(jm2)*rhofj(jm2)*velfj(jm2)+voidfj(jm3)*
+     &         rhofj(jm3)*velfj(jm3)+voidgj(jm2)*rhogj(jm2)*velgj(jm2)
+     &         +voidgj(jm3)*rhogj(jm3)*velgj(jm3))
+c
+c ****   modified liquid velocity due to the ecc jet impact.
+c
+         pdiff = p(k1) -pmv
+         vsmsq = 2.0*max(0.0, pdiff)/rhof(k1)+velf(k1)*velf(k1)
+         vlclm = min(abs(velfj(jm2)), abs(velfj(jm3)))
+c
+c ****   resultant liquid velocity in the mixer:
+         vfres = sqrt(vsmsq+vlclm*vlclm)
+c
+c *** determination of flow patterns based on the paper by Tandon,
+c     Varma and Gupta, Journal of Heat Transfer, vol 104, (Nov. 1982).
+c     with an added zone of bubbly flow for void fractions less than
+c     0.2, and inclusion of intermediate zones for smooth transitions.
+c
+      stargj = wsteam/amixer/sqrt(gravcn*dia*romv*drom)
+      voider = (1. - galf)/galf
+c ****  limitation of voider (for void > 0.99999)
+c
+         if (voider .le. 1.0e-5) then
+             galf   = 0.99999
+             falf   = 1.0 -galf
+             voider = 1.0e-5
+         endif
+c
+c ***  ============  FLOW REGIME DETERMINATION LOGIC  ============
+c
+      if (voider .gt. 3.) mflag= 11
+c        mflag = 11 for bubbly flow
+      if (((voider .gt. 3.) .and. (voider .le. 4.)) .and.
+     &   (stargj .le. 0.01)) mflag= 10
+c        mflag = 10 for transition between bubbly and plug flow
+      if (((voider .gt. 0.5) .and. (voider .le. 4.)) .and.
+     &   (stargj .gt. 0.0125)) mflag = 9
+c        mflag = 9 for slug flow
+      if (((voider .gt. 0.625) .and. (voider .le. 4.)) .and.
+     &   ((stargj .gt. 0.01) .and. (stargj .le. 0.0125))) mflag = 8
+c        mflag = 8 for transition beween plug and slug flow
+      if ((stargj . le. 0.01) .and. (voider .le. 3.)) mflag = 7
+c        mflag = 7 for plug flow
+      if (((voider .gt. 0.5) .and. (voider .le. 0.625)) .and.
+     &   ((stargj .gt. 0.01) .and. (stargj .le. 0.0125))) mflag = 6
+c        mflag = 6 for transition between wavy, plug and slug flows
+      if (((voider .gt. 0.5) .and. (voider .le. 0.625)) .and.
+     &   ((stargj .gt. 0.0125) .and. (stargj .le. 1.0))) mflag = 5
+c        mflag = 5 for transition between wavy and slug flow
+      if ((stargj .le. 1.0) .and. (voider .le. 0.5)) mflag = 1
+c        mflag = 1 for wavy flow
+      if ((voider .le. 0.5) .and. (stargj .gt. 1.)) mflag = 2
+c        mflag = 2 for the transition between wavy and annular flows
+      if ((voider .le. 0.5) .and. (stargj .gt. 1.125)) mflag = 3
+c        mflag = 3 for annular flow
+      if ((voider .le. 0.5) .and. (stargj .gt. 6.)) mflag = 4
+c        mflag = 4 for dispersed droplet flow
+c
+c     ==============================================================
+c
+c ****       MAIN TYPES OF HIFB, FWGB, FWFB AND FICB
+c       ----------------------------------------------------------
+c
+c *** NOTE;  There are six basic modes of interfacial interactions:
+c            hifb(1)  for wavy flow
+c            hifb(2)  for plug flow
+c            hifb(3)  for slug flow
+c            hifb(4)  for bubbly flow
+c            hifb(5)  for annular, semi-annular flow
+c            hifb(6)  for dispersed droplet flow
+c ****  Same basic modes apply to fwgb, fwfb and ficb
+c       ----------------------------------------------
+c
+      if((mflag.le.2) .or. ((mflag.eq.5) .or. (mflag.eq.6))) then
+c ****   wavy flow
+c
+c ****   hif calculation for stratified horizontal flow, using
+c        equations (5.10) of Ref. 4, with the modified liquid flow,
+c        vfres.
+c
+         refms = vfres*roml*dia/vscl
+         regw  = dia*galf*abs(vgg)*romv/vscg
+c ****    nusselt number for wavy flow:
+         hnufm  = 0.0334*regw**0.58*refms**0.42*prlm**0.33
+c
+c ****   interfacial area calculation for stratified flow is done
+c        using the angle facing the two-phase level in the cold leg.
+c        and the exposed jet length in steam, eljet.
+c
+         svoid  = min(galf, falf)
+         hafang = htheta(svoid)
+         eljet  = 0.5*dia*(1.0-cos(hafang))
+         if (galf .ge. falf) then
+              eljet  = 0.5*dia*(1.0+cos(hafang))
+              hafang = pi -hafang
+         endif
+ 31      continue
+c
+c ****   contact area per unit volume in stratified flow:
+         djet = 1.128379167*sqrt(ajun(jm1))
+         contar = (dia*sin(hafang)*elm -ajun(jm1)*fidivd
+     &   +pi*djet*eljet*fidivd)/(acirc*elm)
+         if (contar .lt. 0.5*pi*djet/acirc) contar = 0.5*pi*djet/acirc
+c
+c ****   basic mode of hif for wavy flow:
+         hifb(1)  = contar *hnufm*tclm/dia
+c
+c ****   wall friction fractions in wavy flow:
+         fwgb(1) = hafang/pi
+         fwfb(1) = 1.0 - fwgb(1)
+c
+      endif
+c                                                 ******************
+ 32      continue
+c
+      if(((mflag.ge.6) .and. (mflag.le.8)) .or. (mflag.eq.10)) then
+c        plug flow
+c ****   in this flow regime, interfacial heat transfer and the wall
+c        friction factors, are calculated as for the wavy flow, but
+c        the interfacial area is interpolated between horizontally
+c        stsratified and complete circular area.
+c
+c ****   the nusselt number
+         reyfm  = vfres*roml*dia/vscl
+         reygm  = dia*galf*abs(vgg)*romv/vscg
+         hnuplg = 0.0344*reygm**0.58*reyfm**0.42*prlm**0.33
+c
+c ****   interfacial area calculation for stratified flow, using the
+c        angle facing the two-phase level in the cold leg.
+c
+         svoid  = min(galf, falf)
+         hafang = htheta(svoid)
+         eljet  = 0.5*dia*cos(hafang)
+         if (galf .ge. falf) then
+            eljet = eljet + 0.5*dia
+            hafang = pi -hafang
+         endif
+c
+c ****     contact area per unit volume in stratified flow:
+         djet   = 1.128379167*sqrt(ajun(jm1))
+         contar = (dia*sin(hafang)*elm -pi*djet*djet/4.0*fidivd
+     &   +pi*djet*eljet*fidivd)/(acirc*elm)
+         if (contar .lt. 0.5*pi*djet/acirc) contar = 0.5*pi*djet/acirc
+c ****            area interpolation
+         tv1    = max(0.0, min(1.0, 0.4*(voider -0.5)))
+         aplug  = tv1/elm + contar*(1.0 -tv1)
+c ****   interfacial heat transfer:
+         hifb(2) = aplug * hnuplg*tclm/dia
+c
+         hafp = hafang/pi
+         fwgb(2) = hafp*(1.0 -tv1) + tv1*galf
+         fwfb(2) = (1.0 - hafp)*(1.0 -tv1) + tv1*falf
+c ****   above are the basic modes of wall friction fractions
+c        for plug flow.
+c
+      endif
+c                                                *******************
+ 33      continue
+c
+      if((mflag.ne.7) .and. ((mflag.ge.5) .and. (mflag.le.9))) then
+c ****  slug flow
+c       calculate hifb, fwgb and fwfb for slug flow (including
+c       bubbles contribution).  The following lines are according to
+c       RELAP5/MOD2 interfacial heat transfer model for slug flow,
+c       described in Ref. 2, but modified for ECCMXV.
+c
+         alphab = 0.20
+         alphac = 0.666
+         slugc = 6.778/(alphac-alphab)
+         vfgbb =exp(-slugc*(galf-alphab))
+         alpbub=alphab*vfgbb
+c
+c ****   wall friction fractions.  it is assumed that 100% of the wall
+c        surface is in contact with liquid in slug and bubbly flows.
+c
+         fwgb(3) = 0.0
+         fwfb(3) = 1.0
+c
+         vbs   = galf
+         voidb =(vbs-alpbub)/(1.0-alpbub)
+         dvel  =abs(vgg-vff)*vfgbb**2
+         call fidisv(dvel,alpbub,rdbub,rebub,sbubb,km,0,dia,reflod)
+         sbubb = (1.0-voidb)*sbubb*vfgbb
+c ***    hif for bubbly flow is calculated in hifbub, based on Ref. 3
+c        and Ref. 3a.
+         call hifbub(hifcc,alpbub, rdbub, rebub, sbubb, vfgbb, km)
+         hifbm = hifcc
+         dvel  = abs(vgg -vff)
+         retb  =  roml*dia*min(dvel, 0.8)/vscl
+         svslg = 4.5*voidb/dia
+c
+         hifb(3) =1.18942*sqrt(retb*prlm)*tclm/dia*2.0*svslg +hifbm
+c
+      endif
+c                                                ********************
+ 34      continue
+      if(mflag.ge.10) then
+c ****   bubbly flow
+c ****   calculation of iterfacial heat transfer for bubbly flow,
+c        based on Ref 2.
+c
+         vfgbb = abs(vgg - vff)
+         alpbub = galf
+         if (galf .lt. 1.0e-5) then
+             alpbub = 1.0e-5
+             vfgbb  = vfgbb*alpbub*1.0e5
+         endif
+         call fidisv(vfgbb,alpbub,rdbub,rebub,sbubb,km,0,dia,reflod)
+         call hifbub(hifcc,alpbub, rdbub, rebub, sbubb, 1.0, km)
+         hifbm = hifcc
+c
+         hifb(4) = hifbm
+c
+c ****   wall friction fractions, assuming 100% liquid contact with the
+c        wall in bubbly flow.
+         fwgb(4) = 0.0
+         fwfb(4) = 1.0
+      endif
+c                                           ************************
+ 35      continue
+      if((mflag.ge.2) .and. (mflag.le.4)) then
+c ****  calculate hif, fwgc1 and fwfc1 for for annular, semi-annular
+c       and dispersed droplet flows.
+c
+c ****  hif for annular flow
+c       annular film flow calculation according to the model used in
+c       TRAC-BF1 (Ref. 5), with liquid droplet entrainment fraction
+c       according to page 4-1-7 of the reference.
+c
+           dstarr = dia*sqrt(gravcn*drom/sig)
+           vjg     = wsteam/(romv*amixer)
+           denob   = sig*drom*gravcn/(romv*romv)*(romv/drom)**0.667
+           starj   = vjg/sqrt(sqrt(denob))
+           relent = roml*abs(vff)*falf*dia/vscl
+           xent = 1.0e-6*starj**2.5*dstarr**1.25*relent**0.25
+c
+c ****     entrained liquid fraction, entf:
+c
+           entf    = (xent-0.03)/sqrt(1.+(xent+0.1)*(xent+0.1))
+c
+c                    void fraction in the droplet-vapor core
+           alfdc   = 1.0 - (1.0-galf)*entf
+c
+c ****  film interfacial area, according to eqs.(4.1.30) through
+c       (4.1.34) of Ref. 5.
+c
+         alfaf  = 1.0 -(1.0 -galf)*(1.0 -entf)
+         deltf  = 0.5*dia*(1.0 -sqrt(alfaf))
+         deltfm = (18.0*sig*vscl*vscl/(gravcn*gravcn*roml*roml*roml))
+     &             **0.2
+         deltaf = max(deltf, deltfm)
+         alfmin = 0.0
+         if ((2.0*deltfm) .lt. dia) alfmin= (1.0 -2.0*deltfm/dia)**2
+         farea  = 4.0*sqrt(alfaf)/dia
+         if (galf .gt. alfmin) farea = farea *(1.0-alfaf)/(1.0-alfmin)
+c
+c        film-interface heat transfer coefficient according to
+c        eqs.(4.1.51) through (4.1.56) of Ref. 5.
+c
+             filmf = (1. -entf)*(1. -galf)*vfres*roml*amixer
+             relf  = 4.0*filmf/(pi*vscl*dia)
+             dtsubm= abs(dtsubm) + 1.0e-3
+             ajax  = cpml*dtsubm*sqrt(roml/romv)/hfgm
+             filmt = filmf/(roml*pi*dia*vfres)
+             dif   = dia -2.*filmt
+             denoh = pi*dif*(ajax*relf)**0.667
+             enom  = (gravcn*roml*roml/(vscl*vscl))**0.333
+             hifff  = 0.0771*cpml*filmf*enom/denoh
+c  Interfacial heat transfer to liquid in pure annular flow.
+             hifb(5) = farea * hifff
+c
+c  Wall friction factors for annular flow (according to page 6A-4 of
+c  ref 2).
+             alff = 1.0 - alfaf
+             fwfb(5) = alff**0.25
+             fwgb(5) = 1.0 -fwfb(5)
+c
+c  Wall friction factors for droplet flow, assuming no liquid contact
+c  with the walls.
+             fwgb(6) = 1.0
+             fwfb(6) = 0.0
+c
+c ****   droplet flow
+c ****   hif calculation for droplet flow according to Ref. 5, with
+c        droplet diameter calculation according to eq.(4.1.25) through
+c        (4.1.29) of that reference.
+c
+         tjm    = abs(galf*vgg +falf*vff)
+         vdrop  = 1.414*(gravcn*sig*drom/(romv*romv))**0.25
+         fxp    = (vscg*vscg/(sig*romv*sqrt(sig/(gravcn*drom))))**0.0833
+         cjtm   = 1.0297*vdrop/fxp
+         if (cjtm .lt. tjm) vdrop = 3.0*sig*(gravcn*gravcn*drom*drom/
+     &   (vscg*romv))**0.333/(romv*tjm*tjm)
+         dendr  = max((vdrop*vdrop), (tjm*tjm))
+         ddrop  = 2.7*sig/(romv*dendr)
+c
+c **** limitation of droplet diameter (ddrop) to physically acceptable
+c      values (more than 0.2 mm and less than some other limits)
+c
+         ddmin  = 2.0e-4
+         ddropa = (6.0*(1.0-galf)/(1.0e6*pi+1.0))**0.333
+         ddmax  = 0.25*dia
+         ddrop  = min (ddrop, ddmax)
+         ddrop  = min (ddrop, ddropa)
+         ddrop  = max (ddrop, ddmin)
+c
+c                      interfacial area of the droplets per unit vol.
+         drarea = 6.0*(1.0 -alfdc)/ddrop
+c
+c        droplet-interface heat transfer coeefficient according to
+c                                            eq.(4.1.40) of Ref. 5.
+         hifd  = 1.8*pi*pi*tclm/ddrop
+c ****   hif for droplet flow
+         hifb(6) = hifd * drarea
+c
+c ****       hif for annular-mist flow
+             hifb(5)  = hifb(5) + hifb(6)
+c
+      endif
+c
+ 36      continue
+c     ============================================================
+c
+c ****   APPORTIONMENT OF HIFMV, FICMV, FWALF AND FWALG VALUES
+c                     FOR DIFFERENT MFLAG NUMBERS
+c        -----------------------------------------------------
+c
+      if(mflag .eq. 1) then
+              hifmv(1) = hifb(1)
+              fwfcm(1) = fwfb(1)
+              fwgcm(1) = fwgb(1)
+      endif
+c
+      if(mflag .eq. 2) then
+              van = min(1.0, max((9.0 -8.0*stargj), 0.0))
+              hifmv(2) = hifb(5)**(1.0-van)*hifb(1)**van
+              fwfcm(2) = fwfb(1)*van +fwfb(5)*(1.0 -van)
+              fwgcm(2) = fwgb(1)*van +fwgb(5)*(1.0 -van)
+      endif
+c
+      if(mflag .eq. 3) then
+              hifmv(3) = hifb(5)
+              fwfcm(3) = fwfb(5)
+              fwgcm(3) = fwgb(5)
+      endif
+c
+      if(mflag .eq. 4) then
+              hifmv(4) = hifb(6)
+              fwfcm(4) = fwfb(6)
+              fwgcm(4) = fwgb(6)
+      endif
+c
+      if(mflag .eq. 5) then
+              psw = min(1.0, max((8.0*voider -4.0), 0.0))
+              hifmv(5) = hifb(3)**psw*hifb(1)**(1.0-psw)
+              fwfcm(5) = fwfb(3)*psw +fwfb(1)*(1.0 -psw)
+              fwgcm(5) = fwgb(3)*psw +fwgb(1)*(1.0 -psw)
+      endif
+c
+      if(mflag .eq. 6) then
+          pp  = min(1.0, max(400.*stargj -4.0, 0.0))
+          firsti = hifb(2)**(1.0-pp) *hifb(3)**pp
+          psw = min(1.0, max((8.0*voider -4.0), 0.0))
+          hifmv(6) = firsti**psw*hifb(1)**(1.0-psw)
+          firsti   = fwfb(2)*(1.0 -pp) +fwfb(3)*pp
+          fwfcm(6) = firsti*psw +fwfb(1)*(1.0 -psw)
+          firsti   = fwgb(2)*(1.0 -pp) +fwgb(3)*pp
+          fwgcm(6) = firsti*psw +fwgb(1)*(1.0 -psw)
+      endif
+c
+      if(mflag .eq. 7) then
+              hifmv(7) = hifb(2)
+              fwfcm(7) = fwfb(2)
+              fwgcm(7) = fwgb(2)
+      endif
+c
+      if(mflag .eq. 8) then
+          pp = min(1.0,max(400.*stargj -4.0, 0.0))
+          hifmv(8) = hifb(2)**(1.0-pp) *hifb(3)**pp
+          fwfcm(8) = fwfb(2)*(1.0 -pp) +fwfb(3)*pp
+          fwgcm(8) = fwgb(2)*(1.0 -pp) +fwgb(3)*pp
+      endif
+c
+      if(mflag .eq. 9) then
+              hifmv(9) = hifb(3)
+              fwfcm(9) = fwfb(3)
+              fwgcm(9) = fwgb(3)
+      endif
+c
+      if(mflag .eq. 10) then
+              pb  = min(1.0, max((voider -3.0), 0.0))
+              hifmv(10) = hifb(4)**pb*hifb(2)**(1.0 -pb)
+              fwfcm(10) = fwfb(4)*pb +fwfb(2)*(1.0 -pb)
+              fwgcm(10) = fwgb(4)*pb +fwgb(2)*(1.0 -pb)
+      endif
+c
+      if(mflag .eq. 11) then
+              hifmv(11) = hifb(4)
+              fwfcm(11) = fwfb(4)
+              fwgcm(11) = fwgb(4)
+      endif
+c
+ 37      continue
+c ****       END OF HIFMV, FWALF AND FWALG DETERMINATION
+c           =====================================================
+c
+c ****      variables to be returned to PHAINT:
+c           -----------------------------------
+        do  60  nh=1,  11
+                  if (mflag . eq. nh) then
+                     fwfxag(ix) = fwgcm(nh)
+                     fwfxaf(ix) = fwfcm(nh)
+                     hife    = hifmv(nh)
+                     flomap(ix) = 15 +nh
+                  endif
+  60    continue
+c
+c *** reduction of hif due to the presence of noncondensible gas.
+c     the following correction factor is based on the correlation
+c     suggested by DeVuono and Cristensen, published in Fundamentals
+c     of Phase Change, ASME-HTD-Vol. 38, 1984 (pp 73-80).
+c
+      hife  = hife*(1.0-quala(i))**4.31
+c
+c ****  vapor-to-interface heat transfer for condensation (constant):
+c
+        hig(nmx) = 1.0e7
+      if (voidf(i) .le. 0.0) hig(i) = 0.0
+c
+ 38      continue
+      return
+      end

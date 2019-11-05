@@ -1,0 +1,1065 @@
+*mlist
+*if def,selap
+       subroutine reloc (j,qstocc,qstocb)
+!
+!  Performs structural melt transport calculations:
+!  1. material relocation,
+!  2. heat transfer from molten material to intact structures,
+!  3. solidification of molten material on structures,
+!  4. adjusts appropriate nodal material balances, and
+!  5. determines subchannel blockage.
+!
+!  Cognizant engineer: ewc (ljo fpg).
+!
+!******************************************************************
+!
+!     reloc             1-April-96
+!
+!     the BWR canister/control blade modules were developed at ORNL
+!     by L.J.Ott under the auspices of the NRC sponsored Boiling
+!     Water Reactor Severe Accident Technologies programs.
+!
+!     for information or assistance, call
+!                 L.J.Ott (fts)-624-0324 or (615)-574-0324
+!                 F.P.Griffin (fts)-626-4684 or (615)-576-4684
+!
+!******************************************************************
+!
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+!
+       include 'scddat.h'
+       include 'tblsp.h'
+       include 'ndxara.h'
+       include 'miscon.h'
+       include 'cpmdat.h'
+       include 'contrl.h'
+       include 'ufiles.h'
+       real(kr) cpsmel,scp,ccp,ccpr,cpzmel,csaeff,delt,
+     & delt2 , delt3 , dumelx, dz    , fss(11)       ,
+     & fwssoo, fwzrro, htmtob, htmtoc, qsenbl, qstoc1,
+     & qstoc2, qstoc3, qstocb(ndax)  , qstocc(ndax,2),
+     & rss   , rss1  , rss2  , rvol  , sum(4), sum3i ,
+     & sum3ic, s3iss , sum3iz, sum3jr, s3jrss, s3jrz ,
+     & sum3k , s3k1ss,s3k1z  , s3kss , s3kto1, sum3kz,
+     & sum5  , sumcb , sumsox, sumss5, tnew  , tsscb ,
+     & w1t2  , w5t4  , w5t4z , w7t6  , wfss  , wfz1  ,
+     & woxtm , wssi  , zlf   , zsum  , zwf
+       real(kr) th1,th2,thmin1,thmin2,thopen,wbc1,wss1,wso1,wzr1,wzo1
+       real(kr) aenthl,senthl,centhl,centhlr,zonthl
+!
+       integer ibundl,ifs
+       integer i,isum,j,jr,k,kto1,l,m,n
+!
+!-----common blocks
+!
+       include 'blageo.h'
+       include 'axtrns.h'
+       include 'blinit.h'
+       include 'cboilx.h'
+       include 'cr2.h'
+       include 'za.h'
+!
+       htmtoc = hzmbhr/60.0
+       htmtob = hsmshr/60.0
+!  use conversions of k = (f + 459.67)/1.8
+!  and btu/(lbm*f) = j/(kg*k) / 4186.8
+       if (chngno(70)) then
+         cpzmel = ccpr((tmelbx+459.67)/1.8)/4186.8
+       else
+         cpzmel = ccp((tmelbx+459.67)/1.8)/4186.8
+       endif
+         cpsmel=scp((tmelcb+459.67)/1.8)/4186.8
+         fwzrro=(1.0/(1.0-fwzrzr)-1.0)
+         fwssoo=(1.0/(1.0-fwssss)-1.0)
+!
+!  thopen = thickness of interstitial blockage that must melt to
+!           reopen downward path for relocation
+!  thmin1 = minimum thickness of interstitial blockage (seg. 1)
+!  thmin2 = minimum thickness of interstitial blockage (seg. 2)
+!
+         thopen=0.333333*celcba(1,j)/boxl(1,j)
+         thmin1=celcba(1,j)/boxl(1,j)-thopen
+         sumcb = (0.98*aflwto(ncmpgs(icbla(j)))/nsigl(icbla(j))/
+     &   .09290304) - celcba(1,j)
+         if(sumcb.le.0.0)then
+            fail=.true.
+            write(output,1000) icbla(j)
+ 1000       format('0******** ERROR - Inconsistent input data for ',
+     &      'BWR blade/box component number',i4/
+     &      '    (number of individual BWR blade/box structures on ',
+     &      'card 4ccc0100) times'/
+     &      '    (distance between control blade and channel box ',
+     &      'on card 4ccc0200) times'/
+     &      '    (length of control blade on card 4ccc0300) must ',
+     &      'be less than'/
+     &      '    (98% of flow area for interstitial volumes defined ',
+     &      'on cards 4ccc0401-99)')
+            sumcb=celcba(2,j)
+         endif
+         thmin2=max((min(celcba(2,j),sumcb)/boxl(2,j)-thopen),0.0)
+!
+!----check for canister relocation
+!
+      do 300 k=1,2
+!
+!    if wzcan(i,k,j,5) and/or sum of wsscan(i,k,j,l,1) is ne 0.0,
+!    then check for solidification of molten material on can,
+!    relocate material that does not solidify downward to the
+!    next available node. if material relocates past node 1,
+!    it is no longer within the defined core and thus passes
+!    to the next structure below the core.
+!
+         do 160 n=1,ndz(j)
+            i=ndz(j)-n+1
+            dz=hdz(i,j)
+            qstocc(i,k)=0.0
+            if(k.ne.2)then
+               if((wzcan(i,k,j,1)+wzcan(i,k,j,4)+
+     *         wsscan(i,k,j,1,2)+wsscan(i,k,j,2,2)+wsscan(i,k,j,3,2))
+     *         .lt.0.02*wzcani(i,k,j))then
+                  wzcan(i,k,j,5)=wzcan(i,k,j,5)+wzcan(i,k,j,4)+
+     *                           wzcan(i,k,j,3)+wzcan(i,k,j,1)
+                  wzcan(i,k,j,4)=0.0
+                  wzcan(i,k,j,3)=0.0
+                  wzcan(i,k,j,1)=0.0
+                  wzcan(i,k,j,7)=wzcan(i,k,j,7)+wzcan(i,k,j,6)+
+     *                           wzcan(i,k,j,2)
+                  wzcan(i,k,j,6)=0.0
+                  wzcan(i,k,j,2)=0.0
+                  do 634 l=1,11
+                     wsscan(i,k,j,l,1)=wsscan(i,k,j,l,1)+
+     *                                 wsscan(i,k,j,l,2)
+                     wsscan(i,k,j,l,2)=0.0
+  634                continue
+                  scn(i,k,j)=0.0
+                  if(iblkcb(i,k,j).eq.2)iblkcb(i,k,j)=0
+                  twscan(i,k,j)=max(tboxo(i,k,j),tmlszr)
+               end if
+            else
+               if((wzcan(i,k,j,1)+wzcan(i,k,j,4)+
+     *         wsscan(i,k,j,1,2)+wsscan(i,k,j,2,2)+wsscan(i,k,j,3,2)+
+     *         wsscno(i,j,1,2)  +wsscno(i,j,2,2)  +wsscno(i,j,3,2))
+     *         .lt.0.02*wzcani(i,k,j))then
+                  wzcan(i,k,j,5)=wzcan(i,k,j,5)+wzcan(i,k,j,4)+
+     *                           wzcan(i,k,j,3)+wzcan(i,k,j,1)
+                  wzcan(i,k,j,4)=0.0
+                  wzcan(i,k,j,3)=0.0
+                  wzcan(i,k,j,1)=0.0
+                  wzcan(i,k,j,7)=wzcan(i,k,j,7)+wzcan(i,k,j,6)+
+     *                           wzcan(i,k,j,2)
+                  wzcan(i,k,j,6)=0.0
+                  wzcan(i,k,j,2)=0.0
+                  do 635 l=1,11
+                     wsscan(i,k,j,l,1)=wsscan(i,k,j,l,1)+
+     *                                 wsscan(i,k,j,l,2)
+                     wsscan(i,k,j,l,2)=0.0
+                     wsscno(i,j,l,1)  =wsscno(i,j,l,1)+
+     *                                 wsscno(i,j,l,2)
+                     wsscno(i,j,l,2)  =0.0
+  635             continue
+                  scn(i,k,j)=0.0
+                  twscan(i,k,j)=max(tboxo(i,k,j),tmlszr)
+               end if
+            endif
+            sum(1)=0.0
+            sum(2)=0.0
+            sum(3)=0.0
+            sum(4)=0.0
+            do 30 l=4,7
+   30          sum(1)=sum(1)+wzcan(i,k,j,l)
+            do 40 l=1,6
+               if(l.eq.5)go to 40
+               sum(2)=sum(2)+wzcan(i,k,j,l)
+   40          continue
+            sum5=wzcan(i,k,j,5)+wzcan(i,k,j,7)
+            do 50 m=1,2
+               do 50 l=1,11
+   50             sum(m+2)=sum(m+2)+wsscan(i,k,j,l,m)
+            sumss5=wsscan(i,k,j,1,1)+wsscan(i,k,j,2,1)+wsscan(i,k,j,3,1)
+            if(scn(i,k,j).ne.0.0)then
+               if(abs(wzcan(i,k,j,5)+sum(3)).ge.1.0e-20)then
+                  if(abs(sum(3)+sum(4)).lt.1.0e-20 .and.
+     *            twscan(i,k,j).ge.(tmelbx-0.01))then
+!  molten material solidifies at tmelbx
+                     delt=twscan(i,k,j)-tboxo(i,k,j)
+                     if(delt.gt.0.0)then
+                        qstoc1=dz*boxl(k,j)*htmtoc*delt*dtm
+                        qstoc2=sum(2)*cpzmel*(tmelbx-tboxo(i,k,j))
+                        qstoc1=min(qstoc1,qstoc2)
+                        dumelx=wzcan(i,k,j,5)*hfzirc
+                        if(qstoc1.gt.dumelx.or.wzcan(i,k,j,5).lt.
+     *                     1.0e-15)then
+                           qstocc(i,k)=dumelx/(dtm/60.0)/dz
+                           wzcan(i,k,j,4)=wzcan(i,k,j,4)+wzcan(i,k,j,5)
+                           wzcan(i,k,j,5)=0.0
+                           wzcan(i,k,j,6)=wzcan(i,k,j,6)+wzcan(i,k,j,7)
+                           wzcan(i,k,j,7)=0.0
+                        else
+                           qstocc(i,k)=qstoc1/(dtm/60.0)/dz
+                           w5t4=qstoc1/hfzirc
+                           w5t4z=min(w5t4,wzcan(i,k,j,5))
+                           wzcan(i,k,j,4)=wzcan(i,k,j,4)+w5t4z
+                          wzcan(i,k,j,5)=max(wzcan(i,k,j,5)-w5t4z,0.0)
+                           w7t6=min(fwzrro*w5t4z,wzcan(i,k,j,7))
+                           wzcan(i,k,j,6)=wzcan(i,k,j,6)+w7t6
+                           wzcan(i,k,j,7)=max(wzcan(i,k,j,7)-w7t6,0.0)
+                        end if
+                        twscan(i,k,j)=tmelbx
+                     end if
+                  else
+!  molten material solidifies at tmlszr
+                     delt=twscan(i,k,j)-tboxo(i,k,j)
+                     if(tboxo(i,k,j).gt.tmlszr.and.delt.gt.0.0)then
+                        qstoc1=dz*boxl(k,j)*htmtoc*delt*dtm
+                       tnew=(tboxo(i,k,j)*(sum(2)*cpzmel+sum(4)*cpsmel)+
+     *                       twscan(i,k,j)*(sum(3)*cpsmel+sum5*cpzmel))/
+     *                     ((sum(2)+sum5)*cpzmel+(sum(4)+sum(3))*cpsmel)
+                        qstoc3=(sum(3)*cpsmel+sum5*cpzmel)*
+     *                         (twscan(i,k,j)-tnew)
+                        qstoc1=min(qstoc1,qstoc3)
+                        qstocc(i,k)=qstoc1/(dtm/60.0)/dz
+                        twscan(i,k,j)=twscan(i,k,j)-
+     *                              qstoc1/(sum(3)*cpsmel+sum5*cpzmel)
+                        twscan(i,k,j)=max(twscan(i,k,j),tmlszr)
+                   else if(tboxo(i,k,j).le.tmlszr.and.delt.ge.0.0)then
+                        qstoc1=dz*boxl(k,j)*htmtoc*delt*dtm
+                        qstoc2=(sum(2)*cpzmel+sum(4)*cpsmel)*delt
+                        delt2=twscan(i,k,j)-tmlszr
+                        qstoc3=sumss5*hfssb+(sum(3)*cpsmel+sum5*cpzmel)*
+     *                         delt2+wzcan(i,k,j,5)*hfzirc
+                        qstoc1=min(qstoc1,qstoc2,qstoc3)
+                        dumelx=qstoc3
+                        if(qstoc1.ge.dumelx)then
+                           tnew=(dumelx+
+     *                       tboxo(i,k,j)*(sum(2)*cpzmel+sum(4)*cpsmel)+
+     *                       twscan(i,k,j)*(sum(3)*cpsmel+sum5*cpzmel))/
+     *                     ((sum(2)+sum5)*cpzmel+(sum(4)+sum(3))*cpsmel)
+                           delt3=tmlszr-tnew
+                           if(delt3.gt.0.0)then
+                              dumelx=dumelx+
+     *                               (sum(3)*cpsmel+sum5*cpzmel)*delt3
+                           end if
+                           qstocc(i,k)=dumelx/(dtm/60.0)/dz
+                           do 60 l=1,11
+                              wsscan(i,k,j,l,2)=wsscan(i,k,j,l,2)+
+     *                                          wsscan(i,k,j,l,1)
+   60                         wsscan(i,k,j,l,1)=0.0
+                           wzcan(i,k,j,4)=wzcan(i,k,j,4)+wzcan(i,k,j,5)
+                           wzcan(i,k,j,5)=0.0
+                           wzcan(i,k,j,6)=wzcan(i,k,j,6)+wzcan(i,k,j,7)
+                           wzcan(i,k,j,7)=0.0
+                           twscan(i,k,j)=tmlszr
+                        else
+                           qstocc(i,k)=qstoc1/(dtm/60.0)/dz
+                           qsenbl=(sum(3)*cpsmel+sum5*cpzmel)*delt2
+                           if(qstoc1.gt.qsenbl)then
+                              qstoc1=qstoc1-qsenbl
+                              wfss=sumss5/(sumss5+wzcan(i,k,j,5))
+                              wfz1=1.0-wfss
+                              w1t2=qstoc1/(wfss*hfssb+wfz1*hfzirc)
+                              do 70 l=1,3
+                                 fss(l)=wsscan(i,k,j,l,1)/
+     *                                  (sumss5+wzcan(i,k,j,5))
+                               wssi=min(fss(l)*w1t2,wsscan(i,k,j,l,1))
+                                wsscan(i,k,j,l,2)=wsscan(i,k,j,l,2)+wssi
+                                 wsscan(i,k,j,l,1)=
+     *                                 max(wsscan(i,k,j,l,1)-wssi,0.0)
+   70                            continue
+                              w5t4=wfz1*w1t2
+                              w5t4z=min(w5t4,wzcan(i,k,j,5))
+                              wzcan(i,k,j,4)=wzcan(i,k,j,4)+w5t4z
+                          wzcan(i,k,j,5)=max(wzcan(i,k,j,5)-w5t4z,0.0)
+                              w7t6=min(fwzrro*w5t4z,wzcan(i,k,j,7))
+                              wzcan(i,k,j,6)=wzcan(i,k,j,6)+w7t6
+                           wzcan(i,k,j,7)=max(wzcan(i,k,j,7)-w7t6,0.0)
+                              woxtm=fwssoo*w1t2*wfss
+                              sumsox=sum(3)-sumss5
+                              if(sumsox.gt.0.0)then
+                                 if(woxtm.ge.sumsox)then
+                                    do 80 l=4,11
+                                    wsscan(i,k,j,l,2)=wsscan(i,k,j,l,2)+
+     *                                                 wsscan(i,k,j,l,1)
+   80                                  wsscan(i,k,j,l,1)=0.0
+                                 else
+                                    do 90 l=4,11
+                                       fss(l)=wsscan(i,k,j,l,1)/sumsox
+                                       wssi=
+     *                             min(fss(l)*woxtm,wsscan(i,k,j,l,1))
+                                       wsscan(i,k,j,l,2)=
+     *                                            wsscan(i,k,j,l,2)+wssi
+                                       wsscan(i,k,j,l,1)=
+     *                                 max(wsscan(i,k,j,l,1)-wssi,0.0)
+   90                                  continue
+                                 end if
+                              end if
+                              twscan(i,k,j)=tmlszr
+                           else
+                            tnew=
+     *                      (tboxo(i,k,j)*(sum(2)*cpzmel+sum(4)*cpsmel)+
+     *                      twscan(i,k,j)*(sum(3)*cpsmel+sum5*cpzmel))/
+     *                     ((sum(2)+sum5)*cpzmel+(sum(4)+sum(3))*cpsmel)
+                            twscan(i,k,j)=max(tnew,tmlszr)
+                           end if
+                        end if
+                     else
+                        qstoc1=dz*boxl(k,j)*htmtoc*delt*dtm
+                       tnew=(tboxo(i,k,j)*(sum(2)*cpzmel+sum(4)*cpsmel)+
+     *                       twscan(i,k,j)*(sum(3)*cpsmel+sum5*cpzmel))/
+     *                     ((sum(2)+sum5)*cpzmel+(sum(4)+sum(3))*cpsmel)
+                        qstoc2=(sum(3)*cpsmel+sum5*cpzmel)*
+     *                         (twscan(i,k,j)-tnew)
+                        qstoc1=max(qstoc1,qstoc2)
+                        qstocc(i,k)=qstoc1/(dtm/60.0)/dz
+                        twscan(i,k,j)=twscan(i,k,j)-qstoc1/
+     *                                (sum(3)*cpsmel+sum5*cpzmel)
+                     end if
+                  end if
+               end if
+            end if
+!
+!     allow for vertical transport (ie,downward) of molten material,
+!     if the node below is not blocked (iblkc(jr,k,j)=2)
+!
+            jr=i-1
+            wzrbun(i,k,j)=0.0
+            wssbun(i,k,j)=0.0
+            tmlbun(i,k,j)=tmelbx
+            ibundl=0
+            if(numfs(k,icbla(j)).ge.1) then
+              do 94 ifs=1,numfs(k,icbla(j))
+                if(dzfrcq( i , cmpfs(k,ifs,icbla(j)) ).lt.0.99 .and.
+     #          irubpp( i , cmpfs(k,ifs,icbla(j)) ).eq.0 .and.
+     #          lcrucb( i , cmpfs(k,ifs,icbla(j)) ).eq.0) ibundl=1
+   94         continue
+            endif
+            if(jr.eq.0)then
+!  gonb4c, gonss are used to calculate the fraction of b4c, ss oxidized
+               gonss(j) =gonss(j) +wsscan(i,k,j,1,1)+wsscan(i,k,j,2,1)+
+     #                             wsscan(i,k,j,3,1)
+               gonb4c(j)=gonb4c(j)+wsscan(i,k,j,8,1)
+!  the next 6 variables are used to calculate the mass and energy that
+!  pass through the nose peice to a lower plenum couple mesh.  apply
+!  conversion factors of 0.4535924 kg/lbm and k = (f + 459.67)/1.8
+               if(nslph0.gt.0) then
+               wbc1=(wsscan(i,k,j,8,1)+wsscan(i,k,j,9,1)+
+     #           wsscan(i,k,j,10,1)+wsscan(i,k,j,11,1))*0.4535924
+               wss1=(wsscan(i,k,j,1,1)+wsscan(i,k,j,2,1)+
+     #           wsscan(i,k,j,3,1))*0.4535924
+               wso1=(wsscan(i,k,j,4,1)+wsscan(i,k,j,5,1)+
+     #           wsscan(i,k,j,6,1)+wsscan(i,k,j,7,1))*0.4535924
+               wzr1=wzcan(i,k,j,5)*0.4535924
+               wzo1=wzcan(i,k,j,7)*0.4535924
+               wnosbc(j)=wnosbc(j)+wbc1
+               wnosss(j)=wnosss(j)+wss1
+               wnosso(j)=wnosso(j)+wso1
+               wnoszr(j)=wnoszr(j)+wzr1
+               wnoszo(j)=wnoszo(j)+wzo1
+               tsscb=(twscan(i,k,j)+459.67)/1.8
+               if (chngno(70)) then
+                 enrnos(j) = enrnos(j) + wbc1*aenthl(2,tsscb,rftemp) +
+     &           (wss1+wso1)*senthl(tsscb,rftemp) +
+     &           wzr1*centhlr(tsscb,rftemp) + wzo1*zonthl(tsscb,rftemp)
+               else
+                 enrnos(j) = enrnos(j) + wbc1*aenthl(2,tsscb,rftemp) +
+     &           (wss1+wso1)*senthl(tsscb,rftemp) +
+     &           wzr1*centhl(tsscb,rftemp) + wzo1*zonthl(tsscb,rftemp)
+               endif
+               endif
+               do 92 l=1,11
+                  tsscni(j)=tsscni(j)+wsscan(i,k,j,l,1)
+   92             wsscan(i,k,j,l,1)=0.0
+               tzrcni(j)=tzrcni(j)+wzcan(i,k,j,5)+wzcan(i,k,j,7)
+               wzcan(i,k,j,5)=0.0
+               wzcan(i,k,j,7)=0.0
+            else
+               if(iblkc(jr,k,j).ne.2)then
+                  s3iss=0.0
+                  s3jrss=0.0
+                  do 100 l=1,11
+                     s3iss=s3iss+wsscan(i,k,j,l,1)
+  100                s3jrss=s3jrss+wsscan(jr,k,j,l,1)
+                  sum3iz=wzcan(i,k,j,5)+wzcan(i,k,j,7)
+                  s3jrz=wzcan(jr,k,j,5)+wzcan(jr,k,j,7)
+                  if(s3iss+sum3iz.le.0.0)then
+                     twscan(i,k,j)=tmelbx
+                  else
+                     tnew=(twscan(i,k,j)*(s3iss*cpsmel+sum3iz*cpzmel)+
+     *                 twscan(jr,k,j)*(s3jrss*cpsmel+s3jrz*cpzmel))/
+     *               ((s3iss+s3jrss)*cpsmel+(sum3iz+s3jrz)*cpzmel)
+                     twscan(i,k,j)=tmelbx
+                     twscan(jr,k,j)=tnew
+                  end if
+                  do 110 l=1,11
+                     wsscan(jr,k,j,l,1)=wsscan(jr,k,j,l,1)+
+     *                                  wsscan(i,k,j,l,1)
+  110                wsscan(i,k,j,l,1)=0.0
+                  wzcan(jr,k,j,5)=wzcan(jr,k,j,5)+wzcan(i,k,j,5)
+                  wzcan(jr,k,j,7)=wzcan(jr,k,j,7)+wzcan(i,k,j,7)
+                  wzcan(i,k,j,5)=0.0
+                  wzcan(i,k,j,7)=0.0
+               elseif(ibundl.eq.1) then
+!  molten material will spread horizontally into the fuel bundle
+                  if(wzcan(i,k,j,5).gt.0.0) wzrbun(i,k,j)=
+     #            wzrbun(i,k,j)+wzcan(i,k,j,5)
+                  if(wzcan(i,k,j,7).gt.0.0) wzrbun(i,k,j)=
+     #            wzrbun(i,k,j)+wzcan(i,k,j,7)
+                  wzcan(i,k,j,5)=0.0
+                  wzcan(i,k,j,7)=0.0
+                  do 114 l=1,11
+                    if(wsscan(i,k,j,l,1).gt.0.0) wssbun(i,k,j)=
+     #              wssbun(i,k,j)+wsscan(i,k,j,l,1)
+  114               wsscan(i,k,j,l,1)=0.0
+                  tmlbun(i,k,j)=twscan(i,k,j)
+!
+!     allow for horizontal transport of molten material,
+!     if the nodes beside the current node are not blocked
+!     (iblkc(i,k-1,j)=2 or iblkc(i,k+1,j)=2)
+!
+               else
+                  kto1=0
+                  if(k.eq.1) then
+                     if(iblkc(i,2,j).ne.2) kto1=2
+                  elseif(k.eq.2) then
+                     if(iblkc(i,1,j).ne.2) kto1=1
+                  endif
+                  if(kto1.eq.0)then
+                  else
+                     s3kss=0.0
+                     s3k1ss=0.0
+                     do 120 l=1,11
+                        s3kss=s3kss+wsscan(i,k,j,l,1)
+  120                   s3k1ss=s3k1ss+wsscan(i,kto1,j,l,1)
+                     sum3kz=wzcan(i,k,j,5)+wzcan(i,k,j,7)
+                     s3k1z=wzcan(i,kto1,j,5)+wzcan(i,kto1,j,7)
+                     if(s3kss+s3k1ss+sum3kz+s3k1z.lt.1.0e-20)then
+                        twscan(i,k,j)=tmelbx
+                        twscan(i,kto1,j)=tmelbx
+                     else
+                        zwf = (s3k1ss+s3k1z)/(s3k1ss+s3k1z+s3kss+sum3kz)
+                        zlf = boxl(kto1,j) / (boxl(kto1,j) + boxl(k,j))
+                        if(zwf.lt.zlf) then
+                        tnew=(twscan(i,k,j)*(s3kss*cpsmel+
+     *                  sum3kz*cpzmel)+twscan(i,kto1,j)*
+     *                  (s3k1ss*cpsmel+s3k1z*cpzmel))/
+     *                  ((s3kss+s3k1ss)*cpsmel+(sum3kz+s3k1z)*cpzmel)
+                        twscan(i,k,j)=tnew
+                        twscan(i,kto1,j)=tnew
+                        do 130 l=1,11
+                        zsum = wsscan(i,kto1,j,l,1) + wsscan(i,k,j,l,1)
+                        wsscan(i,kto1,j,l,1) = zsum * zlf
+  130                   wsscan(i,k,j,l,1) = zsum - wsscan(i,kto1,j,l,1)
+                        zsum = wzcan(i,kto1,j,5) + wzcan(i,k,j,5)
+                        wzcan(i,kto1,j,5) = zsum * zlf
+                        wzcan(i,k,j,5) = zsum - wzcan(i,kto1,j,5)
+                        zsum = wzcan(i,kto1,j,7) + wzcan(i,k,j,7)
+                        wzcan(i,kto1,j,7) = zsum * zlf
+                        wzcan(i,k,j,7) = zsum - wzcan(i,kto1,j,7)
+                        end if
+                     end if
+                  end if
+               end if
+            end if
+  160    continue
+!
+!    check for control blade material relocation on the canister
+!    (interstitial side)
+!
+         if(k.eq.2)then
+!
+!    if sum(3) is ne 0.0, then check for solidification of
+!    molten material on canister, relocate mat. that does not solidify
+!    downward to the next available node. if mat. relocates past node 1,
+!    it is no longer within the defined core and thus passes
+!    to the next structure below the core.
+!
+            do 290 n=1,ndz(j)
+               i=ndz(j)-n+1
+               dz=hdz(i,j)
+               if(scn(i,k,j).ne.0.0)then
+                  sum(1)=0.0
+                  sum(3)=0.0
+                  sum(4)=0.0
+                  do 170 l=1,6
+                     if(l.eq.5)go to 170
+                     sum(1)=sum(1)+wzcan(i,k,j,l)
+  170             continue
+                  do 180 m=1,2
+                     do 180 l=1,11
+  180                   sum(m+2)=sum(m+2)+wsscno(i,j,l,m)
+                  sumss5=wsscno(i,j,1,1)+wsscno(i,j,2,1)+
+     *                   wsscno(i,j,3,1)
+                  if(abs(sum(3)).ge.1.0e-20)then
+                     tsscb=tboxo(i,k,j)
+                     sumcb=sum(1)+sum(4)
+                     delt=twscbb(i,k,j)-tsscb
+                     if(tsscb.gt.tmelcb.and.delt.gt.0.0)then
+                        qstoc1=dz*boxl(k,j)*htmtoc*delt*dtm
+                        tnew=(tsscb*sumcb+sum(3)*twscbb(i,k,j))/
+     *                       (sumcb+sum(3))
+                        qstoc3=sum(3)*cpsmel*(twscbb(i,k,j)-tnew)
+                        qstoc1=min(qstoc1,qstoc3)
+                        qstocc(i,k)=qstoc1/(dtm/60.0)/dz+qstocc(i,k)
+                        twscbb(i,k,j)=twscbb(i,k,j)-
+     *                                qstoc1/(sum(3)*cpsmel)
+                        twscbb(i,k,j)=max(twscbb(i,k,j),tmelcb)
+                     else if(tsscb.le.tmelcb.and.delt.ge.0.0)then
+                        qstoc1=dz*boxl(k,j)*htmtoc*delt*dtm
+                        qstoc2=sumcb*cpsmel*delt
+                        delt2=twscbb(i,k,j)-tmelcb
+                        qstoc3=sumss5*hfssb+sum(3)*cpsmel*delt2
+                        qstoc1=min(qstoc1,qstoc2,qstoc3)
+                        dumelx=qstoc3
+                        if(qstoc1.ge.dumelx)then
+                           tnew=(tsscb*sumcb*cpsmel+dumelx+sum(3)*
+     *                          tmelcb*cpsmel)/((sumcb+sum(3))*cpsmel)
+                           delt3=tmelcb-tnew
+                           if(delt3.gt.0.0)then
+                              dumelx=dumelx+sum(3)*cpsmel*delt3
+                           end if
+                           qstocc(i,k)=dumelx/(dtm/60.0)/dz+qstocc(i,k)
+                           do 190 l=1,11
+                              wsscno(i,j,l,2)=wsscno(i,j,l,2)+
+     *                                         wsscno(i,j,l,1)
+  190                         wsscno(i,j,l,1)=0.0
+                           twscbb(i,k,j)=tmelcb
+                        else
+                           qstocc(i,k)=qstoc1/(dtm/60.0)/dz+qstocc(i,k)
+                           qsenbl=sum(3)*cpsmel*delt2
+                           if(qstoc1.gt.qsenbl)then
+                              qstoc1=qstoc1-qsenbl
+                              w1t2=qstoc1/hfssb
+                              do 200 l=1,3
+                                 fss(l)=wsscno(i,j,l,1)/sumss5
+                               wssi=min(fss(l)*w1t2,wsscno(i,j,l,1))
+                                 wsscno(i,j,l,2)=wsscno(i,j,l,2)+wssi
+                                 wsscno(i,j,l,1)=
+     *                                 max(wsscno(i,j,l,1)-wssi,0.0)
+  200                            continue
+                              woxtm=fwssoo*w1t2
+                              sumsox=sum(3)-sumss5
+                              if(sumsox.gt.0.0)then
+                                 if(woxtm.ge.sumsox)then
+                                    do 210 l=4,11
+                                      wsscno(i,j,l,2)=wsscno(i,j,l,2)+
+     *                                                wsscno(i,j,l,1)
+  210                                  wsscno(i,j,l,1)=0.0
+                                 else
+                                    do 220 l=4,11
+                                       fss(l)=wsscno(i,j,l,1)/sumsox
+                                       wssi=
+     *                             min(fss(l)*woxtm,wsscno(i,j,l,1))
+                                       wsscno(i,j,l,2)=
+     *                                            wsscno(i,j,l,2)+wssi
+                                       wsscno(i,j,l,1)=
+     *                                 max(wsscno(i,j,l,1)-wssi,0.0)
+  220                                  continue
+                                 end if
+                              end if
+                              twscbb(i,k,j)=tmelcb
+                           else
+                              tnew=(tsscb*sumcb+sum(3)*twscbb(i,k,j))/
+     *                             (sumcb+sum(3))
+                              twscbb(i,k,j)=max(tnew,tmelcb)
+                           end if
+                        end if
+                     else
+                        qstoc1=dz*boxl(k,j)*htmtoc*delt*dtm
+                        tnew=(tsscb*sumcb+sum(3)*twscbb(i,k,j))/
+     *                       (sumcb+sum(3))
+                        qstoc2=sum(3)*cpsmel*(twscbb(i,k,j)-tnew)
+                        qstoc1=max(qstoc1,qstoc2)
+                        qstocc(i,k)=qstoc1/(dtm/60.0)/dz+qstocc(i,k)
+                        twscbb(i,k,j)=twscbb(i,k,j)-
+     *                              qstoc1/(sum(3)*cpsmel)
+                     end if
+                  end if
+               end if
+!
+!     allow for vertical transport (ie,downward) of molten material,
+!     if the node below is not blocked (iblkcb(jr,k,j)=2)
+!
+               jr=i-1
+               if(jr.eq.0)then
+!  gonb4c, gonss are used to calculate the fraction of b4c, ss oxidized
+                  gonss(j) =gonss(j) +wsscno(i,j,1,1)+wsscno(i,j,2,1)+
+     #                                wsscno(i,j,3,1)
+                  gonb4c(j)=gonb4c(j)+wsscno(i,j,8,1)
+!  the next 4 variables are used to calculate the mass and energy that
+!  pass through the nose peice to a lower plenum couple mesh.  apply
+!  conversion factors of 0.4535924 kg/lbm and k = (f + 459.67)/1.8
+                  if(nslph0.gt.0) then
+                  wbc1=(wsscno(i,j,8,1)+wsscno(i,j,9,1)+
+     #              wsscno(i,j,10,1)+wsscno(i,j,11,1))*0.4535924
+                  wss1=(wsscno(i,j,1,1)+wsscno(i,j,2,1)+
+     #              wsscno(i,j,3,1))*0.4535924
+                  wso1=(wsscno(i,j,4,1)+wsscno(i,j,5,1)+
+     #              wsscno(i,j,6,1)+wsscno(i,j,7,1))*0.4535924
+                  wplabc(j)=wplabc(j)+wbc1
+                  wplass(j)=wplass(j)+wss1
+                  wplaso(j)=wplaso(j)+wso1
+                  tsscb=(twscbb(i,k,j)+459.67)/1.8
+                  enrpla(j)=enrpla(j)+wbc1*aenthl(2,tsscb,rftemp)+
+     #              (wss1+wso1)*senthl(tsscb,rftemp)
+                  endif
+                  do 222 l=1,11
+                     tsscno(j)=tsscno(j)+wsscno(i,j,l,1)
+  222                wsscno(i,j,l,1)=0.0
+               else
+                  th2=0.0
+                  do 228 l=1,11
+  228                th2=th2+wsscno(jr,j,l,1)+wsscno(jr,j,l,2)
+                  th2=th2/rhossl/dz/boxl(2,j)
+                  if(iblkcb(jr,k,j).ne.2 .or. (iblkcb(jr,k,j).eq.2
+     &            .and. th2.lt.thmin2))then
+                     sum3i=0.0
+                     sum3jr=0.0
+                     do 230 l=1,11
+                        sum3i=sum3i+wsscno(i,j,l,1)
+  230                   sum3jr=sum3jr+wsscno(jr,j,l,1)
+                     if(sum3i.le.0.0)then
+                        twscbb(i,k,j)=tmelcb
+                     else
+                        tnew=(twscbb(i,k,j)*sum3i+twscbb(jr,k,j)*
+     *                        sum3jr)/(sum3i+sum3jr)
+                        twscbb(i,k,j)=tmelcb
+                        twscbb(jr,k,j)=tnew
+                     end if
+                     do 240 l=1,11
+                        wsscno(jr,j,l,1)=wsscno(jr,j,l,1)+
+     *                                    wsscno(i,j,l,1)
+  240                   wsscno(i,j,l,1)=0.0
+!
+!     allow for lateral and downward movement through the canister
+!     if scn(jr,k,j)=0.0
+!
+            else if(scn(jr,k,j).eq.0.0.and.iblkc(jr,k,j).ne.2)then
+               sum3i=0.0
+               sum3ic=0.0
+               do 242 l=1,11
+                  sum3i=sum3i+wsscno(i,j,l,1)
+  242             sum3ic=sum3ic+wsscan(jr,k,j,l,1)
+               sum3iz=wzcan(jr,k,j,5)+wzcan(jr,k,j,7)
+               if(sum3i.le.0.0)then
+                  twscbb(i,k,j)=tmelcb
+               else
+                  tnew=(sum3i*cpsmel*twscbb(i,k,j)+
+     &            (sum3ic*cpsmel+sum3iz*cpzmel)*twscan(jr,k,j))/
+     &            ((sum3i+sum3ic)*cpsmel+sum3iz*cpzmel)
+                  twscbb(i,k,j)=tmelcb
+                  twscan(jr,k,j)=tnew
+               end if
+               do 244 l=1,11
+                  wsscan(jr,k,j,l,1)=wsscan(jr,k,j,l,1)+wsscno(i,j,l,1)
+  244             wsscno(i,j,l,1)=0.0
+!
+!     allow for lateral movement through the canister if scn(i,k,j)=0.0
+!
+                  else if(scn(i,k,j).eq.0.0.and.iblkc(i,k,j).ne.2)then
+                     sum3i=0.0
+                     sum3ic=0.0
+                     do 250 l=1,11
+                        sum3i=sum3i+wsscno(i,j,l,1)
+  250                   sum3ic=sum3ic+wsscan(i,k,j,l,1)
+                     sum3iz=wzcan(i,k,j,5)+wzcan(i,k,j,7)
+                     if(sum3i.le.0.0)then
+                        twscbb(i,k,j)=tmelcb
+                     else
+                        tnew=(sum3i*cpsmel*twscbb(i,k,j)+
+     &                  (sum3ic*cpsmel+sum3iz*cpzmel)*twscan(i,k,j))/
+     &                  ((sum3i+sum3ic)*cpsmel+sum3iz*cpzmel)
+                        twscbb(i,k,j)=tmelcb
+                        twscan(i,k,j)=tnew
+                     end if
+                     do 260 l=1,11
+                        wsscan(i,k,j,l,1)=wsscan(i,k,j,l,1)+
+     *                                    wsscno(i,j,l,1)
+  260                   wsscno(i,j,l,1)=0.0
+!
+!     allow for horizontal transport of molten material,
+!     if the node beside the current node are not blocked
+!     (ie, iblkcb(i,k-1,j)=2 )
+!
+                  else
+                     th1=0.0
+                     do 268 l=1,11
+  268                   th1=th1+wsscbb(i,j,l,1)+wsscbb(i,j,l,2)
+                     th1=th1/rhossl/dz/boxl(1,j)
+                     kto1=0
+                     if(iblkcb(i,1,j).ne.2 .or. (iblkcb(i,1,j).eq.2
+     &               .and. th1.lt.thmin1)) kto1=1
+                     if(kto1.eq.0)then
+                     else
+                        sum3k=0.0
+                        s3kto1=0.0
+                        do 270 l=1,11
+                           s3kto1=s3kto1+wsscbb(i,j,l,1)
+                           sum3k=sum3k+wsscno(i,j,l,1)
+  270                      continue
+                        if(sum3k+s3kto1.lt.1.0e-20)then
+                           twscbb(i,k,j)=tmelcb
+                           twscbb(i,kto1,j)=tmelcb
+                        else
+                           zwf = s3kto1/(s3kto1+sum3k)
+                           zlf = boxl(2,j) / (boxl(1,j) + boxl(2,j))
+                           if(zwf.lt.zlf) then
+                           tnew=(twscbb(i,k,j)*sum3k+twscbb(i,kto1,j)*
+     *                     s3kto1)/(sum3k+s3kto1)
+                           twscbb(i,k,j)=tnew
+                           twscbb(i,kto1,j)=tnew
+                           do 280 l=1,11
+                           zsum = wsscno(i,j,l,1) + wsscbb(i,j,l,1)
+                           wsscno(i,j,l,1) = zsum * zlf
+  280                      wsscbb(i,j,l,1) = zsum - wsscno(i,j,l,1)
+                           end if
+                        end if
+                     end if
+                  end if
+               end if
+  290       continue
+         end if
+  300 continue
+!
+!----check for blockage of canister channels
+!
+      do 330 i=1,ndz(j)
+         dz=hdz(i,j)
+         csafuo(i,j)=csafu(i,j)
+         csafu(i,j)=0.0
+         do 330 k=1,2
+!
+!    relocated mass
+!
+            rss1=0.0
+            rss2=0.0
+            do 310 l=1,11
+  310          rss1=rss1+wsscan(i,k,j,l,1)+wsscan(i,k,j,l,2)
+            do 320 l=4,7
+  320          rss2=rss2+wzcan(i,k,j,l)
+!
+            rvol=rss1/rhossl+rss2/rocldl
+            rvol=max(rvol,0.0)
+!
+!    effective cross-sectional area of relocated mass
+!
+            csaeff=rvol/dz
+            csafu(i,j)=csafu(i,j)+csaeff
+!
+!    check for blockage
+!
+            if(csaeff.ge.cellca(k,j))then
+               iblkc(i,k,j)=2
+            else if(scn(i,k,j).eq.0.0 .and.
+     *      (rss1+rss2).lt.1.0e-15)then
+               iblkc(i,k,j)=0
+            end if
+!
+  330 continue
+!
+!----check for control blade relocation
+!
+!    if sum(3) is ne 0.0, then check for solidification of
+!    molten material on blade, relocate material that does not solidify
+!    downward to the next available node. if mat. relocates past node 1,
+!    it is no longer within the defined core and thus passes
+!    to the next structure below the core.
+!
+      k=1
+      do 460 n=1,ndz(j)
+         i=ndz(j)-n+1
+         dz=hdz(i,j)
+         qstocb(i)=0.0
+         if(scb(i,j).ne.0.0)then
+            isum=icb(i,3,j)+icb(i,2,j)+icb(i,1,j)
+            if(isum.eq.0)scb(i,j)=0.0
+         end if
+         if(scb(i,j).ne.0.0)then
+            sum(1)=0.0
+            sum(2)=0.0
+            sum(3)=0.0
+            sum(4)=0.0
+            do 340 m=1,2
+               do 340 l=1,7
+  340             sum(m)=sum(m)+wsscb(i,j,l,m)
+            do 350 m=1,2
+               do 350 l=1,11
+  350             sum(m+2)=sum(m+2)+wsscbb(i,j,l,m)
+            sum(1)=sum(1)+wfe3o(i,j)+wfe3i(i,j)
+            sum(2)=sum(2)+wfe2o(i,j)+wfe2i(i,j)
+            sumss5=wsscbb(i,j,1,1)+wsscbb(i,j,2,1)+wsscbb(i,j,3,1)
+            if(abs(sum(3)).ge.1.0e-20)then
+               if(icb(i,3,j).eq.1)then
+                  tsscb=tcb3o(i,j)
+                  sumcb=sum(1)+sum(4)
+               else
+                  tsscb=tcb2o(i,j)
+                  sumcb=sum(2)+sum(4)
+               end if
+               delt=twscbb(i,k,j)-tsscb
+               if(tsscb.gt.tmelcb.and.delt.gt.0.0)then
+                  qstoc1=dz*cbl(j)*htmtob*delt*dtm
+                  qstoc2=sumcb*cpsmel*(tmelss-tsscb)
+                  tnew=(tsscb*sumcb+sum(3)*twscbb(i,k,j))/
+     *                 (sumcb+sum(3))
+                  qstoc3=sum(3)*cpsmel*(twscbb(i,k,j)-tnew)
+                  qstoc1=min(qstoc1,qstoc2,qstoc3)
+                  qstocb(i)=qstoc1/(dtm/60.0)/dz
+                  twscbb(i,k,j)=twscbb(i,k,j)-qstoc1/(sum(3)*cpsmel)
+                  twscbb(i,k,j)=max(twscbb(i,k,j),tmelcb)
+               else if(tsscb.le.tmelcb.and.delt.ge.0.0)then
+                  qstoc1=dz*cbl(j)*htmtob*delt*dtm
+                  qstoc2=sumcb*cpsmel*delt
+                  delt2=twscbb(i,k,j)-tmelcb
+                  qstoc3=sumss5*hfssb+sum(3)*cpsmel*delt2
+                  qstoc1=min(qstoc1,qstoc2,qstoc3)
+                  dumelx=qstoc3
+                  if(qstoc1.ge.dumelx)then
+                     tnew=(tsscb*sumcb*cpsmel+dumelx+sum(3)*tmelcb*
+     *                    cpsmel)/((sumcb+sum(3))*cpsmel)
+                     delt3=tmelcb-tnew
+                     if(delt3.gt.0.0)then
+                        dumelx=dumelx+sum(3)*cpsmel*delt3
+                     end if
+                     qstocb(i)=dumelx/(dtm/60.0)/dz
+                     do 360 l=1,11
+                        wsscbb(i,j,l,2)=wsscbb(i,j,l,2)+
+     *                                  wsscbb(i,j,l,1)
+  360                   wsscbb(i,j,l,1)=0.0
+                     twscbb(i,k,j)=tmelcb
+                  else
+                     qstocb(i)=qstoc1/(dtm/60.0)/dz
+                     qsenbl=sum(3)*cpsmel*delt2
+                     if(qstoc1.gt.qsenbl)then
+                        qstoc1=qstoc1-qsenbl
+                        w1t2=qstoc1/hfssb
+                        do 370 l=1,3
+                           fss(l)=wsscbb(i,j,l,1)/sumss5
+                           wssi=min(fss(l)*w1t2,wsscbb(i,j,l,1))
+                           wsscbb(i,j,l,2)=wsscbb(i,j,l,2)+wssi
+  370                    wsscbb(i,j,l,1)=max(wsscbb(i,j,l,1)-wssi,0.0)
+                        woxtm=fwssoo*w1t2
+                        sumsox=sum(3)-sumss5
+                        if(sumsox.gt.0.0)then
+                           if(woxtm.ge.sumsox)then
+                              do 380 l=4,11
+                                 wsscbb(i,j,l,2)=wsscbb(i,j,l,2)+
+     *                                           wsscbb(i,j,l,1)
+  380                            wsscbb(i,j,l,1)=0.0
+                           else
+                              do 390 l=4,11
+                                 fss(l)=wsscbb(i,j,l,1)/sumsox
+                                wssi=min(fss(l)*woxtm,wsscbb(i,j,l,1))
+                                 wsscbb(i,j,l,2)=wsscbb(i,j,l,2)+wssi
+                                 wsscbb(i,j,l,1)=
+     *                                max(wsscbb(i,j,l,1)-wssi,0.0)
+  390                         continue
+                           end if
+                        end if
+                        twscbb(i,k,j)=tmelcb
+                     else
+                        tnew=(tsscb*sumcb+sum(3)*twscbb(i,k,j))/
+     *                       (sumcb+sum(3))
+                        twscbb(i,k,j)=max(tnew,tmelcb)
+                     end if
+                  end if
+               else
+                  qstoc1=dz*cbl(j)*htmtob*delt*dtm
+                  tnew=(tsscb*sumcb+sum(3)*twscbb(i,k,j))/
+     *                 (sumcb+sum(3))
+                  qstoc2=sum(3)*cpsmel*(twscbb(i,k,j)-tnew)
+                  qstoc1=max(qstoc1,qstoc2)
+                  qstocb(i)=qstoc1/(dtm/60.0)/dz
+                  twscbb(i,k,j)=twscbb(i,k,j)-qstoc1/(sum(3)*cpsmel)
+               end if
+            end if
+         end if
+!
+!     allow for vertical transport (ie,downward) of molten material,
+!     if the node below is not blocked (iblkcb(jr,k,j)=2)
+!
+         jr=i-1
+         if(jr.eq.0)then
+!  gonb4c, gonss are used to calculate the fraction of b4c, ss oxidized
+            gonss(j) =gonss(j) +wsscbb(i,j,1,1)+wsscbb(i,j,2,1)+
+     #                          wsscbb(i,j,3,1)
+            gonb4c(j)=gonb4c(j)+wsscbb(i,j,8,1)
+!  the next 4 variables are used to calculate the mass and energy that
+!  pass through the nose peice to a lower plenum couple mesh.  apply
+!  conversion factors of 0.4535924 kg/lbm and k = (f + 459.67)/1.8
+            if(nslph0.gt.0) then
+            wbc1=(wsscbb(i,j,8,1)+wsscbb(i,j,9,1)+
+     #        wsscbb(i,j,10,1)+wsscbb(i,j,11,1))*0.4535924
+            wss1=(wsscbb(i,j,1,1)+wsscbb(i,j,2,1)+
+     #        wsscbb(i,j,3,1))*0.4535924
+            wso1=(wsscbb(i,j,4,1)+wsscbb(i,j,5,1)+
+     #        wsscbb(i,j,6,1)+wsscbb(i,j,7,1))*0.4535924
+            wcrdbc(j)=wcrdbc(j)+wbc1
+            wcrdss(j)=wcrdss(j)+wss1
+            wcrdso(j)=wcrdso(j)+wso1
+            tsscb=(twscbb(i,k,j)+459.67)/1.8
+            enrcrd(j)=enrcrd(j)+wbc1*aenthl(2,tsscb,rftemp)+
+     #        (wss1+wso1)*senthl(tsscb,rftemp)
+            endif
+            do 392 l=1,11
+               tsscbo(j)=tsscbo(j)+wsscbb(i,j,l,1)
+  392          wsscbb(i,j,l,1)=0.0
+         else
+            th1=0.0
+            do 398 l=1,11
+  398          th1=th1+wsscbb(jr,j,l,1)+wsscbb(jr,j,l,2)
+            th1=th1/rhossl/dz/boxl(1,j)
+            if(iblkcb(jr,k,j).ne.2 .or. (iblkcb(jr,k,j).eq.2
+     &      .and. th1.lt.thmin1))then
+               sum3i=0.0
+               sum3jr=0.0
+               do 400 l=1,11
+                  sum3i=sum3i+wsscbb(i,j,l,1)
+  400             sum3jr=sum3jr+wsscbb(jr,j,l,1)
+               if(sum3i.le.0.0)then
+                  twscbb(i,k,j)=tmelcb
+               else
+                  tnew=(twscbb(i,k,j)*sum3i+twscbb(jr,k,j)*sum3jr)/
+     *                 (sum3i+sum3jr)
+                  twscbb(i,k,j)=tmelcb
+                  twscbb(jr,k,j)=tnew
+               end if
+               do 410 l=1,11
+                  wsscbb(jr,j,l,1)=wsscbb(jr,j,l,1)+wsscbb(i,j,l,1)
+  410             wsscbb(i,j,l,1)=0.0
+!
+!     allow for lateral and downward movement through the canister
+!     if scn(jr,k,j)=0.0
+!
+            else if(scn(jr,k,j).eq.0.0.and.iblkc(jr,k,j).ne.2)then
+               sum3i=0.0
+               sum3ic=0.0
+               do 412 l=1,11
+                  sum3i=sum3i+wsscbb(i,j,l,1)
+  412             sum3ic=sum3ic+wsscan(jr,k,j,l,1)
+               sum3iz=wzcan(jr,k,j,5)+wzcan(jr,k,j,7)
+               if(sum3i.le.0.0)then
+                  twscbb(i,k,j)=tmelcb
+               else
+                  tnew=(sum3i*cpsmel*twscbb(i,k,j)+
+     &            (sum3ic*cpsmel+sum3iz*cpzmel)*twscan(jr,k,j))/
+     &            ((sum3i+sum3ic)*cpsmel+sum3iz*cpzmel)
+                  twscbb(i,k,j)=tmelcb
+                  twscan(jr,k,j)=tnew
+               end if
+               do 414 l=1,11
+                  wsscan(jr,k,j,l,1)=wsscan(jr,k,j,l,1)+wsscbb(i,j,l,1)
+  414             wsscbb(i,j,l,1)=0.0
+!
+!     allow for lateral movement through the canister if scn(i,k,j)=0.0
+!
+            else if(scn(i,k,j).eq.0.0.and.iblkc(i,k,j).ne.2)then
+               sum3i=0.0
+               sum3ic=0.0
+               do 420 l=1,11
+                  sum3i=sum3i+wsscbb(i,j,l,1)
+  420             sum3ic=sum3ic+wsscan(i,k,j,l,1)
+               sum3iz=wzcan(i,k,j,5)+wzcan(i,k,j,7)
+               if(sum3i.le.0.0)then
+                  twscbb(i,k,j)=tmelcb
+               else
+                  tnew=(sum3i*cpsmel*twscbb(i,k,j)+
+     &            (sum3ic*cpsmel+sum3iz*cpzmel)*twscan(i,k,j))/
+     &            ((sum3i+sum3ic)*cpsmel+sum3iz*cpzmel)
+                  twscbb(i,k,j)=tmelcb
+                  twscan(i,k,j)=tnew
+               end if
+               do 430 l=1,11
+                  wsscan(i,k,j,l,1)=wsscan(i,k,j,l,1)+wsscbb(i,j,l,1)
+  430             wsscbb(i,j,l,1)=0.0
+!
+!     allow for horizontal transport of molten material,
+!     if the node beside the current node are not blocked
+!     (iblkcb(i,k+1,j)=2)
+!
+            else
+               th2=0.0
+               do 438 l=1,11
+  438             th2=th2+wsscno(i,j,l,1)+wsscno(i,j,l,2)
+               th2=th2/rhossl/dz/boxl(2,j)
+               kto1=0
+               if(iblkcb(i,2,j).ne.2 .or. (iblkcb(i,2,j).eq.2
+     &         .and. th2.lt.thmin2)) kto1=2
+               if(kto1.eq.0)then
+               else
+                  sum3k=0.0
+                  s3kto1=0.0
+                  do 440 l=1,11
+                     sum3k=sum3k+wsscbb(i,j,l,1)
+                     s3kto1=s3kto1+wsscno(i,j,l,1)
+  440                continue
+                  if(sum3k+s3kto1.lt.1.0e-20)then
+                     twscbb(i,k,j)=tmelcb
+                     twscbb(i,kto1,j)=tmelcb
+                  else
+                     zwf = s3kto1/(s3kto1+sum3k)
+                     zlf = boxl(2,j) / (boxl(1,j) + boxl(2,j))
+                     if(zwf.lt.zlf) then
+                     tnew=(twscbb(i,k,j)*sum3k+twscbb(i,kto1,j)*
+     *               s3kto1)/(sum3k+s3kto1)
+                     twscbb(i,k,j)=tnew
+                     twscbb(i,kto1,j)=tnew
+                     do 450 l=1,11
+                     zsum = wsscno(i,j,l,1) + wsscbb(i,j,l,1)
+                     wsscno(i,j,l,1) = zsum * zlf
+  450                wsscbb(i,j,l,1) = zsum - wsscno(i,j,l,1)
+                     end if
+                  end if
+               end if
+            end if
+         end if
+  460 continue
+!
+!----check for blockage
+!
+      do 490 i=1,ndz(j)
+         dz=hdz(i,j)
+         csacbo(i,j)=csacb(i,j)
+         csacb(i,j)=0.0
+         do 490 k=1,2
+!
+!    relocated mass
+!
+            rss=0.0
+            if(k.ne.2)then
+               do 470 l=1,11
+  470             rss=rss+wsscbb(i,j,l,1)+wsscbb(i,j,l,2)
+            else
+               do 480 l=1,11
+  480             rss=rss+wsscno(i,j,l,1)+wsscno(i,j,l,2)
+            end if
+!
+            rvol=rss/rhossl
+            rvol=max(rvol,0.0)
+!
+!    effective cross-sectional area of relocated mass
+!
+            csaeff=rvol/dz
+            csacb(i,j)=csacb(i,j)+csaeff
+!
+!    check for blockage
+!
+         if(k.eq.1) then
+            if(csaeff.ge.celcba(k,j))then
+               iblkcb(i,k,j)=2
+            else
+               if(scb(i,j).eq.0.0 .and. rss.lt.1.0e-15)iblkcb(i,k,j)=0
+            endif
+         else
+            sumcb = (0.98*aflwto(ncmpgs(icbla(j)))/nsigl(icbla(j))/
+     &      .09290304) - celcba(1,j)
+            if(csaeff.ge.celcba(k,j) .or. csaeff.ge.sumcb)then
+               iblkcb(i,k,j)=2
+            else
+              if(iblkcb(i,k,j).eq.2 .and. rss.lt.1.0e-15)iblkcb(i,k,j)=0
+            end if
+         endif
+!
+  490 continue
+      return
+      end
+*endif

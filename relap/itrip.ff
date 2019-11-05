@@ -1,0 +1,196 @@
+*mlist
+       subroutine itrip
+c
+c
+c  Complete checking and processing of trip data and set initial
+c  values of trip.
+c
+c  Cognizant engineer: rjw.
+c
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'stcblk.h'
+       include 'trpblk.h'
+       include 'ufiles.h'
+c
+c  Local variables.
+       integer i,ir,l,lb(5),lx,ntl,ntv,pckcod(2)
+       real con,conv1,conv2(1000)
+       logical tfail,xfail,cnum,hedc,hedv,hedl
+       character la(2)*8,ctab1(6)*2,ctab2(3)*3,lbl*64,chwrd*8
+       external fmvlwr,itrscn,scnreq
+c
+c  Data statements.
+       data la/'nolatch','latch'/
+       data ctab1/'eq','ne','gt','ge','lt','le'/
+       data ctab2/'or','and','xor'/
+c
+       cnum = ntrpff(filndx(18)) .ne. 0
+       lx = ntrpof(filndx(18)) + filndx(18)
+       ntl = ntrpnl(filndx(18))
+       ntv = ntrpnv(filndx(18))
+c  Check for legal trip variables and get packed code.  Get conversion
+c  factor to convert constant factor.
+       if (ntv .eq. 0) go to 24
+       l = filndx(18)
+       do i = 1,ntv
+         tfail = .false.
+         conv1 = 1.0
+         conv2(i) = 1.0
+         ir = ntrpno(l)
+         if (cnum) ir = ir*10 + 20600000
+         write (chwrd,'(a8)') ntrcv1(l)
+         if (chwrd .ne. 'null') go to 26
+         write (output,2007) ir
+ 2007  format ('0******** Null in word 1 of card',i9,' is incorrect.')
+         tfail = .true.
+         go to 27
+   26    if (chwrd .eq. 'timeof') go to 28
+         call scnreq (ir,chwrd,ntrnv1(l),1,pckcod,conv1,lbl,xfail)
+         ntrpc1(l) = pckcod(1)
+         ntrpc1(l+1) = pckcod(2)
+         if (xfail) conv1 = 1.0
+         tfail = tfail .or. xfail
+         go to 27
+   28    call itrscn (ir,ntrnv1(l),ntrpc1(l+1))
+         ntrpc1(l) = 18
+         ntrpop(l) = ior(ntrpop(l),4)
+         conv1 = 1.0
+   27    write (chwrd,'(a8)') ntrcv2(l)
+         if (chwrd .ne. 'null') go to 29
+         ntrpc2(l) = 0
+         ntrpc2(l+1) = 0
+         conv2(i) = conv1
+         xfail = .false.
+         go to 30
+   29    if (chwrd .eq. 'timeof') go to 31
+         call scnreq (ir,chwrd,ntrnv2(l),1,pckcod,conv2(i),
+     &   lbl,xfail)
+         ntrpc2(l) = pckcod(1)
+         ntrpc2(l+1) = pckcod(2)
+         if (xfail) conv2(i) = 1.0
+         tfail = tfail .or. xfail
+         go to 30
+   31    call itrscn (ir,ntrnv2(l),ntrpc2(l+1))
+         ntrpc2(l) = 18
+         ntrpop(l) = ior(ntrpop(l),8)
+         conv2(i) = 1.0
+   30    fail = fail .or. tfail
+         if (tfail) go to 32
+         if (conv1 .eq. conv2(i)) go to 32
+         write (output,2008) ir
+ 2008  format ('0******** Quantities being compared in trip',i9,' do not
+     & have same units.')
+         fail = .true.
+   32    if (iand(ntrpop(l),1) .eq. 0) go to 36
+         if (uniti) go to 36
+         if (xfail) write (output,2009) ir
+ 2009  format ('0******** Units conversion for constant in trip',i9,' ma
+     &y not be correct because of prior error.')
+         if (conv2(i) .lt. 0.0) go to 34
+         trpcon(l) = trpcon(l)/conv2(i)
+         go to 36
+   34    if (chwrd .eq. 'null') go to 35
+         trpcon(l) = trpcon(l)/1.8
+         go to 36
+   35    trpcon(l) = trpcon(l)/1.8 - conv2(i)
+   36    l = l + ntvskp
+       enddo
+c  Check logical trip references and get location of references.
+   24  if (ntl .eq. 0) go to 50
+       do i = 1,ntl
+         ir = ntrpno(l)
+         call itrscn (ir,ntrtr1(l),ntrtr1(l+1))
+         call itrscn (ir,ntrtr2(l),ntrtr2(l+1))
+         l = l + ntlskp
+       enddo
+c  Edit trip input data.
+   50  hedc = .false.
+       hedv = .false.
+       hedl = .false.
+       if (ntv .ne. 0) go to 19
+       write (output,2001)
+ 2001  format ('0******** Entering logical trips without at least one va
+     &riable trip cannot be valid.')
+       fail = .true.
+   19  if (iand(iroute,63).eq.3 .or. iand(iroute,63).eq.4) go to 22
+       l = filndx(18)
+       do i = 1,ntv
+c        if (iand(ntrpop(l),1) .eq. 0) go to 44
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+         if (hedv) go to 45
+         write (output,2002)
+ 2002  format ('0',10x,'Edit trip data')
+         write (output,2003)
+ 2003  format ('0Trip no.   left var. code parameter   rel.  right var.
+     &code parameter   +   constant',11x,'latch option   trptim')
+         hedc = .true.
+         hedv = .true.
+   45    lb(1) = ntrpno(l)
+         lb(2) = ntrnv1(l)
+         lb(3) = ishft(iand(ntrpop(l),2),-1)
+         lb(4) = ishft(ntrpop(l),-24)
+         lb(5) = ntrnv2(l)
+         con = trpcon(l)
+         if (unito) go to 17
+         if (conv2(i) .lt. 0.0) go to 18
+         con = con*conv2(i)
+         go to 17
+   18    if (ntrpc2(l) .eq. 0) go to 16
+         con = con*1.8
+         go to 17
+   16    con = (con + conv2(i))*1.8
+   17    write (output,2004) lb(1),ntrcv1(l),lb(2),ctab1(lb(4)),
+     &   ntrcv2(l),lb(5),con,la(lb(3)+1),trptim(l)
+ 2004  format (i9,3x,a10,4x,i10,4x,a2,3x,a10,5x,i10,5x,1p,g14.6,7x,a8,
+     & 5x,g14.6)
+         endif
+   44    l = l + ntvskp
+       enddo
+   20  if (ntl .eq. 0) go to 22
+       l = lx
+       do i = 1,ntl
+         if (iand(ihlppr(2),ishft(1,22)).ne.0) then
+           if (.not.hedl) then
+             hedl = .true.
+             if (.not.hedc) write (output,2002)
+             write (output,2005)
+ 2005  format ('0Trip no.   left trip   rel.  right trip',5x,'latch opti
+     &on     trptim')
+           endif
+           lb(1) = ntrpno(l)
+           lb(2) = ntrtr1(l)
+           lb(4) = ntrtr2(l)
+           if (iand(ntrpop(l),16) .ne. 0) lb(2) = -lb(2)
+           if (iand(ntrpop(l),32) .ne. 0) lb(4) = -lb(4)
+           lb(3) = ishft(ntrpop(l),-24)
+           lb(5) = ishft(iand(ntrpop(l),2),-1)
+           write (output,2006) lb(1),lb(2),ctab2(lb(3)),lb(4),
+     &     la(lb(5)+1),trptim(l)
+ 2006  format (i9,i12,3x,a3,i13,5x,a8,7x,1p,g14.6)
+         endif
+         l = l + ntlskp
+       enddo
+c  Edit and check trip stop data.
+   22  l = filndx(18)
+       if (ntrps1(l).eq.0 .and. ntrps2(l).eq.0) go to 40
+       if (ntrps2(l) .ne. 0) go to 42
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2022) ntrps1(l)
+ 2022  format ('0Transient advancement will be terminated by trip',i9,'.
+     &' )
+       go to 43
+   42  continue
+       if (iand(ihlppr(2),ishft(1,22)).ne.0) write (output,2023)
+     & ntrps1(l),ntrps2(l)
+ 2023  format ('0Transient advancement will be terminated by trips',i9,
+     &  ' and',i9,'.')
+   43  call itrscn (600,ntrps1(l),ntrps1(l+1))
+       if (ntrps2(l) .eq. 0) go to 40
+       call itrscn (600,ntrps2(l),ntrps2(l+1))
+   40  call fmvlwr
+       nfluid = 0
+       return
+       end

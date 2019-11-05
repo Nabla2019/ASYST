@@ -1,0 +1,387 @@
+*mlist
+*if def,selap
+      subroutine fgrelh (deltc  ,naz    ,tcond  ,xcond  ,nrcond ,fpivy
+     &                  ,fpivrt ,fparyc ,fgrj   ,fgr    ,fpary  ,ndisrp
+     &                  ,dzcond ,fulden ,pgas   ,ruliq  ,ruliq0 ,ruomlt
+     &                  ,rumlt0 ,ppower ,paxpz
+     & ,kshapz,afuel,grain,cik,acaen,prfk,gsgen,gout
+     &         ,dist,savg,dlmo,ato,tliqs,tcap,grira,hh,tk,vlm,kraph
+     &         ,itran,buk,rad,fgrmgo,iliq,cc,noxide,modidx5,ifuelcl,
+     &         fistot)
+c
+c  fgrelh calculates fission gas release.
+c
+c  Cognizent engineer: ewc (txh).
+c
+c     calling subroutines: fuelan and grsinp
+c     subroutines called:   grasft
+c
+c     input variables                  description
+c        deltcc         component time step (s)
+c        naz            number of heat conduction axial zones
+c        ppower         fission power (w/m**3)
+c        tcond          fuel rod radial temperature profile at elevation
+c                         z(i)   (k)
+c        xcond          radial node location from component center  (m)
+c        nrcond         number of radial heat conduction nodes in fuel
+c        ruliq          inner radius of annulus of dissolved uo2   (m)
+c        ruliq0         inner radius of dissolved uo2 pellet for
+c                         previous time step (m)
+c        modidx5         = 1 = bypass fission gas release calculations
+c
+c     i/o variables                    description
+c        fpivy          fission product inventory within fuel matrix at
+c                           axial node j,1=xe,2=kr,3=cs,4=i,5=uo2,
+c                          6=zr,7=sn,8=fe,9=ru,10=zr*,11=ba,12=sb,
+c                          13=te,14=ag,15=cs*,& 16=i* (kg)
+c        fpivrt         ratio of fission gas stored intragrainular to
+c                         fission gas generated
+c        fparyc         cumulative mass of gas species released from
+c                         component (kg)
+c        fgrj           ratio of fission gas released to fission gas
+c                         generated in axial zone
+c
+c     output variables                 description
+c        fgr            ratio of fission gas released to fission gas
+c                         generated in component
+c        fpary          fission product release from fuel to gap during
+c                          the current time step 1-xe, 2-kr, 3-cs, 4-i,
+c      5-te,6-zr,7-sr,8-fe,9-ru,10-zr*,11-ba,
+c      12-n.a.(not used/not appl.),13-n.a.,14-n.a.,15-n.a.,&16-n.a.(kg)
+c
+      implicit none
+*call contrl
+*call scddat
+*call buntim
+*call cons
+*call grsprg
+*call grsparg
+*call fginvc
+*call fpmas
+*call tblsp
+*call ufiles
+c
+      integer naz,nrcond,ndisrp,kshapz,kraph,itran,iliq,noxide
+      real deltc,tcond,xcond,fpivy,fpivrt,fparyc,fgrj,fgr,fpary,dzcond,
+     &fulden,pgas,ppower,ruliq,ruliq0,ruomlt,rumlt0,
+     &paxpz,afuel,grain,cik,acaen,prfk,gsgen,gout,dist,savg,dlmo,
+     &ato,tliqs,tcap,grira,hh,tk,vlm,buk,rad,fgrmgo,cc
+      dimension tcond(ndrd,ndax),xcond(ndrd,ndax),nrcond(ndax),
+     &fpivy(ndax,16),fpivrt(5,ndax),fparyc(16),fgrj(5,ndax),fpary(16),
+     &ndisrp(ndax),dzcond(ndax),tk(ndax),afuel(ndax),grain(ndrd,ndax),
+     &cik(15,ndax),acaen(ndax),prfk(ndax),gsgen(5,ndax),gout(6,ndax),
+     &dist(16,ndax),savg(4,ndax),hh(ndax),ruliq(ndax),ruliq0(ndax),
+     &vlm(ndax),ruomlt(ndax),rumlt0(ndax),
+     &paxpz(2,ndax,maxpz),fpivr(5),rj(17),noxide(ndax),fgr(5),
+     &fgrk(4),gouto(5),gsgsum(5),gousum(5),err(4),dlmo(4,ndax),
+     &ato(4,ndax),tliqs(ndax),tcap(ndax),grira(5,ndax),buk(ndax),
+     &rad(4,ndax),fgrmgo(ndax),iliq(ndax),cc(5,ndax),ako(12),q(12)
+      real fpivyi
+      integer i,iquit,isp,isr,j,k,ncolgn,ndebug,nshatr
+      real ako,colgrn,delfp,err,fdens,fgrk,fpivr,fpsav,frc,
+     &gousum,gouto,gradt,grnin,gsgsum,powden,
+     &punuc,q,r1,r1r2,r2,ratio,ratm1,rj,sumdst,t1,tkav,volume
+      real fistot
+      integer modidx5,ifuelcl
+      real fpivy1
+      integer ndbg
+      real avfunc
+      external avfunc,frestr,grasf2
+c
+c     Corsor-M data for Te, Zr, Sr, Fe, Ru, Zr*, Ba.
+      data ako/1.46e7,2.67e8,4.40e5,2.94e4,1.62e6,8.55e4
+     & ,2.95e5,0.0,0.0,0.0,0.0,0.0/
+      data q/143.1,188.2,117.0,87.0,152.8,139.5,100.2
+     & ,0.0,0.0,0.0,0.0,0.0/
+c
+      ndebug = 0
+      ndbg = 0
+cljs    if(timehy.ge.1998.0.and.timehy.le.2001.0)ndbg=1
+        if(ndbg.eq.1)then
+        write(output,9005)icomp,ifplg(icomp),ppower,fistot
+9005    format(' FGRELH entered, icomp=',i5,' ifplg(icomp)=',i5,
+     &  ' ppower=',e10.4,' fistot=',e10.4)
+        end if
+      if (ndebug .eq. 1)  then
+        write (output,'(/55x,a/9(2x,a,i3))') 'fgrelh input'
+     &     ,' itran =',itran,'kshapz =',kshapz,
+     &     'naz =',naz,
+     &     'ndebug =',ndebug
+        write (output,220)' deltc =',deltc,'pgas =',pgas
+     &    ,'fulden =',fulden
+        write (output,'(2x,a,20i5)') 'ndisrp = ',(ndisrp(i),i=1,naz)
+        write (output,230) ' afuel = ',(afuel(i),i=1,naz)
+        write (output,230) ' ruliq = ',(ruliq(i),i=1,naz)
+        write (output,230) 'ruliq0 = ',(ruliq0(i),i=1,naz)
+        write (output,230) 'ruomlt = ',(ruomlt(i),i=1,naz)
+        write (output,230) 'rumlt0 = ',(rumlt0(i),i=1,naz)
+        write (output,240) 'tcond  = ',((tcond(i,k),k=1,naz),i=1,6)
+        write (output,250) ' fpary = ',fpary
+        write (output,230) ' paxpz = ',(paxpz(1,i,kshapz),i=1,naz)
+        write (output,'(/55x,a)')   'fgrelh output'
+      end if
+c
+c       fpary and fparyc may contain gas release from debris formation
+c       at the end of the previous time step. subtract out this release
+c       from fparyc here and add back in with the current release below
+      if(ifplg(icomp) .eq. 0) then
+        do 10 i = 1,naz
+c       obtain initial fuel and gap inventory from input data.
+          do 10 j = 1,16
+            fpivy(i,j) = fpivm(icomp,i,j)*paxpz(1,i,1)
+            fpary(j) = 0.0
+            fparyc(j) = 0.0
+   10       continue
+      endif
+c
+      do 20 isp = 1,16
+   20   fparyc( isp ) = fparyc( isp ) - fpary( isp )
+c       set gas species distribution factors
+c       xmwte=0.1276
+c       set values for para-grass
+      delt=deltc
+      del9=delt*.9999999
+      hs = max ( pgas*10.0 , 1.0e-03 )
+      porxs=1.-fulden
+      pr1 = bvcrit - max( 0. , ((1.0 - fulden) - ptpl) )
+c
+      do 30 isp=1,5
+        gousum(isp)=0.0
+        gsgsum(isp)=0.0
+   30   continue
+c
+c       if input initial inventory, calculate gas inventory and
+c       gas release from input data.
+      if((fpivm(icomp,1,5).gt.1.e-10).and. ifplg(icomp).eq.0)then
+        do 50 j=1,naz
+          do 40 isp=1,5
+            i=indc(isp)
+            gout(i,j)= fpivy(j,isp+11)/con(isp)
+            gsgen(i,j)= gout(i,j) + fpivy(j,isp)/con(isp)
+            fpary(isp)= fpary(isp) + fpivm(icomp,j,isp+11)
+   40       continue
+   50     continue
+c         calculate total initial inventory
+        do 60 isp = 1,16
+          fparyc( isp ) = fparyc( isp ) + fpary( isp )
+   60     continue
+        fpivyi = 0.0
+        fpivy1 = 0.0
+        do 70 isp = 1,16
+          do 70  j = 1,naz
+            if(ndbg.eq.1)then
+            write(output,9033)isp,j,fpivy(j,isp),fpivy1
+9033        format(' FGRELH, isp=',i5,' j=',i5,' fpivy=',e10.4,
+     &      ' fpivy1=',e10.4)
+            end if
+            fpivyi = fpivyi + fpivy(j,isp)
+              if(isp.le.5)fpivy1 = fpivy1 + fpivy(j,isp)
+   70       continue
+c           obtain gap gas inventory from input data
+        write (output,260) 'internal gas pressure is ',pgas , ' (n/m2)'
+        write (output,'(/t5,a/4x,16(4x,a))')
+     &            'fission gas inventory within fuel matrix (kg)',
+     &    'xe','kr','cs','i','te','zr','sr','fe','ru','zr*',
+     &     'ba','n.a.','n.a.','n.a.','n.a.','n.a.'
+        write (output,270) (i,(fpivy(i,j),j=1,16),i=1,naz)
+        write (output,280) 'cumulative fission gas release inventory (kg
+     &)',(fparyc(j),j=1,16)
+        write (output,'(/t5,a/4x,17(4x,a))')
+     &    'gap gas inventory (kg)','xe','kr','cs','i','te','zr*',
+     &   'sr','fe','ru','zr*','ba','n.a.','n.a.','n.a.','n.a.','n.a.','h
+     &e'
+        write (output,300) 'total fission product inventory =',fpivyi,
+     & ' (kg)'
+      endif
+      do 190 j=1,naz
+cljs    if ((irubpp(j,icomp) .eq. 1) .or. (afuel(j) .le. 0.0)) go to 190
+        if ((irubpp(j,icomp) .eq. 1) .or. (afuel(j) .le. 0.0) .or.
+     &  (fistot .le. 1.e-10.and.ifuelcl.eq.0).or.
+     &  modidx5.eq.1)go to 190
+c
+c       calculate grain growth
+c
+        fdens = fulden*10970.
+        powden = 0.0
+          if(ndbg.eq.1)then
+          write(output,9135)fistot
+9135      format(' FGRELH do190 entered, fistot=',e10.4)
+          end if
+c
+        do 90 i = 1 , nrcond(j)
+          nshatr = 0
+          ncolgn = 0
+          grnin = grain(i,j)
+c
+          if (i .eq. 1) then
+            gradt = 0.0
+          else
+            gradt = (tcond(i-1,j)-tcond(i,j)) / (xcond(i,j)-xcond(i-1,j)
+     &)
+          end if
+c
+          call frestr (tcond(i,j) ,deltc  ,grnin  ,gradt  ,powden
+     &                ,grain(i,j) ,nshatr ,fdens  ,colgrn ,ncolgn )
+c
+   90     continue
+c
+c         set beginning of time step gas release
+c
+        if(noxide(j).ne.0)icl=1
+        do 100 isp=1,5
+          gouto(isp)=gout(isp,j)
+  100     continue
+c
+c         set values for para-grass
+c         jx=1 is set internally in paragrass
+c         if(parameteres for enhanced grain growth are to be used)jx=2
+c
+        grd=avfunc(2,xcond(1,j),grain(1,j),nrcond(j))*100.
+        tkav=avfunc(2,xcond(1,j),tcond(1,j),nrcond(j))
+c***
+c***    add protection to prevent floating exception in grasf2
+c***    near "call grs1" for case of cooldown at 12970 s in TMI-2 to 
+c***    temperature less than 600 K.  (Comp. # 7, axial node 3)
+        if(tkav.lt.600.0)tkav=600.0
+c
+        r1=xcond(1,j)*100.
+        r2=xcond(nrcond(j),j)*100.
+        r1r2=(r2-r1)*(r2+r1)
+        punuc = ppower * paxpz(1,j,kshapz) * afuel(j)
+c
+        ts(2)=tcond(nrcond(j),j)
+        ts(1)=tcond(1,j)
+        pow=punuc
+        prso=pgas/6894.8
+        rs(1)=r1
+        rs(2)=r2
+        grsk=grd
+        pifl=pi
+        do 110 k=1,2
+c  54   ara(k)=(pifl+pifl)*rs(k)*dzcond(j)*100.
+  110     ara(k)=(pifl+pifl)*rs(k)
+        kgrad=0
+        if(ts(2)-ts(1).gt.1.e-3) kgrad=1
+        t1=(ts(2)-ts(1))/(rs(2)-rs(1))
+        if(kgrad.eq.0) tgr=min(0.  ,t1)
+        if(kgrad.eq.1) tgr=max(0.  ,t1)
+        t1=pi/(1.000  *3.1e08)
+        pirs=t1*(rs(2)**2-rs(1)**2)
+        tfp=1.  /pirs
+c
+        volume = dzcond(j)*pi*100. * r1r2
+c
+        if(kraph.gt.0)then
+          tko=tk(j)
+        endif
+        tk(j)=tkav
+        if(kraph.eq.0)then
+          vlm(j)=volume
+        endif
+c
+c         calculate release due to fuel liquifaction and melting
+c
+        if(ruliq(j).lt.ruliq0(j))then
+          ratio = (ruliq(j)**2)/ruliq0(j)**2
+          ratm1 = 1.- ratio
+          do 120 isp=1,15
+            cik(isp,j) = cik(isp,j)*ratio
+  120       continue
+          sumdst = 0.
+          do 130 isp=1,16
+            sumdst = sumdst + dist(isp,j)*savg(isp,j)
+            dist(isp,j) = dist(isp,j)*ratio
+  130       continue
+          do 140 isp=1,5
+            gout(isp,j)=gout(isp,j)*ratio+ratm1*gsgen(isp,j)
+  140       continue
+          gout(6,j)=gout(6,j)*ratio+ratm1*gsgen(2,j)
+        endif
+c
+        ratio = vlm(j)/volume
+        do 150 isp=1,16
+          dist(isp,j) = dist(isp,j)*ratio
+  150     continue
+c perform fission gas release calculations
+        call grasf2 (iquit,itran,kraph,cik(1,j),acaen(j),prfk(j),
+     & gsgen(1,j),gout(1,j),savg(1,j),dist(1,j),dlmo(1,j),ato(1,j)
+     & ,tliqs(j),tcap(j),grira(1,j),hh(j),fpivr,rj,fgrk,err
+     & ,tk(j),vlm(j),buk(j),rad(1,j),fgrmgo(j),iliq(j),cc(1,j))
+        tk(j)=tkav
+        vlm(j)=volume
+        do 160 isp=1,5
+          i=indc(isp)
+          fgrj(isp,j)=fgrk(i)
+          fpivrt(isp,j)=fpivr(i)
+          fpivy(j,isp)=con(isp)*(gsgen(i,j)-gout(i,j))
+c***  bypass glitch in gap release on first time step after steady
+c***  state calculation.
+        if(ncount.lt.2) gout(i,j)=gouto(i)
+          fpary(isp)=fpary(isp)+con(isp)*(gout(i,j)-gouto(i))
+          gousum(isp)=gousum(isp)+gout(i,j)
+          gsgsum(isp)=gsgsum(isp)+gsgen(i,j)
+  160     continue
+        do 170 isp=1,5
+  170     fpary(isp) = max(fpary(isp),0.0)
+        if (deltc .le. 20.0) then
+c       Corsor-M computations for Zr, Sr, Fe, Ru, Zr*, Ba only.
+          do 180 isp=6,16
+            isr = isp - 4
+            frc=ako(isr)*exp(-q(isr)/(1.987e-3*tcond(1,j)))
+            fpsav=fpivy(j,isp)
+            delfp=fpsav*(1.-exp(-frc*deltc))
+            fpivy(j,isp)=fpsav-delfp
+            if(fpivy(j,isp).lt.0.0)fpivy(j,isp)=0.0
+            delfp = fpsav - fpivy(j,isp)
+            fpary(isp) = fpary(isp) + delfp
+  180       continue
+        endif
+c
+        if (ndebug .eq. 1) write (output,*)
+     &                  'err=',err,'grd=',grd,'tki=',tki
+  190   continue
+c
+      kraph=1
+      do 200 i=1,5
+        if(gsgsum(i).eq.0.)then
+          fgr(i)=0.
+        else
+          fgr(i)=gousum(i)/gsgsum(i)
+        endif
+  200   continue
+c
+      do 210 isp = 1,16
+        fparyc( isp ) = fparyc( isp ) + fpary( isp )
+  210   continue
+c
+      if (ndebug .eq. 1)  then
+        write (output,320)'   fgr =',fgr
+        write (output,330) ' fgrj = ',(fgrj(isp,i),i=1,naz)
+        write (output,330) ' fpivrt = ',(fpivrt(isp,i),i=1,naz)
+        write (output,330) 'gsgen = ',(gsgen(isp,i),i=1,naz)
+        write (output,330) ' gout = ',(gout(isp,i),i=1,naz)
+        write (output,330) '    hh = ',(hh(i),i=1,naz)
+        write (output,340) 'fpivy = ',((fpivy(k,i),k=1,naz),i=1,16)
+        write (output,350) 'grain  = ',((grain(i,k),k=1,naz),i=1,6)
+        write (output,360) 'fpary = ',fpary
+        write (output,360) 'fparyc = ',fparyc
+      end if
+      ifplg(icomp) = 1
+      return
+  220 format (5(2x,a,e12.5))
+  230 format (2x,a,10e12.5/9(11x,10e12.5/))
+  240 format (2x,a,8e12.5/9(11x,8e12.5/))
+  250 format (2x,a,10e12.5)
+  260 format (/t5,a,1p,e10.4,a)
+  270 format (10(1x,i4,1x,1p,2(8e12.5/6x)))
+  280 format (/t5,a/4x,1p,2(8e12.5/4x))
+  290 format ((4x,1p,2(9e12.5/4x)))
+  300 format (/t5,a,1p,e10.4,a )
+  310 format (3(2x,a,e12.5))
+  320 format (5(2x,a,e12.5))
+  330 format (2x,a,10e12.5/9(11x,10e12.5/))
+  340 format (2x,a,2(8e12.5/),9(11x,2(8e12.5/)))
+  350 format (2x,a,8e12.5/9(11x,8e12.5/))
+  360 format (2x,a,2(8e12.5/))
+      end
+*endif

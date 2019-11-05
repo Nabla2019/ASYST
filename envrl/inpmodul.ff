@@ -1,0 +1,1356 @@
+       module inpmodul
+!  Defines subroutines for inserting data into and extracting data from
+!  inp storage format and subroutines and functions for the inp input
+!  package.
+!
+!  Cognizant engineer: rjw.
+!
+       implicit none
+       integer, parameter, private :: kr=selected_real_kind(12,200)
+!
+       interface inpinsrt
+       module procedure inpinsr,inpinsi,inpinsa
+       end interface inpinsrt
+!
+       interface inpextrt
+       module procedure inpextr,inpexti,inpexti4,inpexta
+       end interface inpextrt
+!
+       type inpmhldt
+         integer crdnop,crdnw,crdflg
+         character*8, pointer :: crddat(:)
+         integer*1, pointer :: crdmodn(:)
+       end type inpmhldt
+!  crdnop    Contains card number in bits 0 through 30, but if bit 31 is
+!            set, bits 0 through contain the ordinal number of the card.
+!  crdnw     Number of words on card with card number and its associated
+!            continuation cards.
+!  crdflg    Contains flags.
+!            Bit 0 is set if format error is found on card.
+!            Bit 1 is set if card number is unrecognizable.
+!            Bit 2 is set when card is accessed by inplnk.
+!  crddat    Pointer to array containing data items on cards, all types
+!            are stored in alphanumeric format. Generic subroutine
+!            inpextrt can extract from the alphanumeric quantity to the
+!            proper type.
+!  crdmonm   Condition codes containing the type for each data item.
+!
+       type (inpmhldt), allocatable :: inpmhld(:),inpmhldm(:)
+       integer inpncrd
+!  inpmhld   Each element contains information for one card number:
+!            card number, number of words on card, error and use flags
+!            for each card, and pointers to the card data and condition
+!            codes. This array holds the data except while data is being
+!            read.
+!  inpmhldm  Same as impmhld except it is used while data is being read
+!            and after data is read, is copied to correct size array,
+!            inpmhld.
+!  inpncrd   Number of cards in inpmhld or imphldm arrays.
+!
+       integer, parameter,private :: ncards=20000,nhld=100000
+!
+       contains
+!
+!      Inserts real(kr) quantity into character(8) word.
+       subroutine inpinsr (a,hold)
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       real(kr) a
+       character hold*8
+       write (hold,"(a8)") a
+       end subroutine inpinsr
+!
+!      Inserts integer(8) quantity into character(8) word.
+       subroutine inpinsi (a,hold)
+       implicit none
+       integer(8) a
+       character hold*8
+       write (hold,"(a8)") a
+       end subroutine inpinsi
+!
+!      Inserts character(8) quantity into character(8) word.
+       subroutine inpinsa (a,hold)
+       implicit none
+       character a*8
+       character hold*8
+       hold = a
+       end subroutine inpinsa
+!
+!      Extracts real(kr) quantity from character(8) word.
+       subroutine inpextr (a,hold)
+       implicit none
+       real(kr) a
+       character hold*8
+       read (hold,"(a8)") a
+       end subroutine inpextr
+!
+!      Extracts integer(8) quantity from character(8) word.
+       subroutine inpexti (a,hold)
+       implicit none
+       integer(8) a
+       character hold*8
+       read (hold,"(a8)") a
+       end subroutine inpexti
+!
+!      Extracts integer(4) quantity from character(8) word.
+       subroutine inpexti4 (a,hold)
+       implicit none
+       integer(4) a
+       integer(8) a8
+       character hold*8
+       read (hold,"(a8)") a8
+       a = a8
+       end subroutine inpexti4
+!
+!      Extracts character(8) quantity from character(8) word.
+       subroutine inpexta (a,hold)
+       implicit none
+       character a*8
+       character hold*8
+       a = hold
+       end subroutine inpexta
+!
+!mpfu       subroutine inp10 (nc1,nc2)
+!mpfu!  This deletes all cards in the range nc1 through nc2.
+!mpfu!
+!mpfu       implicit none
+!mpfu       integer nc1,nc2
+!mpfu!  Parameters in the call list.
+!mpfu!  nc1  first card number to delete.
+!mpfu!  nc2  last card number to delete.
+!mpfu!
+!mpfu!  Local variables.
+!mpfu       integer i,k
+!mpfu!
+!mpfu!  Top of loop for each table entry.
+!mpfu       do i = 1,inpncrd
+!mpfu!  Skip test on card number if flag marking it as having a bad card
+!mpfu!  number is present.
+!mpfu         if (btest(inpmhld(i)%crdnop,29)) cycle
+!mpfu         if (inpmhld(i)%crdnop.lt.nc1 .or. inpmhld(i)%crdnop.gt.nc2)
+!mpfu     &   cycle
+!mpfu!  Card should be deleted.
+!mpfu         deallocate (inpmhld(i)%crddat,inpmhld(i)%crdmodn)
+!mpfu         inpmhld(i)%crdnop = 0
+!mpfu         inpncrd = inpncrd - 1
+!mpfu       enddo
+!mpfu       if (inpncrd .ne. 0) then
+!mpfu!  Eliminate entries with inpmhld%crdnop equal to zero.
+!mpfu         k = 0
+!mpfu         do i = 1,inpncrd
+!mpfu           do
+!mpfu             k = k + 1
+!mpfu             if (inpmhld(k)%crdnop .ne. 0) then
+!mpfu               if (k .eq. i) exit
+!mpfu               inpmhld(i) = inpmhld(k)
+!mpfu               exit
+!mpfu             endif
+!mpfu           enddo
+!mpfu         enddo
+!mpfu       endif
+!mpfu       end subroutine inp10
+!mpfu!
+!mpfu       subroutine inp2 (loc2,ics)
+!mpfu!
+!mpfu!  This subroutine transfers data from the input card buffer to
+!mpfu!  another storage location in memory and performs some checks
+!mpfu!  on the data.
+!mpfu!
+!mpfu!  Cognizant engineer: rjw
+!mpfu!
+!mpfu!  Parameters in argument list.
+!mpfu!     loc2(*)       starting location of moved information.
+!mpfu!     ics(*)        control information.
+!mpfu!     ics(1)=first  card number to process first.
+!mpfu!     ics(2)=last   final card number to process.
+!mpfu!                   may be 0.0 if only one card.
+!mpfu!                   > 0 - card numbers sequential.
+!mpfu!                   < 0 - card numbers increasing, not sequential.
+!mpfu!     ics(3)=minz   minimum number of data words on card.
+!mpfu!     ics(4)=maxz   maximum number of data words on card, 0 if no upper
+!mpfu!                   limit.
+!mpfu!     ic5(5)=nj     displacement of data - data stored every nj+1 loc.
+!mpfu!     ics(6)=j      abs(j)=starting address of data in loc2.
+!mpfu!                   move/check data - >0 => move,  <or=0 => check.
+!mpfu!                   upon exit, ics(6) contains number of items moved.
+!mpfu!                   if j>0,  -(number of items checked) if j<0.
+!mpfu!     ics(7...)     array defining card format (one entry for each data
+!mpfu!                   item on the card).  Code for the format is:
+!mpfu!                   -1 = alphanumeric,
+!mpfu!                    0 = integer,
+!mpfu!                    1 = real.
+!mpfu!
+!mpfu       character(8) loc2(*)
+!mpfu       integer ics(*)
+!mpfu       integer first,last,c,add
+!mpfu!
+!mpfu       include "efiless.h"
+!mpfu       include "efilesd.h"
+!mpfu!  Local variables.
+!mpfu       integer i,j,l,loca,locb,locz,ltype,maxnum,maxz,mgo,minz,nc,
+!mpfu     & ncard,ncase,ndata,next,nj,nlast,nmove,nom
+!mpfu!
+!mpfu       first = ics(1)
+!mpfu       last = ics(2)
+!mpfu       minz = ics(3)
+!mpfu       maxz = ics(4)
+!mpfu       nj = ics(5)
+!mpfu       j = ics(6)
+!mpfu       nlast = 1
+!mpfu       ncase = 1
+!mpfu       nmove = 1
+!mpfu       if (last) 105,110,120
+!mpfu!  To process any cards between first and last  go to 120.
+!mpfu  105  ncase = 2
+!mpfu       go to 120
+!mpfu!  One card only.
+!mpfu  110  last = first
+!mpfu  120  c = first
+!mpfu       add = 0
+!mpfu!  Check if data to be moved - no - set nmove=2.
+!mpfu       if (j.le.0) nmove = 2
+!mpfu       nc = 0
+!mpfu       mgo = 1
+!mpfu!  Check if max number of data items specified.
+!mpfu!  If none - set mgo=2.
+!mpfu       if (maxz .eq. 0) mgo = 2
+!mpfu  130  c = c + add
+!mpfu!  Get card location.
+!mpfu  135  call inplnk (c,next,locz,ndata)
+!mpfu!  ndata  number of data fields on card.
+!mpfu       if (ncase .ne. 1) go to 170
+!mpfu       if (ndata) 160,150,180
+!mpfu  150  if (next - abs(last)) 155,165,255
+!mpfu  155  if (next .lt. 0) go to 255
+!mpfu       go to 165
+!mpfu  160  write (output,"('0******** Illegal format on card',i10,'.')") c
+!mpfu       go to 265
+!mpfu  165  write (output,"('0******** Card',i10,' missing in sequence.')") c
+!mpfu       go to 265
+!mpfu!  Check data count.
+!mpfu  170  if (ndata) 160,175,180
+!mpfu!  No data - set card number to next higher card location.
+!mpfu  175  c = next
+!mpfu       ncard = 2
+!mpfu       if (c) 255,185,185
+!mpfu  180  ncard = 1
+!mpfu  185  if (c - abs(last)) 195,190,255
+!mpfu  190  nlast = 2
+!mpfu!  This is the last card.
+!mpfu  195  if (ncard .ne. 1) go to 135
+!mpfu       nom = nc + ndata
+!mpfu       if (mgo .eq. 1) then
+!mpfu!  Test number of data words.
+!mpfu         if (nom .gt. maxz) then
+!mpfu!  Too many words.
+!mpfu           write (output,"('0******** Too many numbers on cards',i10,' t
+!mpfu     &hrough',i10,'.')") first,c
+!mpfu           go to 265
+!mpfu         endif
+!mpfu       endif
+!mpfu!
+!mpfu!  Check mode of data.
+!mpfu!
+!mpfu!  ltype = 0          no errors.
+!mpfu!  1 < ltype < 10000  item(ltype) should have been integer.
+!mpfu!  ltype < 0          item (-ltype) should have been real.
+!mpfu!  ltype > 10000      item (ltype-10000) should have been alphanumeric.
+!mpfu!
+!mpfu! 210  write (12,"('inp201',i10/(20i5))") inpmhld(locz)%crdnop,
+!mpfu!    & inpmhld(locz)%crdmodn(:)
+!mpfu  210  call inpmod (ics,locz,ndata,ltype,nc)
+!mpfu       if (ltype .ne. 0) then
+!mpfu         select case (ltype)
+!mpfu         case (10001:)
+!mpfu           ltype = ltype - 10000
+!mpfu           write (output,"('0******** Word',i3,' on card',i10,' should b
+!mpfu     &e in alphanumeric format.')") ltype,c
+!mpfu         case (1:9999)
+!mpfu           write (output,"('0******** Word',i3,' on card',i10,' should b
+!mpfu     &e in integer format.')") ltype,c
+!mpfu         case (:-1)
+!mpfu           ltype = -ltype
+!mpfu           write (output,"('0******** Word',i3,' on card',i10,' should b
+!mpfu     &e in floating point format.')") ltype,c
+!mpfu         end select
+!mpfu         go to 265
+!mpfu       endif
+!mpfu!  Check if data to be moved to new location.
+!mpfu       if (nmove .eq. 1) then
+!mpfu!  Move to new location.
+!mpfu         l = locz
+!mpfu         maxnum = l + ndata - 1
+!mpfu         locb = j + (nj + 1)*nc
+!mpfu         loca = l
+!mpfu         do i = 1,ndata
+!mpfu           call inpextrt (loc2(locb),inpmhld(locz)%crddat(i))
+!mpfu           loca = loca + 1
+!mpfu           locb = locb + nj + 1
+!mpfu         enddo
+!mpfu       endif
+!mpfu!  Increment nc.
+!mpfu       nc = nc + ndata
+!mpfu!  Check for last card.
+!mpfu       if (nlast .ne. 1) go to 255
+!mpfu!  Another card expected.
+!mpfu       add = 1
+!mpfu       go to 130
+!mpfu!  Last card.
+!mpfu  255  if (nc .ge. minz) then
+!mpfu         ics(6) = nc
+!mpfu         return
+!mpfu       endif
+!mpfu       loca = abs(last)
+!mpfu       if (nc .le. 0) then
+!mpfu         write (output,"('0******** Cards',i10,' through',i10,' missing.
+!mpfu     &')") first,loca
+!mpfu       else
+!mpfu         write (output,"('0******** Too few numbers on cards',i10,' thro
+!mpfu     &ugh',i10,'.')") first,loca
+!mpfu       endif
+!mpfu  265  ics(6) = -1
+!mpfu       return
+!mpfu       end subroutine inp2
+!mpfu!
+!mpfu       subroutine inp2n (loc2,ics)
+!mpfu!
+!mpfu!  This subroutine transfers data from the input card buffer to
+!mpfu!  another storage location in memory and performs some checks
+!mpfu!  on the data.
+!mpfu!
+!mpfu!  Cognizant engineer: rjw
+!mpfu!
+!mpfu!  Parameters in argument list.
+!mpfu!     loc2(*)       starting location of moved information.
+!mpfu!     ics(*)        control information.
+!mpfu!     ics(1)=first  card number to process first.
+!mpfu!     ics(2)=last   final card number to process.
+!mpfu!                   may be 0.0 if only one card.
+!mpfu!                   > 0 - card numbers sequential.
+!mpfu!                   < 0 - card numbers increasing, not sequential.
+!mpfu!     ics(3)=minz   minimum number of data words on card.
+!mpfu!     ics(4)=maxz   maximum number of data words on card, 0 if no upper
+!mpfu!                   limit.
+!mpfu!     ic5(5)=nj     displacement of data - data stored every nj+1 loc.
+!mpfu!     ics(6)=j      abs(j)=starting address of data in loc2.
+!mpfu!                   move/check data - >0 => move,  <or=0 => check.
+!mpfu!                   upon exit, ics(6) contains number of items moved.
+!mpfu!                   if j>0,  -(number of items checked) if j<0.
+!mpfu!     ics(7...)     array defining card format (one entry for each data
+!mpfu!                   item on the card).  Code for the format is:
+!mpfu!                   -1 = alphanumeric,
+!mpfu!                    0 = integer,
+!mpfu!                    1 = real.
+!mpfu!
+!mpfu       integer(8) loc2(*)
+!mpfu       integer ics(*)
+!mpfu       integer first,last,c,add
+!mpfu!
+!mpfu       include "efiless.h"
+!mpfu       include "efilesd.h"
+!mpfu!  Local variables.
+!mpfu       integer i,j,l,loca,locb,locz,ltype,maxnum,maxz,mgo,minz,nc,
+!mpfu     & ncard,ncase,ndata,next,nj,nlast,nmove,nom
+!mpfu       integer(8) help
+!mpfu!
+!mpfu       first = ics(1)
+!mpfu       last = ics(2)
+!mpfu       minz = ics(3)
+!mpfu       maxz = ics(4)
+!mpfu       nj = ics(5)
+!mpfu       j = ics(6)
+!mpfu       nlast = 1
+!mpfu       ncase = 1
+!mpfu       nmove = 1
+!mpfu       if (last) 105,110,120
+!mpfu!  To process any cards between first and last  go to 120.
+!mpfu  105  ncase = 2
+!mpfu       go to 120
+!mpfu!  One card only.
+!mpfu  110  last = first
+!mpfu  120  c = first
+!mpfu       add = 0
+!mpfu!  Check if data to be moved - no - set nmove=2.
+!mpfu       if (j.le.0) nmove = 2
+!mpfu       nc = 0
+!mpfu       mgo = 1
+!mpfu!  Check if max number of data items specified.
+!mpfu!  If none - set mgo=2.
+!mpfu       if (maxz .eq. 0) mgo = 2
+!mpfu  130  c = c + add
+!mpfu!  Get card location.
+!mpfu  135  call inplnk (c,next,locz,ndata)
+!mpfu!  ndata  number of data fields on card.
+!mpfu       if (ncase .ne. 1) go to 170
+!mpfu       if (ndata) 160,150,180
+!mpfu  150  if (next - abs(last)) 155,165,255
+!mpfu  155  if (next .lt. 0) go to 255
+!mpfu       go to 165
+!mpfu  160  write (output,"('0******** Illegal format on card',i10,'.')") c
+!mpfu       go to 265
+!mpfu  165  write (output,"('0******** Card',i10,' missing in sequence.')") c
+!mpfu       go to 265
+!mpfu!  Check data count.
+!mpfu  170  if (ndata) 160,175,180
+!mpfu!  No data - set card number to next higher card location.
+!mpfu  175  c = next
+!mpfu       ncard = 2
+!mpfu       if (c) 255,185,185
+!mpfu  180  ncard = 1
+!mpfu  185  if (c - abs(last)) 195,190,255
+!mpfu  190  nlast = 2
+!mpfu!  This is the last card.
+!mpfu  195  if (ncard .ne. 1) go to 135
+!mpfu       nom = nc + ndata
+!mpfu       if (mgo .eq. 1) then
+!mpfu!  Test number of data words.
+!mpfu         if (nom .gt. maxz) then
+!mpfu!  Too many words.
+!mpfu           write (output,"('0******** Too many numbers on cards',i10,' t
+!mpfu     &hrough',i10,'.')") first,c
+!mpfu           go to 265
+!mpfu         endif
+!mpfu       endif
+!mpfu!
+!mpfu!  Check mode of data.
+!mpfu!
+!mpfu!  ltype = 0          no errors.
+!mpfu!  0 < ltype < 10000  item ltype         should have been integer.
+!mpfu!  ltype < 0          item (-ltype)      should have been real.
+!mpfu!  ltype > 10000      item (ltype-10000) should have been alphanumeric.
+!mpfu!
+!mpfu! 210  write (12,"('inp201',i10/(20i5))") inpmhld(locz)%crdnop,
+!mpfu!    & inpmhld(locz)%crdmodn(:)
+!mpfu  210  call inpmod (ics,locz,ndata,ltype,nc)
+!mpfu       if (ltype .ne. 0) then
+!mpfu         select case (ltype)
+!mpfu         case (10001:)
+!mpfu           ltype = ltype - 10000
+!mpfu           write (output,"('0******** Word',i3,' on card',i10,' should b
+!mpfu     &e in alphanumeric format.')") ltype,c
+!mpfu         case (1:9999)
+!mpfu           write (output,"('0******** Word',i3,' on card',i10,' should b
+!mpfu     &e in integer format.')") ltype,c
+!mpfu         case (:-1)
+!mpfu           ltype = -ltype
+!mpfu           write (output,"('0******** Word',i3,' on card',i10,' should b
+!mpfu     &e in floating point format.')") ltype,c
+!mpfu         end select
+!mpfu         go to 265
+!mpfu       endif
+!mpfu!  Check if data to be moved to new location.
+!mpfu       if (nmove .eq. 1) then
+!mpfu!  Move to new location.
+!mpfu         l = locz
+!mpfu         maxnum = l + ndata - 1
+!mpfu         locb = j + (nj + 1)*nc
+!mpfu         loca = l
+!mpfu         do i = 1,ndata
+!mpfu           call inpextrt (help,inpmhld(locz)%crddat(i))
+!mpfu           loc2(locb) = help
+!mpfu           loca = loca + 1
+!mpfu           locb = locb + nj + 1
+!mpfu         enddo
+!mpfu       endif
+!mpfu!  Increment nc.
+!mpfu       nc = nc + ndata
+!mpfu!  Check for last card.
+!mpfu       if (nlast .ne. 1) go to 255
+!mpfu!  Another card expected.
+!mpfu       add = 1
+!mpfu       go to 130
+!mpfu!  Last card.
+!mpfu  255  if (nc .ge. minz) then
+!mpfu         ics(6) = nc
+!mpfu         return
+!mpfu       endif
+!mpfu       loca = abs(last)
+!mpfu       if (nc .le. 0) then
+!mpfu         write (output,"('0******** Cards',i10,' through',i10,' missing.
+!mpfu     &')") first,loca
+!mpfu       else
+!mpfu         write (output,"('0******** Too few numbers on cards',i10,' thro
+!mpfu     &ugh',i10,'.')") first,loca
+!mpfu       endif
+!mpfu  265  ics(6) = -1
+!mpfu       return
+!mpfu       end subroutine inp2n
+!mpfu!
+!mpfu       subroutine inp5n (c1,c2,c3,in1,in2,in3,in4,in5,in6,in7,loc2,
+!mpfu     & loc5,loc6,in8)
+!mpfu!  This subroutine can process several sets of cards on a single call
+!mpfu!  and do a sequential or overaly expansion of the input data in either
+!mpfu!  a dense or scattered mode.
+!mpfu!
+!mpfu!  Cognizant engineer: rjw.
+!mpfu!
+!mpfu       implicit none
+!mpfu       integer c1,c2,c3,in1,in2,in3,in4,in5,in6,in7,in8,loc5(*)
+!mpfu       integer(8) loc2(*),loc6(*)
+!mpfu!
+!mpfu       include "efiless.h"
+!mpfu       include "efilesd.h"
+!mpfu!
+!mpfu!  Local variables.
+!mpfu       integer ac1,ac2,card,cn2,item,k1,k10,k11,k12,k13,k2,k3,k4,k5,
+!mpfu     & k6,k8,k9,la,lb,last,limlow,limup,lowlim,lray(46),ls,ltpe,
+!mpfu     & luplim,mad,mode,n1,n2,n3,n4,nmov,nmove,nstart
+!mpfu!
+!mpfu       if (in1.eq.0 .or. in4.eq.0) call fabend
+!mpfu       if (in1 .lt. 0) then
+!mpfu         ltpe = 2
+!mpfu         n1 = -in1
+!mpfu         if (in2 .le. 0) then
+!mpfu           if (in2 .lt. 0) then
+!mpfu             n2 = -in2
+!mpfu           else
+!mpfu             n2 = 0
+!mpfu           endif
+!mpfu           limlow = 1
+!mpfu         endif
+!mpfu         n2 = in2
+!mpfu         limlow = 2
+!mpfu       else
+!mpfu         n1 = in1
+!mpfu         ltpe = 1
+!mpfu         limlow = 1
+!mpfu         n2 = in2
+!mpfu       endif
+!mpfu       if (in4 .lt. 0) then
+!mpfu         n4 = -in4
+!mpfu         mode = 2
+!mpfu       else
+!mpfu         n4 = in4
+!mpfu         mode = 1
+!mpfu       endif
+!mpfu       if (in3 .le. 0) then
+!mpfu         if (in3 .lt. 0) then
+!mpfu           n3 = -in3
+!mpfu         else
+!mpfu           n3 = 32000 - 1
+!mpfu         endif
+!mpfu         limup = 1
+!mpfu       else
+!mpfu         n3 = in3
+!mpfu         limup = 2
+!mpfu       endif
+!mpfu       ac1 = c1
+!mpfu       ac2 = c2
+!mpfu       ls = in7
+!mpfu       lray(1) = ac1
+!mpfu       lray(2) = ac2
+!mpfu       nmove = 0
+!mpfu       lray(3) = 1
+!mpfu       lray(4) = in8
+!mpfu       lray(5) = 0
+!mpfu       lray(6) = 1
+!mpfu       do la = 1,40
+!mpfu         lb = la + 6
+!mpfu         lray(lb) = loc5(la)
+!mpfu       enddo
+!mpfu       do mad = 1,in5
+!mpfu         call inp2n (loc6,lray)
+!mpfu         nmov = lray(6)
+!mpfu         if (nmov .le. 0) then
+!mpfu           if (nmov .lt. 0) in7 = -1
+!mpfu           go to 500
+!mpfu         endif
+!mpfu         luplim = limup
+!mpfu         lowlim = limlow
+!mpfu         nmove = nmove + nmov
+!mpfu         k1 = n1 + ltpe
+!mpfu         k2 = nmov/k1
+!mpfu         last = n2
+!mpfu         if (nmov .ne. k1*k2) then
+!mpfu           cn2 = abs(ac2)
+!mpfu           write (output,"('0********',i5,' numbers on cards',i10,' thro
+!mpfu     &ugh',i10,' are not a multiple of',i4)")
+!mpfu     &     nmov,ac1,cn2,k1
+!mpfu           in7 = -1
+!mpfu           go to 500
+!mpfu         endif
+!mpfu         if (mode .eq. 1) then
+!mpfu           k4 = ls + n4*last
+!mpfu           k5 = 1
+!mpfu           k6 = n4
+!mpfu         else
+!mpfu           k4 = ls + last
+!mpfu           k5 = n4
+!mpfu           k6 = 1
+!mpfu         endif
+!mpfu         do k3 = 1,nmov,k1
+!mpfu           if (ltpe .eq. 1) then
+!mpfu             nstart = last + 1
+!mpfu             k12 = k3
+!mpfu             k13 = k3 + n1 - 1
+!mpfu             go to 250
+!mpfu           endif
+!mpfu           nstart = loc6(k3)
+!mpfu           k12 = k3 + 1
+!mpfu           k13 = k3 + n1
+!mpfu           if (nstart .lt. n2) then
+!mpfu             cn2 = abs(ac2)
+!mpfu             call inp6 (ac1,cn2,k3,card,item)
+!mpfu             write (output,"('0******** Item',i3,' on card',i10,' is les
+!mpfu     &s than minimum allowed of',i5,'.')") item,card,n2
+!mpfu             in7 = -1
+!mpfu             go to 500
+!mpfu           endif
+!mpfu           if (nstart .eq. n2) lowlim = 1
+!mpfu           if (mode .eq. 1) then
+!mpfu             k4 = ls + n4*(nstart - 1)
+!mpfu           else
+!mpfu             k4 = ls + (nstart - 1)
+!mpfu           endif
+!mpfu  250      if (k4 .le. 0) call fabend
+!mpfu           k11 = k3 + k1 - 1
+!mpfu           last = loc6(k11)
+!mpfu           if (last .gt. n3) then
+!mpfu             cn2 = abs(ac2)
+!mpfu             call inp6 (ac1,cn2,k11,card,item)
+!mpfu             write (output,"('0******** Item',i3,' on card',i10,' exceed
+!mpfu     &s maximum allowed of',i5)") item,card,n3
+!mpfu             in7 = -1
+!mpfu             go to 500
+!mpfu           endif
+!mpfu           if (last .eq. n3) luplim = 1
+!mpfu           if (nstart .gt. last) then
+!mpfu             cn2 = abs(ac2)
+!mpfu             call inp6 (ac1,cn2,k3,card,item)
+!mpfu             write (output,"('0******** Error in limits of the set begin
+!mpfu     &ning at item',i3,' on card',i10)") item,card
+!mpfu             in7 = -1
+!mpfu             go to 500
+!mpfu           endif
+!mpfu           if (in7 .ge. 0) then
+!mpfu             do k8 = nstart,last
+!mpfu               k9 = k4
+!mpfu               do k10 = k12,k13
+!mpfu                 loc2(k9) = loc6(k10)
+!mpfu                 k9 = k9 + k5
+!mpfu               enddo
+!mpfu               k4 = k4 + k6
+!mpfu             enddo
+!mpfu           endif
+!mpfu         enddo
+!mpfu         if (lowlim .ne. 1) then
+!mpfu           cn2 = abs(ac2)
+!mpfu           write (output,"('0******** Lower limit of',i5,' is not includ
+!mpfu     &ed on cards',i10, 'through',i10)") n2,ac1,cn2
+!mpfu           in7 = -1
+!mpfu         elseif (luplim .ne. 1) then
+!mpfu           cn2 = abs(ac2)
+!mpfu           write (output,"('0******** Upper limit of',i5,' is not includ
+!mpfu     &ed on cards',i10, 'through',i10)") n3,ac1,cn2
+!mpfu           in7 = -1
+!mpfu         endif
+!mpfu 500     if (ac2 .ne. 0) then
+!mpfu           if (ac2 .lt. 0) then
+!mpfu             ac2 = ac2 - c3
+!mpfu           else
+!mpfu             ac2 = ac2 + c3
+!mpfu           endif
+!mpfu         endif
+!mpfu         ac1 = ac1 + c3
+!mpfu         ls = ls + in6
+!mpfu         lray(1) = ac1
+!mpfu         lray(2) = ac2
+!mpfu         lray(6) = 1
+!mpfu       enddo
+!mpfu       if (in7 .ge. 0) in7 = nmove
+!mpfu       return
+!mpfu       end subroutine inp5n
+!mpfu!
+!mpfu       subroutine inp6 (c1,c2,n1,card,item)
+!mpfu!  This subroutine is used when item n1 of a set obtained from cards c1
+!mpfu!  through c2 by inp2 is in error.  Upon return, card will be the card
+!mpfu!  number, and item will be the field on that card which contained the
+!mpfu!  data item in error.
+!mpfu!
+!mpfu       implicit none
+!mpfu       integer c1,c2,n1,card,item
+!mpfu!
+!mpfu!  Local Variables.
+!mpfu       integer ac1,ac2,d,m,n,ntot
+!mpfu!
+!mpfu       if (c2 .eq. 0) then
+!mpfu         ac2 = c1
+!mpfu       else
+!mpfu         ac2 = c2
+!mpfu       endif
+!mpfu       d = c1
+!mpfu       ntot = 0
+!mpfu       do
+!mpfu         ac1 = d
+!mpfu         if (ac1 .gt. ac2) call fabend
+!mpfu         call inplnk (ac1,d,m,n)
+!mpfu         ntot = ntot + n
+!mpfu         if (ntot .ge. 0) exit
+!mpfu       enddo
+!mpfu       card = ac1
+!mpfu       item = n1 - ntot + n
+!mpfu       return
+!mpfu       end subroutine inp6
+!mpfu!
+!mpfu       subroutine inp7 (card,item)
+!mpfu!  This subroutine prints an error message on the output file that
+!mpfu!  item on card is in error.
+!mpfu!
+!mpfu       implicit none
+!mpfu       integer card,item
+!mpfu!
+!mpfu       include "efiless.h"
+!mpfu       include "efilesd.h"
+!mpfu!
+!mpfu       write (output,"('0******** Item',i3,' on card',i10,' is in error.
+!mpfu     &')") item,card
+!mpfu       return
+!mpfu       end subroutine inp7
+!mpfu!
+!mpfu       function inp8(list)
+!mpfu!  This subroutine returns the number of extraneous cards found. Here
+!mpfu!  extraneous means no reference by inplnk. Subroutine inplnk is called
+!mpfu!  directly and also by inp2, inp4, and inp5.
+!mpfu!
+!mpfu       implicit none
+!mpfu       integer inp8
+!mpfu       integer list
+!mpfu!
+!mpfu       include "efiless.h"
+!mpfu!
+!mpfu!  Local variables.
+!mpfu       integer i,icnt,j
+!mpfu       character ast*17
+!mpfu!  msk = 2**31 - 1
+!mpfu       integer, parameter :: msk=z'3fffffff'
+!mpfu       include "efilesd.h"
+!mpfu!
+!mpfu       icnt = 0
+!mpfu       do i = 1,inpncrd
+!mpfu         if (btest(inpmhld(i)%crdflg,2)) cycle
+!mpfu         if (icnt.eq.0 .and. list.ne.0) write (output,
+!mpfu     & "('0******** The following cards were not used:')")
+!mpfu         icnt = icnt + 1
+!mpfu         if (list .ne. 0) then
+!mpfu           ast = ' '
+!mpfu           if (btest(inpmhld(i)%crdflg,1)) ast = '(bad card number)'
+!mpfu           j = iand(inpmhld(i)%crdnop,msk)
+!mpfu           write (output,"('******** ',i10,2x,a)") j,ast
+!mpfu         endif
+!mpfu       enddo
+!mpfu       inp8 = icnt
+!mpfu       return
+!mpfu       end function inp8
+!mpfu!
+!mpfu       subroutine inp9
+!mpfu!  This subroutine deletes all cards in the that have been referenced.
+!mpfu!
+!mpfu       implicit none
+!mpfu!  Local variables.
+!mpfu!
+!mpfu       integer i,k
+!mpfu!
+!mpfu!  Top of loop for each table entry.
+!mpfu       do i = 1,inpncrd
+!mpfu!  Skip test on card number if flag marking it as having a bad card
+!mpfu!  number is present.
+!mpfu         if (.not.btest(inpmhld(i)%crdflg,2)) cycle
+!mpfu!  Card should be deleted.
+!mpfu         if (associated(inpmhld(i)%crddat))
+!mpfu     &   deallocate (inpmhld(i)%crddat,inpmhld(i)%crdmodn)
+!mpfu         inpmhld(i)%crdnop = 0
+!mpfu         inpncrd = inpncrd - 1
+!mpfu       enddo
+!mpfu       if (inpncrd .ne. 0) then
+!mpfu!  Eliminate entries with inpmhld%crdnop equal to zero.
+!mpfu         k = 0
+!mpfu         do i = 1,inpncrd
+!mpfu           do
+!mpfu             k = k + 1
+!mpfu             if (inpmhld(k)%crdnop .ne. 0) then
+!mpfu               if (k .eq. i) exit
+!mpfu               inpmhld(i) = inpmhld(k)
+!mpfu               exit
+!mpfu             endif
+!mpfu           enddo
+!mpfu         enddo
+!mpfu       endif
+!mpfu       end subroutine inp9
+!mpfu!
+!mpfu       subroutine inplnk (card,next,where,many)
+!mpfu!  This subroutine searches the inpmhld(:)%crdnop array for the card
+!mpfu!  numbered card. It sets where to the index of inpmhld containing the
+!mpfu!  card number and next to the next largest card number. It returns the
+!mpfu!  number on items on the card in many.
+!mpfu!
+!mpfu       implicit none
+!mpfu!
+!mpfu       integer card,next,where,many
+!mpfu!  Parameters in the call list.
+!mpfu!  card    Card number to find in table array.
+!mpfu!  next    Next larger card number in table array; = -1 if no such card
+!mpfu!          exists.
+!mpfu!  where   Index in list array where card data is stored.
+!mpfu!  many    Number of data items on cards if > 0; = 0, no card found;
+!mpfu!          < 0, format error on card.
+!mpfu!
+!mpfu!  Local variables.
+!mpfu       integer, save :: i2old=0,nxtold=0,ip=0,in=0,iold=0
+!mpfu       integer i,i2,ii,nthis
+!mpfu!
+!mpfu       many = 0
+!mpfu       next = -1
+!mpfu       i2 = inpncrd
+!mpfu       if (i2 .eq. 0) return
+!mpfu       if (i2 .ne. i2old) then
+!mpfu         i2old = i2
+!mpfu         i = 0
+!mpfu!  Binary search for card number
+!mpfu         do
+!mpfu           i = i + 1
+!mpfu           i2 = ishft(i2,-1)
+!mpfu           if (i2 .eq. 0) exit
+!mpfu         enddo
+!mpfu         in = ishft(1,i-1)
+!mpfu         ip = in
+!mpfu       else
+!mpfu         if (nxtold .eq. card) then
+!mpfu           i = iold
+!mpfu           nthis = 0
+!mpfu           go to 40
+!mpfu         endif
+!mpfu       endif
+!mpfu       i = ip
+!mpfu       ii = in
+!mpfu       lp1: do
+!mpfu         nthis = card - inpmhld(i)%crdnop
+!mpfu!  nthis = 0, found the card
+!mpfu         if (nthis .eq. 0) exit lp1
+!mpfu         lp2: do
+!mpfu           ii = ishft(ii,-1)
+!mpfu           if (ii .eq. 0) go to 50
+!mpfu           if (nthis .gt. 0) then
+!mpfu             i = i + ii
+!mpfu             if (i .le. inpncrd) cycle lp1
+!mpfu             i = i - ii
+!mpfu             cycle lp2
+!mpfu           endif
+!mpfu           i = i - ii
+!mpfu           if (i .gt. 0) cycle lp1
+!mpfu           i = i + ii
+!mpfu         enddo lp2
+!mpfu       enddo lp1
+!mpfu!  Found the card in the table at index = i
+!mpfu   40  inpmhld(i)%crdflg = ibset(inpmhld(i)%crdflg,2)
+!mpfu       where = i
+!mpfu       many = inpmhld(i)%crdnw
+!mpfu       if (btest(inpmhld(i)%crdflg,1)) many = -many
+!mpfu       if (many .eq. 0) many = -1
+!mpfu   50  if (nthis .ge. 0) i = i + 1
+!mpfu       do
+!mpfu         if (i .gt. inpncrd) exit
+!mpfu!  Get next card if format errors on card.
+!mpfu         if (.not.btest(inpmhld(i)%crdflg,0)) then
+!mpfu           next = inpmhld(i)%crdnop
+!mpfu           exit
+!mpfu         endif
+!mpfu         i = i + 1
+!mpfu       enddo
+!mpfu       nxtold = next
+!mpfu       iold = i
+!mpfu       end subroutine inplnk
+!mpfu!
+!mpfu       subroutine inpmod (loc3,where,num,n,nc)
+!mpfu!  This subroutine checks the mode of num numbers starting at
+!mpfu!  inpmhld(where)%crddat with the condition code starting at 
+!mpfu!  inpmhld(where)%crdmodn by using the format array starting at loc3(7).
+!mpfu!  The number of items already processed (nc) determines the starting
+!mpfu!  point in loc3(7).
+!mpfu!
+!mpfu       implicit none
+!mpfu!  Parameters in the call list
+!mpfu       integer loc3(*),where,num,n,nc
+!mpfu!  loc3    Control word and format array from inp2 call.
+!mpfu!  where   Index in inpmhld holding information of data to be checked.
+!mpfu!  num     Number of data items to check.
+!mpfu!  n       Output error flag.
+!mpfu!          On exit, n contains information about the checking:
+!mpfu!          n < 0 item n should be real but is not;
+!mpfu!          n = 0 mode is correct;
+!mpfu!          0 < n < 10000 item n should be integer but is not;
+!mpfu!          n > 10000 item (n-10000) should be alphanumeric but is not
+!mpfu!  nc      number of items on previous card checked with current format.
+!mpfu!
+!mpfu!  Local variables.
+!mpfu       integer i,k,klim,klims,krep,mode,norepeat,nrepeat
+!mpfu       logical lphlp,repeat,repsgn
+!mpfu!  i         Index to the i-th item in all the cards being processed in the
+!mpfu!            current inp2 call.
+!mpfu!  k         Index to the k-th item in the loc3 array.
+!mpfu!  lphlp     Is false if the repeat count has not been found in the loop
+!mpfu!            that searches loc3 for it; is true if it has been found.
+!mpfu!  norepeat  Number of data items to be processed before repeat logic 
+!mpfu!            starts.
+!mpfu!  nrepeat   Number of mode values to repeat.
+!mpfu!  repeat    Is false if no repeat is present; is true if repeat is preent.
+!mpfu!  repsgn    If false, repeat starts at beginning of repeat mode values for
+!mpfu!            each new card; if true, continues with the mode values 
+!mpfu!            following the mode value used on the last data item on the
+!mpfu!            previous card.
+!mpfu!            true, repeat con
+!mpfu!
+!mpfu       if (where.le.0 .or. num.le.0 .or. nc.lt.0) call fabend
+!mpfu!  Find repeat number if present.
+!mpfu       n = 0
+!mpfu       k = 7
+!mpfu       norepeat = 0
+!mpfu       nrepeat = 0
+!mpfu       repeat = .false.
+!mpfu       lphlp = .false.
+!mpfu       do i = 1,num + nc
+!mpfu         if (abs(loc3(k)) .ge. 2) then
+!mpfu           repsgn = loc3(k) .gt. 0
+!mpfu           lphlp = .true.
+!mpfu           norepeat = i
+!mpfu           nrepeat = abs(loc3(k))
+!mpfu           exit
+!mpfu         endif
+!mpfu         k = k + 1
+!mpfu       enddo
+!mpfu       k = 7
+!mpfu       if (.not.lphlp) then
+!mpfu!  No repeat number present.
+!mpfu         klim = 7 + nc + num
+!mpfu         klims = -999
+!mpfu         krep = -999
+!mpfu       else
+!mpfu!  Repeat number present.
+!mpfu         if (norepeat .eq. 1) then
+!mpfu           krep = 8
+!mpfu           k = 8
+!mpfu           klim = k + nrepeat
+!mpfu           klims = klim
+!mpfu           repeat = .true.
+!mpfu         else
+!mpfu           klim = 6 + norepeat
+!mpfu           krep = klim + 1
+!mpfu           klims = krep +  nrepeat
+!mpfu         endif
+!mpfu       endif
+!mpfu!  Check if previous cards in this card series have been checked.
+!mpfu       if (nc .ne. 0) then
+!mpfu!  Check if repeat number was entered.
+!mpfu         if (nrepeat .eq. 0) then
+!mpfu           k = 7 + nc
+!mpfu         else
+!mpfu           if (nc + 1 .lt. norepeat) then
+!mpfu             k = 7 + nc
+!mpfu           else
+!mpfu             repeat = .true.
+!mpfu             if (repsgn) then
+!mpfu               k = krep
+!mpfu             else
+!mpfu               k = mod(nc - norepeat + 1,nrepeat) + krep 
+!mpfu             endif
+!mpfu             klim = klims
+!mpfu           endif
+!mpfu         endif
+!mpfu       endif
+!mpfu!  Loop to process the mode numbers.
+!mpfu       do i = 1,num
+!mpfu!  Get the next mode number.
+!mpfu         mode = loc3(k)
+!mpfu!      write (12,"('inpmod01',8i5,l5)") i,k,mode,klim,klims,krep,
+!mpfu!    & nrepeat,norepeat,repeat
+!mpfu         k = k + 1
+!mpfu         if (k .ge. klim) then
+!mpfu           if (.not.repeat) then
+!mpfu             repeat = .true.
+!mpfu             k = k + 1
+!mpfu             klim = klims
+!mpfu           else
+!mpfu             k = krep
+!mpfu           endif
+!mpfu         endif
+!mpfu!  Check condition code against the mode.
+!mpfu!      write (12,"('inpmod02',8i5,l5)") i,k,mode,klim,klims,krep,
+!mpfu!    & nrepeat,norepeat,repeat
+!mpfu!      write (12,"('inpmod03',3i5)") i,inpmhld(where)%crdmodn(i),mode
+!mpfu         select case (inpmhld(where)%crdmodn(i))
+!mpfu!  Should be hollerith.
+!mpfu         case (:-1)
+!mpfu           if (mode .ne. -1) n = 10000 + i
+!mpfu!  Should be integer.
+!mpfu         case (0)
+!mpfu           if (mode.ne.0 .and. mode.ne.1) n = i
+!mpfu!  Should be real.
+!mpfu         case (1)
+!mpfu           if (mode.ne.0 .and. mode.ne.2) n = -i
+!mpfu         end select
+!mpfu         if (n .ne. 0) return
+!mpfu       enddo
+!mpfu       end subroutine inpmod
+!mpfu!
+!mpfu       subroutine inpn (hed,ncase,ndata,isw)
+!mpfu!  This subroutine reads data cards for the next case.
+!mpfu!
+!mpfu       implicit none
+!mpfu!  Parameters in argument list.
+!mpfu       integer ncase,ndata,isw
+!mpfu       character hed*108
+!mpfu!  hed    title string: title card, date, time (input/output).
+!mpfu!  ncase  case number, incremented by 1 internally (input/output).
+!mpfu!         input  case number, set = 0 for first call.
+!mpfu!         output < 0 end-of-case (. card) found.
+!mpfu!  ndata  flag for previous data (input/output).
+!mpfu!         input  <= 0  ignore previous table-list array.
+!mpfu!                >  0  use previous table-list array.
+!mpfu!         output >  0  total storage used in table-list array.
+!mpfu!                <  0  no cards found.
+!mpfu!  isw    return status (output).
+!mpfu!              0  normal return.
+!mpfu!              1  end-of-file mark found.
+!mpfu!             -2  end-of-file before . or / termination card.
+!mpfu!              2  card format errors.
+!mpfu!              3  inpmhlds is allocated too small, change parameter
+!mpfu!                 value, nhld.
+!mpfu!
+!mpfu!  Local variables.
+!mpfu       character*8, allocatable :: cvibin(:)
+!mpfu       integer, allocatable :: cvicnd(:)
+!mpfu       type (inpmhldt) inpmhlds
+!mpfu       integer crdno,i,ikp,n1,n4,n5,ncn,ncx,nw
+!mpfu       logical cerr,eox,lphlp,nc,nd,nuse,nx
+!mpfu       character bcd*96,erb*80,dlrs*8
+!mpfu       include "efiless.h"
+!mpfu!
+!mpfu!  bcd     card image.
+!mpfu!  cerr    When false, indicates no error has occurred while processing
+!mpfu!          a data card or its continuation card; when true, indicates
+!mpfu!          that an error has occurred processing those cards.
+!mpfu!  cvibin  Contains words converted from the information on the card
+!mpfu!          image by cvic. The type is character regardlesss of actual
+!mpfu!          type. The word with the proper type can be obtained using
+!mpfu!          inpextrt.
+!mpfu!  cvicnd  Contains codes furnished by cvic indicating the type of words
+!mpfu!          encountered on the card.
+!mpfu!  ikp     Column position number of + on continuation card.
+!mpfu!  n1      Index for conversion results from cvic call.
+!mpfu!  n4      Column number of error on card; zero if no error.
+!mpfu!  n5      Number of words on card.
+!mpfu!  ncn     Ordinal number of card and the number of cards processed.
+!mpfu!  ncx     Ordinal number of data card with card number being processed.
+!mpfu!  nd      Is true when cards are being processed and a search is being
+!mpfu!          made for a data card with a card number; is false when cards
+!mpfu!          are being processed and a search is being made for either a
+!mpfu!          following data card with a card number, or the . or / card,
+!mpfu!          or an end of file, all of which indicate that the previous
+!mpfu!          card was the last card of a data card with card number and 
+!mpfu!          possible continuation cards. Comment and blank cards are
+!mpfu!          allowed to be interspersed between the first data card and
+!mpfu!          its continuation cards.
+!mpfu!  nw      Number of words on data card with card number plus associated
+!mpfu!          continuation cards.
+!mpfu!  nx      Is initialized to true; is set to false when a . card is read
+!mpfu!          indicating that the data need not be saved for a following
+!mpfu!          case.
+!mpfu!          
+!mpfu       data dlrs/'$$$$$$$$'/
+!mpfu       include "efilesd.h"
+!mpfu!
+!mpfu       if (.not.allocated(inpmhldm)) then
+!mpfu         allocate (inpmhldm(nhld))
+!mpfu         inpncrd = 0
+!mpfu       endif
+!mpfu       allocate (cvibin(ncards),cvicnd(ncards))
+!mpfu!
+!mpfu       hed = ' '
+!mpfu       call edate (hed(82:91))
+!mpfu       call eclock (hed(95:102))
+!mpfu       ncase = ncase + 1
+!mpfu       eox = .false.
+!mpfu       isw = 0
+!mpfu       ncn = 0
+!mpfu       nw = 0
+!mpfu       nx = .true.
+!mpfu       nuse = .true.
+!mpfu       cerr = .false.
+!mpfu       nd = .true.
+!mpfu       n1 = 1
+!mpfu       lp1: do
+!mpfu         nc = .true.
+!mpfu         ikp = 0
+!mpfu         read (input,"(a)",iostat=i) bcd
+!mpfu         if (i .gt. 0) then
+!mpfu           write (output,"(' ******** Read failure on file input, execut
+!mpfu     &ion is being terminated.')")
+!mpfu           isw = 2
+!mpfu           return
+!mpfu         elseif (i .lt. 0) then
+!mpfu!  Found end-of-file
+!mpfu           if (ncn .eq. 0) then
+!mpfu             isw = 1
+!mpfu             return
+!mpfu           else
+!mpfu             write (inpout,"(' ******** End of file encountered before e
+!mpfu     &nd(.) card.')")
+!mpfu             eox = .true.
+!mpfu             isw = -2
+!mpfu             ncase = -ncase
+!mpfu             nuse = .false.
+!mpfu             go to 30
+!mpfu           endif
+!mpfu         endif
+!mpfu         i = index(bcd(1:96),char(13))
+!mpfu         if (i .ne. 0) bcd(i:96) = ' '
+!mpfu         if (ncn .eq. 0) write (inpout,"(' Listing of input data for cas
+!mpfu     &e',i3/' ')") ncase
+!mpfu         ncn = ncn + 1
+!mpfu         lphlp = .false.
+!mpfu         do i = 1,80
+!mpfu           if (bcd(i:i) .ne. ' ') then
+!mpfu             lphlp = .true.
+!mpfu             exit
+!mpfu           endif
+!mpfu         enddo
+!mpfu         if (lphlp) then
+!mpfu           if (bcd(i:i) .eq. '+') then
+!mpfu!  Continuation card found
+!mpfu             if (nd) then
+!mpfu               write (inpout,"(' ******** Continuation card indicated, b
+!mpfu     &ut no previous data card; treated as new data card.')")
+!mpfu               isw = 2
+!mpfu               nc = .false.
+!mpfu               nx = .false.
+!mpfu               go to 30
+!mpfu             endif
+!mpfu             ikp = i
+!mpfu             nc = .false.
+!mpfu             go to 50
+!mpfu           endif
+!mpfu           if (bcd(i:i).ne.'*' .and. bcd(i:i).ne.'$') then
+!mpfu             if (bcd(i:i) .eq. '=') then
+!mpfu!  Title card found
+!mpfu               hed(1:80) = bcd(1:80)
+!mpfu               hed(i:i) = ' '
+!mpfu             elseif (bcd(i:i) .eq. '/') then
+!mpfu               nuse = .false.
+!mpfu             elseif (bcd(i:i) .eq. '.') then
+!mpfu               ncase = -ncase
+!mpfu               nuse = .false.
+!mpfu             else
+!mpfu               nc = .false.
+!mpfu               nx = .false.
+!mpfu             endif
+!mpfu           endif
+!mpfu         endif
+!mpfu   30    if (.not.nd) then
+!mpfu!  Put data from card with card number and associated continuation cards
+!mpfu!  into allocated storage.
+!mpfu           inpncrd = inpncrd + 1
+!mpfu           if (inpncrd .gt. nhld) then
+!mpfu             write (output,"(' ******** Number of unique card numbers is
+!mpfu     & too large, processing is being terminated.')")
+!mpfu             isw = 3
+!mpfu             return
+!mpfu           endif
+!mpfu           inpmhldm(inpncrd)%crdflg = 0
+!mpfu           if (cerr) inpmhldm(inpncrd)%crdflg =
+!mpfu     &     ibset(inpmhldm(inpncrd)%crdflg,0)
+!mpfu           lphlp = .false.
+!mpfu           if (cvicnd(1) .ne. 1) then
+!mpfu             lphlp = .true.
+!mpfu           else
+!mpfu             call inpextrt (crdno,cvibin(1))
+!mpfu             if (crdno.le.0 .or. crdno.gt.ishft(1,30)) lphlp = .true.
+!mpfu           endif
+!mpfu           if (lphlp) then
+!mpfu             write (inpout,"(' ******** Unrecognizable card number.')")
+!mpfu             inpmhldm(inpncrd)%crdflg =
+!mpfu     &       ibset(inpmhldm(inpncrd)%crdflg,1)
+!mpfu             inpmhldm(inpncrd)%crdnop =
+!mpfu     &       ibset(inpmhldm(inpncrd)%crdnop,30)
+!mpfu             nw = 1
+!mpfu             isw = 2
+!mpfu           else
+!mpfu             inpmhldm(inpncrd)%crdnop = crdno
+!mpfu           endif
+!mpfu           nw = nw - 1
+!mpfu           inpmhldm(inpncrd)%crdnw = nw
+!mpfu           if (nw .ne. 0) then
+!mpfu             allocate (inpmhldm(inpncrd)%crddat(nw),
+!mpfu     &       inpmhldm(inpncrd)%crdmodn(nw))
+!mpfu             do i = 1,nw
+!mpfu               inpmhldm(inpncrd)%crddat(i) = cvibin(i+1)
+!mpfu               if (cvicnd(i+1).lt.0 .or. cvicnd(i+1).gt.2)
+!mpfu     &         cvicnd(i+1) = -1
+!mpfu               inpmhldm(inpncrd)%crdmodn(i) = cvicnd(i+1)
+!mpfu             enddo
+!mpfu           endif
+!mpfu!  Unless card had an unrecognizable card number, check if card with
+!mpfu!  this card number is stored.
+!mpfu           if (.not.lphlp) then
+!mpfu             do i = inpncrd-1,1,-1
+!mpfu               if (inpmhldm(i)%crdnop .eq. crdno) then
+!mpfu                 lphlp = .true.
+!mpfu                 exit
+!mpfu               endif
+!mpfu             enddo
+!mpfu             if (lphlp) then
+!mpfu               if (associated(inpmhldm(i)%crddat)) 
+!mpfu     &         deallocate (inpmhldm(i)%crddat,inpmhldm(i)%crdmodn)
+!mpfu               if (nw .ne. 0) then
+!mpfu                 write (inpout,"(' -------- Card above is a replacement 
+!mpfu     &card.')")
+!mpfu                 inpmhldm(i) = inpmhldm(inpncrd)
+!mpfu                 inpncrd = inpncrd - 1
+!mpfu               else
+!mpfu                 write (inpout,"(' --------Card above is a delete card.'
+!mpfu     &)")
+!mpfu                 inpmhldm(i) = inpmhldm(inpncrd-1)
+!mpfu                 inpncrd = inpncrd - 2
+!mpfu               endif
+!mpfu!  If a card only has a card number that does not match a current stored
+!mpfu!  card; ignore the card.
+!mpfu             elseif (nw .eq. 0) then 
+!mpfu               inpncrd = inpncrd - 1
+!mpfu             endif
+!mpfu           endif
+!mpfu!  The above coding has finished processing a data card with a card
+!mpfu!  number and its associated continuation cards and the following code
+!mpfu!  sets up to search for next data card.
+!mpfu           cerr = .false.
+!mpfu           nd = .true.
+!mpfu           n1 = 1
+!mpfu           nw = 0
+!mpfu         endif
+!mpfu   50    if (eox) exit lp1
+!mpfu         write (inpout,"(i6,4x,a)") ncn,bcd
+!mpfu         if (nc) then
+!mpfu           if (nuse) cycle lp1
+!mpfu           exit
+!mpfu         endif
+!mpfu         if (ikp .ne. 0) bcd(ikp:ikp) = ' '
+!mpfu         do
+!mpfu           n4 = 1
+!mpfu           if (n1 + 40 .ge. ncards) then
+!mpfu             write (output,"(' ******** Insufficient storage for data, p
+!mpfu     &rocessing terminated.')")
+!mpfu             isw = 3
+!mpfu             return
+!mpfu           endif
+!mpfu!  Crack the card image.
+!mpfu           call cvic (bcd,cvibin(n1),cvicnd(n1),n5,n4)
+!mpfu           if (nd) ncx = ncn
+!mpfu           if (n5 .ne. 0) then
+!mpfu             nd = .false.
+!mpfu             n1 = n1 + n5
+!mpfu             nw = nw + n5
+!mpfu           endif
+!mpfu           if (n4 .ne. 0) then
+!mpfu!  Found an error on the card
+!mpfu             nd = .false.
+!mpfu             isw = 2
+!mpfu             cerr = .true.
+!mpfu             read (dlrs,'(a8)') cvibin(n1)
+!mpfu             cvicnd(n1) = 3
+!mpfu             n1 = n1 + 1
+!mpfu             nw = nw + 1
+!mpfu             erb = ' '
+!mpfu             n4 = min(n4,80)
+!mpfu             erb(n4:n4) = '^'
+!mpfu             write (inpout,"(i6,4x,a)") ncn,bcd
+!mpfu             write (inpout,"(' ',9x,a80,4x,'^ points to card error at co
+!mpfu     &l.',i3)") erb,n4
+!mpfu             do i = 1,80
+!mpfu               if (i .ge. n4) then
+!mpfu                 if (bcd(i:i).eq.' ' .or. bcd(i:i).eq.',') then
+!mpfu                   bcd(i:i) = ' '
+!mpfu                   cycle
+!mpfu                 endif
+!mpfu               endif
+!mpfu               bcd(i:i) = ' '
+!mpfu               exit
+!mpfu             enddo
+!mpfu           endif
+!mpfu           cycle lp1
+!mpfu         enddo
+!mpfu         if (nuse) cycle lp1
+!mpfu       enddo lp1
+!mpfu!
+!mpfu       ndata = inpncrd
+!mpfu       if (nx) ndata = -ndata
+!mpfu!  Sort inpmhldm in increasing order of card number.
+!mpfu       do i = 2,inpncrd
+!mpfu         if (inpmhldm(i)%crdnop .ge. inpmhldm(i-1)%crdnop) cycle
+!mpfu         inpmhlds = inpmhldm(i)
+!mpfu         n1 = i
+!mpfu         do
+!mpfu           inpmhldm(n1) = inpmhldm(n1-1)
+!mpfu           n1 = n1 - 1
+!mpfu           if (n1 .lt. 2) exit
+!mpfu           if (inpmhlds%crdnop .ge. inpmhldm(n1-1)%crdnop) exit
+!mpfu         enddo
+!mpfu         inpmhldm(n1) = inpmhlds
+!mpfu       enddo
+!mpfu       allocate (inpmhld(inpncrd))
+!mpfu       inpmhld(:) = inpmhldm(1:inpncrd)
+!mpfu       deallocate (inpmhldm)
+!mpfu       end subroutine inpn
+!mpfu!
+       subroutine inpmdel
+!  Deallocates the data files and the inpmhld array and sets inpncrd to
+!  zero.
+!
+       integer i
+!
+       if (.not.allocated(inpmhld)) return
+       do i = 1,inpncrd
+         if (associated(inpmhld(i)%crddat))
+     &   deallocate (inpmhld(i)%crddat,inpmhld(i)%crdmodn)
+       enddo
+       deallocate (inpmhld)
+       end subroutine inpmdel
+!
+       subroutine inpmrd
+!  Reads processed input from a previous problem that was saved on a 
+!  scratch file into memory. 
+!
+       integer i
+!
+       rewind (27)
+       allocate (inpmhldm(nhld))
+       read (27) inpncrd
+       read (27) inpmhldm(1:inpncrd)%crdnop,inpmhldm(1:inpncrd)%crdnw,
+     & inpmhldm(1:inpncrd)%crdflg
+       do i = 1,inpncrd
+         inpmhldm(i)%crdflg = ibclr(inpmhldm(i)%crdflg,2)
+         if (inpmhldm(i)%crdnw .ne. 0) then
+           allocate (inpmhldm(i)%crddat(1:inpmhldm(i)%crdnw),
+     &     inpmhldm(i)%crdmodn(1:inpmhldm(i)%crdnw))
+           read (27) inpmhldm(i)%crddat(1:inpmhldm(i)%crdnw),
+     &     inpmhldm(i)%crdmodn(1:inpmhldm(i)%crdnw)
+         endif
+       enddo
+       rewind (27)
+       end subroutine inpmrd
+!
+       subroutine inpmwrt
+!  Writes processed input from current problem to a scratch file for
+!  possible reading during a succeeding problem.
+!
+       integer i
+!
+       rewind (27)
+       write (27) inpncrd
+       write (27) inpmhld(:)%crdnop,inpmhld(:)%crdnw,
+     & inpmhld(:)%crdflg
+       do i = 1,inpncrd
+         if (associated(inpmhld(i)%crddat)) then
+           write (27) inpmhld(i)%crddat(:),inpmhld(i)%crdmodn(:)
+         endif
+       enddo
+       rewind (27)
+       end subroutine inpmwrt
+!
+       end module inpmodul

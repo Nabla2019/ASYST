@@ -1,0 +1,244 @@
+*mlist
+       subroutine std2x1 (a,s,err)
+c
+c  Performs a steam table interpolation on T and X or P and X.
+c
+c  Cognizant engineer: rjw csm.
+c
+c                           PROLOGUE
+c
+c   TITLE= std2x1 -- steam table interpolation on T and X or P and X
+c
+c   AUTHOR-- R. J. Wagner (modified for d2o by C. S. Miller)
+c
+c   PURPOSE--
+c
+c   Compute water thermodynamic properties as a function of temperature
+c   and quality.
+c      entry std2x2 (a,s,err)
+c   Compute water thermodynamic properties as a function of pressure
+c   and quality.
+c
+c  ARGUMENT LIST
+c     a         =   general parameter vector
+c     s(1)      =   T  temperature  deg K
+c     s(2)      =   P  pressure     Pa
+c     s(3)      =  v  specific volume   cubic meter / kg
+c     s(4)      =  u  specific internal energy  J / kg
+c     s(5)      =  h  specific enthalpy  J / kg
+c     s(6)      =  beta  thermal coefficient of expansion  vol / (vol -
+c     s(7)      =  kappa pressure coefficient of expansion  vol / (vol -
+c     s(8)      =  Csubp  specific heat  J / (kg - deg K)
+c     s(9)      =  quality X
+c     s(10)     =  Psat  or  Tsat     Pa or deg K
+c     s(11)     =  vsubf   fluid specific volume  cubic meters / kg
+c     s(12)     =  vsubg   vapor specific volume  cubic meters / kg
+c     s(13)     =  usubf  fluid specific internal energy  J / kg
+c     s(14)     =  usubg  vapor specific internal energy  J / kg
+c     s(15)     =  hsubf  fluid specific enthalpy  J / kg
+c     s(16)     =  hsubg  vapor specific enthalpy  J / kg
+c     s(17)      =  betaf liquid  thermal coefficient of expansion  vol
+c     s(18)      =  betag vapor  thermal coefficient of expansion  vol /
+c     s(19)      =  kappaf liquid pressure coefficient of expansion  vol
+c     s(20)      =  kappag vapor pressure coefficient of expansion  vol
+c     s(21)      =  Csubpf liquid  specific heat  J / (kg - deg K)
+c     s(22)      =  Csubpg vapor  specific heat  J / (kg - deg K)
+c     s(23)      =  indexes
+c     s(24)      =  s   specific entropy  J /  ( kg - deg K)
+c     s(25)      =  ssubf liquid  specific entropy  J /  ( kg - deg K)
+c     s(26)      =  ssubg vapor  specific entropy  J /  ( kg - deg K)
+c     err        =  error flag
+c
+c  DIRECT OUTPUTS--(Arguments modified by this routine itself)
+c
+c      s(2)-s(8), s(10)-s(26), err
+c
+c  Compute water thermodynamic properties as a function of temperature
+c  and quality
+c
+c  COMMON BLOCKS
+c
+       implicit none
+       real a(1),s(26)
+       logical err
+       common /std2xc/ nt,np,ns,ns2,klp,klp2,llp,nt5,jpl
+       integer nt,np,ns,ns2,klp,klp2,llp,nt5,jpl
+c
+c  Local variables.
+       real b(5),c(6),c0,c1,c2,c3,crp,d1,d2,dfdt,dpdt1,dpdt2,f1,f2,fr,
+     & fr1,hfg1,hfg2,pa,pb,plow,pp,pr,prat,ps,t,ta,tb,tc,tlow,tsat,
+     & y,yh
+       integer ia,ib,ip,j,jp,jpp,kp,kp2
+       logical s1,s2,s3
+$if def,in32,3
+       real unp
+       integer iunp(2)
+       equivalence (unp,iunp(1))
+c
+c  Data.
+       data b/-7.81583,17.6012,-18.1747,-3.92488,4.19174/
+       data c/0.37228924e+03, 0.88331901e+02, 0.10970708e+02,
+     & 0.97251708e+00, 0.51713769e-01,0.12129545e-02/
+       data plow/660.114/, crp/2.166e+07/
+       data tlow/276.95/
+c
+c  EXECUTION
+       s(1)=max(s(1),tlow)
+       s1 = .false.
+   15  if (s(1).lt.a(1) .or. s(1).gt.a(ns)) go to 101
+       if (s(9).lt.0.e0 .or. s(9).gt.1.e0) go to 101
+       if (s1) go to 16
+       tc=643.89
+       t=s(1)
+       ta=1.-t/tc
+       if(ta.le.0.) ta=0.
+       prat=(tc/t)*(b(1)*ta+b(2)*ta**1.9+b(3)*ta**2.
+     & +b(4)*ta**5.5+b(5)*ta**10.)
+       ps=crp*exp(prat)
+       s(10)=ps
+       s(2) = s(10)
+       entry std2xb (a,s,err)
+$if -def,in32,5
+$if def,cray,1
+   16  ip = shiftr(s(23),30)
+$if -def,cray,1
+   16  ip = ishft(s(23),-30)
+       jp = and(s(23),1023)
+$if def,in32,3
+   16  unp = s(23)
+       ip = iunp(1)
+       jp = iunp(2)
+       s2 = .false.
+       s3 = .false.
+       if (ip.le.0 .or. ip.ge.ns) ip = 1
+       if (jp.le.0 .or. jp.ge.ns2) jp = 1
+c  Set indexes in temperature and pressure tables for saturation
+c  computations
+   11  if (s(1) .ge. a(ip)) go to 10
+       ip = ip - 1
+       go to 11
+   10  if (s(1) .le. a(ip+1)) go to 12
+       ip = ip + 1
+       go to 10
+   12  jpp = jp + nt
+  111  if (s(10) .ge. a(jpp)) go to 110
+       jpp = jpp - 1
+       if (jpp .gt. nt) go to 111
+       s3 = .true.
+       go to 112
+  110  if (s(10) .le. a(jpp+1)) go to 112
+       jpp = jpp + 1
+       if (jpp .lt. jpl) go to 110
+       s2 = .true.
+  112  jp = jpp - nt
+       kp2 = klp2 + jp*13
+       kp = klp + ip*13
+       if (s3 .or. a(jpp).le. a(kp)) go to 113
+       pa = a(jpp)
+       ta = a(kp2)
+       ia = kp2
+       go to 115
+  113  ta = a(ip)
+       pa = a(kp)
+       ia = kp
+  115  if (s2 .or. a(jpp+1).ge.a(kp+13)) go to 116
+       pb = a(jpp+1)
+       tb = a(kp2+13)
+       ib = kp2 + 13
+       go to 117
+  116  tb = a(ip+1)
+       pb = a(kp+13)
+       ib = kp + 13
+  117  fr1 = s(1) - ta
+       fr = fr1/(tb-ta)
+c  Two phase fluid.
+       hfg1 = a (ia+8) - a (ia+2) + pa * ( a (ia+7) - a (ia+1))
+       hfg2 = a (ib+8) - a (ib+2) + pb * ( a (ib+7) - a (ib+1))
+       dpdt1 = hfg1 / ( ta   *( a(ia+7)- a(ia+1)))
+       dpdt2 = hfg2 / ( tb   *( a(ib+7)- a(ib+1)))
+       f1 = a (ia+1) * ( a (ia+3) - a (ia+4) * dpdt1)
+       f2 = a (ib+1) * ( a (ib+3) - a (ib+4) * dpdt2)
+       d1 = f1 * ( tb - ta )
+       d2 = f2 * ( tb - ta )
+       c0 = a (ia+1)
+       c1 = d1
+       c2 = 3. *( a(ib+1) - a(ia+1)) - d2 - 2. * d1
+       c3 = d2 + d1 - 2. *( a(ib+1) - a(ia+1))
+       s (11) = c0 + fr *( c1 + fr *( c2 + fr * c3 ))
+       f1 = a (ia+7) * ( a (ia+9) - a (ia+10)* dpdt1)
+       f2 = a (ib+7) * ( a (ib+9) - a (ib+10)* dpdt2)
+       d1 = f1 * ( tb - ta )
+       d2 = f2 * ( tb - ta )
+       c0 = a (ia+7)
+       c1 = d1
+       c2 = 3. *( a(ib+7) - a(ia+7)) - d2 - 2. * d1
+       c3 = d2 + d1 - 2. *( a(ib+7) - a(ia+7))
+       s(12) = c0 + fr *( c1 + fr *( c2 + fr * c3 ))
+c   two phase fluid.
+       s(13) = a(ia+2) + (a(ib+2)-a(ia+2))*fr
+       s(14) = a(ia+8) + (a(ib+8)-a(ia+8))*fr
+       s(15) = s(13) + s(10)*s(11)
+       s(16) = s(14) + s(10)*s(12)
+       s(17) = a(ia+3) + (a(ib+3)-a(ia+3))*fr
+       s(18) = a(ia+9) + fr*tb/s(1)*(a(ib+9)-a(ia+9))
+       s(19) = a(ia+4) + (a(ib+4)-a(ia+4))*fr
+       s(20) = a(ia+10) + (s(10)-pa)/(pb-pa)*pb/s(10)*(a(ib+10)-
+     & a(ia+10))
+       s(21) = a(ia+5) + (a(ib+5)-a(ia+5))*fr
+       s(22) = a(ia+11) + (a(ib+11)-a(ia+11))*fr
+       s(25) = a(ia+6) + (a(ib+6)-a(ia+6))*fr
+       s(26) = a(ia+12) + (a(ib+12)-a(ia+12))*fr
+       fr = 1.e0 - s(9)
+       s(3) = fr*s(11) + s(9)*s(12)
+       s(4) = fr*s(13) + s(9)*s(14)
+       s(5) = fr*s(15) + s(9)*s(16)
+       s(24) = fr*s(25) + s(9)*s(26)
+$if -def,in32,1
+       s(23) = or(shift(ip,30),jp)
+$if def,in32,3
+       iunp(1) = ip
+       iunp(2) = jp
+       s(23) = unp
+       err = .false.
+   20  return
+       entry std2x2 (a,s,err)
+c  Compute water thermodynamic properties as a function of pressure
+c  and quality.
+       s1 = .true.
+c  Temporary patch to be able to do ice condenser debug runs.
+       s(2) = max(s(2),plow)
+       s(10) = s(2)
+       if (s(2).lt.plow .or. s(2).gt.crp) go to 101
+       tc=643.89
+       pp=s(2)
+       tsat=0.0
+       pr= (pp/21.671e6)
+       yh=log(pr)
+       y = 1.0
+       do j = 1,6
+         tsat = tsat + c(j)*y
+         y = y*yh
+       enddo
+       t = min(max(tsat + 273.15,0.0),a(ns))
+       ta = max(1.0 - t/tc,0.0)
+       d1 = (tc/t)*(b(1)*ta + b(2)*ta**1.9 + b(3)*ta**2 +
+     & b(4)*ta**5.5 + b(5)*ta**10)
+       d2 = b(1) + 1.9*b(2)*ta**.9 + 2.*b(3)*ta + 5.5*b(4)*ta**4.5 +
+     & 10.*b(5)*ta**9
+       pa = crp*exp(d1)
+       dfdt = -(d1 + d2)/t
+       t = t - (pa - pp)/(pa*dfdt)
+       ta = max(1.0 - t/tc,0.0)
+       d1 = (tc/t)*(b(1)*ta + b(2)*ta**1.9 + b(3)*ta**2 +
+     & b(4)*ta**5.5 + b(5)*ta**10)
+       d2 = b(1) + 1.9*b(2)*ta**.9 + 2.*b(3)*ta + 5.5*b(4)*ta**4.5 +
+     & 10.*b(5)*ta**9
+       pa = crp*exp(d1)
+       dfdt = -(d1 + d2)/t
+       s(1) = t - (pa - pp)/(pa*dfdt)
+c  Patch because of troubles computing values at triple point.
+       s(1) = max(s(1),a(1))
+       go to 15
+  101  err = .true.
+       go to 20
+       end

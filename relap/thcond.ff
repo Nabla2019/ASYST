@@ -1,0 +1,180 @@
+*mlist
+       subroutine thcond (ifluid,ihld,ixhld,ishld,nh,iscskp,temp,pres,
+     & rho,state,thcon,err)
+c
+c
+c  Computes thermal conductivity for a given fluid.
+c
+c  Cognizant engineer: jet.
+c
+*in32 ihld
+*in32 ishld
+*in32 ixhld
+*in32end
+c
+c      thcond  - compute thermal conductivity for given fluid
+c
+c      Parameters:
+c        ifluid = fluid number (input)
+c        ihld   = primary list vector holding subscripts for required
+c                 arrays (input)
+c        ixhld  = secondary list vector (uses values stored in ihld for
+c                 subscripts) containing pointers to needed values in
+c                 alternate data base (input)
+c        ishld  = scratch array holding pointers for table interpolation
+c                 (uses same indexing as ihld) (output)
+c        nh     = vector length (input)
+c        iscskp = skip factor for ihld and ixhld (input)
+c        temp   = array containing temperatures (input)
+c        pres   = array containing pressures (input)
+c        rho    = array containing fluid densities (input)
+c        state  = fluid state (input)
+c                 'liquid' = liquid state
+c                 'vapor'  = vapor state
+c        thcon  = array containing thermal conductivities (output)
+c        err    = error flag (output)
+c
+$if def,iua
+       use uncdata
+$endif
+       implicit none
+c
+c  Arguments:
+       real  pres(*),rho(*),temp(*),thcon(*)
+       integer  ifluid,ihld(*),iscskp,ishld(*),ixhld(*),nh
+       logical  err
+       character*(*)  state
+c
+c  Local variables:
+       real  term
+       integer  i,ih,ix,j,m
+       real  ag0,ag1,ag2,ag3,bg0,bg1,bg2,c,cc,thcont,x1,x2,z0,z1,z2
+       integer  nptct
+       parameter ( nptct = 13 )
+       dimension  c(4),thcont(2,nptct)
+c
+c  Data statements:
+       data  thcont /
+     &   0.000,0.566989,
+     & 273.150,0.566989,  310.928,0.629295,  366.483,0.679140,
+     & 394.261,0.685371,  422.039,0.685371,  449.817,0.679140,
+     & 477.594,0.660448,  533.150,0.604373,  588.706,0.517144,
+     & 616.483,0.448606,  647.039,0.274148,  1.0e+75,0.274148/
+c
+       data  c/0.56340135,0.14504443e-2,-0.79650470e-5,0.71584948e-8/
+c
+       data  cc /2.1482e+5/, ag0 /1.76e-2/, ag1 /5.87e-5/,
+     &       ag2 /1.04e-7/, ag3 /-4.51e-11/,
+     &       bg0 /1.0351e-4/, bg1 /.4198e-6/, bg2 /-2.771e-11/
+c
+c
+c  Execution:
+c--initialize error flag
+       err = .false.
+c
+c--check for valid state specifier
+       if (state.ne.'liquid' .and. state.ne.'vapor') then
+         err = .true.
+         go to 999
+       endif
+c
+c--initialize pointer index
+       ih = 1
+c
+c--branch to correlation for given fluid
+       go to (10,20), ifluid
+       err = .true.
+       go to 999
+c
+c--light water
+   10  if (state.eq.'liquid') then
+         go to 11
+       else
+         go to 16
+       endif
+c
+c--saturated or subcooled liquid;  correlation from interpolation of
+c--1967 ASME tables;  FORTRAN coding by R. J. Wagner and J. E. Tolli,
+c--EG&G Idaho, Inc.
+   11  do 14 m = 1,nh
+         i = ihld(ih)
+         do 12 j=2,nptct
+           if (thcont(1,j).ge.temp(i))  go to 13
+   12    continue
+   13    if ( nh .ne. 1 )  ishld(ih) = j
+         ih = ih + iscskp
+   14  continue
+       ih = 1
+       if ( nh .eq. 1 ) then
+         i = ihld(ih)
+         j = j - 1
+         thcon(i) = thcont(2,j) + ( temp(i) - thcont(1,j) ) /
+     &                            ( thcont(1,j+1) - thcont(1,j) ) *
+     &                            ( thcont(2,j+1) - thcont(2,j) )
+       else
+         do 15 m = 1,nh
+           i = ihld(ih)
+           j = ishld(ih)
+           thcon(i) = thcont(2,j) - ( thcont(1,j) - temp(i) ) /
+     &                              ( thcont(1,j) - thcont(1,j-1) ) *
+     &                              ( thcont(2,j) - thcont(2,j-1) )
+           ih = ih + iscskp
+   15    continue
+       endif
+       go to 999
+c
+c  Saturated or superheated vapor;  correlation from 1967 ASME tables;
+c  FORTRAN coding by R. J. Wagner and J. E. Tolli, EG&G Idaho, Inc.
+   16  do 17 m = 1,nh
+         i = ihld(ih)
+         ix = ixhld(i)
+         term = max(temp(ix) - 273.15, 20.0)
+         z0 = ((-4.51e-11*term + 1.04e-7)*term + 5.87e-5)*term + 17.6e-3
+         z1 = (-2.771e-11*term + 0.4198e-6)*term + 103.51e-6
+         z2 = 2.1482e5*term**(-4.2)
+         term = (z2*rho(ix) + z1)*rho(ix) + z0
+         thcon(i) = max (term, 0.01)
+         ih = ih + iscskp
+   17  continue
+       go to 999
+c
+c--heavy water
+   20  if (state.eq.'liquid') then
+         go to 21
+       else
+         go to 23
+       endif
+c
+c--saturated or subcooled liquid;  correlation from Flowtran program
+c--(Savannah River);  FORTRAN coding by R. J. Wagner, C. S. Miller,
+c--and J. E. Tolli, EG&G Idaho, Inc.
+c  Factor of 0.001 moved from correlation into coefficient (c).
+   21  do 22 m = 1,nh
+         i = ihld(ih)
+         term = max ( temp(i)-273.15, 1.0e-6 )
+         thcon(i) = (((c(4)*term + c(3))*term + c(2))*term + c(1))
+         ih = ih + iscskp
+   22  continue
+       go to 999
+c
+c--saturated or superheated vapor;  FORTRAN coding by R. J. Wagner,
+c--C. S. Miller, and J. E. Tolli, EG&G Idaho, Inc.
+   23  do 24 m = 1,nh
+         i = ihld(ih)
+         ix = ixhld(i)
+         term = max ( temp(ix)-273.15, 1.0e-6 )
+         x1 = ( ( ag3*term + ag2 )*term + ag1 )*term + ag0
+         x2 = ( bg2*term + bg1 )*term + bg0
+         thcon(i) = x1 + rho(ix)*( x2 + cc*rho(ix)*term**(-4.2) )
+         ih = ih + iscskp
+   24  continue
+$if def,iua
+  999  if (.not.err) then
+         if (uncmode) call appwtcon(ifluid,state,ihld,nh,thcon,iscskp)
+       endif
+       return
+$endif
+$if -def,iua
+  999  return
+$endif
+       end

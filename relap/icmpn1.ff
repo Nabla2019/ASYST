@@ -1,0 +1,778 @@
+*mlist
+       subroutine icmpn1
+c
+c  Controls cross checking of component input and first pass of
+c  component initialization.
+c
+c  Cognizant engineer: rjw.
+c
+c  Modified for new hse model by W.M.Bryce, AEEW. April 1989
+c
+       use jvprnt
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'mxnfcd.h'
+       include 'pumpblk.h'
+       include 'rcompc.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+c
+       common /sth2xc/ nth2x,nph2x,nsh2x,ns2h2x,klph2x,klp2h2,llph2x,
+     & nt5h2x,jplh2x
+       integer nth2x,nph2x,nsh2x,ns2h2x,klph2x,klp2h2,llph2x,nt5h2x,
+     & jplh2x
+       save /sth2xc/
+c
+       common /std2xc/ ntd2x,npd2x,nsd2x,ns2d2x,klpd2x,klp2d2,llpd2x,
+     & nt5d2x,jpld2x
+       integer ntd2x,npd2x,nsd2x,ns2d2x,klpd2x,klp2d2,llpd2x,nt5d2x,
+     & jpld2x
+       save /std2xc/
+       include 'ufiles.h'
+       include 'ufilef.h'
+       include 'voldat.h'
+c
+c  Local variables
+       integer lenlfn
+       real stceqv(lstcom)
+       equivalence (stceqv(1),ttrip)
+       integer ist,isttbl,matmax,nuse,nwleft
+       logical hsetst,tpffal
+       integer i,j,jj,jx,k,kc,kk,l,lc,lcontg,m,mm,n,nj,nv,nd
+       real ajth,ftbnid
+       character*80 record(2)
+       character*40 blnk40
+       integer index
+c
+c  Data statements
+       data  blnk40 /' '/
+c
+c  Set pointer in component block to first volume and junction of
+c  the component.  Set  vctrl for time dependent volumes.
+       i = filndx(3)
+       nv = 1
+       nj = 1
+       do k = 1,ncmps(i)
+         if (cmptyp(i) .ne. 0) then
+           if (cmptyp(i) .eq. 2) then
+             l = filndx(4) + (nv-1)*ivskp
+             vctrl(l) = ior(vctrl(l),1)
+           elseif (cmptyp(i) .eq. 9) then
+             l = filndx(5) + (nj-1)*ijskp
+             jc(l) = ior(jc(l),2)
+           endif
+           l = nvc(i)
+           nvcn(i) = nv
+           nvco(i) = (nv - 1)*ivskp
+           nv = nv + l
+           l = njc(i)
+           njcn(i) = nj
+           njco(i) = (nj - 1)*ijskp
+           nj = nj + l
+         endif
+         i = i + cmplen(i)
+       enddo
+c  Check and set to-from pointers for junctions.
+       if (iand(iextra,1) .ne. 0) then
+         i = filndx(5)
+         do k = 1,njuns(i)
+           ij1vn(i) = 0
+           ij2vn(i) = 0
+           i = i + ijskp
+         enddo
+         i = filndx(3)
+         do k = 1,ncmps(i)
+           select case (cmptyp(i))
+           case (0,2,10)
+           case (1,7,16)
+             call ipipe (i)
+           case (3:6,8,9,11:15)
+             call isngj (i)
+           case default
+             call fabend
+           end select
+           i = i + cmplen(i)
+         enddo
+       endif
+       if (filid(4) .ne. 0.0) then
+c  Set flags that indicate whether a volume coordinate direction is in
+c  use.
+         if (iand(iextra,1) .ne. 0) then
+           i = filndx(4)
+           do j = 1,nvols(i)
+             imap(i) = ior(imap(i),16384)
+             imap(i+1) = iand(imap(i+1),not(16384))
+             imap(i+2) = iand(imap(i+2),not(16384))
+             i = i + ivskp
+           enddo
+           if (filid(5) .ne. 0.0) then
+             j = filndx(5)
+             do i = 1,njuns(j)
+               if (ij1vn(j) .ne. 0) then
+                 k = (ij1vn(j) - 1)*ivskp + filndx(4)
+                 kc = k + iand(ishft(jcex(j),-13),3)
+                 imap(kc) = ior(imap(kc),16384)
+               endif
+               if (ij2vn(j) .ne. 0) then
+                 l = (ij2vn(j) - 1)*ivskp + filndx(4)
+                 lc = l + iand(ishft(jcex(j),-10),3)
+                 imap(lc) = ior(imap(lc),16384)
+               endif
+               j = j + ijskp
+             enddo
+           endif
+         endif
+c  Set imap for flow regime map, and set q to zero.
+         i = filndx(4)
+         j = filndx(3)
+         do kk = 1,ncmps(j)
+           if (cmptyp(j) .ne. 0) then
+             if (nvc(j) .ne. 0) then
+               do k = 1,nvc(j)
+                 if (iand(vctrl(i),8) .ne. 0) then
+                   imap(i) = ior(imap(i),2)
+                   if (iand(imap(i+1),16384) .ne. 0) imap(i+1) =
+     &             ior(imap(i+1),2)
+                   if (iand(imap(i+2),16384) .ne. 0) imap(i+2) =
+     &             ior(imap(i+2),2)
+                   if (cmptyp(j) .eq. 7) then
+                     imap(i) = ior(iand(imap(i),not(63)),3)
+                   elseif (cmptyp(j) .eq. 4) then
+                     imap(i) = ior(iand(imap(i),not(63)),4)
+                   elseif (cmptyp(j) .eq. 15) then
+                     imap(i) = ior(iand(imap(i),not(63)),5)
+                   else
+                     if (dl(i) .ne. 0.0) then
+                       if (abs((hydzc(i) + hydzc(i+1))/dl(i)) .gt.
+     &                 0.707106781) imap(i) = imap(i) - 1
+                     endif
+                     if (iand(imap(i+1),16384) .ne. 0) then
+                       if (dl(i+1) .ne. 0.0) then
+                         if (abs((hydzc(i+2) + hydzc(i+3))/dl(i+1)) .gt.
+     &                   0.707106781) imap(i+1) = imap(i+1) - 1
+                       endif
+                     endif
+                     if (iand(imap(i+2),16384) .ne. 0) then
+                       if (dl(i+2) .ne. 0.0) then
+                         if (abs((hydzc(i+4) + hydzc(i+5))/dl(i+2)) .gt.
+     &                   0.707106781) imap(i+2) =  imap(i+2) - 1
+                       endif
+                     endif
+                   endif
+                   q(i) = 0.0
+                   qwf(i) = 0.0
+                   qwg(i) = 0.0
+                   gammaw(i) = 0.0
+                   gammac(i) = 0.0
+$if def,extvol
+                   extv01(i) = 0.0
+                   extv02(i) = 0.0
+                   extv03(i) = 0.0
+                   extv04(i) = 0.0
+                   extv05(i) = 0.0
+                   extv06(i) = 0.0
+                   extv07(i) = 0.0
+                   extv08(i) = 0.0
+                   extv09(i) = 0.0
+                   extv10(i) = 0.0
+                   extv11(i) = 0.0
+                   extv12(i) = 0.0
+                   extv13(i) = 0.0
+                   extv14(i) = 0.0
+                   extv15(i) = 0.0
+                   extv16(i) = 0.0
+                   extv17(i) = 0.0
+                   extv18(i) = 0.0
+                   extv19(i) = 0.0
+                   extv20(i) = 0.0
+$if def,extv100
+                   extv21(i) = 0.0
+                   extv22(i) = 0.0
+                   extv23(i) = 0.0
+                   extv24(i) = 0.0
+                   extv25(i) = 0.0
+                   extv26(i) = 0.0
+                   extv27(i) = 0.0
+                   extv28(i) = 0.0
+                   extv29(i) = 0.0
+                   extv30(i) = 0.0
+                   extv31(i) = 0.0
+                   extv32(i) = 0.0
+                   extv33(i) = 0.0
+                   extv34(i) = 0.0
+                   extv35(i) = 0.0
+                   extv36(i) = 0.0
+                   extv37(i) = 0.0
+                   extv38(i) = 0.0
+                   extv39(i) = 0.0
+                   extv40(i) = 0.0
+                   extv41(i) = 0.0
+                   extv42(i) = 0.0
+                   extv43(i) = 0.0
+                   extv44(i) = 0.0
+                   extv45(i) = 0.0
+                   extv46(i) = 0.0
+                   extv47(i) = 0.0
+                   extv48(i) = 0.0
+                   extv49(i) = 0.0
+                   extv50(i) = 0.0
+                   extv51(i) = 0.0
+                   extv52(i) = 0.0
+                   extv53(i) = 0.0
+                   extv54(i) = 0.0
+                   extv55(i) = 0.0
+                   extv56(i) = 0.0
+                   extv57(i) = 0.0
+                   extv58(i) = 0.0
+                   extv59(i) = 0.0
+                   extv60(i) = 0.0
+                   extv61(i) = 0.0
+                   extv62(i) = 0.0
+                   extv63(i) = 0.0
+                   extv64(i) = 0.0
+                   extv65(i) = 0.0
+                   extv66(i) = 0.0
+                   extv67(i) = 0.0
+                   extv68(i) = 0.0
+                   extv69(i) = 0.0
+                   extv70(i) = 0.0
+                   extv71(i) = 0.0
+                   extv72(i) = 0.0
+                   extv73(i) = 0.0
+                   extv74(i) = 0.0
+                   extv75(i) = 0.0
+                   extv76(i) = 0.0
+                   extv77(i) = 0.0
+                   extv78(i) = 0.0
+                   extv79(i) = 0.0
+                   extv80(i) = 0.0
+                   extv81(i) = 0.0
+                   extv82(i) = 0.0
+                   extv83(i) = 0.0
+                   extv84(i) = 0.0
+                   extv85(i) = 0.0
+                   extv86(i) = 0.0
+                   extv87(i) = 0.0
+                   extv88(i) = 0.0
+                   extv89(i) = 0.0
+                   extv90(i) = 0.0
+                   extv91(i) = 0.0
+                   extv92(i) = 0.0
+                   extv93(i) = 0.0
+                   extv94(i) = 0.0
+                   extv95(i) = 0.0
+                   extv96(i) = 0.0
+                   extv97(i) = 0.0
+                   extv98(i) = 0.0
+                   extv99(i) = 0.0
+                   extv100(i) = 0.0
+$endif
+$endif
+                   gravv(i) = 0.0
+                   gravv(i+1) = 0.0
+                   gravv(i+2) = -gravcn
+$if def,mmfld,6
+                   if (nonmf .ne. 0) then
+                     qwmt(i) = 0.0
+                     qmtg(i) = 0.0
+                     qmtf(i) = 0.0
+                     htcofm(i) = 0.0
+                   endif
+                   hif(i) = 0.0
+                   hig(i) = 0.0
+                   hgf(i) = 0.0
+                   hifo(i) = 0.0
+                   higo(i) = 0.0
+                   hgfo(i) = 0.0
+                   dotm(i) = 0.0
+                   vapgen(i) = 0.0
+$if def,mmfld,1
+                   if (nonmf .ne. 0) fwalm(i) = 0.0
+$if def,selap,4
+                   idbvol(i) = 0
+                   mdbvol(i) = 0
+                   ndbvol(i) = 0
+                   oxyftr(i) = 0.0
+                   voidla(i) = 0.0
+                   voidlb(i) = 0.0
+                   voidao(i) = 0.0
+                   voidbo(i) = 0.0
+                   dlev(i) = 0.0
+                   dlevo(i) = 0.0
+                   vlev(i) = 0.0
+                   vlevo(i) = 0.0
+                   dplev(i) = 0.0
+                   vollev(i) = 0.0
+                   srcamn(i) = 0.0
+                   dfrnto(i) = 0.0
+                   dfront(i) = 0.0
+                   vfront(i) = 0.0
+                   ufla(i) = 0.0
+                   uflb(i) = 0.0
+                   ufao(i) = 0.0
+                   ufbo(i) = 0.0
+c
+                   do nd = 0,2
+                     floreg(i+nd) = 0.0
+                     if (iand(imap(i+nd),16384) .ne. 0) then
+                       floreg(i+nd) = float(iand(ishft(imap(i+nd),-18),
+     &                 31))
+                       fwalf(i+nd) = 0.0
+                       fwalg(i+nd) = 0.0
+                       roughv(i+nd) = max(1.0e-9,
+     &                 (roughv(i+nd)/diamv(i+nd)))
+                     endif
+                   enddo
+                   recipv(i) = 1.0/v(i)
+                   if (iand(vctrl(i),1) .ne. 0) then
+                     dl(i) = 0.0
+                     dl(i+1) = 0.0
+                     dl(i+2) = 0.0
+                     hydzc(i) = 0.0
+                     hydzc(i+1) = 0.0
+                     hydzc(i+2) = 0.0
+                     hydzc(i+3) = 0.0
+                     hydzc(i+4) = 0.0
+                     hydzc(i+5) = 0.0
+                     v(i) = 0.0
+                     vapgno(i) = 0.0
+                     recipv(i) = 0.0
+                     hif(i) = 1.0e7
+                     hig(i) = 1.0e7
+                     hgf(i) = 1.0e4
+                   endif
+                 endif
+                 i = i + ivskp
+               enddo
+             endif
+           endif
+           j = j + cmplen(j)
+         enddo
+       endif
+c  Set junction properties.
+       if (filsiz(5) .ne. 0) then
+         i = filndx(5)
+         do m = 1,njuns(i)
+           if (iand(jc(i),128) .ne. 0) then
+             florgj(i) = float(iand(ishft(jcex(i),-3),31))
+             fij(i)    = 0.0
+             fijo(i)   = 0.0
+             faaj(i)   = 0.0
+             fxj(i)    = 0.0
+             fxjo(i)   = 0.0
+             c0j(i)    = 1.0
+             c0jo(i)   = 1.0
+             iregj(i)  = 0.0
+             voidj(i)  = 0.0
+             jcatn(i)  = 1.0
+             jcato(i)  = 1.0
+             formfj(i) = 0.0
+             formgj(i) = 0.0
+             velfjo(i) = velfj(i)
+             velgjo(i) = velgj(i)
+             sonicj(i) = 0.0
+             soncjo(i) = 0.0
+             xej(i)    = 0.0
+             vgjj(i)   = 0.0
+             chokef(i) = 0.0
+             fwalfj(i) = 0.0
+             fwalgj(i) = 0.0
+             fjunft(i) = 0.0
+             fjunrt(i) = 0.0
+$if def,extjun
+             extj01(i) = 0.0
+             extj02(i) = 0.0
+             extj03(i) = 0.0
+             extj04(i) = 0.0
+             extj05(i) = 0.0
+             extj06(i) = 0.0
+             extj07(i) = 0.0
+             extj08(i) = 0.0
+             extj09(i) = 0.0
+             extj10(i) = 0.0
+             extj11(i) = 0.0
+             extj12(i) = 0.0
+             extj13(i) = 0.0
+             extj14(i) = 0.0
+             extj15(i) = 0.0
+             extj16(i) = 0.0
+             extj17(i) = 0.0
+             extj18(i) = 0.0
+             extj19(i) = 0.0
+             extj20(i) = 0.0
+$endif
+$if def,mmfld
+             if (nonmf .ne. 0.0) then
+               ffmj(i)   = 0.0
+               fgmj(i)   = 0.0
+               ffmjo(i)  = 0.0
+               fgmjo(i)  = 0.0
+               cfmj(i)   = 0.0
+               cgmj(i)   = 0.0
+               formmj(i) = 0.0
+               velmjs(i) = 1.0
+               velmjo(i) = velmj(i)
+             endif
+$endif
+           endif
+           i = i + ijskp
+         enddo
+       endif
+c
+       if (iand(iextra,1).ne.0) then
+c  Set up multiple loop ordering and indices.
+         call imlp
+         if (.not.chngno(77)) then
+c  Set initial flow regime flags.
+           if (filid(5) .ne. 0.0) then
+             j = filndx(3)
+             i = filndx(5)
+             do kk = 1,ncmps(j)
+               if (cmptyp(j) .ne. 0) then
+                 if (njc(j) .ne. 0) then
+                   do jx = 1,njc(j)
+                     k = max(ij1vn(i)-1,0)*ivskp + filndx(4)
+                     l = max(ij2vn(i)-1,0)*ivskp + filndx(4)
+                     kc = iand(ishft(jcex(i),-13),3) + k
+                     lc = iand(ishft(jcex(i),-10),3) + l
+                     if (iand(jc(i),128) .ne. 0) then
+                       if (iand(jc(i),2).ne.0 .or. cmptyp(j).eq.13)
+     &                 jc(i) = ior(jc(i),65536)
+                       if (iand(ishft(jc(i),-17),3).eq.0) jc(i) =
+     &                 ior(jc(i),65536)
+                       ajth = ajun(i)*athrot(i)*1.001
+c  Set hsetst to true if the junction is a side off-take (Pos 18 and
+c  19).
+                       jj = iand(jc(i),393216)
+                       hsetst = jj .eq. 3
+                       if (iand(imap(k),63) .ne. 2) then
+                         if (iand(imap(l),63) .eq. 2) then
+                           if (hsetst .and. avol(lc).lt.ajth .and.
+     &                     cmptyp(j).ne.12) jc(i) = ior(jc(i),65536)
+                         else
+                           jc(i) = ior(jc(i),65536)
+                         endif
+                       elseif (iand(imap(l),63) .ne. 2) then
+                         if (hsetst .and. avol(kc).lt.ajth .and.
+     &                   cmptyp(j).ne.12) jc(i) = ior(jc(i),65536)
+                       elseif (cmptyp(j).ne.12) then
+                         if (hsetst .and. avol(kc).lt.ajth .and.
+     &                   avol(lc).lt.ajth) jc(i) = ior(jc(i),65536)
+                       endif
+                     endif
+                     i = i + ijskp
+                   enddo
+                 endif
+               endif
+               j = j + cmplen(j)
+             enddo
+           endif
+         endif
+         if (chngno(77)) then
+c  Following is new code for more stringent enforcement of consistent
+c  geometries in the use of the offtake entrainment/pullthrough option.
+c  When in force, this new code will replace the preceeding block of
+c  code.  The preceeding block of code will continue to be used until
+c  completion of the AP600 analysis task in order to allow the AP600
+c  decks to continue to run as they are, thus avoiding impact to the
+c  completion date of the task.
+c                                                          jet
+c                                                          2/19/96
+c  Set initial flow regime flags.
+           write (output,'(a)') '0Junctions using hse/lte (IN ICMPN1):'
+           if (filid(5) .ne. 0.0) then
+             j = filndx(3)
+             i = filndx(5)
+             do kk = 1,ncmps(j)
+               if (cmptyp(j) .ne. 0) then
+                 if (njc(j) .ne. 0) then
+                   do jx = 1,njc(j)
+                     if (iand(jc(i),128) .ne. 0) then
+c  Get off-take flag (jc bit pos 18 and 19).
+                       jj = iand(ishft(jc(i),-17),3)
+                       if (jj.eq.0) then
+                         jc(i) = ior(jc(i),65536)
+                         go to 229
+                       endif
+                       if (cmptyp(j).ne. 5 .and. cmptyp(j).ne.11 .and.
+     &                     cmptyp(j).ne.12) then
+                         write (output,1101) cmpnum(j)
+ 1101  format (' ********Entrainment model illegal for component',i4,
+     &         ' (must be branch, sngljun, or valve)')
+cspk                     fail = .true.
+cspk                     jc(i) = ior(jc(i),65536)
+                         go to 231
+                       endif
+                       k = max(ij1vn(i)-1,0)*ivskp + filndx(4)
+                       l = max(ij2vn(i)-1,0)*ivskp + filndx(4)
+                       kc = iand(ishft(jcex(i),-13),3)
+                       lc = iand(ishft(jcex(i),-10),3)
+c  Allow junction to attach anywhere on a time-dependent volume.
+                       if (kc.eq.0)  kc = iand(vctrl(k),1)
+                       if (lc.eq.0)  lc = iand(vctrl(l),1)
+c  Check that junction is attached to the perimeter of either
+c  the inlet or outlet volume.
+                       if (kc.eq.0 .and. lc.eq.0) then
+                         write (output,1102) jx,cmpnum(j)
+ 1102  format (' ********Entrainment model illegal for junction',i4,
+     &         ' of component',i4,' (must be attached to a volume',
+     &         ' perimeter)')
+cspk                     fail = .true.
+cspk                     jc(i) = ior(jc(i),65536)
+                         go to 229
+                       endif
+c  Set 12th bit of vctrlx to 1 for main donor volume for hse
+c  and 0 for off-take volume.
+                       jcex(i) = iand(jcex(i),not(ishft(1,30)))
+                       if (lc.eq.0) then
+                         jcex(i) = ior(jcex(i),(ishft(1,30)))
+                       elseif (kc.eq.0 .and. (avol(k).ge.avol(l))) then
+                         jcex(i) = ior(jcex(i),(ishft(1,30)))
+                       endif
+c  Set hsetst to true if the junction is a side off-take.
+                       hsetst = jj .eq. 3
+                       ajth = ajun(i)*athrot(i)*1.001
+                       if (iand(imap(k),63) .ne. 2) then
+c  Inlet volume is vertical.
+                         if (iand(imap(l),63) .eq. 2) then
+c  Outlet volume is horizontal.
+                           if (hsetst) then
+c  Junction is side offtake.
+                             if (kc .eq. 0) then
+                               write (output,1103) jx,cmpnum(j),volno(k)
+ 1103  format ('0******** Side junction',i4,' (v=3) of component',i4,
+     &         ' is not attached to perimeter of volume',i4)
+cspk                           fail = .true.
+cspk                           jc(i) = ior(jc(i),65536)
+                             else  if (avol(l) .lt. ajth) then
+c  Junction area same as volume area.
+                               jc(i) = ior(jc(i),65536)
+                             endif
+                           else  if (kc.ne.0 .or. lc.eq.0) then
+                             write (output,1104) jx,cmpnum(j)
+ 1104  format (' ********Entrainment junction',i4,' of component',i4,
+     &         ' is attached to wrong face of volume')
+cspk                         fail = .true.
+cspk                         jc(i) = ior(jc(i),65536)
+                           endif
+                         else
+c  Both volumes are vertical.
+                           if (.not. hsetst) then
+                             write (output,1105) jx,cmpnum(j)
+ 1105  format ('0******** Entrainment junction',i4,' of component',i4,
+     &         ' must be attached to a side offtake')
+cspk                         fail = .true.
+cspk                         jc(i) = ior(jc(i),65536)
+                           endif
+                         endif
+                       elseif (iand(imap(l),63) .ne. 2) then
+c  Inlet volume is horizontal and outlet volume is vertical.
+                         if (hsetst) then
+c  Junction is side offtake.
+                           if (lc .eq. 0) then
+                             write (output,1103) jx,cmpnum(j),volno(l)
+cspk                         fail = .true.
+cspk                         jc(i) = ior(jc(i),65536)
+                           else  if (avol(l) .lt. ajth) then
+c  Junction area same as volume area.
+                             jc(i) = ior(jc(i),65536)
+                           endif
+                         else  if (kc.eq.0 .or. lc.ne.0) then
+                           write (output,1104) jx,cmpnum(j)
+cspk                       fail = .true.
+cspk                       jc(i) = ior(jc(i),65536)
+                         endif
+                       else
+c  Both volumes are horizontal.
+                         if (hsetst) then
+c  Junction is side offtake.
+                           if (avol(k).lt.ajth .and. avol(l).lt.ajth)
+     &                       jc(i) = ior(jc(i),65536)
+                         else
+                           write (output,1105) jx,cmpnum(j)
+cspk                       fail = .true.
+cspk                       jc(i) = ior(jc(i),65536)
+                         endif
+                       endif
+                     endif
+  229                continue
+                     if (iand(jc(i),65536) .eq. 0)
+     &                 write (output,'(a,i4,5x,a,a,2x,a)')
+     &                 'comp.#',cmpnum(j),'name = ',cmpnam(j),
+     &                 cmpalf(cmptyp(j))
+                     i = i + ijskp
+                   enddo
+                 endif
+               endif
+  231          continue
+               j = j + cmplen(j)
+             enddo
+           endif
+         endif
+       endif
+c
+c  Reset pump pointers.
+       i = filndx(3)
+       do j = 1,ncmps(i)
+         if (cmptyp(i) .eq. 4) then
+           k = i - filndx(3)
+           if (iand(cmpopt(i),64) .eq. 0) then
+             iputdi(i+1) = iputdi(i) + k
+             iputdi(i+2) = k
+           endif
+           if (iand(cmpopt(i),1024) .eq. 0) then
+             ipu2di(i+1) = ipu2di(i) + k
+             ipu2di(i+2) = k
+           endif
+           if (iand(cmpopt(i),256) .eq. 0) then
+             ipuhmi(i+1) = ipuhmi(i) + k
+             iputmi(i+1) = iputmi(i) + k
+           endif
+           if (iand(cmpopt(i),4096) .eq. 0) ipumtk(i+1) = ipumtk(i) + k
+           if (iand(cmpopt(i),16384) .eq. 0) ipuspi(i+1) = ipuspi(i) + k
+         endif
+         i = i + cmplen(i)
+       enddo
+c
+       if (iand(ihlppr(2),ishft(1,22)).ne.0)
+c  Write page heading for thermodynamic properties file(s) to be used.
+     & write (output,"('0Thermodynamic properties files used by this pro
+     &blem:')")
+       write (tty,"(' Thermodynamic properties files used by this proble
+     &m:')")
+c
+c  Test which thermodynamic property files are needed and bring
+c  them into memory.
+c
+c  Get table storage.
+       filid(6) = -ftbnid(1)
+       filsiz(6) = lcontg(1)
+       call ftbrsv (filid(6),filsiz(6),1,filndx(6))
+c
+c  Find the maximum fluid number required for the problem by checking
+c  the material number of each volume.
+       tpffal = .false.
+       matmax = 0
+       i = filndx(4)
+       do n=1,nvols(i)
+         matmax = max ( matmax, volmat(i) )
+         i = i + ivskp
+       enddo
+c
+c  Set base pointer for steam tables data block.
+       ist = filndx(6) - 1
+c  Zero out first matmax words of steam tables data block.
+       do i=1,matmax
+         fa(ist+i) = 0.
+       enddo
+c
+c  Set pointer word to 1 for fluids that are to be used.
+       i = filndx(4)
+       do n = 1,nvols(i)
+         ia(ist+volmat(i)) = 1
+         i = i + ivskp
+       enddo
+c
+c  Set pointer to first available word in steam tables data block for
+c  storage of steam tables data; also calculate number of words
+c  available for steam tables data.
+       isttbl = filndx(6) + matmax
+       nwleft = filsiz(6) - matmax
+c
+c  Load data into steam tables data block for each required fluid.
+       do n = 1,matmax
+         if (ia(ist+n) .gt. 0) then
+           lenlfn = index (tpfnam(n),' ') - 1
+           if (lenlfn.lt.0) lenlfn = 40
+           open (unit=sth2xt,file=tpfnam(n)(1:lenlfn),status='old',
+     &     form='unformatted',iostat=k)
+           if (k .eq. 0) then
+             if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &       write (output,1015) fsymbl(n),tpfnam(n)(1:lenlfn)
+             write (tty,1015) fsymbl(n),tpfnam(n)(1:lenlfn)
+ 1015  format (' Thermodynamic properties file for ',a,
+     & ' obtained from lfn ',a,',')
+           else
+             if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     &       write (output,1016) k,tpfnam(n)(1:lenlfn)
+             write (tty,1016) k,tpfnam(n)(1:lenlfn)
+ 1016  format ('0******** Open error number',i8,' on file ',a,
+     & '.  Perhaps file does not exist.')
+             stop 'cmpn1-1, code stopped in subroutine icmpn1.'
+c  Remove above line after istate is fixed to give a graceful exit.
+c            tpffal= .true.
+c            cycle
+           endif
+c
+           nuse = nwleft - lstcom
+           call stread (sth2xt,nuse,record,fa(isttbl+lstcom))
+           if (nuse .lt. 0) then
+             tpffal= .true.
+             cycle
+           endif
+           if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &     write (output,1017) record(1),record(2)
+           write (tty,1017) record(1),record(2)
+ 1017  format (' ',a/' ',a/)
+c
+c  Save /stcom/ data for this fluid.
+           do jj=1,lstcom
+             fa(isttbl+jj-1) = stceqv(jj)
+           enddo
+c
+c  Set pointer relative to beginning of steam tables data block to
+c  data for this fluid.
+           ia(ist+n) = isttbl - filndx(6) + 1
+c
+c  If fluid is light or heavy water, load required steam table
+c  routines common blocks.
+           if (n .eq. 1) then
+             nth2x = nt
+             nph2x = np
+             nsh2x = nst
+             ns2h2x = nsp
+             klph2x = it3bp
+             klp2h2 = it4bp
+             llph2x = it5bp
+             nt5h2x = nprpnt
+             jplh2x = it3p0
+           elseif (n .eq. 2) then
+             ntd2x = nt
+             npd2x = np
+             nsd2x = nst
+             ns2d2x = nsp
+             klpd2x = it3bp
+             klp2d2 = it4bp
+             llpd2x = it5bp
+             nt5d2x = nprpnt
+             jpld2x = it3p0
+           endif
+c
+c  Get number of words still available for data storage, and pointer to
+c  next available word.
+           nwleft = nwleft - (lstcom + nuse)
+           isttbl = isttbl + (lstcom + nuse)
+c
+c  Close steam tables data file for this fluid.
+           close (unit=sth2xt)
+         endif
+       enddo
+c
+c  Release unused portion of steam tables data block.
+       if (tpffal) then
+         call ftbdel (filid(6))
+         filid(6) = 0.0
+         fail = .true.
+       else
+         filsiz(6) = isttbl - filndx(6)
+         call ftbsft (filid(6),filsiz(6),1,filndx(6))
+       endif
+!  Process volume and junction print controls.
+       call ihelp
+       return
+       end

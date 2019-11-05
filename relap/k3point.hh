@@ -1,0 +1,76 @@
+*mlist
+c  Cognizant engineer: rjw.
+c
+      common /k3point/
+     &  lnxstartn,  lnxendn, lndnumn,  lnystartn, lnyendn,
+     &  lalamdan,   ldxn,    ldyn,     ldzn,      lnbcn,     lfractbn,
+     &  larean,     lvolun,  lirplann, libplann,  lirpln,    libpln,
+     &  liyplann,   liypln,  ldlnn,    ldlln,     ldlwn,     ldlnvn,
+     &  ldlnun,     lseffn,  lfnswtn,  lfnppotn,  lfnpppotn, lfnoldtn,
+     &  lswoldn,    lswn,    lrelpwrn, lbetatn,   lbetan,    lxhidn,
+     &  lxhipn,     lb2n,    lrivelon, ltcdn,     ltcan,     ltcrn,
+     &  ltnfn,      ltpfn,   lsigdsnn, ladfsvn,   lvelocn,
+     &  ldcln,      ldcwn,   ldcnvn,   ldcnun,    ldcnn,     lawxn,
+     &  lawun,      lawvn,   lawzn,    lawyn,     lbwyn,     lbwxn,
+     &  lbwun,      lbwvn,   lbwzn,    laqn,      ltxtn,     lbetatlamn,
+     &  lrawxvn,    lbawxvn, lrbwxvn,  lbbwxvn,   lrbfvn,    lbbfvn,
+     &  lrqwvn,     lbqwvn,  lyawxvn,  lybwxvn,   lybfvn,    lyqwvn,
+     &  lbfn,       lqwn,    lsswn,    litrrn,    lwomn,     lwomon,
+     &  lfluxn,     lcwn,    lswsn,    lxcwvn,    lxswsvn,   lrmwvn,
+     &  lfilamdt0n, lfilamdt1n, lexplamdtn, lscatn, lscwn,   lcurnxn,
+     &  lnxstarti,  lnxendi
+      common /k3point/
+     &  lcurnyn,    lcurnzn, ltlxn,    ltlyn,     ltlzn,     lplmx1n,
+     &  lplmx2n,    lplmy1n, lplmy2n,  lplmz1n,   lplmz2n,   lrln,
+     &  lrlpn,      lrm1n,   lrmp1n,   lrm2n,     lrmp2n,    ldfn,
+     &  ldfpn,      ljnemn,  lsxtpn,   lamat1n,   lxout1n,   lbrhs1n,
+     &  lamat2n,    lxout2n, lbrhs2n,  lamat3n,   lxout3n,   lbrhs3n,
+     &  lexcn,      lexcpn,  la1n,     la2n,      la3n,      la4n,
+     &  laln,       lalpn,   ltfn,     ltfpn,     lsscatn,   lsscatpn,
+     &  ltdn,       lfl2n,   ltdpn,    lflpn,     lpl1n,     lpl2n,
+     &  lsefven,    lpcn,    ltln,     ltlpn,     ltlmn,     lcurnvn,
+     &  lcurnun,    ltlvn,   ltlun,    lrkuxn,    lrkxun,    lrkuvn,
+     &  lrkvun,     lrkvxn,  lrkxvn,   lrkuxpn,   lrkuxnn,   lplmzx1n,
+     &  lplmzv1n,   lplmzu1n,lplmxy1n, lplmxy2n,  lrmcn,     lrmcpn,
+     &  lrmmn,      lrmmpn,  llzn,     llz1n,     llpzn,     llpz1n,
+     &  lalxplamdn, lcin,    lfact0n,  lfact1n,   lsxtn,     lexplamdn,
+     &  lpwrdnn,    lpwrdnpn,lncolxyn, lncolzn,   lncol2dn,  lpwrdnoldn,
+     &  lfractn,    lcioldn, lfinaln,  lpad,      safe6
+      integer
+     &  lnxstartn,  lnxendn, lndnumn,  lnystartn, lnyendn,
+     &  lalamdan,   ldxn,    ldyn,     ldzn,      lnbcn,     lfractbn,
+     &  larean,     lvolun,  lirplann, libplann,  lirpln,    libpln,
+     &  liyplann,   liypln,  ldlnn,    ldlln,     ldlwn,     ldlnvn,
+     &  ldlnun,     lseffn,  lfnswtn,  lfnppotn,  lfnpppotn, lfnoldtn,
+     &  lswoldn,    lswn,    lrelpwrn, lbetatn,   lbetan,    lxhidn,
+     &  lxhipn,     lb2n,    lrivelon, ltcdn,     ltcan,     ltcrn,
+     &  ltnfn,      ltpfn,   lsigdsnn, ladfsvn,   lvelocn,
+     &  ldcln,      ldcwn,   ldcnvn,   ldcnun,    ldcnn,     lawxn,
+     &  lawun,      lawvn,   lawzn,    lawyn,     lbwyn,     lbwxn,
+     &  lbwun,      lbwvn,   lbwzn,    laqn,      ltxtn,     lbetatlamn,
+     &  lrawxvn,    lbawxvn, lrbwxvn,  lbbwxvn,   lrbfvn,    lbbfvn,
+     &  lrqwvn,     lbqwvn,  lyawxvn,  lybwxvn,   lybfvn,    lyqwvn,
+     &  lbfn,       lqwn,    lsswn,    litrrn,    lwomn,     lwomon,
+     &  lfluxn,     lcwn,    lswsn,    lxcwvn,    lxswsvn,   lrmwvn,
+     &  lfilamdt0n, lfilamdt1n, lexplamdtn, lscatn, lscwn,   lcurnxn,
+     &  lnxstarti,  lnxendi
+      integer
+     &  lcurnyn,    lcurnzn, ltlxn,    ltlyn,     ltlzn,     lplmx1n,
+     &  lplmx2n,    lplmy1n, lplmy2n,  lplmz1n,   lplmz2n,   lrln,
+     &  lrlpn,      lrm1n,   lrmp1n,   lrm2n,     lrmp2n,    ldfn,
+     &  ldfpn,      ljnemn,  lsxtpn,   lamat1n,   lxout1n,   lbrhs1n,
+     &  lamat2n,    lxout2n, lbrhs2n,  lamat3n,   lxout3n,   lbrhs3n,
+     &  lexcn,      lexcpn,  la1n,     la2n,      la3n,      la4n,
+     &  laln,       lalpn,   ltfn,     ltfpn,     lsscatn,   lsscatpn,
+     &  ltdn,       lfl2n,   ltdpn,    lflpn,     lpl1n,     lpl2n,
+     &  lsefven,    lpcn,    ltln,     ltlpn,     ltlmn,     lcurnvn,
+     &  lcurnun,    ltlvn,   ltlun,    lrkuxn,    lrkxun,    lrkuvn,
+     &  lrkvun,     lrkvxn,  lrkxvn,   lrkuxpn,   lrkuxnn,   lplmzx1n,
+     &  lplmzv1n,   lplmzu1n,lplmxy1n, lplmxy2n,  lrmcn,     lrmcpn,
+     &  lrmmn,      lrmmpn,  llzn,     llz1n,     llpzn,     llpz1n,
+     &  lalxplamdn, lcin,    lfact0n,  lfact1n,   lsxtn,     lexplamdn,
+     &  lpwrdnn,    lpwrdnpn,lncolxyn, lncolzn,   lncol2dn,  lpwrdnoldn,
+     &  lfractn,    lcioldn, lfinaln, lpad
+       real safe6
+       integer nemptr(1)
+       equivalence ( nemptr(1), lnxstartn )

@@ -1,0 +1,160 @@
+*mlist
+*if def,selap
+       subroutine bwloca
+c
+c  bwloca computes B4C melt conditions.
+c
+c  Cognizant engineer: ewc.
+c
+       implicit none
+       include 'contrl.h'
+       include 'scddat.h'
+       include 'scdout.h'
+       include 'bwgeom.h'
+       include 'bwprop.h'
+       include 'bwcons.h'
+       include 'bwtrns.h'
+c
+c  Local variables.
+       integer i,ib,ibp,ic,id,ie,im1,nazm
+       real d,vbar
+       real bwvave
+       external bwvave
+       external bwrmlt
+c
+       ibp = ibwrc(icomp)
+       nazm = max(nazs(ibp),nazb(ibp))
+       if (nazm.le.0) return
+       ib = (ibwrc(icomp)-1)*ndax + 1
+       ie = ib + nazm - 1
+       ic = (icomp-1)*ndax + 1
+       id = ibwrc(icomp)
+       do 10 i = ie,ib,-1
+         if ( msot(i).le.0.0 ) go to 20
+c ---- with feo layer
+         if ( msol(i).le.0.0 ) go to 100
+c ---- with liquefied feo
+         vbar = bwvave(r2sos(i),r2sol(i),denso(i),grav,visso(i),dt)
+         d = vbar*dt
+         if ( d.ge.dzcond(ic) ) then
+           msolre(i) = msol(i)
+           r2sol(i) = r2sos(i)
+           msol(i) = 0.0
+           msot(i) = msos(i)
+         else
+           msolre(i) = msol(i)*d/dzcond(ic)
+           r2sol(i) = sqrt( r2sol(i)*r2sol(i) - msolre(i)/msol(i)
+     +                *(r2sol(i)*r2sol(i)-r2sos(i)*r2sos(i)) )
+           msol(i) = msol(i) - msolre(i)
+           msot(i) = msot(i) - msolre(i)
+         endif
+         if (i.gt.1) then
+           im1 = i-1
+           msol(im1) = msol(im1) + msolre(i)
+           msot(im1) = msot(im1) + msolre(i)
+           ut2re(im1) = cpso(i)*msolre(i)*t2(i)
+c ---- updating new temp., mass inventories, radii
+           call bwrmlt( ic,im1,ut2re(im1),0.0,2 )
+         else
+           msolot(id) = msolot(id) + msolre(i)
+           usolot(id) = usolot(id) + ut2re(im1)
+         endif
+  20     continue
+c ---- no solid feo shell
+         if ( msst(i).le.0.0 ) go to 30
+c ---- with ss layer
+         if ( mssl(i).le.0.0 ) go to 100
+c ---- with liquefied ss
+         vbar = bwvave(r2sss(i),r2ssl(i),denss(i),grav,visss(i),dt)
+         d = vbar*dt
+         if ( d.ge.dzcond(ic) ) then
+           msslre(i) = mssl(i)
+           r2ssl(i) = r2sss(i)
+           mssl(i) = 0.0
+           msst(i) = msss(i)
+         else
+           msslre(i) = mssl(i)*d/dzcond(ic)
+           r2ssl(i) = sqrt( r2ssl(i)*r2ssl(i) - msslre(i)/mssl(i)
+     +                *(r2ssl(i)*r2ssl(i)-r2sss(i)*r2sss(i)) )
+           mssl(i) = mssl(i) - msslre(i)
+           msst(i) = msst(i) - msslre(i)
+         endif
+         if (i.gt.1) then
+           im1 = i -1
+           mssl(im1) = mssl(im1) + msslre(i)
+           msst(im1) = msst(im1) + msslre(im1)
+           ut2re(im1) = cpss(i)*msslre(i)*t2(i)
+c ---- updating new temp., mass inventories, radii
+           call bwrmlt( ic,im1,ut2re(im1),0.0,2 )
+         else
+           msslot(id) = msslot(id) + msslre(i)
+           usslot(id) = usslot(id) + ut2re(im1)
+         endif
+  30     continue
+         if ( mbot(i).le.0.0 ) go to 40
+c ---- with bo layer
+         if ( mbol(i).le.0.0 ) go to 100
+c ---- with liquefied b2o3
+         vbar = bwvave(r1bos(i),r1bol(i),denbo(i),grav,visbo(i),dt)
+         d = vbar*dt
+         if ( d.ge.dzcond(ic) ) then
+           mbolre(i) = mbol(i)
+           r1bol(i) = r1bos(i)
+           mbol(i) = 0.0
+           mbot(i) = mbos(i)
+         else
+           mbolre(i) = mbol(i)*d/dzcond(ic)
+           r1bol(i) = sqrt(r1bol(i)*r1bol(i) - mbolre(i)/mbol(i)
+     +                *(r1bol(i)*r1bol(i)-r1bos(i)*r1bos(i)) )
+           mbol(i) = mbol(i) - mbolre(i)
+           mbot(i) = mbot(i) - mbolre(i)
+         endif
+         if (i.gt.1) then
+           im1 = i-1
+           mbol(im1) = mbol(im1) + mbolre(i)
+           mbot(im1) = mbot(im1) + mbolre(i)
+           ut1re(im1) = cpbo(i)*mbolre(i)*t1(i)
+c ---- updating new temp., mass inventories, radii
+           call bwrmlt( ic,im1,0.0,ut1re(im1),1 )
+         else
+           mbolot(id) = mbolot(id) + mbolre(i)
+           ubolot(id) = ubolot(id) + ut1re(im1)
+         endif
+  40     continue
+         if ( mbct(i).le.0.0 ) go to 100
+c ---- with b4c layer
+         if ( mbcl(i).le.0.0 ) go to 100
+c ---- with liquefied b4c
+         vbar = bwvave(r1bcs(i),r1bcl(i),denbc(i),grav,visbc(i),dt)
+         d = vbar*dt
+         if ( d.ge.dzcond(ic) ) then
+           mbclre(i) = mbcl(i)
+           r1bcl(i) = r1bcs(i)
+           mbcl(i) = 0.0
+           mbct(i) = mbcs(i)
+         else
+           mbclre(i) = mbcl(i)*d/dzcond(ic)
+           r1bcl(i) = sqrt( r1bcl(i)*r1bcl(i) - mbclre(i)/mbcl(i)
+     +                *(r1bcl(i)*r1bcl(i)-r1bcs(i)*r1bcs(i)) )
+           mbcl(i) = mbcl(i) - mbclre(i)
+           mbct(i) = mbct(i) - mbclre(i)
+         endif
+         if (i.gt.1) then
+           im1 = i-1
+           mbcl(im1) = mbcl(im1) + mbclre(i)
+           mbct(im1) = mbct(im1) + mbclre(i)
+           ut1re(im1) = cpbc(i)*mbclre(i)*t1(i)
+c ---- updating new tep., mas inventories, radii
+           call bwrmlt( ic,im1,0.0,ut1re(im1),1 )
+         else
+           mbclot(id) = mbclot(id) + mbclre(i)
+           ubclot(id) = ubclot(id) + ut1re(im1)
+         endif
+ 100     continue
+         m1t(i) = mbct(i) + mbot(i)
+         m2t(i) = msst(i) + msot(i)
+         ic = ic + 1
+  10   continue
+       return
+       end
+*endif

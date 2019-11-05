@@ -1,0 +1,509 @@
+*mlist
+*deck fptran
+*if def,selap
+       subroutine fptran
+c
+c  Perform fission product behavior calculations for each time step.
+c
+c  Cognizant engineer: ewc (esm).
+c
+c     Earl S. Marwil
+c
+       use lpdatc
+       implicit none
+       include 'fplim.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'fpctrl.h'
+       include 'fparm2.h'
+       include 'fpdkht.h'
+       include 'fpfast.h'
+       include 'fpvol.h'
+       include 'htsrcm.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       external fpmdlk, fpgedr
+       external fpfcn,fpjac
+       external fpwric, fpsmry
+       real adep, amas, betar, fpmass, liqvf, range, sum, tbs, tbv,
+     & tdkb, tdkg, tenm10, tenm60, tgs, tmp, width
+       integer ibin, ielm, ieq, isp, isp1, ispn,
+     & ispsk, ispvk, isrf, isrf1, isrfk, isrfn, isys, isys1,
+     & isysk, isysn, ivol, ivol1, ivolk, ivoln, jsno, jvol, jvol1,
+     & ksp, ksrf, kvol, model, neq
+       character surf(maxsrf)*16
+       character title*80
+       character lr(2)*5
+       integer maxvst, maxsst, maxeq
+       parameter (maxvst=maxbin+2, maxsst=3)
+       parameter (maxeq=maxsp*(maxvst + maxsst*maxsrf))
+       real mad(maxeq)
+       real t0, tn, rtol, atol
+       real rparm(10)
+       integer iparm(12), job(5), info
+       integer lwk,liwk,iy,mitr,mxstep
+       parameter (iy=4, lwk = (iy+3)*maxeq, liwk = 0, mitr=4)
+       parameter (mxstep=1000)
+       real wk(lwk), iwk(0:liwk)
+       logical debug,fpmodl,first
+       include 'fpmdl.h'
+       parameter (tenm10=1.0e-10, tenm60=1.0e-60)
+c  massfr - defines the mass fractions of
+c  the elements used in decay heat calculations
+c  from the species tracked in fission product transport
+c  Cs, I and Te in the six species that can contribute to
+       real massfr(mxelm, maxsp)
+       real tm(mxelm), vm(mxelm), tsm(mxelm), sm(mxelm)
+c  gs - gamma decay heat on each surface
+c  bs - beta decay heat on each surface
+c  bv - beta decay heat in each volume
+       real gs(mxelm), bs(mxelm), bv(mxelm)
+       data lr /'left', 'right'/
+       data first /.true./
+c
+       if (first) then
+         call fpirho
+         call fpemfr (massfr)
+         first = .false.
+       endif
+c  Account for flow mixing between fp volumes.
+       call fpmix
+       debug = fpdbgr(filndx(34))
+       nsp = fpnsp(filndx(34))
+       nbin = fpnbin(filndx(34))
+       nvolst = nbin + 2
+       nsrfst = 3
+       isysk = fpsysk(filndx(34))
+       isys1 = filndx(34) + fpsyso(filndx(34))
+       isysn = isys1 + (fpnsys(filndx(34))-1)*isysk
+       ivolk = fpvolk(filndx(34))
+       isrfk = fpsrfk(filndx(34))
+       ispvk = fpspvk(filndx(34))
+       ispsk = fpspsk(filndx(34))
+       rtol = fprtol(filndx(34))
+       atol = fpatol(filndx(34))
+c
+c  For each fission product system.
+       do isys = isys1,isysn,isysk
+         do ksp = 1, nsp
+           fpsysm(isys+ksp-1) = 0.0
+         enddo
+         jsno = fpsysn(isys)
+         jvol1 = lpdat(jsno)%liv
+         ivol1 = filndx(34) + fpvolo(isys)
+         ivoln = ivol1 + (fpnvol(isys)-1)*ivolk
+c
+c  For each fission product volume.
+         kvol = 0
+         do ivol = ivol1, ivoln, ivolk
+           write (title, '(a,i3,a,i4,1h-,i6.6)')
+     &     'Hydrodynamic system ', jsno, ' volume ',
+     &     fpvoln(ivol)/1000000, mod(fpvoln(ivol),1000000)
+           kvol = kvol + 1
+           jvol = jvol1 + (kvol-1)*ivskp
+           isp1 = ivol
+           ispn = isp1 + (nsp-1)*ispvk
+c  Check time dependent volume flag (bit 1 of vctrl).
+           if (iand(vctrl(jvol),1) .eq. 0) then
+             liqvf = voidf(jvol)
+c  Set volume dependent data.
+c
+c  Note: bend radius (brad), bend angle (bang),
+c  vapor acceleration (vapa), and vapor mean free path
+c  (vapmfp) are not currently available from SCDAP/RELAP5.
+c  Using values of zero or best estimate, on average.
+             vol = v(jvol)
+             diam = diamv(jvol)
+             brad = 0.0
+             bang = 0.0
+             vapvf = voidg(jvol)
+c  Following is a temporary fix to allow fission product calculations
+c  to continue in a non-vapor field.
+             vapvf = max(vapvf,0.5)
+             vapv = abs(velg(jvol))
+             vapa = 0.0
+             vapt = tempg(jvol)
+             vapp = p(jvol)
+             vaprho = rhog(jvol)
+             vapmu = viscg(jvol)
+             vaptc = thcong(jvol)
+             vapmfp = 1.5e-05
+             vapcp = csubpg(jvol)
+             vol = vol * vapvf
+c  Set number of surfaces and number of equations for the current
+c  volume.
+             isrf1 = filndx(34) + fpsrfo(ivol)
+             nsrf = fpnsrf(ivol)
+             nst  = nvolst+nsrfst*nsrf
+             neq  = nsp*nst
+c  Set surface dependent data.
+c  Sum deposition surface area.
+             adep = 0.0
+             if (nsrf .gt. 0) then
+               isrf = isrf1
+               do ksrf = 1, nsrf
+                 write (surf(ksrf), '(i5,1h-,i3.3,2x,a5)')
+     &           fpsrfn(isrf)/1000,mod(fpsrfn(isrf),1000),
+     &           lr(fpsflr(isrf)+1)
+                 isrf = isrf + isrfk
+               enddo
+               isrf = isrf1
+               do ksrf = 1, nsrf
+                  surfar(ksrf) = fpsfar(isrf) / vol
+                  surfda(ksrf) = surfar(ksrf) * cos(fpsfan(isrf))
+                  surfmt(ksrf) = fpsfmt(isrf)
+                  surft(ksrf) = httmp(filndx(8) + fpsfto(isrf))
+                  adep = adep + surfda(ksrf)
+                  isrf = isrf + isrfk
+               enddo
+             endif
+             fpmodl = .false.
+c
+c  For each species.
+             ksp = 0
+             do isp = isp1,ispn,ispvk
+               ksp = ksp + 1
+c  Put source in smallest bin.
+               fpbin(isp) = fpbin(isp) + fpsrc(isp)*dt
+               fpmodl = fpmodl .or. fpliq(isp).gt.0.0 .or.
+     &         fpvap(isp).gt.0.0
+               do ibin = isp,isp+nbin-1
+                  fpmodl = fpmodl .or. fpbin(ibin).gt.0.0
+               enddo
+               isrf = isrf1 + (ksp-1)*ispsk
+               if (nsrf .gt. 0) then
+                 do ksrf = 1, nsrf
+                   fpmodl = fpmodl .or. fpsfmc(isrf).gt.0.0 .or.
+     &             fpsfma(isrf).gt.0.0 .or. fpsfmp(isrf).gt.0.0
+                   isrf = isrf + isrfk
+                 enddo
+               endif
+             enddo
+             if (fpmodl) then
+               if (vapvf.lt.tenm10) then
+c  Move vapor and aerosol mass to liquid.
+                 do isp = isp1,ispn,ispvk
+                   sum = fpvap(isp)
+                   fpvap(isp) = 0.0
+                   do ibin = isp, isp+nbin-1
+                     sum = sum + fpbin(ibin)
+                     fpbin(ibin) = 0.0
+                   enddo
+                   fpliq(isp) = fpliq(isp)+sum
+                 enddo
+               else
+                 if (liqvf .lt. tenm10) then
+c  For each species, move liquid mass to bin 1.
+                   do isp = isp1,ispn,ispvk
+                     fpbin(isp) = fpbin(isp) + fpliq(isp)
+                     fpliq(isp) = 0.0
+                   enddo
+                 endif
+c  Initialize mad, using mass per unit volume.
+                 ieq = 1
+                 ksp = 0
+                 do isp = isp1,ispn,ispvk
+                   ksp = ksp + 1
+                   mad(ieq) = fpliq(isp)/vol
+                   mad(ieq+1) = fpvap(isp)/vol
+                   ieq = ieq + 2
+                   do ibin = isp,isp+nbin-1
+                     ieq = ieq + 1
+                   enddo
+                   isrf = isrf1 + (ksp-1)*ispsk
+                   if (nsrf .gt. 0) then
+                     do ksrf = 1, nsrf
+                       mad(ieq) = fpsfmc(isrf)/vol
+                       mad(ieq+nsrf) = fpsfma(isrf)/vol
+                       mad(ieq+2*nsrf) = fpsfmp(isrf)/vol
+                       ieq = ieq + 1
+                       isrf = isrf + isrfk
+                     enddo
+                     ieq = ieq + 2 * nsrf
+                   endif
+                 enddo
+                 t0 = timehy - dt
+                 tn = t0 + dt
+                 if (debug) then
+                   call fpwric (title,vol,diam,brad,bang,nsrf,surf,
+     &             surfmt,surfar,surfda,surft,vapvf,vapv,vapa,vapt,
+     &             vapp,vaprho,vapmu,vaptc,vapmfp,vapcp,nsp,
+     &             fpsp(filndx(34)),model,t0,tn,rtol,atol,mxstep)
+                 endif
+                 call fpmdlk (mad, debug)
+                 rparm(1) = 0.0
+                 rparm(2) = fpstep(ivol)
+                 if (rparm(2) .le. 0.0) rparm(2) = 0.1*dt
+                 rparm(3) = 0.0
+                 rparm(4) = 0.0
+                 rparm(5) = 0.0
+                 iparm(1) = iy
+                 iparm(2) = lwk
+                 iparm(3) = liwk
+                 iparm(4) = mxstep
+                 iparm(5) = 0
+                 iparm(6) = iy-1
+                 job(1) = 1
+                 job(2) = 1
+                 job(3) = mitr
+                 job(4) = 2
+                 job(5) = 1
+                 if (debug) call fpsmry (mad,t0)
+                 call fpgedr (fpfcn,neq,t0,mad,tn,fpjac,rtol,atol,
+     &           rparm,iparm,wk,iwk,job,info)
+                 fpstep(ivol) = rparm(7)
+                 if (info .ne. 0) then
+                   write (output,*) 'problem terminated at ', t0,
+     &             ' info = ', info
+                 endif
+                 if (debug) call fpsmry (mad,t0)
+c  Remove mass from largest bin if there is surface area.
+                 if (adep .gt. 0.0) then
+                   do ksp = 1,nsp
+                     ieq = nvolst + (ksp-1)*nst
+                     amas = mad(ieq)/adep
+                     mad(ieq) = 0.0
+                     ieq = ieq + 2*nsrf
+                     do ksrf = 1,nsrf
+                       mad(ieq) = mad(ieq) + amas * surfda(ksrf)
+                       ieq = ieq + 1
+                     enddo
+                   enddo
+                 endif
+c  Transfer end-of-step mad values to dynamic storage.
+c  Compute total mass of each species in aerosol bins.
+                 ieq = 1
+                 ksp = 0
+                 do isp = isp1,ispn,ispvk
+                   ksp = ksp + 1
+                   fpliq(isp) = mad(ieq) * vol
+                   fpvap(isp) = mad(ieq+1) * vol
+                   if (fpliq(isp) .lt. 1.e-30) fpliq(isp) = 0.0
+                   if (fpvap(isp) .lt. 1.e-30) fpvap(isp) = 0.0
+                   ieq = ieq + 2
+                   do ibin = isp, isp+nbin-1
+                     fpbin(ibin) = mad(ieq) * vol
+                     if (fpbin(ibin) .lt. 1.e-30) fpbin(ibin) = 0.0
+                     ieq = ieq + 1
+                   enddo
+                   isrf = isrf1 + (ksp-1)*ispsk
+                   if (nsrf .gt. 0) then
+                     do ksrf = 1, nsrf
+                           fpsfmc(isrf) = mad(ieq) * vol
+                       fpsfma(isrf) = mad(ieq+nsrf) * vol
+                       fpsfmp(isrf) = mad(ieq+2*nsrf) * vol
+                       if (fpsfmc(isrf).lt.1.e-30) fpsfmc(isrf)=0.0
+                       if (fpsfma(isrf).lt.1.e-30) fpsfma(isrf)=0.0
+                       if (fpsfmp(isrf).lt.1.e-30) fpsfmp(isrf)=0.0
+                       ieq = ieq + 1
+                       isrf = isrf + isrfk
+                     enddo
+                     ieq = ieq + 2 * nsrf
+                   endif
+                 enddo
+               endif
+             endif
+           endif
+c  Compute total mass in aerosol bins.
+           ksp = 0
+           do isp = isp1,ispn,ispvk
+             ksp = ksp + 1
+             sum = fpliq(isp) + fpvap(isp)
+             do ibin = isp,isp+nbin-1
+               sum = sum + fpbin(ibin)
+             enddo
+             fpvtm(isp) = sum
+             nsrf = fpnsrf(ivol)
+             sum = 0.0
+             if (nsrf .gt. 0) then
+               isrf = isrf1 + (ksp-1)*ispsk
+               do ksrf = 1, nsrf
+                 sum = fpsfmc(isrf) + fpsfma(isrf) + fpsfmp(isrf)
+                 isrf = isrf + isrfk
+               enddo
+             endif
+             fpstm(isp) = sum
+           enddo
+           ksp = isys
+           do isp = isp1,ispn,ispvk
+             fpsysm(ksp) = fpsysm(ksp) + fpvtm(isp) + fpstm(isp)
+             ksp = ksp + 1
+           enddo
+         enddo
+       enddo
+c  Begin fission product decay heat calculations.
+c  Based on previous version of code in module FPRTR which was
+c  Engineered by Rich Dimenna and programmed by Arthur S.-L. Shieh.
+       tm(lcs) = 0.0
+       tm(li) = 0.0
+       tm(lte) = 0.0
+c  Compute total Cs, I and Te mass in all the systems.
+       do isys = isys1,isysn,isysk
+         ivol1 = filndx(34) + fpvolo(isys)
+         ivoln = ivol1 + (fpnvol(isys)-1)*ivolk
+         do ivol = ivol1, ivoln, ivolk
+           isp = ivol
+           do ksp = 1, nsp
+             fpmass = fpvtm(isp)
+             tm(lte) = tm(lte) + massfr(lte,ksp) * fpmass
+             tm(li) = tm(li) + massfr(li,ksp) * fpmass
+             tm(lcs) = tm(lcs) + massfr(lcs,ksp) * fpmass
+             isp = isp + ispvk
+           enddo
+           nsrf = fpnsrf(ivol)
+           if (nsrf .gt. 0) then
+             isrf1 = filndx(34) + fpsrfo(ivol)
+             isrfn = isrf1 + (nsrf-1)*isrfk
+             do isrf = isrf1,isrfn,isrfk
+               isp = isrf
+               do ksp = 1, nsp
+                 fpmass = fpstm(isp)
+                 tm(lte) = tm(lte) + massfr(lte,ksp)*fpmass
+                 tm(li) = tm(li) + massfr(li,ksp)*fpmass
+                 tm(lcs) = tm(lcs) + massfr(lcs,ksp)*fpmass
+                 isp = isp + ispsk
+               enddo
+             enddo
+           endif
+         enddo
+       enddo
+c  tgs - total gamma decay heat from all surfaces.
+c  tbs - total beta decay heat on all surfaces.
+c  tbv - total beta decay heat in the volume.
+       tgs = 0.0
+       tbs = 0.0
+       tbv = 0.0
+       do isys = isys1, isysn, isysk
+         jsno = fpsysn(isys)
+         jvol1 = lpdat(jsno)%liv
+         ivol1 = filndx(34) + fpvolo(isys)
+         ivoln = ivol1 + (fpnvol(isys)-1)*ivolk
+         kvol = 0
+         do ivol = ivol1,ivoln,ivolk
+           kvol = kvol + 1
+           jvol = jvol1 + (kvol-1)*ivskp
+           nsrf = fpnsrf(ivol)
+           if (nsrf .gt. 0) then
+c  e0 = 2.0 MeV.
+c  range = (.412/rho) * (e0 ** (1.265 - 0.09541*ln(e0)))
+c  in c.g.s. units. Multiplication factor 10.0 is needed
+c  to convert to SI units. This factor and e0 = 2.0 are
+c  absorbed into the constant 9.458.
+c  width is assumed to be the pipe radius
+             range = 9.458/rhog(jvol)
+             width = 0.381
+             if (width .gt. range) then
+               betar = 0.0
+             else
+               betar = 1.0 - width/range
+             endif
+c  Compute the mass of Cs, I and Te in each volume.
+             vm(lcs) = 0.0
+             vm(li) = 0.0
+             vm(lte) = 0.0
+             isp = ivol
+             do ksp = 1, nsp
+               fpmass = fpvtm(isp)
+               vm(lte) = vm(lte) + massfr(lte,ksp) * fpmass
+               vm(li) = vm(li) + massfr(li,ksp) * fpmass
+               vm(lcs) = vm(lcs) + massfr(lcs,ksp) * fpmass
+               isp = isp + ispvk
+             enddo
+c  Compute the total Cs, I and Te mass deposited on all the heat
+c  structures of each volume.
+             tsm(lcs) = 0.0
+             tsm(lte) = 0.0
+             tsm(li) = 0.0
+             do isrf = isrf1, isrfn, isrfk
+               isp = isrf
+               do ksp = 1, nsp
+                 fpmass = fpstm(isp)
+                 tsm(lte) = tsm(lte) + massfr(lte,ksp) * fpmass
+                 tsm(li) = tsm(li) + massfr(li,ksp) * fpmass
+                 tsm(lcs) = tsm(lcs) + massfr(lcs,ksp) * fpmass
+                 isp = isp + ispsk
+               enddo
+             enddo
+             do isrf = isrf1,isrfn,isrfk
+               sm(lcs) = 0.0
+               sm(li) = 0.0
+               sm(lte) = 0.0
+c  Computes the mass of Cs, I and Te deposited on each heat structure
+c  associated with a given volume.
+               isp = isrf
+               do ksp = 1, nsp
+                 fpmass = fpstm(isp)
+                 sm(lte) = sm(lte) + massfr(lte,ksp) * fpmass
+                 sm(li) = sm(li) + massfr(li,ksp) * fpmass
+                 sm(lcs) = sm(lcs) + massfr(lcs,ksp) * fpmass
+                 isp = isp + ispsk
+               enddo
+c  Compute gamma and beta decay heat associated with each heat surface.
+c
+c  Gamma decay heat is calculated by summing three terms.
+c  The first term is the product of the view factor, the fission product
+c  mass in the volume and the approportion factor of decay heat relative
+c  to total mass.
+c  The second term is from the assumption that half of the surface
+c  energy remains there.
+c  The third term comes from half of surface energy that radiates back
+c  into volume which in turn radiates back into the surface.
+c  Note that regardless of what model one uses the energy should be
+c  conserved.
+c
+c  The beta decay heat is computed in a similar fashion except that
+c  beta is viewed as a short range radiation so that there is an
+c  additional range factor betar.  Those that do not have the energy
+c  to exceed the range remain in the volume and appear in the
+c  volume beta energy term,
+c  while those exceeding the range appear in the surface
+c  beta energy term.
+               do ielm = 1, mxelm
+                 if (tm(ielm) .lt. tenm60) then
+                   gs(ielm) = 0.0
+                   bs(ielm) = 0.0
+                   bv(ielm) = 0.0
+                 else
+                   tmp = fpsfra(isrf)*(vm(ielm) + 0.5*tsm(ielm))
+                   gs(ielm) = (tmp + 0.5*sm(ielm))*
+     &             dkhtfr(ielm,lgamma)/tm(ielm)
+                   bs(ielm) = (betar*tmp + 0.5*sm(ielm))*
+     &             dkhtfr(ielm,lbeta)/tm(ielm)
+                   bv(ielm) = (1.-betar)*tmp*
+     &             dkhtfr(ielm,lbeta)/tm(ielm)
+                 endif
+               enddo
+               fpsfgs(isrf) = 0.0
+               fpsfbs(isrf) = 0.0
+               fpsfbv(isrf) = 0.0
+               do ielm = 1, mxelm
+                 fpsfgs(isrf) = fpsfgs(isrf) + gs(ielm)
+                 fpsfbs(isrf) = fpsfbs(isrf) + bs(ielm)
+                 fpsfbv(isrf) = fpsfbv(isrf) + bv(ielm)
+               enddo
+               tgs = tgs + fpsfgs(isrf)
+               tbs = tbs + fpsfbs(isrf)
+               tbv = tbv + fpsfbv(isrf)
+               if (fpsfgs(isrf) .ne. 0.0) then
+                 fpsfbv(isrf) = fpsfbv(isrf)/fpsfgs(isrf)
+               endif
+             enddo
+           endif
+         enddo
+       enddo
+       tdkg = 0.0
+       tdkb = 0.0
+       do ielm = 1, mxelm
+         tdkg = tdkg + dkhtfr(ielm,lgamma)
+         tdkb = tdkb + dkhtfr(ielm,lbeta)
+       enddo
+       if (abs(tdkg - tgs).gt.1.0e-14 .or.
+     & abs(tdkb - (tbs + tbv)).gt.1.0e-14) then
+         write (output,'(1h0,a)')
+     &   '0******** Energy is not conserved in fission product decay he
+     &at calculations'
+       endif
+       return
+       end
+*endif

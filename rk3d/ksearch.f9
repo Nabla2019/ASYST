@@ -1,0 +1,201 @@
+      SUBROUTINE KSEARCH( ZB )
+C
+C     THIS SUBROUTINE PERFORMS CRITICALITY SEARCH, ON FOUR DIFFERENT
+C     PARAMETERS: SOLUBLE POISON, INLET COOLANT TEMPERATURE,
+C     CORE OPERATING POWER, LEADIND CONTROL BANK AXIAL
+C     WITHDRAWAL.
+C
+      include 'param.fcb'
+      include 'conv.fcb'
+      include 'crod.fcb'
+      include 'thermo.fcb'
+      include 'start.fcb'
+      include 'crit.fcb'
+      include 'cntl.fcb'
+      include 'soln2.fcb'
+      include 'thmargin.fcb'
+      
+      DIMENSION ZB(*)
+      
+      SL3=.FALSE.
+C     
+C.....CHECK FOR CRITICALITY
+C=================================
+C     *
+      RELKEFFDIF = ABS(CKE-CKE_TARGET)/CKE
+      IF (RELKEFFDIF.LT.EPSILKEF) THEN
+       SL3=.TRUE.
+C !vmq       WRITE(6,*)
+C !vmq     &   '****** NO SEARCH DONE ON THIS ITER., DELT KEFF < ',EPSILKEF
+       ISRCH = ISRCH - 1
+       RETURN
+      ENDIF
+      
+C     
+C     IWHICH = 1  K_EFF SEARCH USING POWER LEVEL
+C     IWHICH = 2  K_EFF SEARCH USING SOLUBLE POISON CONCENTRATION
+C     IWHICH = 3  K_EFF SEARCH USING INLET COOLANT TEMPERATURE
+C     IWHICH = 4  K_EFF SEARCH USING LEADING CONTROL ROD MOVEMENT
+C     
+      
+      
+      GOTO(111,222,333,444)IWHICH
+      
+ 111  CONTINUE
+      
+C----------POWER SEARCH
+C===========================
+C     *
+      IF(PR.LE.0.0001.AND.CKE.LT.CKE_TARGET)THEN
+C !vmq       WRITE(6,*)'###########################################'
+C !vmq       WRITE(6,*)' POWER LEVEL SEARCH IS NOT POSSIBLE'
+C !vmq       WRITE(6,*)'###########################################'
+C !vmq       WRITE(6,*)CKE,PR
+       RETURN
+      ENDIF
+      PROO = PR
+      IF(ISRCH.EQ.1) THEN
+       PR_OLD = PR
+       PR = 1.1 * PR
+       IF(PR .LT. .1) PR = .1
+      ELSE
+       PRNEW = PR+(CKE_TARGET - CKE)*(PR - PR_OLD)/(CKE - CKE_OLD)
+       PR = PRNEW
+       PR_OLD = PROO
+       IF((PR_OLD/PR).GT.2.0)PR = PR_OLD/1.500
+       IF((PR/PR_OLD).GT.2.0)PR = PR_OLD*1.500
+      ENDIF
+      
+      GOTO 70
+      
+ 222  CONTINUE
+      
+C-------------SOLUBLE POISON SEARCH
+C====================================
+C     
+      IF(PM.LE.0.0.AND.CKE.LT.CKE_TARGET)THEN
+C !vmq       WRITE(6,*)'###########################################'
+C !vmq       WRITE(6,*)' SOLUBLE POISON SEARCH IS NOT POSSIBLE'
+C !vmq       WRITE(6,*)'###########################################'
+C !vmq       WRITE(6,*)CKE,PM
+       RETURN
+      ENDIF
+      
+ 1000 PMOO = PM
+      IF(ISRCH.EQ.1)THEN
+       PM_OLD = PM
+       PM = 1.1*PM
+       IF (PM .LT. 100.0) PM = 100.
+      ELSE
+       PMNEW = PM + (CKE_TARGET - CKE) * (PM-PM_OLD) /
+     &   (CKE - CKE_OLD)
+       PM = PMNEW
+       PM_OLD = PMOO
+      ENDIF
+      
+      GOTO 70
+      
+ 333  CONTINUE
+C----------INLET TEMPERATURE SEARCH
+C====================================
+C     *
+      IF( (TCOLIN.LE.TCOLMIN.AND.CKE.LT.CKE_TARGET).OR.
+     &  (TCOLIN.GE.TCOLMAX.AND.CKE.GT.CKE_TARGET))THEN
+C !vmq       WRITE(6,*)'###########################################'
+C !vmq       WRITE(6,*)' COOLANT INLET TEMP. SEARCH IS NOT POSSIBLE'
+C !vmq       WRITE(6,*)'###########################################'
+C !vmq       WRITE(6,*)CKE,TCOLIN
+C !vmq       RETURN
+      ENDIF
+      
+      TCOLINOO=TCOLIN
+      IF(ISRCH.NE.1) GO TO 18
+ 91   CONTINUE
+      TCOLIN_OLD = TCOLIN
+      IF(CKE.LT.CKE_TARGET)THEN
+       TCOLIN = TCOLIN - 2.00
+      ELSE
+       TCOLIN = TCOLIN + 2.00
+      ENDIF
+      TCOLINNEW = TCOLIN
+      GO TO 70
+ 18   IF( ABS(CKE-CKE_OLD) .LT. 1E-06 )GOTO 91
+      TCOLINNEW = TCOLIN + (CKE_TARGET - CKE) * (TCOLIN-TCOLIN_OLD)/
+     &  (CKE-CKE_OLD)
+      IF(TCOLINNEW-TCOLIN.GE.30)TCOLINNEW=TCOLIN+10.00
+      IF(TCOLIN-TCOLINNEW.GE.30)TCOLINNEW=TCOLIN-10.00
+      TCOLIN = TCOLINNEW
+      TCOLIN_OLD = TCOLINOO
+      GO TO 70
+      
+ 444  CONTINUE
+      
+C--------CONTROL ROD SEARCH
+C=============================
+C     *
+      IF((CKE.LT.CKE_TARGET.AND.(ZB(NBACU)-RODOFFSET)
+     &  .GE.RODLNGTH).OR.(CKE.GT.CKE_TARGET
+     &  .AND.ZB(NBACU).LT.RODOFFSET))THEN
+C !vmq       WRITE(6,*)'#####################################'
+C !vmq       WRITE(6,*)' CONTROL ROD SEARCH IS NOT POSSIBLE'
+C !vmq       WRITE(6,*)'#####################################'
+C !vmq       WRITE(6,*)CKE,(ZB(NBACU)-RODOFFSET)/2.54
+C !vmq       WRITE(6,*)'             '
+       RETURN
+      ENDIF
+      
+      ZBOO = ZB(NBACU)
+      IF(ISRCH .EQ. 1)THEN
+       ZB_OLD = ZB(NBACU)
+       IF(CKE.LT.CKE_TARGET)THEN
+        ZB(NBACU) = ZB(NBACU) + 5.00
+       ELSE
+        ZB(NBACU) = ZB(NBACU) - 5.00
+       ENDIF
+       ZBNEW = ZB(NBACU)
+      ELSE
+       ZBNEW = ZB(NBACU) + (CKE_TARGET - CKE) *
+     &   ( ( ZB(NBACU) - ZB_OLD ) / ( CKE - CKE_OLD ) )
+       ZB(NBACU)=ZBNEW
+       ZB_OLD = ZBOO
+      ENDIF
+      
+      
+ 70   CONTINUE
+      CKE_OLD=CKE
+      
+      IF (PR.LT.0.) PR=0.0001
+      IF (PM.LT.0.) PM=0.0
+      IF (TCOLIN.LT.TCOLMIN) TCOLIN=TCOLMIN
+      IF (TCOLIN.GT.TCOLMAX) TCOLIN=TCOLMAX
+      IF(NBACU.GT.0.AND.IWHICH.EQ.4) THEN
+       IF ((ZB(NBACU)-RODOFFSET).GT.RODLNGTH) 
+     &   ZB(NBACU)=RODLNGTH+RODOFFSET
+       IF (ZB(NBACU).LT.RODOFFSET) ZB(NBACU)=RODOFFSET
+      ENDIF
+      
+C     
+C........................CONVERTING [ CM ] INTO [INCH] "ONLY FOR OUTPUT
+      
+      IF(IWHICH.EQ.4)THEN
+       ZBNEWINCH = (ZB(NBACU)-RODOFFSET)/2.54
+      ENDIF
+      
+C !vmq      IF(CRTON.EQ.'Y') THEN
+C !vmq       IF(IWHICH.EQ.1)
+C !vmq     &   WRITE(6,*)'###### POWER LEVEL >>',PR,' @ SEARCH ITER.',ISRCH
+C !vmq       IF(IWHICH.EQ.2)
+C !vmq     &   WRITE(6,*)
+C !vmq     &   '###### SOLUBLE POISON VALUE >>',PM,' @ SEARCH ITER.',ISRCH
+C !vmq       IF(IWHICH.EQ.3)
+C !vmq     &   WRITE(6,*)'###### INLET COOLANT TEMP >>',TCOLIN,' @ SEARCH ITER
+C !vmq     &   .    ',ISRCH
+C !vmq       IF(IWHICH.EQ.4)
+C !vmq     &   WRITE(6,*)'###### INCHES LEAD BANK WITHDRAWN >>',ZBNEWINCH,
+C !vmq     &   '@ SEARCH ITER.',ISRCH
+C !vmq      ENDIF
+      
+ 1991 CONTINUE
+      
+      RETURN
+      END

@@ -1,0 +1,671 @@
+*mlist
+*if def,selap
+       subroutine rfrzn (ic,ck,rocp,qss)
+c
+c  Calculates heat flux from the molten material during the refreezing
+c  process.
+c
+c  Cognizant engineer: ewc.
+c
+       use scdmod
+       implicit none
+       include 'comctl.h'
+       include 'fast.h'
+       include 'scddat.h'
+c
+       integer ndrd1,ndax2
+      parameter (ndrd1=ndrd+1, ndax2=2*(ndax-1))
+c
+       real zcen(ndax2),zedg(ndax2+1),dz2d(2*ndax2)
+       real aho,asf,ar,al,at,ab,g,t1,snko,snk1,sko,sk1,a,b,c,d,temp1,ck,
+     * rocp,qss,aa,bb,cc,dd,uu,rr
+      dimension aho(2*ndrd,2*ndax2), asf(2*ndax2), ar(ndrd1,ndax2),
+     +          al(ndrd1,ndax2), at(ndrd1,ndax2), ab(ndrd1,ndax2),
+     +          g(ndrd1,ndax2), src(ndrd1,ndax2), t1(ndrd1,ndax2),
+     +          snko(ndax2), snk1(ndax2), sko(ndax2), sk1(ndax2),
+     +          a(ndrd1), b(ndrd1), c(ndrd1), d(ndrd1), temp1(ndrd1),
+     +          ck(ndrd,ndax), rocp(ndrd,ndax), qss(ndrd,ndax)
+     + , aa((ndrd+1)*ndax+1),bb((ndrd+1)*ndax),cc((ndrd+1)*ndax+1),
+     + dd((ndrd+1)*ndax+1),uu((ndrd+1)*ndax+2),rr((ndrd+1)*ndax+2)
+      logical oddev,iter1,iter2
+      integer repeat
+c
+c    size of a, b, c, d, and temp1 needs to be max of ndrd1 and ndax2.
+       real aa2,bb2,cc2,dd2,temp1t
+      dimension aa2(ndax2),bb2(ndax2),cc2(ndax2),dd2(ndax2),
+     +          temp1t(ndax2)
+      equivalence (aa2(1),a(1)),(bb2(1),b(1)),(cc2(1),c(1)),
+     +            (dd2(1),d(1)),(temp1t(1),temp1(1))
+c
+*call trnot1
+*call trnot2
+*call scdcom
+*call ndxara
+*call scdout
+*call cmptim
+*call cons
+*call voldat
+*call tblsp
+c
+c  Local variables.
+       integer i,i0,i1,i2,iaxial,ib,ic,il1,il1x,il2,in1,in2,inb,inc,
+     & inc0,inc1,ind,ind1,int,is1,is2,iz1,iz2,j,j0,j1,j2,j3,jj,kount,n1,
+     & n2,n3,nax,naxn,nci,nco,node2,npm,nr1,nrd,nrd2,nrpnax,nrpnx2
+       real aacc2,dr1,dr2,dt1,dt2,dtbig,dtmax,dtmaxo,dtmin,dtmino,dtsml,
+     & src,vb1,vb2,vt1,vt2,xr1,xr2
+       external matrx2,matrx3,maxitr,mxitr2,oddevn
+c
+      ib = (ic-1)*ndax
+      nax = naz
+      nrd = numelm(ib+1)
+      nr1 = nrd + 1
+      nrd2 = 2*nrd
+      node(ic) = nax
+      naxn = ndax2
+      dtbig = 100.0
+      dtsml = 20.0
+      dtmin = dtsml
+      if (ngeom(ic).ne.2) then
+        is1 = (ndcomp+nsout(ic)-1)*ndax
+        is2 = (nsout(ic)-1)*ndax
+      endif
+      zedg(1) = 0.0
+       do j = 1,nax
+         j2 = 2*j
+         j1 = j2 - 1
+         zcen(j) = zcond(ib+j)
+         zedg(j+1) = zedg(j) + dzcond(ib+j)
+         dz2d(j1) = 0.5*dzcond(ib+j)
+         dz2d(j2) = dz2d(j1)
+       enddo
+       do j = 1,node(ic)
+         nflg(j,ic) = 0
+         nflg1(j,ic) = j
+       enddo
+       do j = 1,nax
+         do i = 1,nr1
+           temp2d(i,j,ic) = tcond3(i,j,ic)
+         enddo
+       enddo
+      kount = 0
+ 9999 continue
+      dtmino = 500.0
+      dtmaxo = 0.0
+      ind = 0
+      inc = 0
+      do 110 j = 1,node(ic)-1
+        dt1 = abs( temp2d(nr1,j,ic)-temp2d(nr1,j+1,ic) )
+        dtmax = max( dtmaxo,dt1 )
+        if (dtmax.eq.dt1) then
+          inc = j + 1
+          dtmaxo = dt1
+        endif
+        if (nflg(j,ic).ne.0. or. nflg(j+1,ic).ne.0) then
+          dt2 = abs( temp2d(nr1,j,ic)-temp2d(nr1,j+1,ic) )
+          dtmin = min(dtmino,dt2)
+          if (dtmin.eq.dt2) then
+            ind = j
+            dtmino = dt2
+          endif
+        endif
+  110 continue
+      npm = 0
+      if (dtmax.gt.dtbig. and. node(ic).lt.naxn) then
+        npm = 2
+        node(ic) = node(ic) + 1
+        node2 = 2*node(ic)
+        inc1 = inc + 1
+        do 120 j = node(ic),inc1,-1
+          zcen(j) = zcen(j-1)
+          nflg(j,ic) = nflg(j-1,ic)
+          nflg1(j,ic) = nflg1(j-1,ic)
+  120   continue
+        zcen(inc) = zedg(inc)
+        if (nflg(inc,ic).eq.0) then
+          nflg(inc,ic) = 1
+          if (nflg(inc-1,ic).ne.0) then
+            nflg1(inc,ic) = nflg1(inc-1,ic)
+            nflg(inc,ic) = 2
+          endif
+        else
+          nflg(inc,ic) = 2
+          nflg1(inc,ic) = nflg1(inc-1,ic)
+        endif
+        do 122 j = node(ic),inc1,-1
+          zedg(j+1) = zedg(j)
+  122   continue
+        int = 2*inc
+        inb = int - 1
+        in1 = inb - 1
+        in2 = int + 1
+        do 130 j = node2,in2+1,-1
+          dz2d(j) = dz2d(j-2)
+  130   continue
+        dz2d(int) = 0.5*dz2d(inb)
+        dz2d(inb) = 0.5*dz2d(in1)
+        dz2d(in2) = dz2d(int)
+        dz2d(in1) = dz2d(inb)
+        zedg(inc) = zcen(inc) -dz2d(inb)
+        zedg(inc+1) = zcen(inc) + dz2d(int)
+c ----
+      else
+        if (dtmin.lt.dtsml. and. node(ic).gt.nax.
+     +      and. nflg(ind,ic).ne.0) then
+          npm = 1
+          node(ic) = node(ic) - 1
+          ind1 = ind + 1
+          if (ind.gt.1) then
+            do 140 j = ind1,node(ic)+1
+              zedg(j) = zedg(j+1)
+  140       continue
+            zedg(ind) = zcen(ind)
+            do 142 j = ind,node(ic)
+              zcen(j) = zcen(j+1)
+  142       continue
+            node2 = 2*node(ic)
+            int = 2*ind
+            in1 = int - 1
+            in2 = int - 2
+            dz2d(in2) = dz2d(in1) + dz2d(in2)
+            dz2d(in1) = dz2d(int) + dz2d(int+1)
+            do 150 j = int,node2
+              dz2d(j) = dz2d(j+2)
+  150       continue
+          else
+            zedg(2) = zcen(2)
+            do 151 j = 3,node(ic)+1
+              zcen(j) = zcen(j+1)
+  151       continue
+            do 152 j = 2,node(ic)
+              zcen(j) = zcen(j+1)
+  152       continue
+            dz2d(2) = dz2d(2) + dz2d(3)
+            dz2d(3) = dz2d(4) + dz2d(5)
+            do 160 j = 4,node2
+              dz2d(j) = dz2d(j+2)
+  160       continue
+          endif
+          do 143 j = ind1,node(ic)
+            nflg(j,ic) = nflg(j+1,ic)
+            nflg1(j,ic) = nflg1(j+1,ic)
+  143     continue
+          if (nflg(ind,ic).eq.0. or. nflg(ind1,ic).eq.0) then
+            nflg(ind,ic) = 0
+          else
+            if (nflg(ind,ic).eq.1. or. nflg(ind1,ic).eq.1) then
+              nflg(ind,ic) = 1
+            else
+              nflg(ind,ic) = 2
+            endif
+          endif
+        endif
+        if (kount.gt.1) go to 990
+      endif
+c ----
+      if (ngeom(ic).eq.2) then
+        do j = 1,node(ic)
+          j2 = 2*j
+          j1 = j2 - 1
+          n2 = nflg1(j,ic)
+          do i = 1,nrd
+            i2 = 2*i
+            i1 = i2 - 1
+            i0 = i + 1
+            aho(i1,j2) = pi*(3.0*xcond3(i,n2,ic)+xcond3(i0,n2,ic))*
+     &      (xcond3(i0,n2,ic)-xcond3(i,n2,ic))*0.25
+            aho(i2,j2) = pi*(3.0*xcond3(i0,n2,ic)+xcond3(i,n2,ic))*
+     &      (xcond3(i0,n2,ic)-xcond3(i,n2,ic))*0.25
+          enddo
+          if (nflg(j,ic).eq.1) then
+            n1 = n2 - 1
+            do i = 1,nrd
+              i2 = 2*i
+              i1 = i2 - 1
+              i0 = i + 1
+              aho(i1,j1) = pi*(3.0*xcond3(i,n1,ic)+xcond3(i0,n1,ic))*
+     &        (xcond3(i0,n1,ic)-xcond3(i,n1,ic))*0.25
+              aho(i2,j1) = pi*(3.0*xcond3(i0,n1,ic)+xcond3(i,n1,ic))*
+     &        (xcond3(i0,n1,ic)-xcond3(i,n1,ic))*0.25
+            enddo
+            do i = 1,nr1
+              i1 = i + 1
+              if (i.eq.nr1) then
+                ar(i,j) = 0.0
+                asf(j1) = 2.0*pi*xcond3(nr1,n1,ic)*dz2d(j1)
+                asf(j2) = 2.0*pi*xcond3(nr1,n2,ic)*dz2d(j2)
+              else
+                dr1 = max(1.0e-8,xcond3(i1,n1,ic)-xcond3(i,n1,ic))
+                dr2 = max(1.0e-8,xcond3(i1,n2,ic)-xcond3(i,n2,ic))
+                xr1 = xcond3(i,n1,ic) + xcond3(i1,n1,ic)
+                xr2 = xcond3(i,n2,ic) + xcond3(i1,n2,ic)
+                ar(i,j) = pi*(xr1*dz2d(j1)*ck(i,n1)/dr1+xr2*dz2d(j2)*
+     +          ck(i,n2)/dr2)
+              endif
+            enddo
+          else
+            do i = 1,nrd
+              i2 = 2*i
+              i1 = i2 - 1
+              aho(i1,j1) = aho(i1,j2)
+              aho(i2,j1) = aho(i2,j2)
+            enddo
+            do i = 1,nr1
+              i1 = i + 1
+              if (i.eq.nr1) then
+                ar(i,j) = 0.0
+                asf(j1) = 2.0*pi*xcond3(nr1,n2,ic)*dz2d(j1)
+                asf(j2) = 2.0*pi*xcond3(nr1,n2,ic)*dz2d(j2)
+              else
+                dr1 = max(1.0e-8,xcond3(i1,n2,ic)-xcond3(i,n2,ic))
+                xr1 = xcond3(i,n2,ic) + xcond3(i1,n2,ic)
+                ar(i,j) = pi*xr1*(dz2d(j1)+dz2d(j2))*ck(i,n2)/dr1
+              endif
+            enddo
+          endif
+        enddo
+c ----
+      else
+        do j = 1,node(ic)
+          j2 = 2*j
+          j1 = j2 - 1
+          n2 = nflg1(j,ic)
+          do i = 1,nrd
+            i2 = 2*i
+            i1 = i2 - 1
+            i0 = i + 1
+            aho(i1,j2) = slbwd(ic)*(xcond3(i0,n2,ic)-xcond3(i,n2,ic))*
+     &      0.5
+            aho(i2,j2) = aho(i1,j2)
+          enddo
+          if (nflg(j,ic).eq.1) then
+            n1 = n2 - 1
+            do i = 1,nrd
+              i2 = 2*i
+              i1 = i2 - 1
+              i0 = i + 1
+              aho(i1,j1) = slbwd(ic)*(xcond3(i0,n1,ic)-xcond3(i,n1,ic))*
+     &        0.5
+              aho(i2,j1) = aho(i1,j1)
+            enddo
+            do i = 1,nr1
+              i1 = i + 1
+              if (i.eq.nr1) then
+                ar(i,j) = 0.0
+                asf(j1) = slbwd(ic)*dz2d(j1)
+                asf(j2) = slbwd(ic)*dz2d(j2)
+              else
+                dr1 = max(1.0e-8,xcond3(i1,n1,ic) - xcond3(i,n1,ic))
+                dr2 = max(1.0e-8,xcond3(i1,n2,ic) - xcond3(i,n2,ic))
+                ar(i,j) = slbwd(ic)*(dz2d(j1)*ck(i,n1)/dr1 +
+     &          dz2d(j2)*ck(i,n2)/dr2)
+              endif
+            enddo
+          else
+            do i = 1,nrd
+              i2 = 2*i
+              i1 = i2 - 1
+              aho(i1,j1) = aho(i1,j2)
+              aho(i2,j1) = aho(i2,j2)
+            enddo
+            do i = 1,nr1
+              i1 = i + 1
+              if (i.eq.nr1) then
+                ar(i,j) = 0.0
+                asf(j1) = slbwd(ic)*dz2d(j1)
+                asf(j2) = slbwd(ic)*dz2d(j2)
+              else
+                dr1 = max(1.0e-8,xcond3(i1,n2,ic)-xcond3(i,n2,ic))
+                ar(i,j) = slbwd(ic)*(dz2d(j1)+dz2d(j2))*ck(i,n2)/dr1
+              endif
+            enddo
+          endif
+        enddo
+      endif
+c ----
+      do 500 j = 1,node(ic)
+        j2 = 2*j
+        j1 = j2 - 1
+        j3 = j2 + 1
+        j0 = j + 1
+        n2 = nflg1(j,ic)
+        n3 = nflg1(j0,ic)
+        il2 =ib + n2
+        in2 = nvad(il2) + filndx(4)
+        if (nflg(j,ic).eq.1) then
+          il1x = n1
+          n1 = n2 - 1
+          il1 = ib + n1
+          in1 = nvad(il1) + filndx(4)
+        else
+          il1x = n2
+          n1 = n2
+          il1 = il2
+          in1 = in2
+        endif
+        g(1,j) = aho(1,j1)*dz2d(j1)*rocp(1,n1) +
+     &           aho(1,j2)*dz2d(j2)*rocp(1,n2)
+        g(nr1,j) = aho(nrd2,j1)*dz2d(j1)*rocp(nrd,n1) +
+     &             aho(nrd2,j2)*dz2d(j2)*rocp(nrd,n2)
+        src(1,j) = aho(1,j1)*dz2d(j1)*qss(1,n1) +
+     &             aho(1,j2)*dz2d(j2)*qss(1,n2)
+        src(nr1,j) = aho(nrd2,j1)*dz2d(j1)*qss(nrd,n1) +
+     &               aho(nrd2,j2)*dz2d(j2)*qss(nrd,n2)
+        if (nrd.eq.1) go to 599
+        do i = 2,nrd
+          i0 = i - 1
+          i1 = 2*i0
+          i2 = i1 + 1
+          g(i,j) = ( aho(i1,j1)*rocp(i0,n1)+aho(i2,j1)*rocp(i,n1) )*
+     &    dz2d(j1) + ( aho(i1,j2)*rocp(i0,n2)+aho(i2,j2)*
+     &    rocp(i,n2) )*dz2d(j2)
+          src(i,j) = ( aho(i1,j1)*qss(i0,n1)+aho(i2,j1)*qss(i,n1) )*
+     &    dz2d(j1) + ( aho(i1,j2)*qss(i0,n2)+aho(i2,j2)*
+     &    qss(i,n2) )*dz2d(j2)
+        enddo
+  599   continue
+        if (j.eq.node(ic)) then
+          do i = 1,nr1
+            at(i,j) = 0.0
+          enddo
+        else
+          at(1,j) = (aho(1,j2)+aho(1,j3))*(ck(1,n2)+ck(1,n3))/
+     &    (dz2d(j2)+dz2d(j3))
+          at(nr1,j) = (aho(nrd2,j2)+aho(nrd2,j3))*(ck(nrd,n2)+
+     &    ck(nrd,n3))/(dz2d(j2)+dz2d(j3))
+          if (nrd.eq.1) go to 598
+          do i = 2,nrd
+            i0 = i - 1
+            i1 = 2*i0
+            i2 = i1 + 1
+            at(i,j) = 0.25*((aho(i1,j2) + aho(i1,j3))*(ck(i0,n2) +
+     &      ck(i0,n3)) + (aho(i2,j2) + aho(i2,j3))*(ck(i,n2) +
+     &      ck(i,n3)))/(dz2d(j2) + dz2d(j3))
+          enddo
+  598     continue
+        endif
+c ----
+        snko(j) = asf(j1)*(hfixf(il1)+hfixg(il1)) +
+     &  asf(j2)*(hfixf(il2)+hfixg(il2))
+        snk1(j) = asf(j1)*(hfixf(il1)*tempf(in1)+hfixg(il1)*tempg(in1))
+     &  + asf(j2)*(hfixf(il2)*tempf(in2)+hfixg(il2)*tempg(in2))
+        if (ngeom(ic).eq.2) then
+          snk1(j) = snk1(j) - asf(j1)*scd22(il1x,ic,1,1)%qrdsur -
+     &    asf(j2)*scd22(n2,ic,1,1)%qrdsur
+        else
+          if (islbot(ic).eq.0) then
+            il1 = is1 + n1
+            il2 = is1 + n2
+            in1 = nvad(il1) + filndx(4)
+            in2 = nvad(il2) + filndx(4)
+            sko(j) = asf(j1)*(hfixf(il1)+hfixg(il1)) +
+     &      asf(j2)*(hfixf(il2)+hfixg(il2))
+            sk1(j) = asf(j1)*(hfixf(il1)*tempf(in1)+hfixg(il1)*
+     &      tempg(in1)) + asf(j2)*(hfixf(il2)*tempf(in2)+
+     &      hfixg(il2)*tempg(in2))
+          else
+            il1 = is2 + n1
+            il2 = is2 + n2
+            sko(j) = asf(j1)*hout(il1) + asf(j2)*hout(il2)
+            sk1(j) = asf(j1)*hout(il1)*tcols(il1) +
+     &      asf(j2)*hout(il2)*tcols(il2)
+          endif
+        endif
+  500 continue
+c ----
+      if (npm.eq.2) then
+        inc0 = inc - 1
+        do j = node(ic),inc1,-1
+          j1 = j - 1
+          do i = 1,nr1
+            temp2d(i,j,ic) = temp2d(i,j1,ic)
+          enddo
+        enddo
+        in2 = 2*inc
+        in1 = in2 - 1
+        iz1 = nflg1(inc0,ic)
+        iz2 = nflg1(inc,ic)
+        vb1 = aho(1,in1)*dz2d(in1)*rocp(1,iz1)
+        vb2 = aho(nrd2,in1)*dz2d(in1)*rocp(nrd,iz1)
+        vt1 = aho(1,in2)*dz2d(in2)*rocp(1,iz2)
+        vt2 = aho(nrd2,in2)*dz2d(in2)*rocp(nrd,iz2)
+        temp2d(1,inc,ic) = (temp2d(1,inc,ic)*vt1+temp2d(1,inc0,ic)*vb1)/
+     &  (vt1+vb1)
+        temp2d(nr1,inc,ic) = (temp2d(nr1,inc,ic)*vt2+
+     &  temp2d(nr1,inc0,ic)*vb2) / (vt2+vb2)
+        if (nrd.eq.1) go to 2001
+        do i = 2,nrd
+          i0 = i - 1
+          i1 = 2*i0
+          i2 = i1 + 1
+          vb1 = aho(i1,in1)*rocp(i0,iz1)*dz2d(in1)
+          vb2 = aho(i2,in1)*rocp(i,iz1)*dz2d(in1)
+          vt1 = aho(i1,in2)*rocp(i0,iz2)*dz2d(in2)
+          vt2 = aho(i2,in2)*rocp(i,iz2)*dz2d(in2)
+          temp2d(i,inc,ic) = (temp2d(i0,inc0,ic)*vb1 + temp2d(i,inc0,ic)
+     &    *vb2 + temp2d(i0,inc,ic)*vt1 + temp2d(i,inc,ic)*vt2) /
+     &    (vb1+vb2+vt1+vt2)
+        enddo
+ 2001   continue
+c ----
+      else
+        if (npm.eq.1) then
+          if (nflg(ind1,ic).eq.0) then
+            do i = 1,nr1
+              temp2d(i,ind,ic) = temp2d(i,ind1,ic)
+            enddo
+          endif
+          do j = ind1,node(ic)
+            j1 = j + 1
+            do i = 1,nr1
+              temp2d(i,j,ic) = temp2d(i,j1,ic)
+            enddo
+          enddo
+        endif
+      endif
+c ----
+      do i = 1,nr1
+        ab(i,1) = 0.0
+      enddo
+      do j = 2,node(ic)
+        j1 = j - 1
+        do i = 1,nr1
+          ab(i,j) = at(i,j1)
+        enddo
+      enddo
+c ----
+      do j = 1,node(ic)
+        al(1,j) = 0.0
+      enddo
+      do i = 2,nr1
+        i1 = i - 1
+        do j = 1,node(ic)
+          al(i,j) = ar(i1,j)
+        enddo
+      enddo
+c ----
+      jj = 1
+      do i = 1,nr1
+        do j = 1,node(ic)
+          a(j) = -ab(i,j)
+          b(j) = 2.0*g(i,j)/deltc + ab(i,j) + at(i,j)
+          c(j) = -at(i,j)
+          d(j) = (2.0*g(i,j)/deltc-al(i,j)-ar(i,j))*temp2d(i,j,ic) +
+     &    src(i,j)
+        enddo
+        if (i.eq.1) then
+          do j = 1,node(ic)
+            d(j) = d(j) + ar(i,j)*temp2d(i+1,j,ic)
+          enddo
+          if (ngeom(ic).ne.2) then
+            do j = 1,node(ic)
+              d(j) = d(j) + sk1(j)
+              b(j) = b(j) + sko(j)
+            enddo
+          endif
+        else
+          if (i.eq.nr1) then
+            do j = 1,node(ic)
+              d(j) = d(j) + al(i,j)*temp2d(i-1,j,ic) + snk1(j)
+              b(j) = b(j) + snko(j)
+            enddo
+          else
+            do j = 1,node(ic)
+              d(j) = d(j) + al(i,j)*temp2d(i-1,j,ic) +
+     &        ar(i,j)*temp2d(i+1,j,ic)
+            enddo
+          endif
+        endif
+         do j = 1,node(ic)
+            aa(jj) = a(j)
+            bb(jj) = b(j)
+            cc(jj) = c(j)
+            dd(jj) = d(j)
+            jj = jj+1
+         enddo
+      enddo
+      oddev = .false.
+      iter1 = .false.
+      iter2 = .false.
+      aacc2 = abs(aa(2)) + abs(cc(2))
+      if(node(ic).eq.4.or.node(ic).eq.6)then
+         oddev = .true.
+         goto 833
+      endif
+      if(node(ic).eq.8.or.node(ic).eq.12)then
+         oddev = .true.
+         goto 833
+      endif
+      if(node(ic).eq.16.or.node(ic).eq.24)oddev = .true.
+      if(node(ic).eq.32.or.node(ic).eq.48)oddev = .true.
+      if(node(ic).gt.20.and.aacc2.lt.0.02*bb(2))iter1=.true.
+      if(node(ic).gt.20.and.aacc2.lt.0.1*bb(2))iter2=.true.
+ 833  continue
+      if (iter1 .or. iter2) then
+        jj = 1
+        do i = 1,nr1
+          do j = 1,node(ic)
+            uu(jj) = temp2d(i,j,ic)
+            jj = jj + 1
+          enddo
+        enddo
+      endif
+      nrpnax = nr1*node(ic)
+      nrpnx2 = nrpnax/2
+      iaxial = 1
+      if(oddev)then
+         call oddevn(iaxial,nr1,node(ic),nrpnax,aa,bb,cc,dd,uu)
+         goto 830
+      endif
+      if(iter1)then
+         call maxitr(nrpnax,nr1,node(ic),aa,bb,cc,dd,uu,rr,repeat)
+         if(repeat.eq.1)goto 837
+         goto 830
+      endif
+      if(iter2)then
+        call mxitr2(nr1,node(ic),nrpnax,nrpnx2,aa,bb,cc,dd,uu,rr,repeat)
+         if(repeat.eq.1)goto 837
+         goto 830
+      endif
+ 837  continue
+      call matrx3(nrpnax,nr1,node(ic),aa,bb,cc,dd,uu)
+ 830  continue
+      jj = 1
+      do i = 1,nr1
+        do j = 1,node(ic)
+          t1(i,j) = uu(jj)
+          jj = jj + 1
+        enddo
+      enddo
+c ----
+      jj = 1
+      do 750 j = 1,node(ic)
+        do i = 1,nr1
+          a(i) = -al(i,j)
+          b(i) = 2.0*g(i,j)/deltc + al(i,j) + ar(i,j)
+          c(i) = -ar(i,j)
+          d(i) = (2.0*g(i,j)/deltc-ab(i,j)-at(i,j))*t1(i,j) + src(i,j)
+        enddo
+        if (j.eq.1) then
+          do i = 1,nr1
+            d(i) = d(i) + at(i,j)*t1(i,j+1)
+          enddo
+        else
+          if (j.eq.node(ic)) then
+            do i = 1,nr1
+              d(i) = d(i) + ab(i,j)*t1(i,j-1)
+            enddo
+          else
+            do i = 1,nr1
+              d(i) = d(i) + ab(i,j)*t1(i,j-1) + at(i,j)*t1(i,j+1)
+            enddo
+          endif
+        endif
+        b(nr1) = b(nr1) + snko(j)
+        d(nr1) = d(nr1) + snk1(j)
+        if (ngeom(ic).ne.2) then
+          b(1) = b(1) + sko(j)
+          d(1) = d(1) + sk1(j)
+        endif
+         do i = 1,nr1
+           aa(jj) = a(i)
+           bb(jj) = b(i)
+           cc(jj) = c(i)
+           dd(jj) = d(i)
+           jj = jj+1
+         enddo
+  750 continue
+      oddev = .false.
+      if(nr1.eq.4.or.nr1.eq.6)oddev = .true.
+      if(nr1.eq.8.or.nr1.eq.12)oddev = .true.
+      if(nr1.eq.16.or.nr1.eq.24)oddev = .true.
+      if(nr1.eq.32.or.nr1.eq.48)oddev = .true.
+      nrpnax = nr1*node(ic)
+      nrpnx2 = nrpnax/2
+      iaxial = 0
+      if(oddev)then
+         call oddevn(iaxial,nr1,node(ic),nrpnax,aa,bb,cc,dd,uu)
+      else
+         call matrx2(nrpnax,nr1,node(ic),aa,bb,cc,dd,uu)
+      endif
+       jj = 1
+       do j = 1,node(ic)
+         do i = 1,nr1
+           temp2d(i,j,ic) = uu(jj)
+           jj = jj + 1
+         enddo
+       enddo
+       kount = kount + 1
+c
+       if (kount.lt.ndax) go to 9999
+c
+  990  continue
+       j = 1
+       do jj = 1,node(ic)
+         if (nflg(jj,ic).ne.0) cycle
+         do i = 1,nr1
+           tcond3(i,j,ic) = temp2d(i,jj,ic)
+         enddo
+         j = j + 1
+       enddo
+c
+       il1 = ib + 1
+       do j = 1,nax
+         nci = nrcldi(il1)
+         nco = numelm(il1) + 1
+         if (numelm(il1).eq.1) then
+           qclad(il1) = -ck(1,j)*(tcond3(2,j,ic)-tcond3(1,j,ic))/
+     &     (xcond3(2,j,ic)-xcond3(1,j,ic))
+         else
+           qclad(il1) = -( ck(nci-1,j)*(tcond3(nci,j,ic)-
+     &     tcond3(nci-1,j,ic))/(xcond3(nci,j,ic)-xcond3(nci-1,j,ic)) +
+     &     ck(nci,j)*(tcond3(nci+1,j,ic)-tcond3(nci,j,ic))/
+     &     (xcond3(nci+1,j,ic)-xcond3(nci,j,ic)) ) / 2.0
+         endif
+         qout2(j,ic,1) = hfixf(il1)*(tcond3(nco,j,ic) - tempf(il1)) +
+     &   hfixg(il1)*(tcond3(nco,j,ic) - tempg(in1))
+         il1 = il1 + 1
+         in1 = in1 + 1
+       enddo
+       return
+       end
+*endif

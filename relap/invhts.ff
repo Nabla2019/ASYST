@@ -1,0 +1,122 @@
+*mlist
+       subroutine invhts
+!  Prepares inverted heat structure table, that is, a list of heat
+!  structures and associated data attached to each volume.
+!
+!  Cognizant engineer: rjw.
+!
+       use invhtb
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'htsrcm.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+!
+       integer i,j,jj,k,l,m,m1,m2,n,ns,nv
+       real sum
+!
+!  Get count of heat structures connected to volumes so space can be
+!  allocated.
+!  Set up loops over components and volumes.
+       k = filndx(3)
+       i = filndx(4)
+       invhno = 0
+!  Loop over components.
+       do l = 1,ncmps(k)
+         if (cmptyp(k) .ne. 0) then
+           nv = nvc(k)
+           if (nv .ne. 0) then
+!  Loop over volumes within component.
+             do m = 1,nv
+!  Search for heat structures attached to this volume.
+               if (filid(8) .ne. 0) then
+                 j = filndx(8)
+                 do m2 = 1,nhtstr(j)
+                   jj = ihtptr(j) + filndx(8)
+                   if (iand(htopt(jj),2) .eq. 0) then
+                     if (htbvc(jj).eq.volno(i) .or. htbvc(jj+1).eq.
+     &               volno(i)) invhno = invhno + 1
+                   endif
+                   j = j + 1
+                 enddo
+               endif
+               i = i + ivskp
+             enddo
+           endif
+         endif
+         k = k + cmplen(k)
+       enddo
+!  Allocate space for inverted heat structure table.
+       if (allocated(invh)) deallocate (invh)
+       allocate (invh(invhno))
+!  In this pass, set data in storage.
+!  Set up loops over components and volumes.
+       k = filndx(3)
+       i = filndx(4)
+       n = 1
+       invhos = filndx(8)
+!  Loop over components.
+       do l = 1,ncmps(k)
+         if (cmptyp(k) .ne. 0) then
+           nv = nvc(k)
+           if (nv .ne. 0) then
+c  Loop over volumes within component.
+             do m = 1,nv
+               invhtf(i) = n
+               inhcnt(i) = 0
+               sum = 0.0
+c  Search for heat structures attached to this volume.
+               if (filid(8) .ne. 0) then
+                 j = filndx(8)
+                 do m2 = 1,nhtstr(j)
+                   jj = ihtptr(j) + filndx(8)
+                   if (iand(htopt(jj),2) .eq. 0) then
+                     if (htbvc(jj).eq.volno(i) .or. htbvc(jj+1).eq.
+     &               volno(i)) then
+                       inhcnt(i) = inhcnt(i) + 1
+                       invh(n)%inhtno = jj
+                       invh(n)%insrft = htxft(jj) + filndx(8)
+                       m1 = jj
+                       if (htbvc(jj+1) .eq. volno(i)) then
+                         invh(n)%insrft = invh(n)%insrft + htnmpt(jj) - 
+     &                   1
+                         m1 = m1 + 1
+                       endif
+                       invh(n)%inhtns = m1
+                       invh(n)%frphpw = diamv(i)/hthdmo(m1)
+                       invh(n)%frahaw = htsrfo(m1)
+                       sum = sum + htsrfo(m1)
+                       n = n + 1
+                     endif
+                   endif
+                   j = j + 1
+                 enddo
+                 if (inhcnt(i) .ne. 0) then
+                   if (sum .eq. 0.0) then
+                     write (output,5777) volno(i)
+ 5777  format ('0******** Sum of heat transfer areas attached to volume'
+     &,i10,' sum to zero.'/' One cause is heat structure with cylindrica
+     &l geometry and zero left radius improperly attached to a volume.'/
+     & 'Improved diagnostics will be added later.')
+                     fail = .true.
+                   else
+                     sum = 1.0/sum
+                     ns = invhtf(i)
+                     do m2 = 1,inhcnt(i)
+                       invh(ns)%frahaw = invh(ns)%frahaw*sum
+                       ns = ns + 1
+                     enddo
+                   endif
+                 endif
+               endif
+               i = i + ivskp
+             enddo
+           endif
+         endif
+         k = k + cmplen(k)
+       enddo
+       return
+       end

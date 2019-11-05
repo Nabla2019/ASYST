@@ -1,0 +1,210 @@
+*mlist
+*if def,selap
+       subroutine htrc3b (n)
+c
+c  Calculate heat transfer from debris to coolant.
+c
+c  Cognizant engineer: ewc.
+c
+       implicit none
+c input -
+c      n  = number of the debris bed
+      integer n
+*call cons
+*call comctl
+*call contrl
+*call fast
+*call statec
+*call stcblk
+*call ufiles
+*call voldat
+c
+*call scddat
+*call debcom
+c  Local variables.
+      integer i5ndx,m
+      real r1,r2,r3,qconv,adum,absg,alpd,dd
+      real a,b,nu,red,ray,prd,gr,epsg,hv,k
+      real nuconv,nunat,epsl,kav,kad
+      real hfg
+      real ff,fg,epsf,epsw,hstr,tnuc,hnuc,fprop,fac1,fac2,fac3
+      real qchf,tcn,wfg,y,alf4,hsfb,nufb,hfgs,tf,gcon,absf
+      real qrg,gravty
+c
+c default return values
+      do 500 m=1,nvoldb(n)
+      qnchdb(m,n)=0.0
+      qfgdeb(m,n)=0.0
+      gmwdeb(m,n)=0.0
+c initialize local variables
+      i5ndx=numdbv(m,n)
+      if((tmpdeb(m,n)-tempg(i5ndx)).eq.0.0)goto 500
+      dd=1.0e-4
+      alpd=0.0
+      gravty=9.8
+      call emissv(adum,absg,tempg(i5ndx),p(i5ndx),
+     #    4.*porvol(m,n)/aovrdb(m,n),tmpdeb(m,n),1,dd,alpd,
+     #    epsl,kav,kad)
+      call emissv(adum,absf,tempf(i5ndx),p(i5ndx),
+     #    4.*porvol(m,n)/aovrdb(m,n),tmpdeb(m,n),1,dd,alpd,
+     #    epsl,kav,kad)
+      hfg = sathg(i5ndx) - sathf(i5ndx)
+      if(voidg(i5ndx).eq.1.)then
+        red=rhog(i5ndx)*abs(velg(i5ndx))*ddbvol(m,n)/viscg(i5ndx)
+        prd=viscg(i5ndx)*csubpg(i5ndx)/thcong(i5ndx)
+        nuconv=0.27*red**0.8*prd**0.4
+        gr= rhog(i5ndx)**2 * gravty * ddbvol(m,n)**3 *betagg(i5ndx)*
+     #      abs(tmpdeb(m,n)-tempg(i5ndx))/viscg(i5ndx)**2
+        ray=gr*prd
+        if(ray.le.50.)then
+          k=0.3
+        elseif(ray.le.200.)then
+          k=0.4
+        elseif(ray.le.1.e6)then
+          k=0.5
+        else
+          k=0.6
+        endif
+        nunat=k*ray**0.25
+        qconv=aovrdb(m,n)*max(nuconv,nunat)*thcong(i5ndx)*
+     #      (tmpdeb(m,n)-tempg(i5ndx))/ddbvol(m,n)
+        qfgdeb(m,n)=qconv
+        epsg=1.0-exp(-absg*4.*porvol(m,n)/aovrdb(m,n))
+        r1=(1.0-epsg)/epsg
+        r2=1.0/epsg
+        r3=1+.3/.7
+        fg=1.0/(r1*(1+r3/r1+r3/r2))
+        qfgdeb(m,n)=qfgdeb(m,n)+aovrdb(m,n)*fg*5.668e-8*
+     #      (tmpdeb(m,n)**4-tempg(i5ndx)**4)
+        qnchdb(m,n)=qfgdeb(m,n)
+      elseif(voidg(i5ndx).eq.0.0 .or.
+     #       tmpdeb(m,n).le.tsatt(i5ndx))then
+        prd=viscf(i5ndx)*csubpf(i5ndx)/thconf(i5ndx)
+        a=150.*(1-porvol(m,n))**2/(porvol(m,n)**3*
+     #    ddbvol(m,n)**2)
+        b=1.75*(1-porvol(m,n))/(porvol(m,n)**3*
+     #    ddbvol(m,n))
+        red=abs(velf(i5ndx))*rhof(i5ndx)*(b/a)/viscf(i5ndx)
+        nu=(7.-10.*porvol(m,n)+5*porvol(m,n)**2) *
+     #     (1.0 + 0.7 * red**0.3 * prd**0.333) +
+     #     (1.33 - 2.4*porvol(m,n)+1.2*porvol(m,n)**2) *
+     #     (red**0.7*prd**0.333)
+        hv=nu*thconf(i5ndx)/(a/b)**2
+        qnchdb(m,n)=hv*(tmpdeb(m,n)-tempf(i5ndx))
+c       if(tempf(i5ndx).ge.tsatt(i5ndx))gmwdeb(m,n)=qnchdb(m,n)/hfg
+      else
+        gcon=gravty*(rhof(i5ndx)-rhog(i5ndx))
+c kinematic viscosity=viscosity/density
+        tf=tempg(i5ndx)+(0.16*rhog(i5ndx)*hfg/thcong(i5ndx)*
+     #     (gcon/rhof(i5ndx)+rhog(i5ndx)) ** 0.666 *
+     #     ((viscf(i5ndx)*viscf(i5ndx)/rhof(i5ndx))/gcon) ** 0.333 *
+     #     (sigma(i5ndx)/gcon)**0.5)
+        if(tmpdeb(m,n).ge.tf)then
+c film boiling
+          hfgs=hfg+0.68*csubpg(i5ndx)*abs(tmpdeb(m,n)-tempg(i5ndx))
+          fac1= rhog(i5ndx)*(rhof(i5ndx)-rhog(i5ndx))*gravty*
+     #         hfgs*ddbvol(m,n)**3.
+          fac2 = viscg(i5ndx)*thcong(i5ndx)*
+     #               abs(tmpdeb(m,n)-tempg(i5ndx))
+          nufb=0.67*(fac1/fac2)**0.25
+          hsfb=nufb*(thcong(i5ndx)/ddbvol(m,n))
+          alf4=pi*sqrt(2.)/6.
+          if(voidg(i5ndx).gt.alf4)then
+c transition from film boiling to convection to steam
+c qnchdb(m,n) is total heat xfr to liquid by convection
+            y=(voidg(i5ndx)-alf4)/(1.0-alf4)
+            wfg=y*y*(3.0-2.0*y)
+c qfgdeb(m,n) is total heat xfr by convection
+            red=rhog(i5ndx)*abs(velg(i5ndx))*ddbvol(m,n)/viscf(i5ndx)
+            prd=viscg(i5ndx)*csubpg(i5ndx)/thcong(i5ndx)
+            nuconv=0.27*red**0.8*prd**0.4
+            gr= rhog(i5ndx)**2* gravty * ddbvol(m,n)**3 *betagg(i5ndx)*
+     #        abs(tmpdeb(m,n)-tempg(i5ndx))/viscg(i5ndx)**2
+            ray=gr*prd
+            if(ray.le.50.)then
+              k=0.3
+            elseif(ray.le.200.)then
+              k=0.4
+            elseif(ray.le.1.e6)then
+              k=0.5
+            else
+              k=0.6
+            endif
+            nunat=k*ray**0.25
+            qconv=aovrdb(m,n)*max(nuconv,nunat)*thcong(i5ndx)*
+     #        (tmpdeb(m,n)-tempg(i5ndx))/ddbvol(m,n)
+            qfgdeb(m,n)=wfg*qconv
+            qnchdb(m,n)=(1.0-wfg)*aovrdb(m,n)*hsfb*
+     #            (tmpdeb(m,n)-tempg(i5ndx)) + qfgdeb(m,n)
+          else
+            qnchdb(m,n)=hsfb*(tmpdeb(m,n)-tsatt(i5ndx))
+          endif
+        else
+c calc tcn
+          prd=viscf(i5ndx)*csubpf(i5ndx)/thconf(i5ndx)
+          a=150.*(1-porvol(m,n))**2/(porvol(m,n)**3*
+     #      ddbvol(m,n)**2)
+          b=1.75*(1-porvol(m,n))/(porvol(m,n)**3*
+     #      ddbvol(m,n))
+          red=abs(velf(i5ndx))*rhof(i5ndx)*(b/a)/viscf(i5ndx)
+          nu=(7.-10.*porvol(m,n)+5*porvol(m,n)**2) *
+     #       (1.0 + 0.7 * red**0.3 * prd**0.333) +
+     #       (1.33 - 2.4*porvol(m,n)+1.2*porvol(m,n)**2) *
+     #       (red**0.7*prd**0.333)
+          hv=nu*thconf(i5ndx)/(a/b)**2
+          tcn=tsatt(i5ndx)+(aovrdb(m,n)*4.63e6/hv)**0.5
+          if(tmpdeb(m,n).le.tcn)then
+            qnchdb(m,n)=hv*(tmpdeb(m,n)-tempf(i5ndx))
+          else
+c calc. tnuc
+            qchf=0.11*hfg*rhog(i5ndx)*(gravty*sigma(i5ndx)*
+     #           ((rhof(i5ndx)-rhog(i5ndx))/rhog(i5ndx)**2.))**0.25
+            fac1=viscf(i5ndx)*csubpf(i5ndx)**3
+            gcon=gravty*(rhof(i5ndx)-rhog(i5ndx))
+            fac2=(sigma(i5ndx)/gcon)**0.5
+            fac3=(viscf(i5ndx)*csubpf(i5ndx)/thconf(i5ndx))**4.913
+            fprop=fac1/(hfg*hfg*fac2*fac3)
+            hnuc=4.63e6*fprop*(tmpdeb(m,n)-tsatt(i5ndx))**2
+            tnuc=tsatt(i5ndx)+(qchf/4.63e6*fprop)**0.333
+c nucleate boiling
+            if(tmpdeb(m,n).lt.tnuc)then
+              qnchdb(m,n)=hnuc*(tmpdeb(m,n)-tsatt(i5ndx))
+            else
+c transition between nucleate and film boiling
+              hfgs=hfg+0.68*csubpg(i5ndx)*abs(tmpdeb(m,n)-tempg(i5ndx))
+              fac1= rhog(i5ndx)*(rhof(i5ndx)-rhog(i5ndx))*gravty*
+     #           hfgs*ddbvol(m,n)**3.
+              fac2 = viscg(i5ndx)*thcong(i5ndx)*
+     #             abs(tmpdeb(m,n)-tempg(i5ndx))
+              nufb=0.67*(fac1/fac2)**0.25
+              hsfb=nufb*(thconf(i5ndx)/ddbvol(m,n))
+              hstr=(tmpdeb(m,n)-tnuc)/(tf-tnuc)*(hsfb-hnuc)+hnuc
+c assume transition transfer uses gas temperature
+              qnchdb(m,n)=hstr*(tmpdeb(m,n)-tsatt(i5ndx))
+            endif
+          endif
+        endif
+c radiation heat transfer to two phase
+        epsg=1.0-exp(-absg*4.*porvol(m,n)/aovrdb(m,n))
+        epsf=1.0-exp(-absf*4.*porvol(m,n)/aovrdb(m,n))
+        epsw=0.7
+        r1=(1.-epsg)/(epsg*(1.-epsg/epsf))
+        r2=(1.-epsf)/(epsg*(1.-epsg/epsf))
+        r3=1./(1.-epsf*epsg)+(1.-epsw)/epsw
+        ff=1./(r2*(1.+r3/r1+r3/r2))
+        fg=1./(r1*(1.+r3/r1+r3/r2))
+        qnchdb(m,n) = qnchdb(m,n) + aovrdb(m,n)*ff*5.668e-8*
+     &  (tmpdeb(m,n)**4 - tsatt(i5ndx)**4)
+        qrg = aovrdb(m,n)*fg*5.668e-8*(tmpdeb(m,n)**4 - tempg(i5ndx)**4)
+        qnchdb(m,n)=qnchdb(m,n)+qrg
+        qfgdeb(m,n)=qfgdeb(m,n)+qrg
+        if (tmpdeb(m,n).ge.tcn)
+     &  gmwdeb(m,n) = (qnchdb(m,n) - qfgdeb(m,n))/sathg(i5ndx)
+      endif
+c  Convert from w/m3 to watts
+        qnchdb(m,n)=qnchdb(m,n)*v(i5ndx)
+        qfgdeb(m,n)=qfgdeb(m,n)*v(i5ndx)
+  500 continue
+      return
+      end
+$endif

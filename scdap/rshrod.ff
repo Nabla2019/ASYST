@@ -1,0 +1,621 @@
+*mlist
+*if def,selap
+       subroutine rshrod
+!
+!  Processes input data for the shroud component.
+!
+!  Cognizant engineer: ewc.
+!
+*in32 idat
+*in32 imesh
+*in32end
+       use scdmod
+       implicit none
+       include 'scddat.h'
+       include 'bconds.h'
+       include 'scdout.h'
+       include 'scdcom.h'
+       include 'scntl.h'
+       include 'miscon.h'
+       include 'ndxara.h'
+       include 'tblsp.h'
+       include 'cons.h'
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'ufiles.h'
+       include 'matdat.h'
+       include 'slbcom.h'
+       include 'debcom.h'
+!
+!  Local variables.
+      integer i,j,knt,knt1,inode,
+     #  nstart,istart,num,next,nfield,irad,nptim,npptim
+      real rdat(20),slbth,rmesh((ndrd+1)*ndax),
+     # ptim(50),pptim(50),timp(50),timpp(50)
+      integer idat(20),imesh((ndrd+1)*ndax)
+      equivalence(rdat(1),idat(1)),(rmesh(1),imesh(1))
+      integer l1(7),l2(12),l2a(ndax+7),l4(3*ndax+6),l4a(8),
+     #    l5(8+ndrd),l8(7),l8a(9),
+     #    l3(6+ndmatr),l3a(15),l80(7+ndax),
+     #    l20(16),l21(16),l22(16),l50(11)
+      integer ndbg
+      character*8 nopt(10),onoff(10)
+      external rtemp
+!  Format data.
+      data l1 /0,0,1,1,0,1,0/
+      data l2/0,0,2,6,0,1,1,1,0,1,0,0/
+      data l2a /0,0,0,0,0,1,1,ndax*1/
+cljs  change in line below
+cljs  Warning: line below needs value of 3*ndax+6 for l4
+*if def,scdapext
+      data l4/ 126*0/
+*endif
+*if -def,scdapext
+      data l4/ 66*0/
+*endif
+      data l4a /8*0/
+      data l5 /8*0,ndrd*0/
+      data l8 /0,0,0,3,0,1,0/
+      data l8a/0,0,3,3,0,1,0,0,0/
+      data l3 /6*0,ndmatr*0/
+      data l3a /0,0,2,9,0,1,9*1/
+      data l20 /0,0,10,10,0,1,10*1/
+      data l21 /0,0,10,10,0,1,10*1/
+      data l22 /0,0,10,10,0,1,10*1/
+      data l50 /7*0,4*1/
+      data l80/6*0,1,ndax*1/
+c
+        shcpflg = .false.
+        ndbg=0
+         if(ndbg.eq.1)then
+         write(output,9005)
+9005     format(' RSHROD entered')
+         end if
+      if(.not.scntrl(7))then
+        write(output,'(1h )')
+c 4ccc0100 Number of shrouds
+        l1(1)= scd1(icomp)%cmpno*10000 + 40000100
+        l1(6)=1
+        call inp2(fa(filndx(1)),rdat,l1)
+        if(l1(6).eq.0)then
+          write(output,2000) l1(1)
+          fail=.true.
+          nsigl(icomp)=1
+        else
+          nsigl(icomp)=idat(1)
+            write(output,9016)nsigl(icomp)
+9016        format(/,' Number of shrouds =',i3)
+        endif
+      endif
+c 40000200   Shroud Geometry
+      if(.not.scntrl(7))then
+c set default value for threshold thickness for breakup.
+        l2(1)=  scd1(icomp)%cmpno*10000 + 40000200
+        l2(6)=1
+        call inp2(fa(filndx(1)),rdat,l2)
+        if(l2(6).le.0)then
+          write(output,2000) l2(1)
+          write(output,*)' values reset to allow input processing'
+          write(output,*)' W1 = 10.0'
+          write(output,*)' W2 = 10.0'
+          slbwd(icomp)=10.0
+          slbth=10.0
+          ishdcr(icomp)=1
+          fail=.true.
+        else
+          if(uniti)then
+            slbwd(icomp)=rdat(1)
+            slbth=rdat(2)
+            tmxlss=rdat(4)
+              write(output,9025)slbwd(icomp),tmxlss
+9025          format(/,' shroud perimeter =',e10.4,' m; ',
+     &        ' thickness for molten pool modeling =',e10.4,
+     &        e10.4)
+          else
+            slbwd(icomp)=rdat(1)*0.3048
+            slbth=rdat(2)*0.3048
+            tmxlss=rdat(4)*0.3048
+          endif
+          if(l2(6).ge.3)then
+            ishdcr(icomp)=min(1,idat(3))
+          else
+            ishdcr(icomp)=1
+          endif
+          if(ishdcr(icomp).eq.0)then
+            write(output,901)' not '
+          else
+            write(output,901)' '
+901     format(' This component does',a,'interact with molten',
+     #  ' pool that has spread to periphery of core.')
+          end if
+          if(l2(6).ge.4)then
+            if(uniti)then
+              tmxlss=rdat(4)
+            else
+              tmxlss=rdat(4)*0.3048
+            endif
+          else
+            tmxlss=1.e-3
+          endif
+          if(slbwd(icomp).lt.0.0)then
+            write(output,2010)'negative perimeter',l2(1)
+            write(output,*)'perimeter=',slbwd(icomp)
+            write(output,*)'input value reset to absolute value'
+            fail=.true.
+            slbwd(icomp)=abs(slbwd(icomp))
+          endif
+          if(slbwd(icomp).eq.0.0)then
+            write(output,2010)',bad perimeter value',l2(1)
+            write(output,*)'perimeter=',slbwd(icomp)
+            write(output,*)'input value reset to 10.0'
+            slbwd(icomp)=10.0
+            fail=.true.
+          endif
+          if(slbth.lt.0.0)then
+            write(output,2010)'W2 negative',l2(1)
+            write(output,*)'W2=',slbth
+            write(output,*)'input value reset to absolute value'
+            fail=.true.
+            slbth=abs(slbth)
+          endif
+c    Note.  pitch is not applied for shroud, so give it nominal value.
+          pitch(icomp)=0.0125
+        endif
+      endif
+ccma  Input for radial mesh moved here
+c 4ccc0501-99 Radial Mesh Spacing
+      l5(1)=scd1(icomp)%cmpno*10000+40000501
+      l5(2)=-l5(1)-98
+  510 call inplnk(l5(1),next,nstart,nfield,fa(filndx(1)) )
+      if(nfield.le.0)then
+        if(nfield.eq.0)then
+          if(next.gt.0.and.next.le.-l5(2))then
+            l5(1)=next
+            goto 510
+          endif
+          write(output,2000)l5(1)
+        endif
+        fail=.true.
+        istart=1
+        goto 590
+      else
+        do 520 inode=1,naz
+  520   nrods2(inode,icomp)=nfield-1
+        l5(3)=nfield
+        l5(4)=nfield*naz
+        l5(6)=1
+        do 530 inode=1,nrods2(1,icomp)
+  530   l5(6+inode)=1
+        l5(7+nrods2(1,icomp))=0
+        call inp2(fa(filndx(1)),rmesh,l5)
+        if(l5(6).le.0)then
+          fail=.true.
+          istart=1
+          goto 590
+        endif
+        next=1
+        knt=0
+  540   num=imesh(nfield+knt)
+        do 550 inode=next,num
+        do 550 irad=1,nrods2(1,icomp)
+        if(uniti)then
+          xcond3(irad,inode,icomp)=rmesh(knt+irad)
+            if(ndbg.eq.1)then
+            write(output,9051)irad,knt,rmesh(knt+irad),
+     &      xcond3(irad,inode,icomp),inode
+9051        format(' RSHROD; irad=',i5,' knt=',i5,
+     &      ' rmesh=',e10.4,' xcond3=',e10.4,
+     &      ' inode=',i5)
+            end if
+        else
+          xcond3(irad,inode,icomp)=rmesh(knt+irad)*0.3048
+        endif
+  550   continue
+        knt=knt+nfield
+        next=num+1
+        if(next.le.naz)then
+          if(knt+nrods2(1,icomp)+1.lt.l5(6))then
+            write(output,2020)l5(1),l5(2)
+            fail=.true.
+            istart=next
+            goto 590
+          endif
+          goto 540
+        endif
+      endif
+c error checking
+      do 560 inode=1,naz
+        if(xcond3(1,inode,icomp).ne.0.0)then
+          write(output,*)' ******* first radial mesh point not 0.0'
+          write(output,*)'mesh point =',xcond3(1,inode,icomp)
+          fail=.true.
+        endif
+        do 560 knt=2,nrods2(inode,icomp)
+         if(xcond3(knt,inode,icomp).lt.xcond3((knt-1),inode,icomp))then
+           write(output,*)' ******** mesh points are not consecutive'
+           write(output,559)inode,knt
+  559      format('Axial node',i3,' Radial node',i3)
+           write(output,*)xcond3(knt,inode,icomp),' less than ',
+     #           xcond3(knt-1,inode,icomp)
+           fail=.true.
+         endif
+  560 continue
+cma  error check on mesh spacing moved since test only has to be
+c    done with old input
+      goto 570
+  590 do 595 inode=istart,naz
+      nrods2(inode,icomp)=3
+      xcond3(1,inode,icomp)=0.
+      xcond3(2,inode,icomp)=0.05
+  595 xcond3(3,inode,icomp)=0.1
+  570 continue
+
+ccmaend
+c 4ccc0300- Indices of materials
+  600 l3(1)=scd1(icomp)%cmpno*10000+40000300
+      l3(2)=0
+      l3(3)=1
+      l3(4)=9
+      l3(5)=0
+      l3(6)=1
+      call inp2(fa(filndx(1)),rdat,l3)
+      if (l3(6) .le. 0) then
+        fail = .true.
+      else
+        do 900 knt=1,l3(6)
+  900   imatr3(knt,1,icomp)=idat(knt)
+        nmater2(1,icomp)=l3(6)
+      endif
+ccma
+c     new input added using cards 301 if imatr3(1,1,icomp)le 0
+
+c 4ccc0301-99 - Material layer radii
+      if(imatr3(1,1,icomp).le.0 )then
+         call rshmat
+      else
+c coding remained the same but was indented for if
+         l3a(1)=scd1(icomp)%cmpno*10000+40000301
+         l3a(2)=-l3a(1)-98
+         l3a(3)=nmater2(1,icomp)
+         l3a(4)=nmater2(1,icomp)
+         l3a(6)=1
+         call inp2(fa(filndx(1)),rdat,l3a)
+         if (l3a(6) .le. 0) then
+            fail = .true.
+         else
+            radmt3(1,1,icomp)=0.0
+            do 975 knt=1,nmater2(1,icomp)
+              if(uniti)then
+                radmt3(knt+1,1,icomp)=rdat(knt)
+              else
+                radmt3(knt+1,1,icomp)=rdat(knt)*0.3048
+              endif
+  975       continue
+c This error checking was moved from radial mesh checks error checking
+c looking for material layer and mesh spacing alignment.
+            do  knt=2,nmater2(1,icomp)+1
+               do  knt1=2,nrods2(1,icomp)
+                 if (abs(radmt3(knt,1,icomp) - xcond3(knt1,1,icomp)).lt.
+     &           .001) goto 610
+               enddo
+               fail=.true.
+               write (output,2030) 'material layer alignment',l3a(1),
+     &         l3a(2)
+               write(output,2070)knt
+            enddo
+610         continue
+c             error checking for consecutive order
+            do  knt=2,nmater2(1,icomp)+1
+               if(radmt3(knt,1,icomp).lt.radmt3((knt-1),1,icomp))then
+                  write(output,2030)'material radii not consecutive',
+     #            l3a(1),l3a(2)
+                  fail=.true.
+               endif
+            enddo
+         endif
+
+c  Coding moved to here from ishrod to initialize other elevations.
+         do i = 2,naz
+           radmt3( 1,i,icomp ) = 0.0
+           nmater2( i,icomp ) = nmater2( 1,icomp )
+           do  j = 1,nmater2( 1,icomp )
+              radmt3( j+1,i,icomp ) = radmt3( j+1,1,icomp )
+              imatr3( j,i,icomp )   = imatr3( j,1,icomp )
+           enddo
+         enddo
+      endif
+c  Add temporary debug printout to verify input is okay.
+       write (output,
+     & "('0debug print, rshrod to test radial mesh and material layer in
+     &put- component number',i3)")
+     &  icomp
+       write (output,
+     & "('0   axial node no   radial mesh')")
+       do i = 1, naz
+         write (output,
+     & "('0',i3,10g10.5/('   ',10g13.5))")
+     &   i,(xcond3(i,j,icomp),j=1,nrods2(1,icomp))
+       enddo
+       write (output,
+     & "('0   axial node no , no. of materials , material no ,',
+     & ' inner layer radius,  outer layer radius')")
+       do i = 1, naz
+         do j = 1, nmater2(i,icomp)
+           write (output,
+     & "('0    ',i3,'  ',i3,'  ',i3,'  ',g10.5,' ',g10.5)")
+     &     i,nmater2(i,icomp),imatr3(j,i,icomp),radmt3(j,i,icomp),
+     &     radmt3(j+1,i,icomp)
+         enddo
+       enddo
+cmaend
+c 4ccc0400 upper and lower volumes
+      l4a(1)=scd1(icomp)%cmpno*10000+40000400
+      l4a(3)=2
+      l4a(4)=2
+      l4a(6)=1
+      call inp2(fa(filndx(1)),rdat,l4a)
+      if (l4a(6) .eq. 0) then
+        fail=.true.
+      else
+        write(output,'(a)') '0 Upper and lower hydraulic volumes'
+        voluh(icomp)=idat(1)
+        vollh(icomp)=idat(2)
+        write(output,'(a,i9)') '   Upper volume ',voluh(icomp)
+        write(output,'(a,i9)') '   Lower Volume ',vollh(icomp)
+      endif
+c 4ccc0401-99 Hydraulic volumes
+      l4(2)=0
+      l4(3)=4
+      l4(4)=4
+      l4(5)=0
+      istart=1
+      knt=1
+  395 l4(1)= scd1(icomp)%cmpno*10000 + 40000400 + knt
+      call inplnk(l4(1),next,nstart,nfield,fa(filndx(1)) )
+      if(nfield.le.0)then
+        if(nfield.eq.0)then
+          if (next.gt.0.and.next.le.scd1(icomp)%cmpno*10000 + 40000499)
+     &    then
+            knt=next - (scd1(icomp)%cmpno*10000 + 40000400)
+            goto 395
+          endif
+          write(output,2030)'Incomplete',40000401,40000499
+          fail = .true.
+          goto 401
+        endif
+      endif
+      l4(6)=1
+      call inp2(fa(filndx(1)),idat,l4)
+      if (l4(6) .le. 0) then
+        fail=.true.
+      else
+        if(idat(2).eq.0)then
+          islbot(icomp)=1
+        else
+          islbot(icomp)=0
+        endif
+        do 400 inode=istart,idat(4)
+          if(inode.eq.istart)then
+            nvhyd(icomp,inode)=idat(1)
+            nvhyd(ndcomp+nsout(icomp),inode)=idat(2)
+          else
+            nvhyd(icomp,inode)=nvhyd(icomp,inode-1)+idat(3)
+            if(islbot(icomp).eq.0)then
+              nvhyd(ndcomp+nsout(icomp),inode)=
+     #             nvhyd(ndcomp+nsout(icomp),inode-1)+idat(3)
+            else
+              nvhyd(ndcomp+nsout(icomp),inode)=0
+            endif
+          endif
+          write(output,3020)inode,nvhyd(icomp,inode),
+     #          nvhyd(ndcomp+nsout(icomp),inode)
+ 3020 format (t5,'Axial node',i3,' inner boundary - ',i9,
+     #         ' outer boundary - ',i9)
+  400   continue
+        istart=idat(4)+1
+        knt=knt+1
+        if(istart.le.naz) goto 395
+      endif
+  401 continue
+cma  4ccc0501-99 Radial Mesh Spacing coding moved prior to card 300
+c    so that new material layer input would have xcond defined.
+c 4ccc0501-99 Radial Mesh Spacing
+c     .
+c     .
+c     .
+c  570 continue
+ccmaend
+c 4ccc0601-699 initial temperatures
+      call rtemp(2033.)
+c 4ccc0800- Embedded Flow Channel Data
+      l8(1)=scd1(icomp)%cmpno*10000+40000800
+      l8(6)=1
+      call inp2(fa(filndx(1)),rdat,l8)
+      if (l8(6) .ne. 0) then
+        write(output,3030)
+ 3030 format('0Embedded Flow Channel Input')
+        if (l8(6) .lt. 0) then
+          fail=.true.
+        else
+          nodech(icomp)=idat(1)
+          ishdcr(icomp)=1
+          write(output,3040)nodech(icomp)
+ 3040 format(' Linked to radial node number',i4)
+          l8a(1)=scd1(icomp)%cmpno*10000+40000801
+          knt=1
+  574     call inplnk(l8a(1),next,nstart,nfield,fa(filndx(1)) )
+          if(nfield.eq.0)then
+            if(next.gt.l8a(1) .and.
+     #         next.le.scd1(icomp)%cmpno*10000+40000899)then
+              l8a(1)=next
+            else
+              write(output,2020) ' ',scd1(icomp)%cmpno*10000+40000801,
+     #                              scd1(icomp)%cmpno*10000+40000899
+              fail=.true.
+              goto 578
+            endif
+          endif
+          l8a(6)=1
+          call inp2(fa(filndx(1)),rdat,l8a)
+          if(l8a(6).le.0)then
+            fail=.true.
+          else
+            do 575 inode=knt,idat(3)
+              khydch(inode,icomp)=idat(1)+(inode-knt)*idat(2)
+  575       write(output,3050)inode,khydch(inode,icomp)
+ 3050 format(t5,'Axial node',i3,' bounded by volume ',i9)
+            knt=idat(3)+1
+            l8a(1)=l8a(1)+1
+            if(knt.le.naz)goto 574
+          endif
+        endif
+      endif
+  578 continue
+      call rpower(nptim,npptim,ptim,pptim,timp,timpp)
+      call ipower(nptim,npptim,ptim,pptim,timp,timpp)
+c OPTIONAL SWITCHES - 4ccc4000
+      call rswtch(scd1(icomp)%cmpno,knt,nopt,onoff)
+      iox(icomp)=0
+      if(knt.gt.0)then
+        do 30 knt1=1,knt
+          write(output,3060)nopt(knt1),onoff(knt1)
+ 3060 format('0Special Option - ',a8,' is ',a8,'.')
+          if(nopt(knt1).eq.'limit')then
+            if(onoff(knt1).eq.'on')then
+              iox(icomp)=1
+            elseif(onoff(knt1).eq.'off')then
+              iox(icomp)=0
+            else
+              write(output,3070)onoff(knt1)
+ 3070 format('1Invalid Switch -',a8,'.')
+              fail=.true.
+            endif
+          else
+            write(output,3080)nopt(knt1)
+            fail=.true.
+ 3080 format('1Invalid Option -',a8,'.')
+          endif
+   30   continue
+      endif
+c 4ccc5000 - Shroud insulation and failure
+      l50(1)=scd1(icomp)%cmpno*10000+40005000
+      l50(3)=3
+      l50(4)=5
+      l50(6)=1
+      call inp2(fa(filndx(1)),rdat,l50)
+      if (l50(6) .lt. 0) then
+        fail=.true.
+      else
+        imshrd=idat(1)
+        tfshrd=rdat(2)
+        fmshrd=rdat(3)
+        if(l50(6).ge.4)then
+          zfshrd=rdat(4)
+        else
+          zfshrd=0.0	
+        end if
+        if(l50(6) .ge. 5) then
+          cmshrd = rdat(5)
+          shcpflg = .true.
+        else
+          cmshrd = 1.0	
+        end if
+c error checking
+        if(tfshrd.lt.(0.0-0.001))then
+         write(output,2010)'negative input value',l50(1)
+         fail=.true.
+         else
+         write(output,2012)imshrd,tfshrd
+2012     format(/,' multiplier applied to conductivity of',
+     &   ' shroud material with index of',i3,' beginning at',
+     &   ' time of ',e10.4,' s')
+        endif
+        if(fmshrd.lt.0.0)then
+         write(output,2010)'negative input value',l50(1)
+         fail=.true.
+         else
+         write(output,2014)fmshrd
+2014     format(' multiplier on conductivity of shroud',
+     &   ' material = ',f6.3)
+        endif
+        if(cmshrd .lt. 0.0) then
+           write(output,2010)'negative input value',l50(1)
+           fail = .true.
+         else
+           write(output,2015)cmshrd
+2015       format(' Multiplier on heat capacity of shroud',
+     &   ' material = ',f6.3)
+        endif
+          if(zfshrd.lt.0.0)then
+          write(output,2022)zfshrd
+2022      format(/,' bottom elevation for shroud failure defined',
+     &    ' to be too low; defined bottom elevation =',e10.4,' m')
+          fail=.true.
+          else
+          write(output,2024)zfshrd
+2024      format(/,' bottom elevation of shroud failure =',e10.4,
+     &    ' m')
+        end if
+c end error checking
+      endif
+c 4ccc8000 - Shroud outer boundary heat flux
+      if(islbot(icomp).ne.0)then
+        nqtim(icomp)=0
+        do 899 knt=1,9
+          l80(1)=40008001+(scd1(icomp)%cmpno*10000)+knt*100
+          l80(2)=-l80(1)-98
+          if(knt.eq.1)then
+            l80(3)=2
+          else
+            l80(3)=0
+          endif
+          l80(4)=naz+1
+          l80(6)=1
+          call inp2(fa(filndx(1)),rdat,l80)
+          if (l80(6) .lt. 0) then
+            fail=.true.
+            return
+          elseif (l80(6).eq.0)then
+            if(knt.eq.1)then
+              write(output,2000)l80(1)
+              fail=.true.
+            endif
+          else
+            if(l80(6).ne.2 .and. l80(6).ne.naz+1)then
+              write(output,2030)'Incomplete data,',
+     #                l80(1),-l80(2)
+              fail=.true.
+              return
+            endif
+            nqtim(icomp)=nqtim(icomp)+1
+            qtime(nqtim(icomp),nsh)=rdat(1)
+            do 820 inode=1,naz
+              if(l80(6).eq.2)then
+                if(uniti)then
+                  qslabt(nqtim(icomp),(nsh-1)*ndax+inode)=rdat(2)
+                else
+                  qslabt(nqtim(icomp),(nsh-1)*ndax+inode)=rdat(2)
+                endif
+              else
+                if(uniti)then
+                  qslabt(nqtim(icomp),(nsh-1)*ndax+inode)=
+     #                             rdat(inode+1)
+                else
+                  qslabt(nqtim(icomp),(nsh-1)*ndax+inode)=
+     #                             rdat(inode+1)/(.3048*.3048*1055.056)
+                endif
+              endif
+  820       continue
+          endif
+  899   continue
+      endif
+      return
+ 2000 format  ('0******** Card ',i8,' is missing.')
+ 2010 format('0******** Range error ',a,' card ',i9)
+ 2020 format('0******** Range error ',a,' cards ',i9,'-',i9)
+ 2030 format('0******** Error ',a,' cards ',i9,'-',i9)
+ 2060 format('0$$$$$$$$ Warning ',a,' cards ',i9,'-',i9)
+ 2070 format(' Material #',i1,' does not lie on a radial node.')
+      end
+*endif

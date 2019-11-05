@@ -1,0 +1,349 @@
+*mlist
+       subroutine pstdnb
+c
+c  Computes post-dnb forced convection heat transfer correlations.
+c
+c  Cognizant engineer: rjw.
+c---------------------------------------------------------------------
+c     If onrefl=1, use the modifications made by G.Th.Analytis.
+c-----------------------------------------------------------------------
+c
+*in32 iprop
+*in32 lprop
+*in32end
+c
+       implicit none
+       include 'cons.h'
+       include 'contrl.h'
+       include 'comctl.h'
+       include 'fast.h'
+       include 'flood.h'
+       include 'htrcom.h'
+       include 'radhtc.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+       real absf,absv,acuthi,alo,alp,alph,bernco,bromco,c1,c2,c3,c4,c5,
+     & dd,diff,diff1,dis1,dis2,disd1,dmax,drd,dtchf,dtwchf,dum,emf,emg,
+     & exw,exw1,ff1,ff1t,ff2,ff2t,fl,fl1,fllow,fl1top,fl2,fwd,g1,hfb,
+     & hfbgr,hfbgrtop,hfblow,hfbtop,hfr,hinter,hmax,ht1,ht2,htb,htbf,
+     & htbg,htbt,htcfsv,hv,qtbtop,prop(36),qfb,qfbf,qfbg,qrwd,qtb,qtbf,
+     & qtbg,rsub1,rsub2,rsub3,term,tg,theta,trad4,velfg,xmf,zqfmin
+       logical err,skipp
+       integer iones(2),it
+       integer iprop(36)
+       logical lprop(36)
+       equivalence (prop(1),iprop(1),lprop(1))
+c
+       parameter (acuthi=0.999)
+       parameter (diff1=111.11111)
+       parameter (exw = 0.02)
+       parameter (exw1 = 0.05)
+       parameter (ff1 = 1400.)
+       parameter (ff2 = 1880.)
+       parameter (ff1t = 600.)
+       parameter (ff2t = 5000.)
+       parameter (fllow = 1.e-4)
+       parameter (dis1 = 0.1)
+       parameter (dis2 = 0.2)
+       parameter (disd1 = 10.)
+c  disd1 = 1/(dis2 - dis1).
+c
+       data iones/1,1/
+c
+       hinter(alo,ht1,ht2,alp,diff) = ht1 + (ht2 - ht1)*(alp - alo)*diff
+c
+       prop(2) = p(iv)
+       if (prop(2).lt.ptrip .or. prop(2).gt.pcrit) then
+         write (output,9010) volno(iv),p(iv)
+ 9010  format (' $$$$$$$$ Pressure in volume ',i10,
+     & ' exceeds thermodynamic property bounds ',es13.5)
+         prop(2) = max(prop(2),ptrip)
+         prop(2) = min(prop(2),pcrit)
+       endif
+       qfb = 0.0
+       qtb = 0.0
+       qtbtop = 0.0
+       qtbf = 0.0
+       qtbg = 0.0
+       qfbf = 0.0
+       qfbg = 0.0
+       hfb = 0.0
+       htb = 0.0
+       htcf = 0.0
+       hfbgr= 0.0
+       htbf = 0.0
+       htbg = 0.0
+       fl = 0.0
+       fl1 = 0.0
+       fl1top = 0.0
+       fl2 = 0.0
+       cps = csubpg(iv)
+       beta = betagg(iv)
+       gamw = 0.0
+       if (pgopta .gt. 0.) then
+c  When using the Czech PG-CHF correlation use Zuber for CHF because
+c  the PG-CHF correlation can give misleading values beyond DNB.
+c  CHF is used in CHEN transition boiling and we should also start using
+c  Zuber when Table Lookup of CHF is used.
+         chf = 0.13*hfgp*sqrt(rhog(iv)*sqrt(gravcn*sigma(iv)*
+     &   (rhof(iv) - rhog(iv))))
+c Griffith modification of Zuber.
+         chf = chf*max(voidf(iv),0.04)
+         chfmul = 1.0
+       endif
+c
+       if (quala(iv) .gt. 1.0e-9) then
+         rhos = rhog(iv)
+         viscs = viscg(iv)
+         thcons = thcong(iv)
+       else
+c  The ASME 1967 steam table thcond curve fit goes negative prior to
+c  6000K. The curve for viscosity and thermal conductivity are said to
+c  range up to 700 C. therefore limit prop(1) to 973.15K.
+c  By limiting prop(1) all the properties will be consistent and the
+c  Prandtl number in Dittus will be consistant.
+         prop(1) = min(973.15,(tw + tsatt(iv))*0.5)
+         iprop(23) = sth2xv(iv)
+         if (nfluid .eq. 1) then
+           call sth2x3 (fa(ndxstd),prop,it,err)
+         elseif (nfluid .eq. 2) then
+           call std2x3 (fa(ndxstd),prop,it,err)
+         else
+           call strtp (fa(ndxstd),prop,it,err)
+         endif
+         if (err) call fabend
+         rhos = 1.0/prop(3)
+c  prop(9) is quality.
+         if (prop(9) .eq. 0.) rhos = rhog(iv)
+         call thcond (nfluid,iones,iones,dum,1,1,prop(1),p(iv),rhos,
+     &   'vapor',thcons,err)
+         call viscos (nfluid,iones,iones,1,1,prop(1),p(iv),rhos,
+     &   tsatt(iv),'vapor',viscs,err)
+       endif
+       hfb = max(1.0e-7,rhof(iv) - rhog(iv))
+       bromco = 0.62*(gravcn*rhog(iv)*hfb*thcons**3*
+     & (hfgp + 0.5*dtsat*csubpg(iv))/(viscs*dtsat))**0.25
+c  Berensen length coefficient (2*pi)**0.25 = 1.58323349.
+       bernco = 1.58323349*(sigma(iv)/(gravcn*hfb))**0.125
+       hfb = bromco/bernco
+       if (onrefl .eq. 1) then
+         if (zqf .lt. dis2) then
+c  Weismann correlation (modified by Mike Analytis).
+c  exw=0.02 not 0.04.
+c  1/67.8 = 0.01474926.
+           dtchf = max(3.0,min(40.0,dtsat))
+           dtwchf = max(0.0,tw - twchf)
+           hmax = 0.5*chf/dtchf
+           htbf = hmax*exp(-exw*dtwchf) +
+     &     ((gabs*0.01474926)**0.2)*4500.*exp(-0.012*(dtwchf))
+           htbf = min(htbf,hmax)
+           if (zqf .ge. dis1)
+     &     htbf = (zqf-dis1)*fllow*disd1 + (dis2-zqf)*htbf*disd1
+           qtb = htbf*dtsat
+         endif
+         hfblow = hfb*max(acuthi - voidg(iv),0.)
+c Forslund-Rohsenow.
+c  Term, 0.4*(pi/4.) changed to 0.1*pi.
+         hfr = 0.1*pi*((6.0/pi)**0.6666666)*((acuthi- voidg(iv))**
+     &   0.66666666)
+         drd = 3.0*sigma(iv)/(rhog(iv)*
+     &   max((abs(velg(iv) - velf(iv)))**2.0,0.01))
+         drd = max(drd,1.e-04)
+         drd = min(drd,3.e-03)
+         hfr = hfr*((gravcn*rhof(iv)*rhog(iv)*hfgp*thcons**3/
+     &   (dtsat*viscs*drd*((pi/6.)**0.33333))))**0.25
+         zqfmin = max(zqf,0.005)
+c  Bromley with length (not wave length).
+         hfb = (ff1 - ff2*zqfmin)*min(acuthi - voidg(iv),0.5) +
+     &   bromco*sqrt(1.-voidg(iv))/zqfmin**0.25
+         hfb = max(hfblow,hfb,hfr)
+       else
+         if (tw .le. (tsatt(iv) + 600.)) then
+c  Dryout assumed.
+           alph = min(voidg(iv),0.999)
+           c2 = 0.05/(1.0 - alph**40.0) + 0.075*alph
+           c1 = 2.4*c2
+           c3 = 0.2*c2
+           g1 = gabs*7.373381e-03
+           c4 = c1 - c2*g1
+           c5 = c3*g1
+           theta = max(c4,c5)
+           fl = exp(-1.34164*theta*min(15.0, sqrt(dtsat)))
+           if (irwt .ne. 0) then
+             xmf = voidf(iv)
+             if (dlev(iv) .gt. 0.0) xmf = dlev(iv)/dl(iv)
+             fl = fl*xmf
+           endif
+           qtb = chf*fl
+         endif
+c
+c  Ramp Bromley between a gas void of 0.2 and acuthi.
+         c1 = min(1., max(1.2516*(acuthi - voidg(iv)) ,0.))
+c  1./(.999-.2) = 1.2516.
+         if (c1 .lt. 1.) then
+           c2 = (voidg(iv) - 0.2)*1.2516
+c  Spline fit.
+           c2 = c2*(3.*c2 - 2.*c2*c2)
+           c1 = 1. - c2
+         endif
+         hfb = c1*hfb
+c  Now apply a liquid subcooling factor by Sudo and Murao of
+c  JAERI "Study on Film Boiling Heat Transfer During Reflood
+c  Process", JPNRSR-15, August 1975. Uncertainty is 20 %.
+         hfb = hfb*(1. + 0.025*max(tsatt(iv) - tempf(iv), 0.))
+       endif
+       if (help .ne. 0) then
+         if (iand(ihlppr(1),ishft(1,25)) .ne. 0) then
+           if (iand(vctrlx(iv),1) .ne. 0) then
+             write (output,175) thcons, viscs, csubpg(iv),
+     &       rhof(iv), rhog(iv), sigma(iv)
+  175  format(5x,'pstdnb - thcons',8x,'viscs',9x,'csubpg',8x,
+     & 'rhof',10x,'rhog',10x,'sigma'/12x,1p,6e14.6)
+           endif
+         endif
+       endif
+       if (tempg(iv).gt.tsatt(iv) .and. voidf(iv).gt.0.0) then
+         skipp = .true.
+         if (filid(38) .ne. 0.0) then
+           skipp = timron(filndx(38)) .ge. timehy
+c  If above is false wall to wall radiation is on.
+         endif
+         if (skipp) then
+           dmax = sqrt(voidf(iv))*htdiam
+           velfg = max(abs(velg(iv) - velf(iv)), 0.005)
+           dd = 7.5*sigma(iv)/(rhog(iv)*velfg**2)
+           dd = max(min(dd,dmax),1.e-5)
+           absf = 1.11*voidf(iv)/dd
+           emg = 0.02
+           emf = min((1.0 - exp(-0.9*htdiam*absf)),0.75)
+           term = 1.0 - emg*emf
+           rsub3 = 0.111 + 1./term
+           absf = term*emf
+           rsub2 = (1.0 - emf)/absf
+           absv = term*emg
+           rsub1 = (1.0 - emg)/absv
+           fwd = 1.0/(rsub2*(1.0 + rsub3/rsub1 + rsub3/rsub2))
+c  Stefan-Boltzmann constant = 5.67e-8 W/K4-m2.
+           trad4 = 5.67e-08*(tw**4 - tsatt(iv)**4)
+           qrwd = fwd*trad4
+c  qrvd = fvd*trad4.
+           hfb = hfb + qrwd/dtsat
+           if (help .ne. 0) then
+             if (iand(ihlppr(1),ishft(1,25)) .ne. 0) then
+               if (iand(vctrlx(iv),1)  .ne. 0) then
+                 write (output,185) velfg,dd,emf,rsub1,rsub2,rsub3,fwd,
+     &           trad4,qrwd,hfb
+  185  format (14x,'velfg',9x,'dd',12x,'emf',11x,'rsub1',9x,
+     & 'rsub2',9x,'rsub3',9x,'fwd'/12x,7es14.6/
+     & 14x,'trad4',10x,'qrwd',10x,'hfb',/12x,3es14.6)
+               endif
+             endif
+           endif
+         endif
+       endif
+       tg = max(tempg(iv),tsatt(iv))
+       tf = tg
+       beta = betagg(iv)
+       cps = csubpg(iv)
+       mode = 9
+       htcfsv = htcf
+       call dittus
+       htcf = htcfsv
+       hv = htcoef
+       if (onrefl .eq. 1) then
+         hv = hv*voidg(iv)
+       else
+         hv = hinter(0.0,0.0,hv,voidg(iv),2.0)
+         hv = min(hv,htcoef)
+       endif
+c  Want no heat flux to gas when voidg = 0 and smooth behavior.
+c  but do not start ramping until the void is < 0.5.
+       if (onrefl .eq. 1) then
+         htbg = hv
+         if (refbun .eq. 1) then
+           if (zqftop .lt. dis2) then
+c  Top quench logic.
+c 1/67.8 = 0.01474926 from Wiesmann.
+             dtchf = max(1.0,min(40.0,dtsat))
+             dtwchf = max(0.0,tw - twchf)
+             hmax = 0.5*chf/dtchf
+             htbt = hmax*exp(-exw1*dtwchf) +
+     &       ((gabs*0.01474926)**0.2)*4500.*exp(-0.012*(dtwchf))
+             htbt = min(htbt,hmax)
+             if (zqftop.le.dis1) then
+               fl1top = htbt
+             else
+               fl1top = (zqftop - dis1)*max(fllow,htbf)*disd1 +
+     &         (dis2 - zqftop)*htbt*disd1
+             endif
+             qtb = fl1top*dtsat
+             zqftop = max(zqftop,0.005)
+             hfbgrtop = bromco/(zqftop**0.25)
+             hfbtop =(ff1t -  ff2t*zqftop)*min(acuthi - voidg(iv),0.5) +
+     &       hfbgrtop*sqrt(1.0 - voidg(iv))
+             hfbtop = max(hfbtop,hfr)
+             hfb = max(hfb,hfbtop)
+           endif
+         endif
+       else
+         htbg = hv*(1.0 - fl)
+       endif
+c
+       htbf = qtb/dtsat
+       htb = htbf + htbg
+       qtbf = qtb
+       qtbg = htbg*(tw - tg)
+       qtb = qtbf + qtbg
+       qfbf = hfb*dtsat
+       qfbg = hv*(tw - tg)
+       qfb = qfbf + qfbg
+c
+       if (qfb .lt. qtb) then
+c  Transition boiling.
+         mode = 5
+         htcf = htbf
+         htcg = htbg
+         qffo = qtbf
+         qfgo = qtbg
+       else
+c  Film boiling.
+         mode = 7
+         htcf = hfb
+         htcg = hv
+         qffo = qfbf
+         qfgo = qfbg
+       endif
+c
+       qfluxo = qffo + qfgo
+       htcoef = htcf + htcg
+       htzht = htcoef
+       htzhff = 0.0
+       htzhft = htcf
+       htzhgg = htcg
+       htzhgt = 0.0
+       htzhgp = 0.0
+       htqot = qfluxo
+       htqof = qffo
+       htqog = qfgo
+c
+       if (tempf(iv) .ge. tsatt(iv)-0.05) mode = mode + 1
+c  mode = 5   Subcooled transiton boiling.
+c  mode = 6   Saturated transiton boiling.
+       if (help .ne. 0) then
+         if (iand(ihlppr(1),ishft(1,25)) .ne. 0) then
+           if (iand(vctrlx(iv),1) .ne. 0) then
+             write (output,195) htbf,htbg,qtbf,qtbg,hfb,hv,qfbf,qfbg,
+     &       htcoef,qfluxo,qfb,qtb
+  195  format(5x,'pstdnb - ',
+     & 'htbf',10x,'htbg',10x,'qtbf',10x,'qtbg',10x,
+     & 'hfb',11x,'hv',12x,'qfbf',10x,'qfbg'/12x,1p,8e14.6/14x,
+     & 'htcoef',8x,'qfluxo',10x,'qfb',11x,'qtb'/12x,4e14.6)
+           endif
+         endif
+       endif
+       return
+       end

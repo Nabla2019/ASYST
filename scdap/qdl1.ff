@@ -1,0 +1,156 @@
+*mlist
+*if def,selap
+      subroutine qdl1 (vg, vf, vvg, vvf, de180, ghfg, gv35, gv175,
+     1                 avvf, am, bm, cm, c0, s, nex, idbug, qdo)
+c
+c  qdl1, for a given s, calculates lipinski 1-d debris bed dryout heat
+c  flux.
+c
+c  Cognizant engineer: ewc (gaj).
+c
+c       ref: hsieh, t. s., "debris bed characterization and
+c            thermal behavior models for scdap",
+c            egg-cdd-5728, january, 1982,
+c            equation 27.
+c
+c       input -
+c         vg     = specific volume of sat. steam, m**3/kg
+c         vf     = specific volume of sat. liquid, m**3/kg
+c         vvg    = vg * viscosity of sat. steam
+c         vvf    = vf * viscosity of sat. liquid
+c         de180  = 180.0 * (1.0 - e) / d,
+c                     e   = porosity of debris bed
+c                     d   = diameter of debris bed particles, m
+c         ghgf   = gflux * hfg, w/m**2,
+c                     gflux  = mass flux, kg/m**2-s
+c                     hfg = h sat. steam - h sat liquid, j/kg
+c         gv35   = 3.5 * gflux * vf
+c         gv175  = 1.75 * gflux * vf
+c         avvf   = vvf * de180
+c         am     = 1.75 * (1.0 - e) / (d * e**3 * hfg**2)
+c         bm     =        (1.0 - e) / (d * e**3 * hfg)
+c         cm     =gflux * (1.0 - e) / (d * e**3)
+c         c0     = g * (1.0/vf - 1.0/vg)
+c         s      = effective saturation
+c         nex    = exponent on s and 1-s terms; nex=3,4,5, or 6
+c         idbug  = extra printout control
+c
+c       output -
+c         qdo    = dryout heat flux, w/m**2
+c
+       implicit none
+c
+       integer nex,idbug
+       real vg,vf,vvg,vvf,de180,ghfg,gv35,gv175,avvf,am,bm,cm,c0,s,qdo
+c
+      dimension nors(2)
+*call ufiles
+c
+c  Local variables.
+       integer iop,nerr,nerrpr,nors
+       real a,a1,a2,aeps,b,b1,b2,c,c1,c2,q,q1,q2,r,sf,sg
+      data nerr, nerrpr / 1, 20 /
+      data aeps / 1.0e-25 /
+c
+      qdo = 0.0
+      q1 = 0.0
+      q2 = 0.0
+      sg = 1.0 / (1.0 - s)**nex
+      sf = 1.0 / s**nex
+      a1 = vg * sg
+      a2 = vf * sf
+      b1 = de180 * (vvg * sg + vvf * sf)
+      b2 = gv35 * sf
+      c1 = gv175 * sf
+      c2 = avvf * sf
+      if (idbug .gt. 2) then
+        write (output,50) sg, sf, a1, a2, b1, b2, c1, c2
+   50   format ('  qdl1 - sg, sf, a1, a2, b1, b2, c1, c2 =', 8e11.3)
+      end if
+c
+      do 100 iop=1,2
+      if (iop .eq. 1) then
+c         arith. operation 1, for q > g*hfg
+        a = am * ( a1 + a2)
+        b = bm * ( b1 - b2)
+        c = cm * (+c1 - c2) - c0
+      else
+c         arith. operation 2, for q < g*hfg
+        a = am * ( a1 - a2)
+        b = bm * ( b1 + b2)
+        c = cm * (-c1 - c2) - c0
+      end if
+      r = b*b - 4.0*a*c
+      if (idbug .gt. 2) then
+        write (output,70) iop, a, b, c, r
+   70   format ('         iop, a, b, c, r =', i3, 4e13.5)
+      end if
+      if (r.lt.0.0 .or. abs(a).lt.aeps) then
+        nors(iop) = 1
+        go to 100
+      else
+        nors(iop) = 0
+      end if
+      r = sqrt(r)
+      q = max((-b + r) / (2.0*a), 0.0)
+      if (iop .eq. 1) then
+        q1 = q
+        if (q1 .ge. 0.999*ghfg) then
+          qdo = q1
+          go to 300
+        end if
+      else
+        q2 = q
+        qdo = q2
+      end if
+  100 continue
+c
+      if (nerr .gt. nerrpr) go to 300
+c
+      if (nors(1) .eq. 0) then
+        if (nors(2) .eq. 0) then
+          if (q2 .gt. 1.001*ghfg) then
+            write (output,140) nerr
+  140       format (' ***** qdl1 error', i5)
+            write (output,150)
+  150       format ('    (1)  q1 < ghfg, but q2 > ghfg')
+            go to 200
+          end if
+        else
+          write (output,140) nerr
+          write (output,160)
+  160     format ('    (2)  q1 < ghfg, but q2 has no real sol.')
+          go to 200
+        end if
+      else
+        if (nors(2) .eq. 0) then
+          if (q2 .gt. 1.001*ghfg) then
+            write (output,140) nerr
+            write (output,170)
+  170       format ('    (3)  q1 has no real sol., but q2 > ghfg')
+            go to 200
+          end if
+        else
+          write (output,140) nerr
+          write (output,180)
+  180     format ('    (4)  neither q1 nor q2 has a real sol.')
+          go to 200
+        end if
+      end if
+      go to 300
+  200 continue
+      write (output,210) s, vg, ghfg, q1, q2, qdo
+  210 format ('          s, vg, ghfg, q1, q2, qdo =', 6e13.5)
+      nerr = nerr + 1
+      if (nerr .gt. nerrpr) then
+        write (output,220)
+  220   format ('0**** further printout of qdl1 errors suppressed.')
+      end if
+  300 continue
+      if (idbug .gt. 1) then
+        write (output,350) s, qdo
+  350   format ('         qdl1 -   s, qdo =', 2e15.7)
+      end if
+      return
+      end
+*endif

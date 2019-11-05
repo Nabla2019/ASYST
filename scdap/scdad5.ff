@@ -1,0 +1,539 @@
+*mlist
+*if def,selap
+       subroutine scdad5
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: ewc.
+c
+       use invtbl
+       use scdmod
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'htrcom.h'
+       include 'jundat.h'
+       include 'scddat.h'
+       include 'cpmdat.h'
+       include 'debcom.h'
+       include 'statec.h'
+       include 'plndat.h'
+       include 'slumpv.h'
+       include 'hardpn.h'
+       include 'radata.h'
+       include 'solcom.h'
+       include 'buntim.h'
+       include 'cora.h'
+       include 'miscon.h'
+       include 'voldat.h'
+       include 'scdout.h'
+       include 'ndxara.h'
+       include 'tblsp.h'
+       include 'thplot.h'
+       include 'cons.h'
+       include 'nhtara.h'
+       include 'scdcom.h'
+       include 'trnot1.h'
+       include 'trnot2.h'
+       include 'ufiles.h'
+       include 'fpfast.h'
+       include 'fparm2.h'
+       include 'fpdkht.h'
+       include 'bconds.h'
+       include 'nrcom.h'
+       include 'uoxcom.h'
+       include 'fecom.h'
+       include 'bwgeom.h'
+       include 'intcom.h'
+       include 'debout.h'
+       include 'blageo.h'
+       include 'blinit.h'
+       include 'scdads.h'
+       include 'scdpow.h'
+       include 'dbacct.h'
+c
+c  Local variables.
+       integer i,icm1,il,j,jj,k,k1,kbot,kdyn1,kdyn2,kk,l,m,n,nn,nsw
+       integer lmeltn,nsizsw,id,ntest1
+       integer ichn,icpchn,indxjn,nj,idxjun
+       real frcsp1
+       real dlttmp,frcmc1,klsmxf,klsmxr,expkls,coefav,expavl,coefhy,
+     & frcrdc,coefre,exprdc,htsa0,aflow1,fnrmsh
+       data klsmxf / 500./, klsmxr / 500./, expkls / 0.5/
+       data coefav / 0.5/, expavl / 0.5/, coefhy / 0./
+       data coefre/ 0.5/,  exprdc/ 0.5/
+c  fnrmsh=1.-(fraction way through phase change for 100% blockage).
+c  Value should be consistent with value in heatld.
+       data fnrmsh / 0.0/
+c
+       do j = 1,ncomp
+         do k = 1,naz
+           qdebcl(k,j) = 0.0
+         enddo
+       enddo
+c  Loop over enclosures and axial nodes to generate current mapping of
+c  debris regions. Debris in different enclosures is considered to be
+c  different debris regions. Debris in enclosures that are contiguous
+c  in axial direction are considered to be part of same debris region.
+       do i = 1,igp
+         do k = 1,naz
+           iruben(i,k) = 0
+c  irubeb(i,k) = number of component groups that are debris in i-th
+c                enclosure of axial node k.
+c  iencln(i,k,n) = component number of n-th component group that is
+c                  debris in i-th enclosure at k-th axial node.
+           numdeb = 0
+           do j = 1,icp(i)
+             icm1 = ngpc(i,j)
+             lmeltn=0
+             if (lcrucb(k,icm1).lt.1 .and. nblkrd(k,icm1).lt.1 .and.
+     &       lmeltn.eq.0) then
+               if (irubpp(k,icm1).eq.1 .and. idcomp(icm1).eq.0 .and.
+     &         rpel2(k,icm1).gt.0.2e-3) then
+                 numdeb = numdeb + 1
+                 iruben(i,k) = numdeb
+                 iencln(i,k,numdeb) = icm1
+               endif
+             endif
+           enddo
+         enddo
+       enddo
+       do j = 1,ncomp
+         ktopdb(j) = 0
+       enddo
+       ndbreg = 0
+       ndbprn = 0
+       do i = 1,igp
+c  Identify for each component each set of contiguous axial nodes that
+c  are debris.
+         do k = 1,naz
+           if (iruben(i,k) .eq. 0) cycle
+           do n = 1,iruben(i,k)
+             j = iencln(i,k,n)
+             if (ktopdb(j) .ge. k) cycle
+             ndbreg = ndbreg + 1
+c  New coding.
+             idbcom(ndbreg) = j
+             ndebbt(ndbreg) = k
+c  Store temperature of vapor at bottom of debris bed.
+             tvapbt(ndbreg) = tempg(inv+filndx(4))
+             if (k .ge. 2) then
+               k1 = k - 1
+               nsw = 0
+               do kk = k1,1,-1
+                 if (nsw .eq. 1) cycle
+                 if (lcrucb(kk,j).ge.1 .or. irubpp(kk,j).eq.1) cycle
+                 il = (j - 1)*ndax + kk
+                 l = nvad(il) + filndx(4)
+                 tvapbt(ndbreg) = tempg(l)
+                 nsw = 1
+               enddo
+               kk = ndebbt(ndbreg)
+               if (nblkrd(kk,j) .eq. 1) then
+                 if (kk .lt. naz) then
+                   il = (j - 1)*ndax + kk + 1
+                   l = nvad(il) + filndx(4)
+                 else
+                   l = invtp + filndx(4)
+                 endif
+                 tvapbt(ndbreg) = tempg(l)
+               endif
+             endif
+             if (ndbreg .gt. nxdbrg) then
+               write (output,9000) k,ndbreg,nxdbrg
+ 9000  format ('0******** at axial node',i2,' number of debris',
+     +' regions =',i2,' maximum allowed is ',i2,'.')
+               fail = .true.
+             endif
+             nsw = 0
+             do kk = k,naz
+               if (iruben(i,kk) .eq. 0) nsw = 1
+               if (nsw .eq. 1) cycle
+               nswtop = 0
+               do nn = 1,iruben(i,kk)
+                 if (iencln(i,kk,nn) .eq. j) then
+                   ndebup(ndbreg) = kk
+                   nswtop = 1
+                   ktopdb(j) = kk
+                 endif
+               enddo
+               if (nswtop .eq. 0) nsw = 1
+             enddo
+           enddo
+         enddo
+       enddo
+c
+       if (ndbreg .eq. 0) return
+       do n = 1,ndbreg
+c  Initialize variables for calling subroutine htrc3.
+c  Each axial node is assumed to be in different relap5 volume.
+         nvoldb(n) = ndebup(n) - ndebbt(n) + 1
+         j = idbcom(n)
+c  Calculate heat flux into bottom of debris bed.
+         kbot = ndebbt(n)
+         qbtdeb(n) = 0.0
+c  Determine state of dryout of debris bed at last time step.
+         nswq2 = 0
+         nswq = 0
+         m = 0
+         do k = ndebbt(n),ndebup(n)
+           m = m + 1
+           nqndbl(m,n) = idebqn(k,j)
+           if (nqndbl(m,n) .eq. 0) nswq = 1
+           if (nqndbl(m,n) .ne. (-1)) nswq2 = 1
+         enddo
+         powsum = 0.0
+         m = 0
+         nbundl = nsigl(j)
+         kdyn = (j - 1)*ndax + 1
+         if (idcomp(j).eq.0 .and. rpel2(1,j).lt.0.2e-3) nbundl = 0
+         mhdpan = 0
+         nsizsw=0
+         do k = ndebbt(n),ndebup(n)
+           m = m + 1
+           kdyn = (j - 1)*ndax + k
+           if (nblkrd(k,j) .eq. 1) then
+             mhdpan = m
+             tsurhp = achdpn(j)
+           endif
+           l = nvad(kdyn) + filndx(4)
+           if (nblkrd(k,j).eq.1 .and. k.lt.naz) then
+             kdyn2 = (j - 1)*ndax + k + 1
+             l = nvad(kdyn2) + filndx(4)
+           endif
+           numdbv(m,n) = l
+           powdeb = powrub(k,j)
+           if (nspowi.eq.3 .or. nspowi.eq.1) powdeb = powdeb*powtot(1)
+           powsum = powsum+powdeb/pitch(j)**2
+           dvdeb = dzcond(kdyn)*pitch(j)**2
+           powdbl(m,n) = powdeb/dvdeb
+           qdboxm(m,n) = qdebox(k,j)/dvdeb
+           hgdebm(m,n) = hgdeb(k,j)/dvdeb
+           frcsp1 = frcspr(k,j)
+           if (frcsp1.gt.0.95) frcsp1 = 0.95
+           voldeb(m,n) = (1. - frcsp1)*float(nsigl(j))*dvdeb
+           aradeb(m,n) = float(nsigl(j))*pitch(j)**2
+           porvol(m,n) = porcom(k,j)
+           ddbvol(m,n) = diacom(k,j)
+           nsizsw = 0
+           aovrdb(m,n) = aovcom(k,j)
+           dbentn(m,n) = debent(k,j)
+           dbqenn(m,n) = debqen(k,j)
+c  Do not change hydraulic diameter of a volume for an empty guide tube.
+c  Do not alter RELAP5 control volume geometry parameters for location
+c  that is partly cohesive debris.
+           if (idcomp(j).eq.0 .and. rpel2(k,j).gt.0.2e-3 .and.
+     &     nblkrd(k,j).ne.1) then
+c  Hydraulic diameter = 4.*(fluid volume)/(surface area of debris).
+             diamv(l) = 4.*porvol(m,n)*ddbvol(m,n)/(6.*(1. -
+     &       porvol(m,n)))
+c  Limit how small diamv is set for interphase models.
+             if (diamv(l) .lt. 0.5e-3) diamv(l) = 0.5e-3
+c  Do not change roughness parameter for debris that is representative
+c  of intact fuel rods.
+c***   delete line below because change in loss coefficents for change
+c***   to geometry of debris controls over effect of surface roughness
+c***   on loss.
+c***         if (ddbvol(m,n).lt.(0.5*rpel(kdyn))) roughv(l) =
+c*** &       ddbvol(m,n)
+           endif
+$if -def,debth
+c  Note. To activate flow loss for porous debris in FWDRAG modeling, set
+c  idbvol(l) = 1.
+           idbvol(l) = 0
+           mdbvol(l) = m
+           ndbvol(l) = n
+$endif
+           tmpdeb(m,n) = tcond3(1,k,j)
+           if (idcomp(j).eq.0 .and. rpel2(k,j).lt.0.2e-3) tmpdeb(m,n) =
+     &     tempg(l)
+         enddo
+c  If debris in each axial node in this debris region is representing
+c  intact rods, then go to segment of subroutine that determines heat
+c  transfer from rods using heat transfer correlations for intact rods.
+         if (nsizsw.eq.0) go to 180
+c  Calculate fraction of enclosure occupied by component j.
+         nsw = 0
+         fncomp = 0.0
+         do i = 1,igp
+           do jj = 1,icp(i)
+             if (nsw .eq. 1) cycle
+             if (ngpc(i,jj) .eq. j) then
+               fncomp = float(nsigl(jj))
+               frcbun = fncomp/anrden(i)
+               nsw = 1
+             endif
+           enddo
+         enddo
+$if -def,debth,1
+         call htrc3a (n,mhdpan,nbundl,tsurhp,frcbun)
+$if def,debth,1
+         call htrc3b (n)
+c
+c  After call to subroutine htrc3, mark state of quench of each axial
+c  nodeof each component in debris region.
+         m = 0
+         do k = ndebbt(n),ndebup(n)
+           m = m + 1
+           idebqn(k,j) = nqndbl(m,n)
+c  If debris contains relocated prior liquid material, consider it to
+c  block most of debris from coolant and result in negligible heat
+c  transfer from debris to coolant for case of dry debris.
+           kdyn = (j - 1)*ndax + k
+         enddo
+c  Input heat transfer from debris into relap5 volumes.
+         m = 0
+         do k = ndebbt(n),ndebup(n)
+           m = m + 1
+           debqen(k,j) = dbqenn(m,n)
+c  j=component number.
+           il = (j - 1)*ndax + k
+           if (nblkrd(k,j).eq.1 .and. k.lt.naz) il=(j - 1)*ndax + k +
+     &     1
+           if (nblkrd(k,j).ne.1 .or. k.lt.naz) then
+             scd21(k,j,1)%qscd = scd21(k,j,1)%qscd + qnchdb(m,n)
+             scd21(k,j,1)%qwgscd = scd21(k,j,1)%qwgscd + qfgdeb(m,n)
+             scd21(k,j,1)%gamscd = scd21(k,j,1)%gamscd + gmwdeb(m,n)
+       if (help)
+     & write (12,"(a,i10,3i5,4es13.5)") 'scdad501',ncount,il,
+     & scd21(k,j,1)%qscd,scd21(k,j,1)%qwgscd,htssmf(il),
+     & scd21(k,j,1)%gamscd
+           endif
+           htsa = aovrdb(m,n)*voldeb(m,n)
+           if (nblkrd(k,j) .ne. 1) then
+             qflux0(il) = scd21(k,j,1)%qscd/htsa
+             qfg0(il) = qfgdeb(m,n)/htsa
+             l = numdbv(m,n)
+             tcolc(il) = tempg(l)
+             deltmp = tmpdeb(m,n) - tcolc(il)
+             if (abs(deltmp) .lt. 0.1) deltmp = 0.1
+$if -def,debth
+             if (voidf(l) .le. 0.0001) then
+               htcf = 0.0
+               htcg = qflux0(il)/deltmp
+             else
+               htcf = qflux0(il)/deltmp
+               htcg = 0.0
+             endif
+$endif
+$if def,debth
+             htcg = qfg0(il)/deltmp
+             htcf = qflux0(il)/deltmp-htcg
+$endif
+             hfixf(il) = htcf
+             hfixg(il) = htcg
+             hfix(il) = htcf + htcg
+             hcnvec(il) = hfix(il)
+           endif
+           qdebcl(k,j) = qnchdb(m,n)/float(nsigl(j))
+c  For quenched debris, account for partial penetration of debris into
+c  molten pool.
+           if (idebqn(k,j) .eq. (-1)) qdebcl(k,j) = frcpen(k,j)*
+     &     qdebcl(k,j)
+           if (timehy.gt.1.e+30 .and. timehy.lt.1.1e+30) then
+c  Calculate pressure drop based on correlation and compare with relap5
+c  value.
+             if (ndebup(n).eq.5 .and. ndebbt(n).eq.5) then
+               kdyn1 =(j - 1)*ndax + ndebup(n)
+               kdyn2 =(j - 1)*ndax + ndebup(n) + 1
+               delprs = p(nvad(kdyn1)+filndx(4)) -
+     &         p(nvad(kdyn2)+filndx(4))
+               satbed = (voidf(l) - 0.17)/0.83
+               term1 = 150.*(1. - porvol(m,n))**2/
+     &         ((porvol(m,n)**3)*(ddbvol(m,n)**2)*(1. - satbed)**3)
+               term2 = 1.75*(1. - porvol(m,n))/
+     &         (ddbvol(m,n)*(porvol(m,n)**3)*(1. -satbed)**5)
+               delpvp = term1*viscg(l)*velg(l) + term2*rhog(l)*
+     &         velg(l)**2
+               delplq = term1*viscf(l)*velf(l) + term2*rhof(l)*
+     &         velf(l)**2
+               delpvp = delpvp*0.5*dl(l)
+               delplq = 0.5*dl(l)*delplq
+c              write (output,966) timehy,volno(l),satbed,delprs,delpvp,
+c    &         delplq
+c 966  format (' Timehy=',f10.1,' volno=',i10,' satbed=',e10.4,
+c    &    ' p(relap5)=',e10.4,' p(vapor)=',e10.4,' p(liq)=',e10.4)
+             endif
+           endif
+         enddo
+         cycle
+c  Calculate heat transfer from debris to fluid using correlations
+c  applicable for intact rods.
+  180    m = 0
+         do k = ndebbt(n),ndebup(n)
+           m = m + 1
+           kdyn = (j - 1)*ndax + k
+           if (idcomp(j).eq.0 .and. ddbvol(m,n).lt.(0.5*rpel2(k,j)))
+     &     then
+c  Rubble debris.
+             htsa = aovrdb(m,n)*voldeb(m,n)
+           else
+c  Degrading intact rod.
+             htsa = float(nsigl(j))*pi*ddbvol(m,n)*dzcnd2(k,j)
+           endif
+           ichn = ncmpgp(j)
+c  Apply multiplier that accounts for reduction in surface area due
+c  to degeneration of fuel rods from intact configuration; apply same
+c  reduction in surface area as done in subroutine HEATDB to account
+c  for reduction in oxidation due to reduction in surface area.
+           frcrdc =c oefre*(frcmcl(ichn,k)/(1. - fnrmsh))**exprdc
+           htsa0 = htsa
+           htsa = (1. - frcrdc)*htsa
+           tw = tcond3(1,k,j)
+           l = nvad(kdyn) + filndx(4)
+c  ichn = identification number of flow channel that component j resides
+c  in.
+c  Check to see whether component j is "master" fuel rod for this flow
+c  channel.
+           nsw = 0
+           do jj =1,icp(ichn)
+             if (nsw.eq.1) cycle
+             icpchn = ngpc(ichn,jj)
+             if (idcomp(icpchn).ne.0) cycle
+             if (rpel2(k,icpchn).le. 0.2e-3) cycle
+             if (icpchn.eq.j) then
+               nsw = 1
+               dlttmp = tmlliq(k,j) - tmlsol(k,j)
+               frcmc1 = (tw - tmlsol(k,j))/dlttmp
+               if (frcmc1.gt.frcmcl(ichn,k)) then
+                 frcmcl(ichn,k) = frcmc1
+c  Adjust thermal hydraulic parameters to account for new level of
+c  degeneration in fuel rods.
+c  First adjust loss coefficients.
+                 klsif1(ichn,k) = klsif0(ichn,k) + (klsmxf -
+     &           klsif0(ichn,k))*(frcmc1/(1. - fnrmsh))**expkls
+                 klsir1(ichn,k) = klsir0(ichn,k) + (klsmxr -
+     &           klsir0(ichn,k))*(frcmc1/(1. - fnrmsh))**expkls
+                 klsof1(ichn,k) = klsof0(ichn,k) + (klsmxf -
+     &           klsof0(ichn,k))*(frcmc1/(1.-fnrmsh))**expkls
+                 klsor1(ichn,k) = klsor0(ichn,k) + (klsmxr -
+     &           klsor0(ichn,k))*(frcmc1/(1. - fnrmsh))**expkls
+c  Find junction numbers corresponding with RELAP5 control volume for
+c  this location in reactor core and modify its thermal hydraulic
+c  parameters to account for incremental increase in fuel rod
+c  degeneration.
+                 indxjn = invfnd(l)
+                 do nj = 1,invcnt(l)
+c  Skip the cross flow junctions( 8 bit on).
+                   if (iand(invj(indxjn)%invjun,8).eq.0) then
+c  idxjun = junction index.
+                     idxjun = invj(indxjn)%invvnx
+                     if (iand(invj(indxjn)%invjun,2).ne.0) then
+c  Outlet junction (2 bit is on).
+                       fjunf(idxjun) = klsof1(ichn,k)
+                       fjunr(idxjun) = klsor1(ichn,k)
+                     else
+c  Inlet junction (2 bit is off).
+                       fjunf(idxjun)=klsif1(ichn,k)
+                       fjunr(idxjun)=klsir1(ichn,k)
+                     endif
+                   endif
+                   indxjn = indxjn + 1
+                 enddo
+c  Next update RELAP5 control volume parameters to correspond with
+c  incremental increase in damage of fuel rods.
+                 aflow1 = aflwto(ichn)
+                 avold1(ichn,k) = aflow1*
+     &           (1. - coefav*(frcmcl(ichn,k)/(1. - fnrmsh))**expavl)
+c  Take into account reduction in flow area due to cladding ballooning.
+                 avol(l) = min(avold1(ichn,k),avol(l))
+                 avold1(ichn,k) = avol(l)
+                 dhydb1(ichn,k) = dhydb0(ichn,k)*
+     &           (1.+coefhy*frcmcl(ichn,k))
+                 diamv(l)=dhydb1(ichn,k)
+               endif
+             endif
+           enddo
+           id = (j - 1)*ndax + k
+           iv = l
+           iv1 = iv
+           iv2 = iv
+           htdiam = diamv(iv)
+           htlenc = zcond2(naz,1)+0.5*dzcnd2(naz,1)
+c***       htlenc = diamv(iv)
+           gridz = 0.0
+           gridk = 1.0
+           axpf = 1.0
+           hfg = sathg(iv) - sathf(iv)
+           ggasa = abs(ggas(iv))
+           gliqa = abs(gliq(iv))
+           gabs = max(ggasa + gliqa,0.001)
+$if def,vargrav,1
+           if (iand(print,16384) .eq. 0) then
+             g = hydzc(iv2) + hydzc(iv2+1)
+$if def,vargrav,5
+           else
+             g = (hydxc(iv2) + hydxc(iv2+1))*gravv(iv) + (hydyc(iv2) +
+     &       hydyc(iv2+1))*gravv(iv+1) + (hydzc(iv2) + hydzc(iv2+1))*
+     &       gravv(iv+2)
+           endif
+           g = (ggas(iv1) + gliq(iv1))*sign(1.0,g)
+c  drod = outer diameter of rod.
+           drod = rco((j-1)*ndax+k)
+c  delgrv=(gravity constant)*(length of heat structure).
+           delgrv = g*dzcnd2(k,j)
+c  gcross = mass flux in direction perpindicular to rod.
+           gcross = 0.0
+c  gcrosf = (gravity constant)*(ratio of flow area to gap area).
+           gcrosf = 0.0
+c  pitdia = ratio of pitch to diameter
+           pitdia = pitch(j)/rco((j-1)*ndax + k)
+c  htopta = index that defines configuration of heat structure.
+           htopta = 1
+c  ivindx = index of RELAP5 control volume at inlet of bundle (used for
+c  Czech CHF correlation)
+           ivindx = iv
+           chf = 0.0
+           chfmul = 0.0
+c  Case of condensation during accumulator injection.
+           ntest1 = 0
+           if (tw.le.satt(l)) then
+             if (tempg(l).lt.satt(l)) then
+               if (voidg(l).gt.0.01 .and. voidg(l).lt.0.35) then
+                 tw=satt(l) + 0.01
+                 ntest1 = 1
+               endif
+             endif
+           endif
+           call htrc1(id)
+$if def,remove3
+           if (ntest1.eq.1) then
+c  Case of condensation.
+             htcg = 0.0
+             qfgo = 0.0
+           endif
+           scd21(k,j,1)%qscd = qfluxo*htsa
+           scd21(k,j,1)%qwgscd = qfgo*htsa
+           scd21(k,j,1)%gamscd = (qfluxo - qfgo)*htssmf(kdyn)
+       if (help)
+     & write (12,"(a,i10,i4,3es13.5)") 'scdad502',ncount,kdyn,
+     & scd21(k,j,1)%qscd,scd21(k,j,1)%qwgscd,scd21(k,j,1)%gamscd
+           qnchdb(m,n) = scd21(k,j,1)%qscd
+           qfgdeb(m,n) = scd21(k,j,1)%qwgscd
+           gmwdeb(m,n) = scd21(k,j,1)%gamscd
+           qdebcl(k,j) = qnchdb(m,n)/float(nsigl(j))
+           il = (j - 1)*ndax + k
+           hfixf(il) = htcf
+           hfixg(il) = htcg
+           tcolc(il) = tempg(l)
+           hfix(il) = htcf + htcg
+           hcnvec(il) = hfix(il)
+           htsht(il) = htzht
+           htshff(il) = htzhff
+           htshft(il) = htzhft
+           htshgg(il) = htzhgg
+           htshgp(il) = htzhgp
+           htshgt(il) = htzhgt
+           htsqst(il) = htqot
+           htsqsf(il) = htqof
+           htsqsg(il) = htqog
+           htssmf(il) = htgamf
+           htssmg(il) = htgamg
+$endif
+         enddo
+c  End of do loop over debris regions.
+       enddo
+       return
+       end
+*endif

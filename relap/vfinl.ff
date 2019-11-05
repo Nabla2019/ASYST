@@ -1,0 +1,1001 @@
+*mlist
+       subroutine vfinl
+c
+c  Calls the subroutines preseq and syssol and computes the new
+c  velocities, mass flow rates, and checks for bad donoring and
+c  water packing.
+c
+c  Cognizant engineer: hxc,dmk.
+c
+       use lpdatc
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'jundat.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer i,i1,ixp,j,k,kf,kg,l,n
+       real tvar1,tvar2
+       logical badonr
+       character iflag*8
+       integer ix,mm
+c
+       lpdat(issys)%lpackr = 0
+c  Load pressure matrix.
+$if def,mmfld,1
+       if (lpdat(issys)%lnonmf .eq. 0) then
+         call preseq
+$if def,mmfld,3
+       else
+         call prseqm
+       endif
+c
+c  Solve matrix for change in pressure.
+       lpdat(issys)%lsuces = 0
+       matrix = 1
+       call syssol (0,.true.)
+c
+c  Save all donor and velocity information.
+       j = ixjff
+       i = lpdat(issys)%lij
+       do n = 1,lpdat(issys)%lijn
+         scvj1(j) = velfj(i)
+         scvj1(j+1) = velfjo(i)
+         scvj1(j+2) = velgj(i)
+         scvj1(j+3) = velgjo(i)
+         scvj1(j+4) = ufj(i)
+         scvj1(j+5) = ugj(i)
+         scvj1(j+6) = voidfj(i)
+         scvj1(j+7) = voidgj(i)
+         scvj1(j+8) = qualaj(i)
+         scvj1(j+9) = rhofj(i)
+         scvj1(j+10) = rhogj(i)
+         velfjo(i)=velfj(i)
+         velgjo(i)=velgj(i)
+         jcex(i) = iand(jcex(i),not(ishft(3,16)))
+         j = j + scskp
+         i = i + ijskp
+       enddo
+       do i1 = 1,lpdat(issys)%lnoncn
+         j = ixjff
+         i = lpdat(issys)%lij
+         do n = 1,lpdat(issys)%lijn
+           scvj1(j+i1-6) = qualnj(i+i1-1)
+           j = j + scskp
+           i = i + ijskp
+         enddo
+       enddo
+$if def,mmfld
+       if (lpdat(issys)%lnonmf .ne. 0) then
+         j = ixjff
+         i = lpdat(issys)%lij
+         do n = 1,lpdat(issys)%lijn
+           smvj1(j) = velmj(i)
+           smvj2(j) = velmjo(i)
+           smvj3(j) = umj(i)
+           smvj4(j) = voidmj(i)
+           smvj5(j) = rhomj(i)
+           velmjo(i) = velmj(i)
+           j = j + scskp
+           i = i + ijskp
+         enddo
+         do i1 = 1,lpdat(issys)%lnonmf
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             smvj6(j+i1-1) = qualmj(i+i1-1)
+             j = j + scskp
+             i = i + ijskp
+           enddo
+         enddo
+       endif
+$endif
+c
+c  Compute new time velocities.
+       j = ixjff
+       i = lpdat(issys)%lij
+       ixp = 1 - lpdat(issys)%livnn
+       do n = 1,lpdat(issys)%lijn
+         dvelfj(j) = vfdpk(j)*sourcp(ij1vn(i)+ixp) -
+     &   vfdpl(j)*sourcp(ij2vn(i)+ixp)
+         dvelgj(j) = vgdpk(j)*sourcp(ij1vn(i)+ixp) -
+     &   vgdpl(j)*sourcp(ij2vn(i)+ixp)
+         j = j + scskp
+         i = i + ijskp
+       enddo
+$if def,mmfld
+       if (lpdat(issys)%lnonmf .ne. 0) then
+         j = ixjff
+         i = lpdat(issys)%lij
+         do n = 1,lpdat(issys)%lijn
+           dvelmj(j) = vmdpk(j)*sourcp(ij1vn(i)+ixp) -
+     &     vmdpl(j)*sourcp(ij2vn(i)+ixp)
+           j = j + scskp
+           i = i + ijskp
+         enddo
+       endif
+$endif
+       j = ixjff
+       i = lpdat(issys)%lij
+       do n = 1,lpdat(issys)%lijn
+         velfj(i) = velfj(i) + dvelfj(j)
+         velgj(i) = velgj(i) + dvelgj(j)
+$if def,mmfld
+         if(lpdat(issys)%lnonmf.ne.0)then
+           if(voidmj(i).gt.0.99999)then
+             velfj(i) = 0.0
+             velgj(i) = 0.0
+           endif
+         endif
+$endif
+         if (velfj(i) .ge. 0.0) then
+           kf = ij1nx(i)
+         else
+           kf = ij2nx(i)
+         endif
+         if (velgj(i) .ge. 0.0) then
+           kg = ij1nx(i)
+         else
+           kg = ij2nx(i)
+         endif
+         tvar1 = voidfj(i)*rhofj(i)
+         tvar2 = voidgj(i)*rhogj(i)
+         mflowj(i) = (tvar1*velfj(i) + tvar2*velgj(i))*ajun(i)
+         mflowfj(i) = voidfj(i)*rhofj(i)*velfj(i)*ajun(i)
+         mflowgj(i) = voidgj(i)*rhogj(i)*velgj(i)*ajun(i)
+         flenth(i) = ((tvar1*ufj(i) + voidfj(i)*po(kf))*velfj(i) +
+     &   (tvar2*ugj(i) + voidgj(i)*po(kg))*velgj(i))*ajun(i)
+         scvj12(j) = voidfj(i)*ufj(i)*min(rhofj(i),5.0*rhogj(i)) +
+     &   voidgj(i)*ugj(i)*rhogj(i)
+         j = j + scskp
+         i = i + ijskp
+       enddo
+$if def,mmfld
+       if (lpdat(issys)%lnonmf .ne. 0) then
+         j = ixjff
+         i = lpdat(issys)%lij
+         do n = 1,lpdat(issys)%lijn
+           velmj(i) = velmj(i) + dvelmj(j)
+           if (voidmj(i).le.1.0e-5) velmj(i) = 0.0
+           mmflwj(i) = voidmj(i)*rhomj(i)*velmj(i)*ajun(i)
+           smvj7(j) = voidmj(i)*umj(i)*rhomj(i)
+           j = j + scskp
+           i = i + ijskp
+         enddo
+       endif
+$endif
+c
+c  Get donor properties based on new velocities.
+       call jprop (1)
+c
+c  Determine if bad donoring occurs.
+       j = ixjff
+       i = lpdat(issys)%lij
+       do n = 1,lpdat(issys)%lijn
+         dvelfj(j) = abs(voidfj(i)*ufj(i)*min(rhofj(i),5.0*rhogj(i)) +
+     &   voidgj(i)*ugj(i)*rhogj(i) - scvj12(j)) - scvj12(j)*0.20
+         j = j + scskp
+         i = i + ijskp
+       enddo
+$if def,mmfld
+       if (lpdat(issys)%lnonmf .ne. 0) then
+         j = ixjff
+         i = lpdat(issys)%lij
+         do n = 1,lpdat(issys)%lijn
+           dvelmj(j) = abs(voidmj(i)*umj(i)*rhomj(i) - smvj7(j)) -
+     &     smvj7(j)*0.20
+           j = j + scskp
+           i = i + ijskp
+         enddo
+       endif
+$endif
+       badonr = .false.
+       j = ixjff
+       do n = 1,lpdat(issys)%lijn
+         badonr = badonr .or. dvelfj(j).gt.0.0
+         j = j + scskp
+       enddo
+$if def,mmfld
+       if (lpdat(issys)%lnonmf .ne. 0) then
+         j = ixjff
+         do n = 1,lpdat(issys)%lijn
+           badonr = badonr .or. dvelmj(j).gt.0.0
+           j = j + scskp
+         enddo
+       endif
+$endif
+       if (badonr) then
+c
+c  Bad donoring occurred -- solve for pressures with new donors.
+c  Restore velocity information.
+         j = ixjff
+         i = lpdat(issys)%lij
+         do n = 1,lpdat(issys)%lijn
+           velfjs(j) = velfj(i)
+           velgjs(j) = velgj(i)
+           velfj(i) = scvj1(j)
+           velfjo(i) = scvj2(j)
+           velgj(i) = scvj3(j)
+           velgjo(i) = scvj4(j)
+$if def,mmfld
+           if(lpdat(issys)%lnonmf.ne.0)then
+             if(voidmj(i).gt.0.99999)then
+               velfj(i) = 0.0
+               velgj(i) = 0.0
+               velfjo(i) = 0.0
+               velgjo(i) = 0.0
+             endif
+           endif
+$endif
+           j = j + scskp
+           i = i + ijskp
+         enddo
+$if def,mmfld
+         if (lpdat(issys)%lnonmf .ne. 0) then
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             velmjs(i) = velmj(i)
+             velmj(i) = smvj1(j)
+             velmjo(i) = smvj2(j)
+             if (voidmj(i) .le. 1.0e-5) then
+               velmj(i) = 0.0
+               velmjo(i) = 0.0
+             endif
+             j = j + scskp
+             i = i + ijskp
+           enddo
+         endif
+$endif
+c
+c  Load pressure matrix.
+$if def,mmfld,1
+         if (lpdat(issys)%lnonmf .eq. 0) then
+           call preseq
+$if def,mmfld,3
+         else
+           call prseqm
+         endif
+c
+c  Solve matrix for change in pressure.
+         call syssol (0,.true.)
+c
+c  Save all donor and velocity information.
+         j = ixjff
+         i = lpdat(issys)%lij
+         do n = 1,lpdat(issys)%lijn
+           scvj1(j) = velfj(i)
+           scvj1(j+1) = velfjo(i)
+           scvj1(j+2) = velgj(i)
+           scvj1(j+3) = velgjo(i)
+           scvj1(j+4) = ufj(i)
+           scvj1(j+5) = ugj(i)
+           scvj1(j+6) = voidfj(i)
+           scvj1(j+7) = voidgj(i)
+           scvj1(j+8) = qualaj(i)
+           scvj1(j+9) = rhofj(i)
+           scvj1(j+10) = rhogj(i)
+           velfjo(i)=velfjs(j)
+           velgjo(i)=velgjs(j)
+           j = j + scskp
+           i = i + ijskp
+         enddo
+         do i1 = 1,lpdat(issys)%lnoncn
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             scvj1(j+i1-6) = qualnj(i+i1-1)
+             j = j + scskp
+             i = i + ijskp
+           enddo
+         enddo
+$if def,mmfld
+         if (lpdat(issys)%lnonmf .ne. 0) then
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             smvj1(j) = velmj(i)
+             smvj2(j) = velmjo(i)
+             smvj3(j) = umj(i)
+             smvj4(j) = voidmj(i)
+             smvj5(j) = rhomj(i)
+             velmjo(i) = velmjs(i)
+             j = j + scskp
+             i = i + ijskp
+           enddo
+           do i1 = 1,lpdat(issys)%lnonmf
+             j = ixjff
+             i = lpdat(issys)%lij
+             do n = 1,lpdat(issys)%lijn
+               smvj6(j+i1-1) = qualmj(i+i1-1)
+               j = j + scskp
+               i = i + ijskp
+             enddo
+           enddo
+         endif
+$endif
+c
+c  Compute new time velocities.
+         j = ixjff
+         i = lpdat(issys)%lij
+         do n = 1,lpdat(issys)%lijn
+           dvelfj(j) = vfdpk(j)*sourcp(ij1vn(i)+ixp) -
+     &     vfdpl(j)*sourcp(ij2vn(i)+ixp)
+           dvelgj(j) = vgdpk(j)*sourcp(ij1vn(i)+ixp) -
+     &     vgdpl(j)*sourcp(ij2vn(i)+ixp)
+           j = j + scskp
+           i = i + ijskp
+         enddo
+$if def,mmfld
+         if (lpdat(issys)%lnonmf .ne. 0) then
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             dvelmj(j) = vmdpk(j)*sourcp(ij1vn(i)+ixp) -
+     &       vmdpl(j)*sourcp(ij2vn(i)+ixp)
+             j = j + scskp
+             i = i + ijskp
+           enddo
+         endif
+$endif
+         j = ixjff
+         i = lpdat(issys)%lij
+         do n = 1,lpdat(issys)%lijn
+           velfj(i) = velfj(i) + dvelfj(j)
+           velgj(i) = velgj(i) + dvelgj(j)
+$if def,mmfld
+           if(lpdat(issys)%lnonmf.ne.0)then
+             if (voidmj(i) .gt. 0.99999) then
+               velfj(i) = 0.0
+               velgj(i) = 0.0
+             endif
+           endif
+$endif
+           if (velfj(i) .ge. 0.0) then
+             kf = ij1nx(i)
+           else
+             kf = ij2nx(i)
+           endif
+           if (velgj(i) .ge. 0.0) then
+             kg = ij1nx(i)
+           else
+             kg = ij2nx(i)
+           endif
+           tvar1 = voidfj(i)*rhofj(i)
+           tvar2 = voidgj(i)*rhogj(i)
+           mflowj(i) = (tvar1*velfj(i) + tvar2*velgj(i))*ajun(i)
+           mflowfj(i) = voidfj(i)*rhofj(i)*velfj(i)*ajun(i)
+           mflowgj(i) = voidgj(i)*rhogj(i)*velgj(i)*ajun(i)
+           flenth(i) = ((tvar1*ufj(i) + voidfj(i)*po(kf))*velfj(i) +
+     &     (tvar2*ugj(i) + voidgj(i)*po(kg))*velgj(i))*ajun(i)
+           scvj12(j) = voidfj(i)*ufj(i)*min(rhofj(i),5.0*rhogj(i)) +
+     &     voidgj(i)*ugj(i)*rhogj(i)
+           j = j + scskp
+           i = i + ijskp
+         enddo
+$if def,mmfld
+         if (lpdat(issys)%lnonmf .ne. 0) then
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             velmj(i) = velmj(i) + dvelmj(j)
+             if (voidmj(i) .le. 1.0e-5) velmj(i) = 0.
+             mmflwj(i) = voidmj(i)*rhomj(i)*velmj(i)*ajun(i)
+             smvj7(j) = voidmj(i)*umj(i)*rhomj(i)
+             j = j + scskp
+             i = i + ijskp
+           enddo
+         endif
+$endif
+       else
+c
+c  No bad donoring occurred -- restore donor information.
+         j = ixjff
+         i = lpdat(issys)%lij
+         do n = 1,lpdat(issys)%lijn
+           ufj(i) = scvj1(j+4)
+           ugj(i) = scvj1(j+5)
+           voidfj(i) = scvj1(j+6)
+           voidgj(i) = scvj1(j+7)
+           qualaj(i) = scvj1(j+8)
+           rhofj(i) = scvj1(j+9)
+           rhogj(i) = scvj1(j+10)
+           j = j + scskp
+           i = i + ijskp
+         enddo
+         do i1 = 1,lpdat(issys)%lnoncn
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             qualnj(i+i1-1) = scvj1(j+i1-6)
+             j = j + scskp
+             i = i + ijskp
+           enddo
+         enddo
+$if def,mmfld
+         if (lpdat(issys)%lnonmf .ne. 0) then
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             velmjo(i) = smvj2(j)
+             umj(i) = smvj3(j)
+             voidmj(i) = smvj4(j)
+             rhomj(i) = smvj5(j)
+             j = j + scskp
+             i = i + ijskp
+           enddo
+           do i1 = 1,lpdat(issys)%lnonmf
+             j = ixjff
+             i = lpdat(issys)%lij
+             do n = 1,lpdat(issys)%lijn
+               qualmj(i+i1-1) = smvj6(j+i1-1)
+               j = j + scskp
+               i = i + ijskp
+             enddo
+           enddo
+         endif
+$endif
+c
+c  Bottom of bad donoring logic.
+       endif
+c
+c  Check if water packing occurs.
+       call packer
+       if (lpdat(issys)%lpackr .eq. 1) then
+c
+c  Water packing occurred -- solve for new pressures and velocities.
+c  Restore velocity information.
+         j = ixjff
+         i = lpdat(issys)%lij
+         do n = 1,lpdat(issys)%lijn
+           velfjs(j) = velfj(i)
+           velgjs(j) = velgj(i)
+           velfj(i) = scvj1(j)
+           velfjo(i) = scvj2(j)
+           velgj(i) = scvj3(j)
+           velgjo(i) = scvj4(j)
+$if def,mmfld
+           if(lpdat(issys)%lnonmf.ne.0)then
+             if(voidmj(i).gt.0.99999)then
+               velfj(i) = 0.0
+               velgj(i) = 0.0
+               velfjo(i) = 0.0
+               velgjo(i) = 0.0
+             endif
+           endif
+$endif
+           j = j + scskp
+           i = i + ijskp
+         enddo
+$if def,mmfld
+         if (lpdat(issys)%lnonmf .ne. 0) then
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             velmjs(i) = velmj(i)
+             velmj(i) = smvj1(j)
+             velmjo(i) = smvj2(j)
+             if (voidmj(i) .le. 1.0e-5) then
+               velmj(i) = 0.0
+               velmjo(i) = 0.0
+             endif
+             j = j + scskp
+             i = i + ijskp
+           enddo
+         endif
+$endif
+c
+c  Load pressure matrix.
+$if def,mmfld,1
+         if (lpdat(issys)%lnonmf .eq. 0) then
+           call preseq
+$if def,mmfld,3
+         else
+           call prseqm
+         endif
+c
+c  Solve matrix for change in pressure.
+         call syssol (0,.true.)
+c
+c  Save all donor and velocity information.
+         j = ixjff
+         i = lpdat(issys)%lij
+         do n = 1,lpdat(issys)%lijn
+           scvj1(j) = velfj(i)
+           scvj1(j+1) = velfjo(i)
+           scvj1(j+2) = velgj(i)
+           scvj1(j+3) = velgjo(i)
+           scvj1(j+4) = ufj(i)
+           scvj1(j+5) = ugj(i)
+           scvj1(j+6) = voidfj(i)
+           scvj1(j+7) = voidgj(i)
+           scvj1(j+8) = qualaj(i)
+           scvj1(j+9) = rhofj(i)
+           scvj1(j+10) = rhogj(i)
+           velfjo(i)=velfjs(j)
+           velgjo(i)=velgjs(j)
+           j = j + scskp
+           i = i + ijskp
+         enddo
+         do i1 = 1,lpdat(issys)%lnoncn
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             scvj1(j+i1-6) = qualnj(i+i1-1)
+             j = j + scskp
+             i = i + ijskp
+           enddo
+         enddo
+$if def,mmfld
+         if (lpdat(issys)%lnonmf .ne. 0) then
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             smvj1(j) = velmj(i)
+             smvj2(j) = velmjo(i)
+             smvj3(j) = umj(i)
+             smvj4(j) = voidmj(i)
+             smvj5(j) = rhomj(i)
+             velmjo(i) = velmjs(i)
+             j = j + scskp
+             i = i + ijskp
+           enddo
+           do i1 = 1,lpdat(issys)%lnonmf
+             j = ixjff
+             i = lpdat(issys)%lij
+             do n = 1,lpdat(issys)%lijn
+               smvj6(j+i1-1) = qualmj(i+i1-1)
+               j = j + scskp
+               i = i + ijskp
+             enddo
+           enddo
+         endif
+$endif
+c
+c  Compute new time velocities.
+         j = ixjff
+         i = lpdat(issys)%lij
+         do n = 1,lpdat(issys)%lijn
+           dvelfj(j) = vfdpk(j)*sourcp(ij1vn(i)+ixp) -
+     &     vfdpl(j)*sourcp(ij2vn(i)+ixp)
+           dvelgj(j) = vgdpk(j)*sourcp(ij1vn(i)+ixp) -
+     &     vgdpl(j)*sourcp(ij2vn(i)+ixp)
+           j = j + scskp
+           i = i + ijskp
+         enddo
+$if def,mmfld
+         if (lpdat(issys)%lnonmf .ne. 0) then
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             dvelmj(j) = vmdpk(j)*sourcp(ij1vn(i)+ixp) -
+     &       vmdpl(j)*sourcp(ij2vn(i)+ixp)
+             j = j + scskp
+             i = i + ijskp
+           enddo
+         endif
+$endif
+         j = ixjff
+         i = lpdat(issys)%lij
+         do n = 1,lpdat(issys)%lijn
+           velfj(i) = velfj(i) + dvelfj(j)
+           velgj(i) = velgj(i) + dvelgj(j)
+$if def,mmfld
+           if(lpdat(issys)%lnonmf.ne.0)then
+             if (voidmj(i) .gt. 0.99999) then
+               velfj(i) = 0.0
+               velgj(i) = 0.0
+             endif
+           endif
+$endif
+           if (velfj(i) .ge. 0.0) then
+             kf = ij1nx(i)
+           else
+             kf = ij2nx(i)
+           endif
+           if (velgj(i) .ge. 0.0) then
+             kg = ij1nx(i)
+           else
+             kg = ij2nx(i)
+           endif
+           tvar1 = voidfj(i)*rhofj(i)
+           tvar2 = voidgj(i)*rhogj(i)
+           mflowj(i) = (tvar1*velfj(i) + tvar2*velgj(i))*ajun(i)
+           mflowfj(i) = voidfj(i)*rhofj(i)*velfj(i)*ajun(i)
+           mflowgj(i) = voidgj(i)*rhogj(i)*velgj(i)*ajun(i)
+           flenth(i) = ((tvar1*ufj(i) + voidfj(i)*po(kf))*velfj(i) +
+     &     (tvar2*ugj(i) + voidgj(i)*po(kg))*velgj(i))*ajun(i)
+           scvj12(j) = voidfj(i)*ufj(i)*min(rhofj(i),5.0*rhogj(i)) +
+     &     voidgj(i)*ugj(i)*rhogj(i)
+           j = j + scskp
+           i = i + ijskp
+         enddo
+$if def,mmfld
+         if (lpdat(issys)%lnonmf .ne. 0) then
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             velmj(i) = velmj(i) + dvelmj(j)
+             if (voidmj(i) .le. 1.0e-5) velmj(i) = 0.
+             mmflwj(i) = voidmj(i)*rhomj(i)*velmj(i)*ajun(i)
+             smvj7(j) = voidmj(i)*umj(i)*rhomj(i)
+             j = j + scskp
+             i = i + ijskp
+           enddo
+         endif
+$endif
+c
+c  Get donor properties based on new velocities.
+         call jprop (1)
+c
+c  Determine if bad donoring occurs.
+         j = ixjff
+         i = lpdat(issys)%lij
+         do n = 1,lpdat(issys)%lijn
+           dvelfj(j) = abs(voidfj(i)*ufj(i)*min(rhofj(i),5.0*rhogj(i)) +
+     &     voidgj(i)*ugj(i)*rhogj(i) - scvj12(j)) - scvj12(j)*0.20
+           j = j + scskp
+           i = i + ijskp
+         enddo
+$if def,mmfld
+         if (lpdat(issys)%lnonmf .ne. 0) then
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             dvelmj(j) = abs(voidmj(i)*umj(i)*rhomj(i) - smvj7(j)) -
+     &       smvj7(j)*0.20
+             j = j + scskp
+             i = i + ijskp
+           enddo
+         endif
+$endif
+         badonr = .false.
+         j = ixjff
+         do n = 1,lpdat(issys)%lijn
+           badonr = badonr .or. dvelfj(j).gt.0.0
+           j = j + scskp
+         enddo
+$if def,mmfld
+         if (lpdat(issys)%lnonmf .ne. 0) then
+           j = ixjff
+           do n = 1,lpdat(issys)%lijn
+             badonr = badonr .or. dvelmj(j).gt.0.0
+             j = j + scskp
+           enddo
+         endif
+$endif
+         if (badonr) then
+c
+c  Bad donoring occurred after water packing model was applied -- solve
+c    for pressures with new donors.
+c  Re-donor packed and stretched junctions to insure proper donoring.
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+c  65536 is bit 17 (water packer bit)
+             if (iand(jcex(i),65536) .ne. 0) then
+               if (iand(imap(ij1nx(i)),1073741824) .ne. 0) then
+                 k = ij1nx(i)
+                 voidfj(i) = voidf(k)
+                 rhofj(i) = rhof(k)
+                 ufj(i) = uf(k)
+               else
+                 l = ij2nx(i)
+                 voidfj(i) = voidf(l)
+                 rhofj(i) = rhof(l)
+                 ufj(i) = uf(l)
+               endif
+             endif
+c  131072 is bit 18 (stretch bit)
+             if (iand(jcex(i),131072) .ne. 0) then
+               if (iand(imap(ij1nx(i)),256) .eq. 0) then
+                 k = ij1nx(i)
+                 voidfj(i) = 1.0 - voidgo(k)
+                 rhofj(i) = rhofo(k)
+                 ufj(i) = uf(k)
+                 voidgj(i) = voidgo(k)
+                 rhogj(i) = rhogo(k)
+                 ugj(i) = ugo(k)
+                 qualaj(i) = qualao(k)
+               else
+                 l = ij2nx(i)
+                 voidfj(i) = 1.0 - voidgo(l)
+                 rhofj(i) = rhofo(l)
+                 ufj(i) = uf(l)
+                 voidgj(i) = voidgo(l)
+                 rhogj(i) = rhogo(l)
+                 ugj(i) = ugo(l)
+                 qualaj(i) = qualao(l)
+               endif
+             endif
+             i = i + ijskp
+           enddo
+c
+c  Restore velocity information.
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             velfjs(j) = velfj(i)
+             velgjs(j) = velgj(i)
+             velfj(i) = scvj1(j)
+             velfjo(i) = scvj2(j)
+             velgj(i) = scvj3(j)
+             velgjo(i) = scvj4(j)
+$if def,mmfld
+             if(lpdat(issys)%lnonmf.ne.0)then
+               if(voidmj(i).gt.0.99999)then
+                 velfj(i) = 0.0
+                 velgj(i) = 0.0
+                 velfjo(i) = 0.0
+                 velgjo(i) = 0.0
+               endif
+             endif
+$endif
+             j = j + scskp
+             i = i + ijskp
+           enddo
+$if def,mmfld
+           if (lpdat(issys)%lnonmf .ne. 0) then
+             j = ixjff
+             i = lpdat(issys)%lij
+             do n = 1,lpdat(issys)%lijn
+               velmjs(i) = velmj(i)
+               velmj(i) = smvj1(j)
+               velmjo(i) = smvj2(j)
+               if (voidmj(i) .le. 1.0e-5) then
+                 velmj(i) = 0.0
+                 velmjo(i) = 0.0
+               endif
+               j = j + scskp
+               i = i + ijskp
+             enddo
+           endif
+$endif
+c
+c  Load pressure matrix.
+$if def,mmfld,1
+           if (lpdat(issys)%lnonmf .eq. 0) then
+             call preseq
+$if def,mmfld,3
+           else
+             call prseqm
+           endif
+c
+c  Solve matrix for change in pressure.
+           call syssol (0,.true.)
+c
+c  Compute new time velocities.
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             dvelfj(j) = vfdpk(j)*sourcp(ij1vn(i)+ixp) -
+     &       vfdpl(j)*sourcp(ij2vn(i)+ixp)
+             dvelgj(j) = vgdpk(j)*sourcp(ij1vn(i)+ixp) -
+     &       vgdpl(j)*sourcp(ij2vn(i)+ixp)
+             j = j + scskp
+             i = i + ijskp
+           enddo
+$if def,mmfld
+           if (lpdat(issys)%lnonmf .ne. 0) then
+             j = ixjff
+             i = lpdat(issys)%lij
+             do n = 1,lpdat(issys)%lijn
+               dvelmj(j) = vmdpk(j)*sourcp(ij1vn(i)+ixp) -
+     &         vmdpl(j)*sourcp(ij2vn(i)+ixp)
+               j = j + scskp
+               i = i + ijskp
+             enddo
+           endif
+$endif
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             velfj(i) = velfj(i) + dvelfj(j)
+             velgj(i) = velgj(i) + dvelgj(j)
+$if def,mmfld
+             if(lpdat(issys)%lnonmf.ne.0)then
+               if (voidmj(i) .gt. 0.99999) then
+                 velfj(i) = 0.0
+                 velgj(i) = 0.0
+               endif
+             endif
+$endif
+             if (velfj(i) .ge. 0.0) then
+               kf = ij1nx(i)
+             else
+               kf = ij2nx(i)
+             endif
+             if (velgj(i) .ge. 0.0) then
+               kg = ij1nx(i)
+             else
+               kg = ij2nx(i)
+             endif
+             tvar1 = voidfj(i)*rhofj(i)
+             tvar2 = voidgj(i)*rhogj(i)
+             mflowj(i) = (tvar1*velfj(i) + tvar2*velgj(i))*ajun(i)
+             mflowfj(i) = voidfj(i)*rhofj(i)*velfj(i)*ajun(i)
+             mflowgj(i) = voidgj(i)*rhogj(i)*velgj(i)*ajun(i)
+             flenth(i) = ((tvar1*ufj(i) + voidfj(i)*po(kf))*velfj(i) +
+     &       (tvar2*ugj(i) + voidgj(i)*po(kg))*velgj(i))*ajun(i)
+             j = j + scskp
+             i = i + ijskp
+           enddo
+$if def,mmfld
+           if (lpdat(issys)%lnonmf .ne. 0) then
+             j = ixjff
+             i = lpdat(issys)%lij
+             do n = 1,lpdat(issys)%lijn
+               velmj(i) = velmj(i) + dvelmj(j)
+               if (voidmj(i) .le. 1.0e-5) velmj(i) = 0.
+               mmflwj(i) = voidmj(i)*rhomj(i)*velmj(i)*ajun(i)
+               j = j + scskp
+               i = i + ijskp
+             enddo
+           endif
+$endif
+         else
+c
+c  No bad donoring, restore old donor properties.
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             ufj(i) = scvj1(j+4)
+             ugj(i) = scvj1(j+5)
+             voidfj(i) = scvj1(j+6)
+             voidgj(i) = scvj1(j+7)
+             qualaj(i) = scvj1(j+8)
+             rhofj(i) = scvj1(j+9)
+             rhogj(i) = scvj1(j+10)
+             j = j + scskp
+             i = i + ijskp
+           enddo
+           do i1 = 1,lpdat(issys)%lnoncn
+             j = ixjff
+             i = lpdat(issys)%lij
+             do n = 1,lpdat(issys)%lijn
+               qualnj(i+i1-1) = scvj1(j+i1-6)
+               j = j + scskp
+               i = i + ijskp
+             enddo
+           enddo
+$if def,mmfld
+           if (lpdat(issys)%lnonmf .ne. 0) then
+             j = ixjff
+             i = lpdat(issys)%lij
+             do n = 1,lpdat(issys)%lijn
+               velmjo(i) = smvj2(j)
+               umj(i) = smvj3(j)
+               voidmj(i) = smvj4(j)
+               rhomj(i) = smvj5(j)
+               j = j + scskp
+               i = i + ijskp
+             enddo
+             do i1 = 1,lpdat(issys)%lnonmf
+               j = ixjff
+               i = lpdat(issys)%lij
+               do n = 1,lpdat(issys)%lijn
+                 qualmj(i+i1-1) = smvj6(j+i1-1)
+                 j = j + scskp
+                 i = i + ijskp
+               enddo
+             enddo
+           endif
+$endif
+c
+c  Bottom of bad donoring logic.
+         endif
+c
+c  Bottom of water packer/stretch logic.
+       endif
+c
+c  Restore old velocities.
+       j = ixjff
+       i = lpdat(issys)%lij
+       do n = 1,lpdat(issys)%lijn
+         velfjo(i)=scvj2(j)
+         velgjo(i)=scvj4(j)
+$if def,mmfld
+         if (lpdat(issys)%lnonmf .ne. 0) then
+           if (voidmj(i) .gt. 0.99999) then
+             velfjo(i) = 0.0
+             velgjo(i) = 0.0
+           endif
+         endif
+$endif
+         j = j + scskp
+         i = i + ijskp
+       enddo
+$if def,mmfld
+       if (lpdat(issys)%lnonmf .ne. 0) then
+         j = ixjff
+         i = lpdat(issys)%lij
+         do n = 1,lpdat(issys)%lijn
+           velmjo(i) = smvj2(j)
+           velmjs(i) = 1.0
+           if (voidmj(i) .le. 1.0e-5) velmjo(i) = 0.0
+           j = j + scskp
+           i = i + ijskp
+         enddo
+       endif
+       i = lpdat(issys)%lij
+       do n = 1,lpdat(issys)%lijn
+         if (iand(jc(i),32768.eq.0 .and. iand(jc(i),2).ne.0) then
+           if cmptyp(jcnfnd(i)) .ne. 9) then
+$if def,dbgprnt
+             if (velfj(i).ne.0.0 .or. velgj(i).ne.0.0)
+     &       write (12,"('0$$$$$$$$ Nonzero velocity in blocked junction
+     &,',i10,'.','vfinlaa',i10,2es13.5)") junno(i),ncount,
+     &       velfj(i),velgj(i)
+$endif
+           endif
+         endif
+         i = i + ijskp
+       enddo
+$endif
+c
+c  Debug printout.
+$if def,dbgprnt
+       if (help.ne.0) then
+         if( iand(ihlppr(2),ishft(1,7)).ne.0 ) then
+           call helphd ('vfinl',10)
+           write (output,2001)
+ 2001  format ('0Final junction velocities and flows'/1x,131('=')/
+     & 7x,'junno(i)',3x,'flag',9x,'ajun(i)',6x,'voidfj(i)',4x,
+     & 'rhofj(i)',5x,'velfj(i)',11x,'vfdpk(j)',5x,'vgdpk(j)',
+     & 7x,'k',3x,'p(k)-po(k)'/31x,'mflowj(i)',4x,'voidgj(i)',4x,
+     & 'rhogj(i)',5x,'velgj(i)',11x,'vfdpl(j)',5x,'vgdpl(j)',7x,'l',
+     & 3x,'p(l)-po(l)'/1x,131('='))
+           j = ixjff
+           i = lpdat(issys)%lij
+           do n = 1,lpdat(issys)%lijn
+             if (iand(jc(i),2) .ne. 0) then
+               iflag = 't.d.jun.'
+             elseif (iand(jc(i),1) .ne. 0) then
+               iflag = 'choked'
+             elseif (iand(jcex(i),2) .ne. 0) then
+               iflag = 'ccfl'
+             else
+               iflag = ' '
+             endif
+             if (iand(jcex(i),ishft(1,20)) .ne. 0) write (output,2002)
+     &       junno(i),iflag,ajun(i),voidfj(i),rhofj(i),velfj(i),
+     &       vfdpk(j),vgdpk(j),ij1vn(i),sourcp(ij1vn(i)+ixp),mflowj(i),
+     &       voidgj(i),rhogj(i),velgj(i),vfdpl(j),vgdpl(j),ij2vn(i),
+     &       sourcp(ij2vn(i)+ixp)
+ 2002  format (6x,i10.9,2x,a11,1p,4g13.5,6x,2g13.5,1x,i4,1x,g13.5/
+     & 29x,4g13.5,6x,2g13.5,1x,i4,1x,g13.5)
+             j = j + scskp
+             i = i + ijskp
+           enddo
+         endif
+       endif
+$endif
+c
+$if def,nanscr
+c  Nan out dvelfj,dvelgj
+       call nanscj(1,2)
+c  Nan out scvj1(-5+10)
+       call nanscj(9,24)
+c  Nan out scvj2,scvj3,scvj4
+       call nanscj(15,17)
+c  Nan out scvj12
+       call nanscj(25,25)
+c  Nan out vfdpk,vgdpk,vfdpl,vgdpl
+       call nanscj(27,30)
+c  Nan out sathfx,stahgx,hsfg
+       call nanscv(83,85)
+c  Nan out velfjs,velgjs
+       call nanscj(102,103)
+$if def,mmfld
+c  Nan out vmdpk,vmdpl
+       call nanscj(111,112)
+c  Nan out dvelmj,smvj1,smvj2,smvj3,smvj4,smvj5,smvj6(6),smvj7
+       call nanscj(123,129)
+$endif
+$endif
+       return
+       end

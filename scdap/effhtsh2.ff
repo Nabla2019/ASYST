@@ -1,0 +1,386 @@
+*mlist
+*if def,selap
+       subroutine effhtsh2(pzroo,unuc,effcp,
+     & effgen,effk,oxheto,kx)
+!  Computes effective material properties and effective volumetric heat
+!  generation for finite element heat conduction solution.
+!  This subroutine calculates effective properties for shroud, in
+!  particular it takes into account the heat generation from oxidation
+!  of both sides of shroud.
+!
+!  Cognizant engineer: ljs.
+!
+cljs  simplified coding version of subroutine effht
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       include 'scddat.h'
+       include 'scdout.h'
+       include 'cons.h'
+       include 'intcom.h'
+       include 'iocom.h'
+       include 'miscon.h'
+       include 'ndxara.h'
+       include 'nhtara.h'
+       include 'scdcom.h'
+       include 'tblsp.h'
+       include 'ufiles.h'
+       include 'contrl.h'
+       include 'fecom.h'
+       include 'eht0.h'
+       include 'dbacct.h'
+!
+!  Input variables.
+!  pzroo     Power generated at outer zr-o2 reaction front in cladding
+!            at r=rnoxd (W/m).
+!  rnoxd     Distance of outer zr-o2 reaction front in cladding from
+!            component center (m) - equivalent to rnoxd.
+!  unuc      Average linear nuclear heat generation in fuel region
+!            (w/m).
+!  oxheto    heat generation from oxidation on outside surface (radial
+!            node 1) of shroud component (W/m)
+!
+!  Output variables.
+!  effcp     Effective volumetric heat capacity (J/m3-K).
+!  effcpf    Effective volumetric heat capacity in fuel (J/m3-K).
+!  effgen    Effective volumetric heat generation (W/m3).
+!  effk      Effective thermal conductivity (W/m-K).
+!  effqf     Effective volumetric heat generation (W/m3) in fuel region.
+!
+!  Local variables
+!
+!
+!  Local variables.
+       real(kr) ael,al,areaf,arean,cp0,cp1,dti,
+     & dxmin,effcp(ndrd),effgen(ndrd),effk(ndrd),
+     & fnrn,hgap,k0,kgap,pce,
+     & pzroo,oxheto,rfnr,rfuel,rmatmx,ro0,ro1,rpf,
+     & sfnrn,t0,t1,unuc,x0,x1
+       real fncp2,fnk,fnro,fnucr,polate,pol8,fneps
+       integer i,if,ilce,im,ix,j,kx,l,la,li,ml,n
+       real(kr) fsbcon,hgprad,fgpems,kgprd1
+       real(kr) tdum,cndum,fdum,rdum,rdum1,rdum2,rgap1,rgap2,tgap1,tgap2 
+       real(kr) thkgpr,denmsh,keffgp
+       real(kr) fgems1,thkgp1
+       real(kr) femiss        
+       real(kr) cpdum1,cpdum2,cpave,rodum1,rodum2,roave,cpvave
+c       
+       real(kr) hgapi, thkgpi1,keffgpi,fgpems1,fgpems2    
+c       
+       real term1
+       real tmpmid
+       real rm1,rm2,rox,vtot,vtox,vmet,wtox,wmet
+       real qmatav,areato
+       real rad1,rad2
+       real drtot,drmet,drox
+       real dum1,dum2,dum3,dum4,htcdm1,kgprad
+       integer imox,imet
+       integer ldum,mdum,laydum,imdum,nmxgap,nn1,nn2,nngap,nsw
+       integer matgs1
+       integer mshmat(ndrd)
+       integer mmm
+       integer m
+       integer ndbg
+       data dxmin/2.5e-6/
+cljs fsbcon = Stefan-Boltzmann constant
+       data fsbcon / 5.6697e-8/
+cljs fgpems = emissivity factor for radiation heat transfer across gap
+c       data fgpems / 0.75/
+!   control time for debug
+!
+!  Multiplier adjusts for density correction of fuel due to ballooning.
+         ndbg=0
+         do i =1,numelm2(inaz,icomp)
+         mshmat(i) = mshmt3(i,inaz,icomp)
+         end do
+         do i = 1,numelm(kx)
+         im = mshmat(i)
+         tmpmid = 0.5*(tcond3(i+1,inaz,icomp) +
+     &            tcond3(i,inaz,icomp))
+cljs  if mesh models gas gap between fuel and cladding, then calculate
+cljs  gap heat transfer.
+         if (modidx(6) .eq. 0) then
+           if(ngeom(icomp).eq.2.and.im.eq.9)then
+cljs   gap between fuel and cladding
+           call gaphtc(hgap,keffgp,thkgp1,mshmat,inaz)
+           htcgap(inaz,icomp) = hgap    
+           thkgp2(inaz,icomp) = thkgp1
+           kgpshi(inaz,icomp) = keffgp 
+           effk(i) = keffgp
+           effcp(i) = fncp2(im,tmpmid,kx)*fnro(im,tmpmid)
+           elseif(im.eq.5.or.im.eq.1)then
+cljs add modification for cladding with oxide layer
+cljs  weight thermal properties according to volumes of metallic Zr and
+cljs  oxidized Zr in mesh
+           imox = 5
+           imet = 1
+           rox = rnoxd((icomp-1)*ndax + inaz)
+           rm1 = xcond3(i,inaz,icomp)
+           rm2 = xcond3(i+1,inaz,icomp)
+             if(rox.lt.rm1)then
+cljs  mesh fully oxidized
+             effk(i) = fnk(imox,tmpmid,kx)
+             effcp(i) = fncp2(imox,tmpmid,kx)*fnro(imox,tmpmid)
+             elseif(rox.gt.rm2)then
+cljs  mesh fully metallic
+             effk(i) = fnk(imet,tmpmid,kx)
+             effcp(i) = fncp2(imet,tmpmid,kx)*fnro(imet,tmpmid)
+             else
+cljs   mesh contains layer of metallic Zr and layer of oxidized Zr
+               if(ngeom(icomp).eq.2)then
+               vtox = rm2*rm2 - rox*rox
+               vtot = rm2*rm2 - rm1*rm1
+               vmet = rox*rox - rm1*rm1
+               else
+               vtox = rm2 - rox
+               vtot = rm2 - rm1
+               vmet = rox - rm1
+               end if
+             wtox = vtox/vtot
+             wmet = vmet/vtot
+             effcp(i) = wtox*fncp2(imox,tmpmid,kx)*fnro(imox,tmpmid) +
+     &                  wmet*fncp2(imet,tmpmid,kx)*fnro(imet,tmpmid)
+               drtot = rm2 -rm1
+               drox = rm2 - rox
+               drmet = rox - rm1
+               effk(i) = drtot/((drmet/fnk(imet,tmpmid,kx)) +
+     &         (drox/fnk(imox,tmpmid,kx)))
+             end if
+           else
+cljs  radial mesh not modeling either a gap or partially
+cljs  oxidized cladding.
+           effcp(i) = fncp2(im,tmpmid,kx)*fnro(im,tmpmid)            
+           effk(i) = fnk(im,tmpmid,kx)
+           end if
+         else
+           if(ngeom(icomp).eq.2.and.im.eq.9)then
+             if(i.lt.nrcond2(inaz,icomp))then
+chm   inner gap (between fuel and heater)
+              call gaphtc2(hgap,hgapi,keffgp,keffgpi,thkgp1,thkgpi1,
+     &             mshmat,inaz)
+              htcgap(inaz,icomp) = hgapi    
+              thkgp2(inaz,icomp) = thkgpi1
+              kgpshi(inaz,icomp) = keffgpi 
+              effk(i) = keffgpi
+              effcp(i) = fncp2(im,tmpmid,kx)*fnro(im,tmpmid)
+              if(ndbg.eq.2)then
+               dum1=fncp2(im,tmpmid,kx)
+               dum2=fnro(im,tmpmid)
+               write(output,9035)icomp,inaz,i,im,dum1,dum2
+9035           format(' EFFHTSH for inner gap in rod; icomp=',i5,
+     &         ' inaz=',i5,  ' i=',i5,' im=',i5,' cp=',e10.4,
+     &         ' rho=',e10.4)          
+              endif
+             elseif(i.ge.nrcond2(inaz,icomp))then
+cljs   outer gap (between fuel and cladding OR heater and cladding)
+              call gaphtc2(hgap,hgapi,keffgp,keffgpi,thkgp1,thkgpi1,
+     &             mshmat,inaz)
+              htcgap(inaz,icomp) = hgap    
+              thkgp2(inaz,icomp) = thkgp1
+              kgpshi(inaz,icomp) = keffgp 
+              effk(i) = keffgp
+              effcp(i) = fncp2(im,tmpmid,kx)*fnro(im,tmpmid)
+              if(ndbg.eq.1)then
+               dum1=fncp2(im,tmpmid,kx)
+               dum2=fnro(im,tmpmid)
+               write(output,9036)icomp,inaz,i,im,dum1,dum2
+9036           format(' EFFHTSH for outer gap in rod; icomp=',i5,
+     &         ' inaz=',i5,  ' i=',i5,' im=',i5,' cp=',e10.4,
+     &         ' rho=',e10.4)          
+             end if
+            end if
+cljs       elseif(im.eq.5.or.im.eq.1)then
+           elseif(im.eq.1)then
+cljs add modification for cladding with oxide layer
+cljs  weight thermal properties according to volumes of metallic Zr and
+cljs  oxidized Zr in mesh
+           imox = 5
+           imet = 1
+           rox = rnoxd((icomp-1)*ndax + inaz)
+           rm1 = xcond3(i,inaz,icomp)
+           rm2 = xcond3(i+1,inaz,icomp)
+             if(rox.lt.rm1)then
+cljs  mesh fully oxidized
+             effk(i) = fnk(imox,tmpmid,kx)
+             effcp(i) = fncp2(imox,tmpmid,kx)*fnro(imox,tmpmid)
+             elseif(rox.gt.rm2)then
+cljs  mesh fully metallic
+             effk(i) = fnk(imet,tmpmid,kx)
+             effcp(i) = fncp2(imet,tmpmid,kx)*fnro(imet,tmpmid)
+             else
+cljs   mesh contains layer of metallic Zr and layer of oxidized Zr
+               if(ngeom(icomp).eq.2)then
+               vtox = rm2*rm2 - rox*rox
+               vtot = rm2*rm2 - rm1*rm1
+               vmet = rox*rox - rm1*rm1
+               else
+               vtox = rm2 - rox
+               vtot = rm2 - rm1
+               vmet = rox - rm1
+               end if
+             wtox = vtox/vtot
+             wmet = vmet/vtot
+             effcp(i) = wtox*fncp2(imox,tmpmid,kx)*fnro(imox,tmpmid) +
+     &                  wmet*fncp2(imet,tmpmid,kx)*fnro(imet,tmpmid) 
+               drtot = rm2 -rm1
+               drox = rm2 - rox
+               drmet = rox - rm1
+               effk(i) = drtot/((drmet/fnk(imet,tmpmid,kx)) +
+     &         (drox/fnk(imox,tmpmid,kx)))
+             end if
+           else
+cljs  radial mesh not modeling either a gap or partially
+cljs  oxidized cladding.
+           effcp(i) = fncp2(im,tmpmid,kx)*fnro(im,tmpmid)   
+           effk(i) = fnk(im,tmpmid,kx)
+           end if
+         endif
+         end do
+cljs  end of loop for calculation effk and effcp.
+cljs  For gap region in shroud calculate increase in effective
+cljs  conductivity for radiation heat transfer across gap.
+         if (modidx(6) .eq. 0) then
+           if(ngeom(icomp).eq.1)then
+cljs  check for gap in shroud
+             if(ishgpi(inaz,icomp).ge.2)then
+             tgap1 = tcond3(ishgpi(inaz,icomp)+1,inaz,icomp)
+             rgap1 = xcond3(ishgpi(inaz,icomp)+1,inaz,icomp)
+             tgap2 = tcond3(ishgpo(inaz,icomp)+1,inaz,icomp)
+             rgap2 = xcond3(ishgpo(inaz,icomp)+1,inaz,icomp)
+             htcdm1 = fgpems*fsbcon*(tgap2**2 + tgap1**2)*
+     &       (tgap2 + tgap1)
+             kgprad = htcdm1*(rgap2-rgap1)
+               do i = ishgpi(inaz,icomp),ishgpo(inaz,icomp)
+               effk(i) = effk(i) + kgprad
+               thkgp2(inaz,icomp) = rgap2 - rgap1
+               htcgap(inaz,icomp) = htcdm1 
+               kgpshi(inaz,icomp) = effk(i)
+               end do
+             end if
+           end if
+         else
+           if(ngeom(icomp).eq.1)then
+cljs  check for gap in shroud
+c 	     if(ishgpi(inaz,icomp).ge.2)then
+c             tgap1 = tcond3(ishgpi(inaz,icomp)+1,inaz,icomp)             
+c             rgap1 = xcond3(ishgpi(inaz,icomp)+1,inaz,icomp)
+              tgap1 = tcond3(ishgpi(inaz,icomp),inaz,icomp)             
+              rgap1 = xcond3(ishgpi(inaz,icomp),inaz,icomp)
+              tgap2 = tcond3(ishgpo(inaz,icomp)+1,inaz,icomp)
+              rgap2 = xcond3(ishgpo(inaz,icomp)+1,inaz,icomp)
+              fgpems = 0.0
+c hm 20140124 
+	     if (ishgpo(inaz,icomp).eq.numelm2(inaz,icomp)) then
+	       fgpems = 0.0
+	     elseif (ishgpi(inaz,icomp).ge.2)then  	    
+c hm 20140124 if(ishgpi(inaz,icomp).ge.2)then  
+              fgpems1=fneps(mshmat(ishgpi(inaz,icomp)-1),tgap1)
+              fgpems2=fneps(mshmat(ishgpo(inaz,icomp)+1),tgap1)
+              fgpems =1./((1./fgpems1) + (1./fgpems2) -1.)
+              if(ndbg.eq.2)then
+                write(output,9040)icomp,inaz,i,
+     &          mshmat(ishgpi(inaz,icomp)-1),
+     &          mshmat(ishgpo(inaz,icomp)+1)
+9040            format(' EFFHTSH ; icomp=',i5,
+     &          ' inaz=',i5,' i=',i5,' mat-in=',i5,' mat-out=',i5)          
+              end if 
+             endif
+             htcdm1 = fgpems*fsbcon*(tgap2**2 + tgap1**2)*
+     &         (tgap2 + tgap1)
+             kgprad = htcdm1*(rgap2-rgap1)
+             do i = ishgpi(inaz,icomp),ishgpo(inaz,icomp)
+               effk(i) = effk(i) + kgprad
+               thkgp2(inaz,icomp) = rgap2 - rgap1
+               htcgap(inaz,icomp) = htcdm1 
+               kgpshi(inaz,icomp) = effk(i)
+              end do
+           end if
+         endif
+cljs  End of calculation of radiation heat transfer gap in shroud.
+       do i=1,numelm2(inaz,icomp)
+       effgen(i) = 0.0
+       end do
+cljs  input nuclear or electrical heat generation
+cljs  also input oxidation heat generation
+       if (ngeom(icomp) .gt. 1) then
+!  Fuel rod or simulator rod
+cljs  start do01
+           im = mshmat(1)
+cljs  if02
+           if(mshmat(1).ge.6.and.mshmat(1).le.8.and.
+     &     idcomp(icomp).eq.0)then
+cljs  fuel rod
+           areato = pi*(xcond3(nrcond2(1,icomp),inaz,icomp)**2 -
+     &              xcond3(1,inaz,icomp)**2)
+           qmatav = unuc/areato
+           elseif(idcomp(icomp).eq.6)then
+cljs    simulator rod
+             if(im.eq.4 .or.
+     &       im.eq.21 .or. im.eq.22
+     &       .or. im.eq.23 .or.
+     &       im.eq.24.or.im.eq.25)then
+             areato = pi*(xcond3(nsimot(inaz,icomp)+1,inaz,icomp)**2 -
+     &              xcond3(1,inaz,icomp)**2)
+             qmatav = unuc/areato
+             end if
+           else
+           qmatav = 0.0
+           end if
+         do i = 1,numelm2(inaz,icomp)
+         im = mshmat(i)
+           if(idcomp(icomp).eq.0)then
+cljs   fuel rod
+             if(im.eq.6 .or. im.eq.7 .or. im.eq.8)then
+             rfnr = 0.5*(xcond3(i,inaz,icomp) + xcond3(i+1,inaz,icomp))
+             fnrn = fnucr(rfnr,prdpr(1,icomp),xrdpr(1,icomp),
+     &       nrdpr(icomp),zcond(kx),paxpz(1,1,icomp),naxpz(icomp),
+     &       kshapz(icomp))
+             effgen(i) = fnrn*qmatav
+             end if
+           elseif(idcomp(icomp).eq.6)then
+cljs  simulator rod
+             if(im.eq.4 .or. im.eq.21 .or. im.eq.22
+     &       .or. im.eq.23 .or. im.eq.23 .or. im.eq.25)then
+cljs    no radial power distribution for electrical heat element.
+             effgen(i) = qmatav
+             end if
+           else
+cljs     mesh does not include nuclear fuel or electrical heating
+cljs     material
+           effgen(i) = 0.0
+           end if
+         end do
+       end if
+!  Chemical energy sources.
+       if (pzroo.ne.0.) then
+cljs account for heat generation due to oxidation.
+cljs oxidation heat generation is put into outermost mesh
+             pce = pzroo
+!  Add chemical energy sources to effective volumetric heat sources.
+           ix = nrodes(kx) -1
+cljs  oxidation heat generation added at outermost cladding mesh
+               if (ngeom(icomp) .eq. 1) then
+c       shroud
+                 ael = (xcond3(ix+1,inaz,icomp) -
+     &           xcond3(ix,inaz,icomp))*slbwd(icomp)
+               else
+c       rods
+                 rad2 = xcond3(ix+1,inaz,icomp)
+                 rad1 = xcond3(ix,inaz,icomp)
+                 ael = pi*(rad2**2 - rad1**2)
+               endif
+cljs   convert oxidation heat generation from W/m to W/m3
+            pce = pce/ael
+            effgen(ix) = effgen(ix) + pce
+cljs   end oxidation generation for inside surface shroud (maximum
+cljs   radial node)
+       end if
+       if(oxheto.gt.1.e-8)then
+cljs   oxidation heat generation for outside surface shroud (radial
+cljs   node 1)
+       ael = xcond3(2,inaz,icomp)*slbwd(icomp)
+       pce = oxheto/ael
+       effgen(1) = pce + effgen(1)
+       end if
+       return
+       end
+*endif

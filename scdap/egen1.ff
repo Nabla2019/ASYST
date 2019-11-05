@@ -1,0 +1,229 @@
+*mlist
+*if def,selap
+      subroutine egen1 (bg,xm2,ng2,netco,genz,vole,ix,ngnm,nadt,ft, bv,
+     +powrat,r,z,ielem,jelem,elemij,imme,ncslp)
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: ewc.
+c
+c This is a COUPLE ROUTINE
+*in32 ng2
+*in32 netco
+*in32 ix
+*in32 ngnm
+*in32 nadt
+*in32 ielem
+*in32 jelem
+*in32 elemij
+*in32 imme
+*in32end
+c
+       use gentblc
+       implicit none
+       include 'fast.h'
+       include 'scddat.h'
+       include 'parm.h'
+       include 'iparm.h'
+       include 'cpmdat.h'
+       include 'slumpv.h'
+       include 'comctl.h'
+       include 'rkinc.h'
+       include 'trpblk.h'
+       include 'convarc.h'
+       include 'contrl.h'
+       include 'ufiles.h'
+       include 'scdpow.h'
+c  Local variables.
+      integer i,ifun,ix,j,k,kfun,l,n,nadt,ncslp,ng2,ngnm
+      integer ii,ipow,ir5gt,mtl,mtlast,netco,ng,i1
+      logical err
+      real bg,ft,genz,powdr5,valgn,vole,xm2
+      real powrat,bv,frac1(1),pwkinc,r,z
+      dimension bg(*),xm2(*),netco(*),ng2(*),genz(4,*),vole(4,*)
+      dimension powrat(*),bv(*)
+      dimension nadt(3,*),ft(2,*),ix(5,*),ngnm(*)
+      dimension r(*),z(*)
+      integer ielem(*),jelem(*),elemij(*),imme(*)
+      integer norent
+      real zmintp,zmaxtp,zminbt,zmaxbt,powbas,powbs1,powbs2
+      external inpol,tcpowr
+      if (nslph .eq.-1) then
+        if      (npdtbi .eq. 0) then
+c         No tables.
+          do 10 n = 1, numnp
+            bg(n) = xm2(n)
+   10     continue
+        else if (npdtbi .eq. 1) then
+c         Only 1 Relap5 general table for all elements with power.
+          call tcpowr (npdtbo, time, powdr5)
+          do 20 n = 1, numnp
+            bg(n) = powdr5 * xm2(n)
+   20     continue
+        else
+c         More than 1 table; test each node separately.
+          ir5gt = 0
+          do 30 n = 1, numnp
+            if (ng2(n) .eq. 0) then
+              bg(n) = xm2(n)
+            else
+              if (ng2(n) .ne. ir5gt) then
+                ir5gt = ng2(n)
+                call tcpowr (netco(n), time, powdr5)
+              end if
+              bg(n) = powdr5 * xm2(n)
+            end if
+   30     continue
+        end if
+c Calculate power in the elements with internal generation.
+        mtlast = 0
+        do n = 1,numel
+          mtl = ix(5,n)
+          if (mtl .ne. mtlast) then
+            mtlast = mtl
+            ipow = 1
+            do ng = 1,ngenm
+              if (ix(5,n) .eq. ngnm(ng)) ipow = 0
+            enddo
+          end if
+          if (ipow .eq. 1) then
+            do ii = 1,4
+              genz(ii,n) = vole(ii,n)*bg(ix(ii,n))
+            enddo
+          endif
+        enddo
+      else
+        if (ncslp.ge.1) then
+          ifun = 0
+          if (nslph .eq. 1) then
+            i1 = nctcno(mcp)
+            call gtpolat (gen(i1)%gtinfo,gtptr(i1)%gtbl,timehy,
+     &      frac1(1:1),err)
+          else
+            frac1(1) = 1.0
+          endif
+          do n = 1,numnp
+chm            bg(n) = xm2(n)*frac1(1)
+chm: In case of user-defined slumping, the multiplication factor defined
+chm  in card 5m200000 was multiplied twice: slmpdt and egen1.
+chm  Correction: remove multiplication in egen1
+            bg(n) = xm2(n)
+            if(ng2(n).gt.0) then
+              kfun = ng2(n)
+              if(ifun.ne.kfun) then
+                ifun = kfun
+                call inpol (nadt,ft,kfun,time,valgn)
+                bg(n) = xm2(n)*valgn
+              endif
+            endif
+          enddo
+        else
+c if ncpow = 3, genz multiplied by current reactor power
+c in EGEN2 for ratio of current reactor power to reactor power
+c at time that material slumped in each element.  In subroutine MUPDAT,
+c genz(1,n) was divided by power of reactor at time that material
+c slumped into element n.
+c case of power in slumped material from RELAP5 reactor kinetics.
+c so update bg every time step.
+          do n = 1,numnp
+            bg(n) = 0.0
+          enddo
+          if (nslph .eq. 1) then
+            i1 = nctcno(mcp)
+            call gtpolat (gen(i1)%gtinfo,gtptr(i1)%gtbl,timehy,
+     &      frac1(1:1),err)
+          endif
+          do n = 1,numel
+            pwkinc = 1.0
+            if (ncpow .eq. 3) then
+              if (powrat(n) .ge. 1.e-10) then
+                pwkinc = pwrfdk/powrat(n)
+              endif
+            elseif (nslph.eq.1 .and. ncslp.eq.0) then
+              if (powrat(n) .eq. 0.) powrat(n) = frac1(1)
+              genz(1,n) = genz(1,n)*frac1(1)/powrat(n)
+              genz(2,n) = genz(2,n)*frac1(1)/powrat(n)
+              genz(3,n) = genz(3,n)*frac1(1)/powrat(n)
+              genz(4,n) = genz(4,n)*frac1(1)/powrat(n)
+              powrat(n) = frac1(1)
+            endif
+            i = ix(1,n)
+            j = ix(2,n)
+            k = ix(3,n)
+            l = ix(4,n)
+            if(bv(i).ge.1.e-10) bg(i)=bg(i)+pwkinc*genz(1,n)/bv(i)
+            if(bv(j).ge.1.e-10) bg(j)=bg(j)+pwkinc*genz(2,n)/bv(j)
+            if(bv(k).ge.1.e-10) bg(k)=bg(k)+pwkinc*genz(3,n)/bv(k)
+            if(bv(l).ge.1.e-10) bg(l)=bg(l)+pwkinc*genz(4,n)/bv(l)
+          enddo
+        endif
+      endif
+c   if element is only partially filled with debris, then put power in
+c   nodes at top of element into nodes at bottom so that no power is
+c   lost.  Nodes at top of element have temperature fixed to temperature
+c   at bottom of element to preclude artifical loss of heat by conductio
+c   Thus temperature of nodes at top of partially filled element is
+c   independent of power at top of element.
+      do620n=1,numel
+      if(ix(5,n).ne.1)go to 620
+      if(imme(n).ne.1)go to 620
+      i=ix(1,n)
+      j=ix(2,n)
+      k=ix(3,n)
+      l=ix(4,n)
+c   find orientation of element.
+c    four configurations of mesh are considered; norent =1 = crotch
+c    element at bottom of mesh, norent = 2 = all other crotch elements,
+c    norent = 3 = quadrilateral elements to left of crotch elements,
+c    norent = 4 = quadrilateral elements to right of crotch element.
+       norent=0
+       zmintp=min(z(j),z(k),z(l))
+       zmaxtp=max(z(j),z(k),z(l))
+       if(abs(zmaxtp-zmintp).le.0.001)then
+c      "crotch element"
+       norent=2
+       if(r(i).lt.1.e-3)norent=1
+       endif
+       if(norent.ge.1)go to 615
+c
+c      quadrilateral element.
+c
+       zminbt=min(z(i),z(j))
+       zmaxbt=max(z(i),z(j))
+       if(z(j).gt.z(i))then
+       norent=4
+       else
+       norent=3
+       end if
+615    continue
+       if(norent.eq.1.or.norent.eq.2)then
+c   triangular element; zero out power at all nodes on top, and transfer
+c   power to bottom node.
+       powbas=bg(i)*bv(i)
+       bg(i)=(powbas+bg(l)*bv(l)+bg(k)*bv(k)+bg(j)*bv(j))/bv(i)
+       bg(l)=0.0
+       bg(k)=0.0
+       bg(j)=0.0
+       end if
+       if(norent.eq.3)then
+c   element to left of triangular elements; transfer power in upper
+c   left node to bottom left node.
+       powbs1=bg(l)*bv(l)
+       powbas=bg(i)*bv(i)
+       bg(i)=(powbas+bg(l)*bv(l))/bv(i)
+       bg(l)=0.0
+       powbs2=bg(i)*bv(i)
+       end if
+       if(norent.eq.4)then
+c    element to right of triangular element, transfer power in upper
+c    right node to bottom right node.
+       powbas=bg(i)*bv(i)
+       powbs1=bg(j)*bv(j)
+       bg(i)=(powbas+bg(j)*bv(j))/bv(i)
+       bg(j)=0.0
+       powbs2=bg(i)*bv(i)
+       end if
+620   continue
+      return
+      end
+*endif

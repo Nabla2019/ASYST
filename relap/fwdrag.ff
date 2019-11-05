@@ -1,0 +1,724 @@
+*mlist
+       subroutine fwdrag
+c  Computes wall drag terms including flow regimes and htfs
+c  correlation.
+c
+c  Cognizant engineer: dmk.
+c  Modified 9/10/92 by wlw.
+c
+       use invhtb
+       use lpdatc
+       implicit none
+       include 'cons.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'jundat.h'
+       include 'htsrcm.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'lvectr.h'
+       include 'scrtch.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'scddat.h'
+       include 'debcom.h'
+       include 'tblsp.h'
+c
+c  Local variables.
+       real fholdf, fholdg, philam, phitur, pfinal
+       real avoid,bvoid,dhyx,fwfrat,rhox,velz,viscx
+$if def,mmfld,1
+       real flammt,viscm
+       real reynum,frilmn,fritrb,fritbu,ftran,ax,bx,cx,shapx,edrx,reyx,
+     & fhwf,fhwg,viscwf,viscwg,tsurf,remnlm,remxlm,remntr
+       integer iones(2),l,j
+       logical erx
+       data iones /1,1/
+       data remnlm,remxlm,remntr/50.0,2200.0,3000.0/
+$if def,selap
+       real afw,bfw,d,ee
+$if def,debth,5
+       real twindo,alphab,tgsat,preduc
+       real fwga,fwgb,fwfa,fwfb,acons,bcons,jg,jf,kg,kf,etag,etaf,zeta
+       real alph1,alph2,alph3,alph4,dbubl,dpart,eps,wfrac
+       integer idbm,kaxn,jcmp
+       logical poschf,posdry
+$endif
+       integer i,i1,i1s,ih1,ih2,ix,izz,nh1,nh2,nh3,m,nd
+$if def,mmfld,1
+       integer ih3
+       logical bad
+c
+c  Inline functions, interpolated approx to Moody friction factors.
+       reynum(rhox,velz,dhyx,viscx) = rhox*velz*dhyx/viscx
+c
+       frilmn(reyx,shapx) = 64.0/(reyx*shapx)
+c
+       fritrb(edrx,reyx) = 1.0/(-2.0*log10((edrx/3.7) +
+     & (2.51/reyx)*(1.14 - 2.0*log10(edrx + 21.25/
+     & (reyx**0.9)))))**2
+c
+       fritbu(ax,bx,cx,reyx) = ax + bx*(reyx**(-cx))
+c
+       ftran(reyx) = min(1.0,max(0.0,(3.75 - (8250./max(2000.,reyx)))))
+c
+       fwfrat(avoid, bvoid) = max(1.0e-15, avoid)/max(1.0e-15, bvoid)
+c
+c  Friction factor loop.
+       if (lvnofr(lpdat(issys)%llvect) .ne. 0) then
+         i1 = lvnofr(lpdat(issys)%llvect)
+         do nd = 0,2
+           if (lvptr(i1) .ne. 0) then
+             do m = 1,lvptr(i1)
+               i1 = i1 + 1
+               i = lvptr(i1)
+               fwalf(i+nd) = 0.0
+               fwalg(i+nd) = 0.0
+             enddo
+           endif
+           i1 = i1 + 1
+         enddo
+       endif
+       if (lvwifr(lpdat(issys)%llvect) .ne. 0) then
+         nh3 = 0
+         bad = .false.
+         i1 = lvwifr(lpdat(issys)%llvect)
+         do nd = 0,2
+           if (lvptr(i1) .ne. 0) then
+             i1s = i1
+             do m = 1,lvptr(i1)
+               i1 = i1 + 1
+               i = lvptr(i1)
+               ix = vctrls(i)
+               fwfaf1(ix) = fwalf(i+nd)
+               fwfag1(ix) = fwalg(i+nd)
+               ratdpf(ix+nd) = 0.5/diamv(i+nd)
+             enddo
+c  Get basic friction factors.
+             i1 = i1s
+             ih1 = ixvff
+             ih2 = ixvff
+             nh1 = 0
+             nh2 = 0
+             do m = 1,lvptr(i1)
+               i1 = i1 + 1
+               i = lvptr(i1)
+               ix = vctrls(i)
+               if (pfinrg(ix) .lt. 1.0) then
+                 jhld1(ih1) = i
+                 ih1 = ih1 + scskp
+                 nh1 = nh1 + 1
+               else
+                 jhld2(ih2) = i
+                 ih2 = ih2 + scskp
+                 nh2 = nh2 + 1
+               endif
+             enddo
+             if (nh1 .ne. 0) then
+$if def,mmfld
+               if (lnonmf(issys) .ne. 0) then
+                 ih3 = ixvff
+                 i1 =i1s
+                 do m =1,lvptr(i1)
+                   i1 = i1+1
+                   i = lvptr(i1)
+                   if (voidmo(i) .gt. 1.0e-10) then
+                     jhld3(ih3) = i
+                     ih3 = ih3 + scskp
+                     nh3 = nh3 + 1
+                   endif
+                 enddo
+               endif
+$endif
+               ih1 = ixvff
+               do m = 1,nh1
+                 i = jhld1(ih1)
+                 ix = vctrls(i)
+                 aterm(ih1) = fwfrat(fwfxaf(ix+nd),(1.0 - voidgo(i)))
+                 bterm(ih1) = fwfrat(fwfxag(ix+nd),voidgo(i))
+                 axvelf(ih1) = sumvfx(ix+nd)/max(1.0e-15,aterm(ih1))
+                 bxvelg(ih1) = sumvgx(ix+nd)/max(1.0e-15,bterm(ih1))
+                 reynf2(ix) = reynum(rhof(i),axvelf(ih1),diamv(i+nd),
+     &           viscf(i))
+                 reyng2(ix) = reynum(rhog(i),bxvelg(ih1),diamv(i+nd),
+     &           viscg(i) )
+                 frtrf2(ix) = ftran(reynf2(ix))
+                 frtbf2(ix) = 0.0
+                 frlmf2(ix) = 0.0
+                 if (frtrf2(ix) .gt. 0.0) then
+                   if(iand(imap(i+nd),4096) .eq. 0) then
+                     frtbf2(ix) = fritrb(roughv(i+nd),
+     &               max(remntr,reynf2(ix)))
+                   else
+                     frtbf2(ix) = fritbu(frica(i+nd),fricb(i+nd),
+     &               fricc(i+nd),max(remntr,reynf2(ix)))
+                   endif
+                 endif
+                 if (frtrf2(ix) .lt. 1.0) frlmf2(ix) =
+     &           frilmn(min(remxlm,max(remnlm,reynf2(ix))),
+     &           fshape(i+nd))
+                 fwf2(ix) = fwfxaf(ix+nd)*sumvfx(ix+nd)*
+     &           (frlmf2(ix) + frtrf2(ix)*(frtbf2(ix) - frlmf2(ix)))
+                 frtrg2(ix) = ftran(reyng2(ix))
+                 frtbg2(ix) = 0.0
+                 frlmg2(ix) = 0.0
+                 if (frtrg2(ix) .gt. 0.0) then
+                   if (iand(imap(i+nd),4096) .eq. 0) then
+                     frtbg2(ix) = fritrb(roughv(i+nd),
+     &               max(remntr,reyng2(ix)))
+                   else
+                     frtbg2(ix) = fritbu(frica(i+nd),fricb(i+nd),
+     &               fricc(i+nd),max(remntr,reyng2(ix)))
+                   endif
+                 endif
+                 if (frtrg2(ix) .lt.1.0) frlmg2(ix) =
+     &           frilmn(min(remxlm,max(remnlm,reyng2(ix))),fshape(i+nd))
+                 fwg2(ix) = fwfxag(ix+nd)*sumvgx(ix+nd)*
+     &           (frlmg2(ix) + frtrg2(ix)*(frtbg2(ix) - frlmg2(ix)))
+                 ih1 = ih1 + scskp
+               enddo
+             endif
+             ih2 = ixvff
+             do m = 1,nh2
+               i = jhld2(ih2)
+               ix = vctrls(i)
+               reynf2(ix) = 0.0
+               reyng2(ix) = 0.0
+               fwf2(ix) = 0.0
+               fwg2(ix) = 0.0
+               frlmf2(ix) = 0.
+               frtrf2(ix) = 0.
+               frtbf2(ix) = 0.
+               frlmg2(ix) = 0.
+               frtrg2(ix) = 0.
+               frtbg2(ix) = 0.
+               ih2 = ih2 + scskp
+             enddo
+c  Get second friction factors for interpolation.
+             i1 = i1s
+             ih1 = ixvff
+             ih2 = ixvff
+             nh1 = 0
+             nh2 = 0
+             do m = 1,lvptr(i1)
+               i1 = i1 + 1
+               i = lvptr(i1)
+               ix = vctrls(i)
+               if (pfinrg(ix) .gt. 0.0) then
+                 jhld1(ih1) = i
+                 ih1 = ih1 + scskp
+                 nh1 = nh1 + 1
+               else
+                 jhld2(ih2) = i
+                 ih2 = ih2 + scskp
+                 nh2 = nh2 + 1
+               endif
+             enddo
+             ih1 = ixvff
+             do m = 1,nh1
+               i = jhld1(ih1)
+               ix = vctrls(i)
+               aterm(ih1) = fwfrat(fwfaf1(ix),(1.0 - voidgo(i)))
+               bterm(ih1) = fwfrat(fwfag1(ix),voidgo(i))
+               axvelf(ih1) = sumvfx(ix+nd)/max(1.0e-15,aterm(ih1))
+               bxvelg(ih1) = sumvgx(ix+nd)/max(1.0e-15,bterm(ih1))
+               reynf1(ix) = reynum(rhof(i),axvelf(ih1),diamv(i+nd),
+     &         viscf(i))
+               reyng1(ix) = reynum( rhog(i),bxvelg(ih1),diamv(i+nd),
+     &         viscg(i) )
+               frtrf1(ix) = ftran(reynf1(ix))
+               frtbf1(ix) = 0.0
+               frlmf1(ix) = 0.0
+               if (frtrf1(ix) .gt. 0.0) then
+                 if (iand(imap(i+nd),4096) .eq. 0) then
+                   frtbf1(ix) = fritrb(roughv(i+nd),
+     &             max(remntr,reynf1(ix)))
+                 else
+                   frtbf1(ix) = fritbu(frica(i+nd),fricb(i+nd),
+     &             fricc(i+nd),max(remntr,reynf1(ix)))
+                 endif
+               endif
+               if (frtrf1(ix) .lt. 1.0) frlmf1(ix) =
+     &         frilmn(min(remxlm,max(remnlm,reynf1(ix))),fshape(i+nd))
+               fwf1(ix) = fwfaf1(ix)*sumvfx(ix+nd)*
+     &         (frlmf1(ix) + frtrf1(ix)*( frtbf1(ix) - frlmf1(ix)))
+               frtrg1(ix) = ftran(reyng1(ix))
+               frlmg1(ix) = 0.0
+               frtbg1(ix) = 0.0
+               if (frtrg1(ix) .gt. 0.0) then
+                 if (iand(imap(i+nd),4096) .eq. 0) then
+                   frtbg1(ix) = fritrb(roughv(i+nd),
+     &             max(remntr,reyng1(ix)))
+                 else
+                   frtbg1(ix) = fritbu(frica(i+nd),fricb(i+nd),
+     &             fricc(i+nd),max(remntr,reyng1(ix)))
+                 endif
+               endif
+               if (frtrg1(ix) .lt.1.0) frlmg1(ix) =
+     &         frilmn(min(remxlm,max(remnlm,reyng1(ix))),fshape(i+nd))
+               fwg1(ix) = fwfag1(ix)*sumvgx(ix+nd)*
+     &         (frlmg1(ix) + frtrg1(ix)*(frtbg1(ix) - frlmg1(ix)))
+               ih1 = ih1 + scskp
+             enddo
+             ih2 = ixvff
+             do m = 1,nh2
+               i = jhld2(ih2)
+               ix = vctrls(i)
+               reynf1(ix) = 0.0
+               reyng1(ix) = 0.0
+               fwf1(ix) = 0.0
+               fwg1(ix) = 0.0
+               frlmf1(ix) = 0.
+               frtrf1(ix) = 0.
+               frtbf1(ix) = 0.
+               frlmg1(ix) = 0.
+               frtrg1(ix) = 0.
+               frtbg1(ix) = 0.
+               ih2 = ih2 + scskp
+             enddo
+c  Interpolation for flow regime/inverted flow regime.
+             i1 = i1s
+             do m = 1,lvptr(i1)
+               i1 = i1 + 1
+               i = lvptr(i1)
+               ix = vctrls(i)
+               pfinrg(ix) = max(0.0,min(pfinrg(ix),1.0))
+               fwalf(i+nd) = rhof(i)*(fwf2(ix) + pfinrg(ix)*
+     &         (fwf1(ix) - fwf2(ix)))
+               fwalg(i+nd) = rhog(i)*(fwg2(ix) + pfinrg(ix)*
+     &         (fwg1(ix) - fwg2(ix)))
+               badfw(ix) = fwalf(i+nd).lt.0.0 .or. fwalg(i+nd).lt.0.0
+               bad = bad .or. badfw(ix)
+               sumvfx(ix+nd)  = max(1.0e-20,sumvfx(ix+nd))
+               sumvgx(ix+nd)  = max(1.0e-20,sumvgx(ix+nd))
+             enddo
+c
+             if (bad .and. help.ge.0) help = 1
+$if def,dbgprnt
+             if (help.ne.0 .and. iand(ihlppr(1),ishft(1,7)).ne.0) then
+               if (bad) write (output,9030)
+ 9030  format ('0******** Bad wall friction coefficient in fwdrag')
+c  Diagnostic print.
+               call helphd ('fwdrag',8)
+               write (output, 9002)
+ 9002  format ('0Volume terms'/1x,102('=')/7x,
+     & 'volno(i) ',2x,'vctrl(i) ',13x,'voidf(i) ',4x,'rhof(i)  ',4x,
+     & 'viscf(i) ',4x,'diamv(i) ', 4x,'fwalf(i) '/18x,
+     & 'imap(i)  ',13x,'voidg(i) ',4x,'rhog(i)  ',4x,'viscg(i) ',4x,
+     & 'roughv(i)',4x,'fwalg(i) '/,40x,
+     & 'fshape(i)',4x,'frica(i)',5x,'fricb(i)',5x,'fricc(i)'/1x,
+     & 102('='))
+               i1 = i1s
+               do m = 1,lvptr(i1)
+                 i1 = i1 + 1
+                 i = lvptr(i1)
+                 if( iand(vctrlx(i),1).ne.0 ) then
+                   izz = iand(vctrl(i),not(8))
+                   write (output,9003) volno(i),izz,(1.0 - voidgo(i)),
+     &             rhof(i),viscf(i),diamv(i+nd),fwalf(i+nd),
+     &             imap(i+nd),voidgo(i),rhog(i),viscg(i),
+     &             roughv(i+nd),fwalg(i+nd),fshape(i+nd),
+     &             frica(i+nd),fricb(i+nd),fricc(i+nd)
+ 9003  format (6x,i10.9,i22,1p,5g13.5/16x,i22,5g13.5/38x,4g13.5)
+                 endif
+                 i = i + ivskp
+               enddo
+               write (output,9012)
+ 9012  format ('0scratch terms, friction factor loop'/1x,122('=')/
+     & 3x,'nd',3x,'volno(i)',5x,
+     & 'sumvfx(l)',4x,'fwfaf1(l)',4x,
+     & 'reynf1(l)',4x,'fwf1(l)  ',4x,'fwfxaf(l)',4x,'reynf2(l)',4x,
+     & 'fwf2(l)  ',4x,'pfinrg(l)',/21x,
+     & 'sumvgx(l)',4x,'fwfag1(l)',4x,
+     & 'reyng1(l)',4x,'fwg1(l)  ',4x,'fwfxag(l)',4x,'reyng2(l)',4x,
+     & 'fwg2(l)  '/21x,
+     & 'frlmf1(l)',4x,'frtrf1(l)',4x,'frtbf1(l)',4x,'frlmf2(l)',4x,
+     & 'frtrf2(l)',4x,'frtbf2(l)',4x,/21x,
+     & 'frlmg1(l)',4x,'frtrg1(l)',4x,'frtbg1(l)',4x,'frlmg2(l)',4x,
+     & 'frtrg2(l)',4x,'frtbg2(l)'/1x,122('='))
+               i1 = i1s
+               do m = 1,lvptr(i1)
+                 i1 = i1 + 1
+                 i = lvptr(i1)
+                 if( iand(vctrlx(i),1).ne.0 ) then
+                   ix = vctrls(i)
+                   write (output,9013) nd,volno(i),sumvfx(ix+nd),
+     &             fwfaf1(ix),reynf1(ix),fwf1(ix),fwfxaf(ix+nd),
+     &             reynf2(ix),fwf2(ix),pfinrg(ix),sumvgx(ix+nd),
+     &             fwfag1(ix),reyng1(ix),fwg1(ix),fwfxag(ix+nd),
+     &             reyng2(ix),fwg2(ix),frlmf1(ix),frtrf1(ix),frtbf1(ix),
+     &             frlmf2(ix),frtrf2(ix),frtbf2(ix),frlmg1(ix),
+     &             frtrg1(ix),frtbg1(ix),frlmg2(ix),frtrg2(ix),
+     &             frtbg2(ix)
+ 9013  format (3x,i2,3x,i10.9,1x,1p,8g13.5/19x,7g13.5/19x,6g13.5/19x,
+     & 6g13.5)
+                 endif
+               enddo
+             endif
+$endif
+           endif
+           i1 = i1 + 1
+         enddo
+c
+         i1 = lvwifr(lpdat(issys)%llvect)
+         do nd = 0,2
+           if (lvptr(i1) .ne. 0) then
+             i1s = i1
+c  Phase apportioning loop.
+             i1 = i1s
+             nh1 = 0
+             ih1 = ixvff
+             do m = 1,lvptr(i1)
+               i1 = i1 + 1
+               i = lvptr(i1)
+               if ((1.0 - voidgo(i))*voidgo(i).gt.0.0 .and.
+     &         (fwalf(i+nd).ne.0.0 .or. fwalg(i+nd).ne.0.0)) then
+                 jhld1(ih1) = i
+                 ih1 = ih1 + scskp
+                 nh1 = nh1 + 1
+               endif
+             enddo
+             ih1 = ixvff
+             do m = 1,nh1
+               i = jhld1(ih1)
+               ix = vctrls(i)
+c  Friction gradients.
+               axvelf(ih1) = (1.0 - voidgo(i))*sumvfx(ix+nd)
+               bxvelg(ih1) = voidgo(i)*sumvgx(ix+nd)
+               reynf1(ix) = reynum(rhof(i),axvelf(ih1),diamv(i+nd),
+     &         viscf(i))
+               reyng1(ix) = reynum(rhog(i),bxvelg(ih1),diamv(i+nd),
+     &         viscg(i) )
+               frtrf1(ix) = ftran(reynf1(ix))
+               frtbf1(ix) = 0.0
+               frlmf1(ix) = 0.0
+               if (frtrf1(ix) .gt. 0.0) then
+                 if (iand(imap(i+nd),4096) .eq. 0) then
+                   frtbf1(ix) = fritrb(roughv(i+nd),
+     &             max(remntr,reynf1(ix)))
+                 else
+                   frtbf1(ix) = fritbu(frica(i+nd),fricb(i+nd),
+     &             fricc(i+nd),max(remntr,reynf1(ix)))
+                 endif
+               endif
+               if (frtrf1(ix) .lt. 1.0) frlmf1(ix) =
+     &         frilmn(min(remxlm,max(remnlm,reynf1(ix))),fshape(i+nd))
+               dpdxfx(ix) = rhof(i)*axvelf(ih1)*axvelf(ih1)*
+     &         (frlmf1(ix) + frtrf1(ix)*(frtbf1(ix) - frlmf1(ix)))
+               frtrg1(ix) = ftran(reyng1(ix))
+               frlmg1(ix) = 0.0
+               frtbg1(ix) = 0.0
+               if (frtrg1(ix) .gt. 0.0) then
+                 if (iand(imap(i+nd),4096) .eq. 0) then
+                   frtbg1(ix) = fritrb(roughv(i+nd),
+     &             max(remntr,reyng1(ix)))
+                 else
+                   frtbg1(ix) = fritbu(frica(i+nd),fricb(i+nd),
+     &             fricc(i+nd),max(remntr,reyng1(ix)))
+                 endif
+               endif
+               if (frtrg1(ix) .lt. 1.0) frlmg1(ix) =
+     &         frilmn(min(remxlm,max(remnlm,reyng1(ix))),fshape(i+nd))
+               dpdxgx(ix) = rhog(i)*bxvelg(ih1)*bxvelg(ih1)*
+     &         (frlmg1(ix) + frtrg1(ix)*( frtbg1(ix) - frlmg1(ix)))
+c  h.t.f.s. two-phase friction correlation.
+               gfwabs(ix) = min(8711.111111111,(axvelf(ih1)*rhof(i) +
+     &         bxvelg(ih1)*rhog(i)))
+               zambda(ix) = log10(rhog(i)/rhof(i)) +
+     &         0.2*log10(viscf(i)/viscg(i)) + 2.5
+               ctermx(ix) = max(2.0,(-2.0 + (28.0 - 0.3*
+     &         sqrt(gfwabs(ix)))*exp(zambda(ix)*zambda(ix)/(1.0e-04*
+     &         gfwabs(ix) - 2.4))))
+               tpdpdx(ix) = dpdxfx(ix) + dpdxgx(ix) +
+     &         ctermx(ix)*sqrt(dpdxfx(ix)*dpdxgx(ix))
+               ratdpf(ix+nd) = ratdpf(ix+nd)*tpdpdx(ix)/
+     &         (fwalf(i+nd)*sumvfx(ix+nd) + fwalg(i+nd)*sumvgx(ix+nd))
+               ih1 = ih1 + scskp
+             enddo
+c  Wall drag coefficients.
+             i1 = i1s
+             do m = 1,lvptr(i1)
+               i1 = i1 + 1
+               i = lvptr(i1)
+               ix = vctrls(i)
+               fwalf(i+nd) = fwalf(i+nd)*ratdpf(ix+nd)
+               fwalg(i+nd) = fwalg(i+nd)*ratdpf(ix+nd)
+               if (velf(i+nd)*velg(i+nd).gt.0.0 .and. chngno(57)) then
+c  Get the Wallis's friction multipler for laminar flow.
+c----------------------------------------------------------------------
+c  Note: the factor of 1.5 is to account for the annular friction factor
+c  in the film flow; it is f=96/Re not f=64/Re (private conversation
+c  with Joe Kelly.
+c----------------------------------------------------------------------
+                 philam = 1.5/(1.0 - min(voidgo(i),0.99999))**2
+c  Get the Wallis's friction multipler for terbulent flow.
+                 phitur = (1.0/((1.0 - sqrt(min(voidgo(i),0.99999999)))*
+     &           (1.0 + 1.1429*sqrt(min(voidgo(i),0.99999999)))**0.875))
+     &           **2
+c  Get the multiplier after the smoothing.
+                 pfinal = philam + ftran(reynf1(ix))*(phitur - philam)
+c                pfinal = max(philam, phitur)
+c  Get the two-phase pressure drop from the Wallis' multiplier.
+                 tpdpdx(ix) = dpdxfx(ix)*(pfinal)
+c  Get the equivalent fwalf(i+nd) and store in fholdf, so do gas phase.
+                 fholdf = (0.5/diamv(i+nd))*tpdpdx(ix)/sumvfx(ix+nd)
+                 fholdg = 0.0
+c  Test if the flow regime is between ann-mist transition.
+                 if ((floreg(i).eq.10) .and. (pfinrg(ix).lt.1.0)) then
+                   fwalf(i+nd) = fholdf + pfinrg(ix)*
+     &             (fwalf(i+nd) - fholdf)
+                   fwalg(i+nd) = fholdg + pfinrg(ix)*
+     &             (fwalg(i+nd) - fholdg)
+c  Test if the flow regime is between slug-ann transition.
+                 else
+                   if (floreg(i).eq.5 .and. fanms(ix).gt.0.0) then
+                     fwalf(i+nd) = fwalf(i+nd) + fanms(ix)*
+     &               (fholdf - fwalf(i+nd))
+                     fwalg(i+nd) = (1.0 - fanms(ix))*fwalg(i+nd)
+                   endif
+c  Test if it is in the annular region.
+                   if (floreg(i) .eq. 6) then
+c  pfinal for transition from ann-mist to mist-pre-chf(0.9999 to 0.999).
+                     pfinal = (0.9999 - voidg(i))/9.0e-4
+                     pfinal = min(1.0,max(0.0,pfinal))
+                     if (fwalf(i+nd) .gt. 0.0)
+     &               fwalf(i+nd) = fholdf**pfinal*
+     &               fwalf(i+nd)**(1.0 - pfinal)
+                     fwalg(i+nd) = fwalg(i+nd)*(1.0 - pfinal)
+                   endif
+                 endif
+               endif
+               badfw(ix) = fwalf(i+nd).lt.0.0 .or. fwalg(i+nd).lt.0.0
+             enddo
+$if def,mmfld
+             if (nh3 .ne. 0) then
+               ih3 = ixvff
+               viscm = 0.0014
+               do m = 1,nh3
+                 i = jhld3(ih3)
+                 ix = vctrls(i)
+                 fwalf(i+nd) = 0.
+                 fwalg(i+nd) = 0.
+                 if (abs(velmt(i)) .gt. 1.0e-10) then
+                   flammt = viscm/(rhomt(i)*abs(velmt(i))*diamv(i+nd))
+                   flammt = max(64.0*flammt,0.3164*flammt**0.25)
+                   fwalm(i) = 0.5*voidm(i)*rhomt(i)*flammt*velmt(i)/
+     &             diamv(i+nd)
+                 else
+                   fwalm(i) = 32.0*voidm(i)*sign(1.0,velmt(i))/
+     &             diamv(i+nd)**2
+                 endif
+                 ih3 = ih3 + scskp
+               enddo
+             endif
+$endif
+$if def,selap
+$if -def,debth
+c  Set up array of volumes with debris.
+             i1 = i1s
+             ih1 = ixvff
+             nh1 = 0
+             do m = 1,lvptr(i1)
+               i1 = i1 + 1
+               i = lvptr(i1)
+               if (idbvol(i) .eq. 1) then
+                 jhld1(ih1) = i
+                 ih1 = ih1 + scskp
+                 nh1 = nh1 + 1
+               endif
+             enddo
+c
+c  Calculate wall drag coeffs. for volumes containing debris.
+             ih1 = ixvff
+             do m = 1,nh1
+               i = jhld1(ih1)
+               ee = porvol(mdbvol(i),ndbvol(i))
+               d = ddbvol(mdbvol(i),ndbvol(i))
+               afw = 150.0*(1.0 - ee)/(d*e)**2
+               bfw = 1.75*(1.0 - ee)/(d*e**2)
+               fwalf(i+nd) = afw*viscf(i)/rhof(i) + bfw*velf(i+nd)*
+     &         (1.0 - voidgo(i))
+               fwalg(i+nd) = afw*viscg(i)/rhog(i) + bfw*velg(i+nd)*
+     &         voidgo(i)
+               ix = vctrls(i)
+               badfw(ix) = fwalf(i+nd).lt.0.0 .or. fwalg(i+nd).lt.0.0
+               ih1 = ih1 + scskp
+             enddo
+$endif
+$if def,debth
+c  Set up array of volumes with debris.
+             i1 = i1s
+             ih1 = ixvff
+             nh1 = 0
+             do 40 m = 1,lvptr(i1)
+               i1 = i1 + 1
+               i = lvptr(i1)
+               if (idbvol(i) .gt. 0) then
+                 kaxn = mod(idbvol(i),ndax)
+                 jcmp = (idbvol(i) - kaxn)/ndax + 1
+                 eps = porcom(jcmp,kaxn)
+                 dpart = diacom(jcmp,kaxn)
+                 acons = 150.*(1. - eps)**2/(eps**3*dpart**2)
+                 bcons = 1.75*(1. - eps)/(eps**3*dpart)
+c  1-D mass flux.
+                 jg = abs(ggas(i))/rhog(i)
+                 jf = abs(gliq(i))/rhof(i)
+c  Simplified debris flow regime conditions.
+                 if (voidf(i+nd) .lt. 1.e-6) then
+                   fwalf(i+nd) = 0.0
+                   fwalg(i+nd) = eps*(acons*viscg(i)*jg +
+     &             bcons*rhog(i)*jg**2)
+                 elseif (voidf(i+nd) .gt. 0.999) then
+                   fwalg(i+nd) = 0.0
+                   fwalf(i+nd) = eps*(acons*viscf(i)*jf +
+     &             bcons*rhof(i)*jf*abs(jf))
+                 else
+                   alph2 = pi/6.
+                   alph3 = 0.6
+                   alph4 = pi*sqrt(2.)/6.
+                   if (voidgo(i) .lt. alph2) then
+                     dbubl = 1.35*sqrt(sigma(i)/
+     &               (gravcn*(rhof(i) - rhog(i))))
+                     if(dbubl/dpart .le. 0.29) then
+                       alph1 = 0.3
+                     else
+                       alph1 = 0.6*(1. - dbubl/dpart)*(1. - dbubl/dpart)
+                     endif
+                     if(voidg(i) .lt. alph1) then
+                       idbm = 1
+                     else
+                       idbm = 2
+                     endif
+                   elseif (voidg(i) .lt. alph3) then
+                     idbm=3
+                   elseif (voidg(i) .lt. alph4) then
+                     idbm = 4
+                   else
+                     idbm = 5
+                   endif
+c  Determine if wet or dry wall map is to be used.
+                   tgsat = tempg(i) - tsatt(i) - 1.0
+                   pfinrg(ix+nd) = 0.0
+                   poschf = (qwg(i).gt.0.0 .or.
+     &             iand(imap(i+nd),ishft(1,29)).ne.0) .and. tgsat.gt.0.0
+c  15-60 degree interpolation window as p-reduced varies from .025 to
+c  .25.
+                   if (poschf) then
+                     preduc = p(i)/pcrit
+                     if (preduc .lt. 0.25) then
+                       if (preduc .lt. 0.025) then
+                         twindo = 0.06666667
+                       else
+                         twindo = 1.0/(15.0 + 200.0*(preduc - 0.025))
+                       endif
+                     else
+                       twindo = 0.016666667
+$endif
+$endif
+c  Debug printout.
+             bad = .false.
+             i1 = i1s
+             do m = 1,lvptr(i1)
+               i1 = i1 + 1
+               ix = vctrls(lvptr(i1))
+               bad = bad .or. badfw(ix)
+             enddo
+             if (bad .and. help .ge. 0) help = 1
+             if (help.ne.0 .and. iand(ihlppr(1),ishft(1,7)).ne.0) then
+               if (bad) write (output,9031)
+ 9031  format ('0******** Bad wall friction coefficient in fwdrag')
+               write (output,9022)
+ 9022  format ('0Wall friction terms, phase apportioning loop'/1x,
+     & 90('=')/3x,'volno(i)',4x,'fwalf(i) ',17x,'reynf1(l)',4x,
+     & 'dpdxfx(l)',4x,'zambda(l)',4x,'tpdpdx(l)'/15x,'fwalg(i) ',4x,
+     & 'gfwabs(l)',4x,'reyng1(l)',4x,'dpdxgx(l)',4x,'ctermx(l)',4x,
+     & 'ratdpf(l)'/15x,
+     & 'frlmf1(l)',4x,'frtrf1(l)',4x,'frtbf1(l)',4x,'frlmg1(l)',4x,
+     & 'frtrg1(l)',4x,'frtbg1(l)'/1x,90('='))
+               i1 = i1s
+               do m = 1,lvptr(i1)
+                 i1 = i1 + 1
+                 i = lvptr(i1)
+                 if( iand(vctrlx(i),1).ne.0 ) then
+                   ix = vctrls(i)
+                   write (output,9023) volno(i),fwalf(i+nd),reynf1(ix),
+     &             dpdxfx(ix),zambda(ix),tpdpdx(ix),fwalg(i+nd),
+     &             gfwabs(ix),reyng1(ix),dpdxgx(ix),ctermx(ix),
+     &             ratdpf(ix+nd),frlmf1(ix),frtrf1(ix),frtbf1(ix),
+     &             frlmg1(ix),frtrg1(ix),frtbg1(ix),fanms(ix)
+ 9023  format (2x,i10.9,2x,1p,g13.5,13x,4g13.5/14x,6g13.5/14x,6g13.5/
+     & g13.5)
+                 endif
+               enddo
+             endif
+c
+c  Heated wall effect.
+             if (help.ne.0 .and. iand(ihlppr(1),ishft(1,7)).ne.0)
+     &       write (output,9040)
+ 9040  format ('0Wall friction terms, heated wall effect'/1x,90('='))
+             i1 = i1s
+             do m = 1,lvptr(i1)
+               i1 = i1 + 1
+               i = lvptr(i1)
+               ix = vctrls(i)
+               if (inhcnt(i) .eq. 0) then
+                 fhwf = 1.0
+                 fhwg = 1.0
+               else
+                 fhwf = 0.0
+                 fhwg = 0.0
+                 if (fmurex(i+nd) .eq. 0.0) then
+                   l = invhtf(i)
+                   do j = 1,inhcnt(i)
+                     fhwf = fhwf + invh(l)%frahaw
+                     l = l + 1
+                   enddo
+                   fhwg = fhwf
+                 else
+                   if (help.ne.0 .and.
+     &             iand(ihlppr(1),ishft(1,7)).ne.0) then
+                     if (iand(vctrlx(i),1) .ne. 0)
+     &               write (output,9041) nd,volno(i),viscf(i),
+     &               viscg(i),fmurex(i+nd)
+ 9041  format (3x,'nd',3x,'volno(i)',5x,'viscf(i)',5x,
+     & 'viscg(i)',5x,'fmurex(i)'/,3x,i2,3x,i10.9,1x,1p,3g13.5/
+     & 4x,'j',3x,'htstno(j)',4x,'tsurf(j)',5x,'frphpw(j)',4x,
+     & 'frahaw(j)',4x,'viscwf(j)',4x,'fhwf',9x,'viscwg(j)',4x,'fhwg')
+                   endif
+                   do j =1,inhcnt(i)
+                     tsurf = httmp(invh(l)%insrft)
+c  Compute liquid viscosity at surface temperature.
+                     call viscos (nfluid,iones,iones,1,1,tsurf,p(i),
+     &               rhof(i),satt(i),'liquid',viscwf,erx)
+                     fhwf = fhwf + invh(l)%frahaw*(1.0 + invh(l)%frphpw*
+     &               ((viscwf/viscf(i))**fmurex(i+nd) - 1.0))
+c  Compute vapor viscosity at surface temperature.
+                     call viscos (nfluid,iones,iones,1,1,tsurf,p(i),
+     &               rhog(i),satt(i),'vapor',viscwg,erx)
+                     fhwg = fhwg + invh(l)%frahaw*(1.0 + invh(l)%frphpw*
+     &               ((viscwg/viscg(i))**fmurex(i+nd) - 1.0))
+                     if (help.ne.0 .and.
+     &               iand(ihlppr(1),ishft(1,7)).ne.0) then
+                       if (iand(vctrlx(i),1).ne.0)
+     &                 write (output,9042) j,htstno(invh(l)%inhtno),
+     &                 tsurf,invh(l)%frphpw,invh(l)%frahaw,viscwf,
+     &                 fhwf,viscwg,fhwg
+ 9042  format (3x,i2,3x,i10.9,1x,1p,7g13.5)
+                     endif
+                     l = l + 1
+                   enddo
+                   if (help.ne.0 .and. iand(ihlppr(1),ishft(1,7)).ne.0)
+     &             write (output,9043)
+ 9043  format (1x,30('='))
+                 endif
+               endif
+               fwalf(i+nd) = fwalf(i+nd)*fhwf
+               fwalg(i+nd) = fwalg(i+nd)*fhwg
+             enddo
+           endif
+           i1 = i1 + 1
+         enddo
+       endif
+       return
+       end

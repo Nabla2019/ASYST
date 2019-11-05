@@ -1,0 +1,181 @@
+       subroutine inp2u (loc1,loc2,ics,w1,w2,skp,errflg)
+$if def,iua 
+c  This subroutine transfers data from the input card buffer to
+c  another storage location in memory and performs some checks
+c  on the data. Modified inp2u, it only checks word number specified
+c  is of type specified
+c
+c  Cognizant engineer: rjw
+c
+c  Parameters in argument list.
+c     loc1(1)       starting location of input buffer.
+c     loc2(1)       starting location of moved information.
+c     ics           control information.
+c     ics(1)=first  card number to process first.
+c     ics(2)=last   final card number to process.
+c                   may be 0.0 if only one card.
+c                   > 0 - card numbers sequential.
+c                   < 0 - card numbers increasing, not sequential.
+c     ics(3)=minz   minimum number of data words on card.
+c     ics(4)=maxz   maximum number of data words on card, 0 if no upper
+c                   limit.
+c     ic5(5)=nj     displacement of data - data stored every nj+1 loc.
+c     ics(6)=j      abs(j)=starting address of data in loc2.
+c                   move/check data - >0 => move,  <or=0 => check.
+c                   upon exit, ics(6) contains number of items moved.
+c                   if j>0,  -(number of items checked) if j<0.
+c     ics(7...)     array defining card format (one entry for each data
+c                   item on the card).  Code for the format is:
+c                   -1 = alphanumeric,
+c                    0 = integer,
+c                    1 = real.
+c     w1,w2         first and last words to be checked
+c     skp           skip factor
+c     errflg        error flag errflg(1) if number of words is smaller 
+c                   than word number/s to be modified, errflg(2) if 
+c                   format error in any of the words to be modified 
+c                   (real data, until discrete distribution is added)
+c
+$if -def,in32,1
+       integer loc1(*),loc2(*),ics(*)
+$if def,in32,2
+       integer loc1(2,*),loc2(2,*)
+       integer ics(*)
+       integer first,last,c,add
+       integer w1,w2,skp
+       logical errflg(2)
+c
+       include 'efiless.h'
+       include 'efilesd.h'
+c
+       errflg(1) = .false.
+       errflg(2) = .false.
+       first = ics(1)
+       last = ics(2)
+       minz = ics(3)
+       maxz = ics(4)
+       nj = ics(5)
+       j = ics(6)
+       nlast = 1
+       ncase = 1
+       nmove = 1
+       if (last) 105,110,120
+c  To process any cards between first and last  go to 120.
+  105  ncase = 2
+       go to 120
+c  One card only.
+  110  last = first
+  120  c = first
+       add = 0
+c  Check if data to be moved - no - set nmove=2.
+       if (j.le.0) nmove = 2
+       nc = 0
+       mgo = 1
+c  Check if max number of data items specified.
+c  If none - set mgo=2.
+       if (maxz .eq. 0) mgo = 2
+  130  c = c + add
+c  Get card location.
+  135  call inplnk (c,next,locz,ndata,loc1)
+c  ndata  number of data fields on card.
+       if (ncase .ne. 1) go to 170
+       if (ndata) 160,150,180
+  150  if (next - abs(last)) 155,165,255
+  155  if (next .lt. 0) go to 255
+       go to 165
+  160  write (output,1000) c
+ 1000  format ('0******** Illegal format on card',i10,'.')
+       go to 265
+  165  write (output,1001) c
+ 1001  format ('0******** Card',i10,' missing in sequence.')
+       go to 265
+c  Check data count.
+  170  if (ndata) 160,175,180
+c  No data - set card number to next higher card location.
+  175  c = next
+       ncard = 2
+       if (c) 255,185,185
+  180  ncard=1
+  185  if (c - abs(last)) 195,190,255
+  190   nlast = 2
+c  This is the last card.
+  195  if (ncard .ne. 1) go to 135
+       nom = nc + ndata
+       if (mgo .ne. 1) go to 210
+c  Test number of data words.
+       if (nom .le. maxz) go to 210
+c  Too many words.
+       write (output,1002) first,c
+ 1002  format ('0******** Too many numbers on cards',i10,' through',i10,
+     & '.')
+       go to 265
+c
+c  Check mode of data.
+c
+c  ltype = 0          no errors.
+c  0 < ltype < 10000  item ltype         should have been integer.
+c  ltype < 0          item (-ltype)      should have been real.
+c  ltype > 10000      item (ltype-10000) should have been alphanumeric.
+c
+  210  if (ndata .lt. w2) then
+         errflg (1) = .true.
+         return
+       endif
+       call inpmodu (loc1,ics,locz,ndata,ltype,nc,w1,w2,skp)
+       if (ltype .ne. 0) errflg(2) = .true.
+       if (ltype .gt. 10000) go to 225
+       if (ltype) 220,230,215
+c  Floating point number found for fixed point.
+  215  write (output,1003) ltype,c
+ 1003  format ('0******** Word',i3,' on card',i10,' should be in integer
+     & format.')
+       go to 265
+c  Fixed point number found for a floating point.
+  220  ltype = -ltype
+       write (output,1004) ltype,c
+ 1004  format ('0******** Word',i3,' on card',i10,' should be in floatin
+     *g point format.')
+       go to 265
+c  Alpha-numeric data expected - not found.
+  225  ltype = ltype - 10000
+       write (output,1005) ltype,c
+ 1005  format ('0******** Word',i3,' on card',i10,' should be in alphanu
+     *meric format.')
+       go to 265
+c  Check if data to be moved to new location.
+  230  if (nmove .ne. 1) go to 245
+c  Move to new location.
+       l = locz
+       maxnum = l + ndata - 1
+       locb = j + (nj + 1)*nc
+       do loca = l,maxnum
+$if -def,in32,1
+         loc2(locb) = loc1(loca)
+$if def,in32,1
+         loc2(:,locb) = loc1(:,loca)
+         locb=locb + nj + 1
+       enddo
+c  Increment nc.
+ 245   nc = nc + ndata
+c  Check for last card.
+       if (nlast .ne. 1) go to 255
+c  Another card expected.
+       add = 1
+       go to 130
+c  Last card.
+ 255   if (nc .ge. minz) go to 270
+       loca = abs(last)
+       if (nc .le. 0) then
+         write (output,1006) first,loca
+ 1006  format ('0******** Cards',i10,' through',i10,' missing.')
+       else
+         write (output,1007) first,loca
+ 1007  format ('0******** Too few numbers on cards',i10,' through',i10,
+     & '.')
+       endif
+  265  ics(6) = -1
+       go to 280
+  270  ics(6) = nc
+$endif
+  280  return
+       end

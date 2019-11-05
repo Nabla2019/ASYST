@@ -1,0 +1,1340 @@
+*mlist
+       subroutine raccum
+*in32 init
+*in32end
+!  Process accumulator component data.
+!
+!  Cognizant engineer: dmk
+!
+       use cmpdat
+       use jundat
+       use voldat
+       implicit none
+       include 'fast.h'
+       include 'cmpdac.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'cons.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'rcompc.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+!
+!  Local variables.
+       integer l3a(16),l3b(9),l3c(11),l3e(15),l3f(10),l3h(9),init(24)
+       real xinit(25), fr(6)
+       equivalence (init(1),xinit(1))
+       integer i,i3,icc,ick,idans,ief,ihb,ihf,ihff,ihl,ihp,iht,ihv,ii,
+     & ij,ije,ijs,ink,irf,isf,iv,ivk,ix,ixp,jlbl,k,k1,k2,n,n3,n4,nc,
+     & nc1,nj1,nj1o,nnv,nt,nv1,nv1o,inp10,lcntgs,lens,geom
+       real angl(3),cs(3),degf1,degf2,dumr,ft,ft2,ft3,psia,rpi180,si(3),
+     & tt,vline,vliq2,xcl,xcp,xlbsec,xthcnd,tkrad,voltk,sgas,tkht
+       logical fshapl,tfail,tfail2,ovl
+       character *10 lblx(25,2),labl1(2),labl2(2),labl3(2)
+       character *10 ihton, ihtoff, lablen(2)
+       external ftbmov,ftbsft,inp2,inp10,inplnk,lcntgs,setndf
+!  Data statements.
+       parameter(lens=56)
+       data l3a/2*0,9,10,0,1,8*1,0,0/
+       data l3b/2*0,2,3,0,1,2,1,1/
+       data l3c/2*0,2*5,0,1,0,1,1,1,0/
+       data l3e/2*0,8,9,0,1,5*1,0,2*1,0/
+       data l3f/2*0,0,4,0,1,1,1,1,1/
+       data l3h/2*0,0,6,0,1,2,1,1/
+       data ft/0.3048/, ft2/9.290304e-2/, ft3/2.831685e-2/,
+     & psia/6.894757e3/, degf1/0.5555555555555/,
+     & degf2/255.3722222222/, xlbsec/.45359237/, tt/300.0/
+       data rpi180/1.745329252e-2/
+       data labl1/' vel.',' flow'/, labl2/'(ft/sec)','(lbm/sec)'/,
+     & labl3/'(m/sec)','(kg/sec)'/
+       data xcp/4.1868e+3/,xthcnd/1.73074/
+      data lblx/2*'(m2)',' ',3*'(m)',2*'(m3)','(kg/m3)',2*'(deg)',
+     &          '(J/kg-k)',2*'(deg)',7*'(m)','(m3)',' ','(m)','(m3)',
+     &          2*'(ft2)',' ',3*'(ft)',2*'(ft3)','(lb/ft3)',2*'(deg)',
+     &          '(Btu/lb-f)',2*'(deg)',7*'(ft)','(ft3)',' ','(ft)',
+     &          '(ft3)'/
+      data ihton/'(on)'/,ihtoff/'(off)'/,lablen/'(m)','(ft)'/
+!
+!  Get component number.
+       ovl = .false.
+       i = ncmps(filndx(3)) + filndx(3)
+       nc = cmpnum(i)
+!  Extend component block.
+       filsiz(3) = filsiz(3) + lens
+       l3a(1) = filsiz(3)
+       if (.not.cmpsrc) l3a(1) = l3a(1) + lens
+       if (lcntgs(filid(3),1) .ge. l3a(1)) go to 10
+   15  write (output,2001) nc
+ 2001  format ('0******** Insufficient storage to process component',i4,
+     & '.')
+   12  l3b(1) = nc*10000
+       l3b(2) = l3b(1) + 9999
+       filsiz(1) = inp10(fa(filndx(1)),l3b(1),l3b(2))
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+  204  filsiz(3) = filsiz(3) - lens + 4
+       cmplen(i) = 4
+       cmptyp(i) = 0
+       call ftbsft (filid(3),filsiz(3),1,filndx(3))
+       ncmps(filndx(3)) = ncmps(filndx(3)) + 4
+       fail = .true.
+       return
+   10  call ftbsft (filid(3),l3a(1),1,filndx(3))
+       i = ncmps(filndx(3)) + filndx(3)
+       cmplen(i) = lens
+       nvc(i) = 1
+       njc(i) = 1
+       cmpopt(i) = 4
+       acctrp(i) = 0
+       acctrp(i+1) = 0
+!  Check if replacement or flag modification is possible.
+       if (cmpsrc) go to 401
+       ii = filndx(3)
+       nnv = ncomp - 1
+       if (nnv .eq. 0) go to 407
+       nv1 = 0
+       nj1 = 0
+       tfail = .false.
+       do k = 1,nnv
+         nv1o = nvc(ii)
+         nj1o = njc(ii)
+         nc1 = cmplen(ii)
+         if (cmpnum(ii) - nc) 403,404,405
+  405    tfail = .true.
+  403    nv1 = nv1 + nv1o
+         nj1 = nj1 + nj1o
+         ii = ii + nc1
+       enddo
+       if ( tfail )  go to  410
+  407  cmpsrc = .true.
+       go to 401
+  404  ncomp = nnv
+       if (cmptyp(ii) .ne. cmptyp(i)) go to 406
+       ovl = cmpflg
+       go to 14
+  410  nv1o = 0
+       nj1o = 0
+       nc1 = 0
+  406  if (.not.cmpflg) go to 14
+  409  write (output,2035) nc
+ 2035  format ('0******** Illegal use of component flag change option in
+     & component',i4,'.')
+       write (output,2002) nc
+ 2002  format ('0******** Data for component',i4,' cannot be processed.'
+     +)
+       go to 12
+!  Extend volume and junction blocks for this component.
+  401  if (cmpflg) go to 409
+   14  if (cmpsrc) nv1o = 0
+       k2 = 1 - nv1o
+       k = filsiz(4) + k2*ivskp
+       k1 = max(filsiz(4),k)
+       if (k1 .gt. lcntgs(filid(4),1)) go to 15
+       call ftbsft (filid(4),k1,1,filndx(4))
+       if (cmpsrc) nv1 = nvols(filndx(4))
+       iv = nv1*ivskp + filndx(4)
+       k1 = (nvols(filndx(4)) - nv1 - nv1o)*ivskp
+       if (k1 .ne. 0) then
+         n3 = iv + nv1o*ivskp
+         n4 = iv + ivskp
+         ink = n3 - n4
+         if (ink .ne. 0) then
+           if (ink .lt. 0) k1 = -k1
+           call ftbmov (fa(n3+1),fa(n4+1),k1)
+         endif
+       endif
+       nvols(filndx(4)) = nvols(filndx(4)) + k2
+       if (associated(cmphld(nc)%volp)) deallocate (cmphld(nc)%volp)
+       allocate (cmphld(nc)%volp(1))
+       if (associated(cmphld(nc)%junp)) deallocate (cmphld(nc)%junp)
+       allocate (cmphld(nc)%junp(1))
+   16  filsiz(4) = k
+!  Set storage for new volumes.
+       if (.not.ovl) then
+         call setndf (fa(iv+1),ivskp)
+         vctrl(iv) = 40
+         vctrlx(iv) = 0
+         imap(iv) = 16384
+         imap(iv+1) = 0
+         imap(iv+2) = 0
+       endif
+!  Get junction block
+       if (cmpsrc) nj1o = 0
+       k2 = 1 - nj1o
+       k = filsiz(5) + k2*ijskp
+       k1 = max(filsiz(5),k)
+       if (k1 .gt. lcntgs(filid(5),1)) go to 15
+       call ftbsft (filid(5),k1,2,filndx(5))
+       if (cmpsrc) nj1 = njuns(filndx(5))
+       ij = nj1*ijskp + filndx(5)
+       k1 = (njuns(filndx(5)) - nj1 - nj1o)*ijskp
+       if (k1 .eq. 0) go to 421
+       n3 = ij + nj1o*ijskp
+       n4 = ij + ijskp
+       if (n3 - n4) 422,421,423
+  422  k1 = -k1
+  423  call ftbmov (fa(n3+1),fa(n4+1),k1)
+  421  njuns(filndx(5)) = njuns(filndx(5)) + k2
+   19  filsiz(5) = k
+       ije = ij + ijskp - 1
+       if (ovl) go to 430
+       call setndf (fa(ij+1),ijskp)
+       jc(ij) = 128
+       jcex(ij) = 0
+       ijflg(ij) = 0
+       athrot(ij) = 1.0
+!jmk-1
+       if (chngno(53)) then
+!  Henry-Fauske default values.
+         jdissc(ij) = 1.0
+         jdistp(ij) = 0.14
+         jdissh(ij) = 0.0
+       else
+!  Standard default values.
+         jdissc(ij) = 1.0
+         jdistp(ij) = 1.0
+         jdissh(ij) = 1.0
+       endif
+!jmk-1
+  430  call ftbsft (filid(5),filsiz(5),2,filndx(5))
+       call ftbsft (filid(4),filsiz(4),2,filndx(4))
+       iv = nv1*ivskp + filndx(4)
+       ij = nj1*ijskp + filndx(5)
+!  Insert new component in proper place in component block if necessary.
+       if (cmpsrc .or. nc1.eq.0) go to 431
+       k2 = lens - nc1
+       n3 = ii + nc1
+       n4 = ii + lens
+       k1 = i + lens - n3
+       if (k2) 433,432,434
+  434  k1 = -k1
+  433  call ftbmov (fa(n3+1),fa(n4+1),k1)
+       i = i + k2
+  432  call ftbmov (fa(i+1),fa(ii+1),lens)
+       ncmps(filndx(3)) = ncmps(filndx(3)) + k2
+       filsiz(3) = filsiz(3) + k2 - lens
+       call ftbsft (filid(3),filsiz(3),3,filndx(3))
+       i = ii
+       go to 17
+  431  ncmps(filndx(3)) = ncmps(filndx(3)) + lens
+!  Write output header for component.
+   17  if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write(output, 2101) nc, cmpnam(i), cmpalf(cmptyp(i))
+ 2101  format ('0====================================================='
+     & '==================',/,
+     & 22x,'Input data for component',i4,',',2a9,', having
+     & 1 volume and 1 junction')
+!  Process volume geometry input.
+       if (.not.uniti) then
+         fr(1) = ft
+         fr(2) = ft2
+         fr(3) = ft3
+       else
+         fr(1) = 1.0
+         fr(2) = 1.0
+         fr(3) = 1.0
+       endif
+       l3a(1) = nc*10000 + 101
+       l3a(2) = -l3a(1) - 9
+       l3a(6) = 1
+       call inp2 (fa(filndx(1)),init,l3a)
+       if (l3a(6) .gt. 0) go to 22
+       write (output,2007)
+ 2007  format ('0******** Volume geometry conditions set to default valu
+     &es for continued checking.')
+       geom = 0
+       avol(iv) = 1.0
+       dl(iv) = 1.0
+       v(iv) = 1.0
+       rhof(iv) = 0.0
+       rho(iv) = 0.0
+       do k = 1,18
+         hydzc(iv+k-1) = 0.0
+       enddo
+       roughv(iv) = 0.0
+       diamv(iv) = 2.0*sqrt(avol(iv)/pi)
+       tklen(i) = 1.0
+       fail = .true.
+       go to 115
+   22  geom = 0
+       if (l3a(6) .eq. 9) go to 86
+       geom = init(10)
+       if (geom .eq. 0) go to 86
+       if (geom .eq. 1) go to 84
+       write (output,2140)
+ 2140  format ('0******** Geometry flag incorrect, set to 0 for continue
+     &d checking.')
+       geom = 0
+       fail = .true.
+       go to 86
+   84  cmpopt(i) = ior(cmpopt(i),256)
+   86  avol(iv) = xinit(1)*fr(2)
+       if (avol(iv) .lt. 0.0) then
+         avol(iv) = 1.0
+         write (output,2005)
+ 2005  format ('0******** Volume area less than 0.0, set to 1.0 for cont
+     &inued checking.')
+         fail = .true.
+       endif
+       dl(iv) = xinit(2)*fr(1)
+       if (dl(iv) .lt. 0.0) then
+         dl(iv) = 1.0
+         write (output,2009)
+ 2009  format ('0******** Volume length less than 0.0, set to 1.0 for co
+     &ntinued checking.')
+         fail = .true.
+       endif
+       v(iv) = xinit(3)*fr(3)
+       if (v(iv) .lt. 0.0) then
+         write (output,2011)
+ 2011  format ('0******** Volume volume less than 0.0, set to 1.0 for co
+     &ntinued checking.')
+         fail = .true.
+         v(iv) = 1.0
+       endif
+!  Apply defaults to volume area, length, and volume.
+       tfail = .false.
+       if (v(iv) .ne. 0.0) go to 60
+       if (geom .eq. 0) then
+        v(iv) = avol(iv)*dl(iv)
+       else
+        tkrad = sqrt(avol(iv)/pi)
+        v(iv) = (4./3.)*pi*tkrad**3 - (pi/3.)*
+     &  (2.*tkrad - dl(iv))**2*(tkrad + dl(iv))
+       endif
+       if (v(iv) .gt. 0.0) go to 27
+       tfail = .true.
+       v(iv) = 1.0
+   60  if (avol(iv) .ne. 0.0) go to 61
+       if (geom .eq. 0) then
+        if (dl(iv) .eq. 0.0) go to 62
+        avol(iv) = v(iv)/dl(iv)
+        go to 65
+       else
+        write (output,2032)
+ 2032   format ('0******** Value of area must be specified.')
+       endif
+   62  tfail = .true.
+       avol(iv) = 1.0
+   61  if (dl(iv) .ne. 0.0) go to 63
+       if (geom .eq. 0) then
+        dl(iv) = v(iv)/avol(iv)
+        go to 65
+       else
+        write (output,2086)
+ 2086   format ('0******** Value of length must be specified.')
+        tfail = .true.
+        dl(iv) = 1.0
+       endif
+   63  if (geom .eq. 0) then
+        if (abs(avol(iv)*dl(iv)-v(iv))/v(iv) .le. 0.000001) go to 65
+       else
+        tkrad = sqrt(avol(iv)/pi)
+        voltk= (4./3.)*pi*tkrad**3 - (pi/3.)*
+     &  (2.*tkrad - dl(iv))**2 * (tkrad + dl(iv))
+        if (abs(voltk-v(iv))/v(iv) .le. 0.000001) go to 65
+       endif
+       write (output,2031)
+ 2031  format ('0******** Values of volume, area, and length are',
+     &         ' inconsistent.')
+       go to 64
+   65  if (.not.tfail) go to 27
+       write (output,2030)
+ 2030  format ('0******** Only one of the volume area, length, or volume
+     & may be 0.0, default values used.')
+   64  fail = .true.
+!  Save tank length for a spherical tank.
+   27  tklen(i) = dl(iv)
+       rhof(iv) = xinit(4)
+       if (abs(rhof(iv)) .gt. 360.0) then
+         rhof(iv) = 0.0
+         write (output,2012)
+ 2012  format ('0******** Horizontal angle incorrect, set to 0.0 for con
+     &tinued checking.')
+         fail = .true.
+       endif
+       rho(iv) = xinit(5)
+       if (rho(iv).ne.-90.0 .and. rho(iv).ne.90.0) then
+         rho(iv)    = 90.0
+         write (output, 2013) xinit(5)
+ 2013  format ('0******** Incorrect vertical angle, input as ',
+     & 1p,g14.6,' degrees'/
+     & 10x,'required accumulator vertical angle input must be ( + or - )
+     & 90.0 degrees'/
+     & 10x,'angle set to +90.0 for continued checking')
+         fail = .true.
+       endif
+       angl(1) = rhof(iv)*rpi180
+       angl(2) = rho(iv)*rpi180
+       cs(1) = cos(angl(1))
+       si(1) = sin(angl(1))
+       cs(2) = cos(angl(2))
+       si(2) = sin(angl(2))
+       cmphld(nc)%volp(1)%hyanpr(1,1) = cs(1)*cs(2)
+       cmphld(nc)%volp(1)%hyanpr(1,2) = -si(1)
+       cmphld(nc)%volp(1)%hyanpr(1,3) = -cs(1)*si(2)
+       cmphld(nc)%volp(1)%hyanpr(2,1) = si(1)*cs(2)
+       cmphld(nc)%volp(1)%hyanpr(2,2) = cs(1)
+       cmphld(nc)%volp(1)%hyanpr(2,3) = -si(1)*si(2)
+       cmphld(nc)%volp(1)%hyanpr(3,1) = si(2)
+       cmphld(nc)%volp(1)%hyanpr(3,2) = 0
+       cmphld(nc)%volp(1)%hyanpr(3,3) = cs(2)
+       hydzc(iv) = xinit(6)*fr(1)
+       tfail = .false.
+       if (rho(iv) .eq. 0.0) then
+         if (hydzc(iv) .ne. 0.0) tfail = .true.
+       else
+         if (hydzc(iv) .ne. 0.0) then
+           if (rho(iv)*hydzc(iv) .le. 0.0) tfail = .true.
+         else
+           tfail = .true.
+         endif
+       endif
+       if (tfail) then
+         write (output,2033)
+ 2033  format ('0******** Volume vertical angle inconsistent with vertic
+     &al incremental height.')
+         fail = .true.
+       endif
+       if (abs(hydzc(iv)) .gt. dl(iv)) then
+         hydzc(iv) = 0.0
+         write (output,2015)
+ 2015  format ('0******** Volume incremental height greater than volume
+     &length, set to 0.0 for continued checking.')
+         fail = .true.
+       endif
+       roughv(iv) = xinit(7)*fr(1)
+       if (roughv(iv) .lt. 0.0) then
+         roughv(iv) = 0.0
+         write (output,2016)
+ 2016  format ('0******** Volume roughness less than 0.0, set to 0.0 for
+     & continued checking.')
+         fail = .true.
+       endif
+       diamv(iv) = xinit(8)*fr(1)
+       if (diamv(iv) .le. 0.0) then
+         if (diamv(iv) .lt. 0.0) then
+           write (output,2017)
+ 2017  format ('0******** Hydraulic diameter less than 0.0, set to defau
+     &lt value for continued checking.')
+           fail = .true.
+         endif
+         diamv(iv) = 2.0*sqrt(avol(iv)/pi)
+       endif
+       if (roughv(iv) .ge. 0.5*diamv(iv)) then
+         write (output,2034)
+ 2034  format ('0******** Volume roughness is not less than half the vol
+     &ume hydraulic diameter.')
+         fail = .true.
+       endif
+   34  tfail = .false.
+       if (init(9) .lt. 0) then
+         init(9) = -init(9)
+         tfail = .true.
+       endif
+       iht = init(9)/1000000
+       init(9) = init(9) - 1000000*iht
+       if (iht .ne. 0) then
+         iht = 0
+         tfail = .true.
+       endif
+       ihl = init(9)/100000
+       init(9) = init(9) - 100000*ihl
+       if (ihl .ne. 0) then
+         ihl = 0
+         tfail = .true.
+       endif
+       ihp = init(9)/10000
+       init(9) = init(9) - 10000*ihp
+       if (ihp .gt. 1) then
+         tfail = .true.
+       endif
+       ihp = 1
+       ihv = init(9)/1000
+       init(9) = init(9) - 1000*ihv
+       if (ihv .gt. 1) then
+         tfail = .true.
+       endif
+       ihv = 1
+       ihb = init(9)/100
+       init(9) = init(9) - 100*ihb
+       idans = 0
+       if (ihb .ne. 0) then
+         ihb = 0
+         tfail = .true.
+       endif
+       ihf = init(9)/10
+       init(9) = init(9) - 10*ihf
+       if (ihf .gt. 2) then
+         ihf = 0
+         ihff = 0
+         tfail = .true.
+       else
+         ihff = ishft(ihf,-1)
+         ihf = iand(ihf,1)
+       endif
+       if (init(9) .ne. 0) then
+         init(9) = 0
+         tfail = .true.
+       endif
+       if (tfail) then
+         write (output,2021)
+ 2021  format ('0******** Volume control incorrect, set to zero for cont
+     &inued checking.')
+         fail = .true.
+       endif
+       vctrl(iv) = ior(ior(ior(ior(vctrl(iv),ishft(iht,2)),
+     & ishft(init(9),1)),ishft(ihb,30)),ishft(ihp,7))
+       imap(iv) = ior(ior(ior(ior(ior(ior(imap(iv),ishft(ihv,9)),
+     & ishft(ihb,16)),ishft(ihf,13)),ishft(idans,27)),ishft(ihff,26)),
+     & ishft(ihl,28))
+!  Process additional wall friction data.
+       fshapl = .false.
+       l3h(1) = nc*10000 + 131
+       l3h(4) = 2
+       l3h(6) = 1
+       call inp2 (fa(filndx(1)),xinit,l3h)
+       if (l3h(6) .lt. 0) then
+         l3h(6) = 0
+         fshapl = .true.
+       endif
+       if (l3h(6) .gt. 0) fshapl = .true.
+       tfail = .false.
+       tfail2 = .false.
+       if (l3h(6) .gt. 0) then
+         if (l3h(6) .ne. 2) then
+           tfail = .true.
+           tfail2 = .true.
+         endif
+       else
+         tfail2 = .true.
+       endif
+       if (tfail2) then
+         xinit(1) = 1.0
+         xinit(2) = 0.00
+       endif
+       if (xinit(1).lt.0.0 .or. xinit(2).lt.0.0) then
+         tfail = .true.
+         xinit(1) = 1.0
+         xinit(2) = 0.00
+       endif
+       fshape(iv) = xinit(1)
+       fmurex(iv) = xinit(2)
+       if (tfail) then
+         fail = .true.
+         write (output,2220) l3h(1)
+ 2220  format ('0******** Number of words or value of words on card',
+     & i8,' is incorrect.')
+       endif
+!  Process alternate wall friction data.
+       l3h(1) = nc*10000 + 141
+       l3h(4) = 3
+       l3h(6) = 1
+       call inp2 (fa(filndx(1)),xinit,l3h)
+       if (l3h(6) .lt. 0) then
+         l3h(6) = 0
+         fshapl = .true.
+       endif
+       if (l3h(6) .gt. 0) fshapl = .true.
+       tfail = .false.
+       tfail2 = .false.
+       if (l3h(6) .gt. 0) then
+         if (l3h(6) .ne. 3) then
+           tfail = .true.
+           tfail2 = .true.
+         endif
+       else
+         tfail2 = .true.
+       endif
+       if (tfail2) then
+         xinit(1) = 0.0
+         xinit(2) = 0.0
+         xinit(3) = 0.0
+       endif
+       if ((xinit(1).lt.0.0 .and. xinit(2).lt.0.0) .or.
+     & (xinit(1).eq.0.0 .and. xinit(2).eq.0.0 .and.
+     & xinit(3).ne.0.0)) then
+         tfail = .true.
+         xinit(1) = 0.0
+         xinit(2) = 0.0
+         xinit(3) = 0.0
+       endif
+       if (xinit(1).ne.0.0 .or. xinit(2).ne.0.0 .or.
+     & xinit(3).ne.0.0) imap(iv) = ior(imap(iv),4096)
+       frica(iv) = xinit(1)
+       fricb(iv) = xinit(2)
+       fricc(iv) = xinit(3)
+       if (tfail) then
+         fail = .true.
+         write (output,2120) l3h(1)
+       endif
+!  Process volume initial conditions
+  115  if (.not.uniti) then
+         fr(1) = psia
+         fr(2) = degf1
+         fr(3) = degf2
+       else
+         fr(1) = 1.0
+         fr(2) = 1.0
+         fr(3) = 0.0
+       endif
+       l3b(1) = l3a(1) + 99
+       l3b(6) = 1
+       call inp2 (fa(filndx(1)),init,l3b)
+       if (l3b(6) .lt. 0) then
+         write (output,2022)
+ 2022  format ('0******** Volume conditons set to liquid water for conti
+     &nued checking.')
+         vctrl(iv) = ior(vctrl(iv),256)
+         temp(iv) = tt
+         quale(iv) = 0.0
+         fail = .true.
+       else
+         p(iv) = xinit(1)*fr(1)
+         temp(iv) = xinit(2)*fr(2) + fr(3)
+         if (l3b(6) .eq .2) xinit(3) = 0.0
+         boron(iv) = xinit(3)
+         i3 = 3
+         if (boron(iv) .gt. 0.0) i3 = 13
+         vctrl(iv) = ior(vctrl(iv),ishft(i3,8))
+       endif
+       volmat(iv) = 0
+!  Process junction input.
+       ijs = ij
+       nt = 1
+       l3a(1) = nc*10000 + 101
+       l3c(1) = l3a(1) + nt*1000
+       call inplnk (l3c(1),ix,n3,n4,fa(filndx(1)))
+       if (n4 .eq. 0) then
+         if (ix .eq. -1) go to 59
+         write (output,2010) l3c(1)
+ 2010  format ('0******** Card',i8,' is missing.')
+         go to 59
+       endif
+       junno(ij) = nc*1000000 + nt*10000
+       cmphld(nc)%junp(1)%junno = junno(ij)
+       fr(1) = 1.0
+       if (.not.uniti) fr(1) = ft2
+       l3c(6) = 1
+       call inp2 (fa(filndx(1)),init,l3c)
+       if (l3c(6) .le. 0) then
+         write (output,2008)
+ 2008  format ('0******** Junction geometry set to default conditions fo
+     &r continued checking.')
+         ajun(ij) = 0.0
+         fjunf(ij) = 0.0
+         fjunr(ij) = 0.0
+         fail = .true.
+         go to 1155
+       endif
+       if (init(1) .le. 0) then
+         init(1) = 0
+         write (output,2006)
+ 2006  format ('0******** Volume pointers less than or equal to 0, set t
+     &o 0 for further checking.')
+         fail = .true.
+       endif
+       ij1(ij) = nc*1000000
+       if (rho(iv) .le. 0.0) ij1(ij) = ij1(ij) + 10000
+       ij2(ij) = init(1)
+       if (xinit(2) .lt. 0.0) then
+         write (output,2014)
+ 2014  format ('0******** Junction area less than 0.0, set to 0.0 for co
+     &ntinued checking.')
+         xinit(2) = 0.0
+         fail = .true.
+       endif
+       ajun(ij) = xinit(2)*fr(1)
+       diamj(ij) = 2.0*sqrt(ajun(ij)/pi)
+       tfail = .false.
+       if (xinit(3) .lt. 0.0) then
+         xinit(3) = 0.0
+         tfail = .true.
+       endif
+       if (xinit(4) .lt. 0.0) then
+         xinit(4) = 0.0
+         tfail = .true.
+       endif
+       fjunf(ij) = xinit(3)
+       fjunr(ij) = xinit(4)
+       if (tfail) then
+         write (output,2004)
+ 2004  format ('0******** Form loss coefficients less than 0.0, set to 0
+     &.0 for continued checking.')
+         fail = .true.
+       endif
+       tfail = .false.
+       if (init(5) .lt. 0) then
+         init(5) = -init(5)
+         tfail = .true.
+       endif
+       ief = init(5)/1000000
+       init(5) = init(5) - 1000000*ief
+       icc = init(5)/100000
+       init(5) = init(5) - 100000*icc
+       ivk = init(5)/10000
+       init(5) = init(5) - 10000*ivk
+       ick = init(5)/1000
+       init(5) = init(5) - 1000*ick
+       irf = init(5)/100
+       init(5) = init(5) - 100*irf
+       ihf = init(5)/10
+       isf = init(5) - ihf*10
+       if (ief .eq. 0) go to 553
+       ief = 0
+       tfail = .true.
+  553  if (icc .eq. 0) go to 554
+       write (output,2018) l3c(1)
+ 2018  format ('0******** Error in accumulator fvcahs term, junction car
+     &d',i9)
+       write (output,2003) icc
+ 2003  format (' f =',i2,' is not allowed, must be 0.')
+       icc = 0
+       tfail = .true.
+  554  if (ivk .eq. 0) go to 70
+       if (.not. tfail) write (output,2018) l3c(1)
+       write (output, 2020) ivk
+ 2020  format (' v =',i2,' is not allowed, must be 0.')
+       tfail = .true.
+   70  ivk = 0
+       if (ick .lt. 2) go to 72
+       if (.not. tfail) write (output, 2018) l3c(1)
+       write (output, 2023) ick
+ 2023  format (' c =',i2,' is not allowed, must be 0 or 1.')
+       ick = 0
+       tfail = .true.
+   72  if (irf .ne. 0) then
+         if (.not. tfail) write (output, 2018) l3c(1)
+         write (output, 2024) irf
+ 2024  format (' a =',i2,' is not allowed, must be 0.')
+         irf = 0
+         tfail = .true.
+       endif
+       if (ihf .le. 2) go to 100
+       if (.not.tfail) write (output, 2018) l3c(1)
+       write (output, 2025) ihf
+ 2025  format (' h =',i2,' is not allowed, must be 0, 1, or 2.')
+       ihf = 0
+       tfail = .true.
+  100  ihf = min(1,ihf)
+       if (isf .ge. 2) then
+         if (.not.tfail) write (output, 2018) l3c(1)
+         write (output, 2027) isf
+ 2027  format (' s =',i2,' is not allowed, must be 0 or 1.')
+         isf = 0
+         tfail = .true.
+       endif
+       jc(ij) = ior(ior(ior(ior(ior(ior(jc(ij),ishft(irf,8)),
+     & ishft(ihf,9)),ishft(isf,12)),ishft(ick,4)),ishft(ivk,17)),66)
+       jcex(ij) = ior(ior(jcex(ij),ishft(icc,2)),ishft(ief,15))
+       fail = fail .or. tfail
+!  Process junction form loss input data card.
+ 1155  fjunfb(ij) = 0.0
+       fjunfc(ij) = 0.0
+       fjunrb(ij) = 0.0
+       fjunrc(ij) = 0.0
+       l3a(1) = nc*10000 + 101
+       l3f(1) = l3a(1) + nt*1000 + 1
+       l3f(6) = 1
+       call inp2 (fa(filndx(1)),init,l3f)
+       if (l3f(6) .lt. 0) then
+         write (output,2320)
+ 2320  format ('0******** Junction input form loss data set to default f
+     &or continued checking.')
+         fail = .true.
+         go to 55
+       endif
+       if (l3f(6) .eq. 0) go to 55
+       if (l3f(6) .ne. 4) then
+         write (output,2222)
+ 2222  format ('0******** Junction input form loss data card contains le
+     &ss than 4 words, input set to default.')
+         fail = .true.
+         go to 55
+       endif
+       if (xinit(1) .lt. 0.0) then
+         write (output,2223)
+ 2223  format ('0******** Forward form loss coefficient less than 0.0, s
+     &et to 0.0 for continued checking.')
+         xinit(1) = 0.0
+         fail = .true.
+       endif
+       fjunfb(ij) = xinit(1)
+       if (xinit(2) .lt. 0.0) then
+         write (output,2224)
+ 2224  format ('0******** Forward form loss exponent less than 0.0, se
+     &t to 0.0 for continued checking.')
+         xinit(2) = 0.0
+         fail = .true.
+       endif
+       fjunfc(ij) = xinit(2)
+       if (xinit(3) .lt. 0.0) then
+         write (output,2225)
+ 2225  format ('0******** Reverse form loss coefficient less than 0.0, s
+     &et to 0.0 for continued checking.')
+         xinit(3) = 0.0
+         fail = .true.
+       endif
+       fjunrb(ij) = xinit(3)
+       if (xinit(4) .lt. 0.0) then
+         write (output,2226)
+ 2226  format ('0******** Reverse form loss exponent less than 0.0, se
+     &t to 0.0 for continued checking.')
+         xinit(4) = 0.0
+         fail = .true.
+       endif
+       fjunrc(ij) = xinit(4)
+!  Process card to aid hydrodynamic noding diagram.
+   55  l3f(1) = l3f(1) + 11
+       l3f(6) = 1
+       call inp2 (fa(filndx(1)),xinit,l3f)
+       tfail = .true.
+       if (l3f(6) .lt. 0) then
+         fail = .true.
+       elseif (l3f(6) .gt. 0) then
+         if (l3f(6) .eq. 4) then
+           tfail = .false.
+         else
+           fail = .true.
+           write (output,"('0******** Less than four quantities were ent
+     &ered on Card',i8,', all quantities set to zero.')") l3f(1)
+         endif
+       endif
+       if (tfail) then
+         guinval(ij:ij+1) = 0.0
+         guinang(ij:ij+1) = 0.0
+       else
+         guinval(ij) = xinit(1)
+         guinval(ij+1) = xinit(3)
+         guinang(ij) = xinit(2)
+         guinang(ij+1) = xinit(4)
+         if (.not.uniti) guinval(ij:ij+1) = guinval(ij:ij+1)*ft
+         tfail = any(guinval(ij:ij+1).lt.0.0) .or.
+     &   any(abs(guinang(ij:ij+1)).gt.360.0)
+         if (tfail) then
+           fail = .true.
+           write (output,"('0******** One or more quantities on Card',
+     & i8,' are negative.')") l3f(1)
+         endif
+       endif
+!  Set junction initial conditions.
+       velfj(ij) = 0.0
+       velgj(ij) = 0.0
+$if def,mmfld,1
+       velmj(ij) = 0.0
+       go to 301
+   59  write (output,2019) nc
+ 2019  format ('0******** No junction entered for component',i10,
+     & ', defaults being entered.')
+       ij1(ij) = 0
+       ij2(ij) = 0
+       ajun(ij) = 0.0
+       fjunf(ij) = 0.0
+       fjunr(ij) = 0.0
+       velfj(ij) = 0.0
+       velgj(ij) = 0.0
+$if def,mmfld,1
+       velmj(ij) = 0.0
+       junno(ij) = nc*1000000
+       cmphld(nc)%junp(1)%junno = junno(ij)
+       fail = .true.
+  301  if (.not.uniti) then
+         fr(1) = ft
+         fr(2) = ft2
+         fr(3) = ft3
+         fr(4) = xlbsec/ft3
+         fr(5) = xcp
+         fr(6) = xthcnd
+       else
+         fr(1) = 1.0
+         fr(2) = 1.0
+         fr(3) = 1.0
+         fr(4) = 1.0
+         fr(5) = 1.0
+         fr(6) = 1.0
+       endif
+       l3e(1) = nc*10000 + 2200
+       dialn(i) = 1.128379167*sqrt(ajun(ij))
+       call inplnk (l3e(1),ix,n3,n4,fa(filndx(1)))
+       if (n4 .eq. 0) then
+         write (output,2010) l3e(1)
+       else
+         l3e(6)   =  1
+         call inp2(fa(filndx(1)),init,l3e)
+         if (l3e(6) .gt. 0) go to 141
+       endif
+       write(output, 2040)
+ 2040  format('0******** Tank geometry set to default conditions for con
+     &tinued checking.')
+       vliq(i)   =  0.0
+       thick(i)  =  0.0
+       lnlen(i)  =  0.0
+       lnelv(i)  =  0.0
+       rhot(i)   =  0.0
+       htcap(i)  =  0.0
+       thcnd(i)  =  0.0
+       htxr(i)   =  0.0
+       dialn(i)  =  0.0
+       acctrp(i) =  0
+       acctrp(i+1) = 0
+       tkht = 0.0
+       gasln(i) = 0.0
+       gaslno(i) = 0.0
+       fail = .true.
+       go to 243
+  141  vliq(i) = xinit(1)*fr(3)
+       if (vliq(i) .lt. 0.0) then
+         write (output,2041)
+ 2041  format('0******** Liquid volume less than 0.0, set to 1.0 and con
+     &tinue checking.')
+         vliq(i) =  1.0
+         fail = .true.
+       endif
+       if (xinit(2) .lt. 0.0) then
+         xinit(2) = 1.0
+         write (output,2042)
+ 2042  format ('0******** Liquid level less than 0.0, set to 1.0 for con
+     &tinued  checking.')
+         fail = .true.
+       endif
+       dumr = xinit(2)*fr(1)
+       if (dumr .gt. abs(hydzc(iv))) then
+         fail = .true.
+         write(output, 2060)
+ 2060 format('0******** Tank liquid level exceeds elevation change of th
+     &e tank, liquid level reset to tank elevation change for continued
+     &checking.')
+         dumr = abs(hydzc(iv))
+       endif
+!      save liquid level for printing
+  240  if (geom .eq. 1) tkht = dumr
+       if (abs(hydzc(iv)) .eq. 0.0) go to 241
+!      divide by cosine of angle between
+!      vertical direction and tank direction
+       dumr = dumr*dl(iv)/abs(hydzc(iv))
+  241  xinit(2) = dumr/fr(1)
+!      save gas length for a spherical tank
+       if (geom .eq. 1) then
+        gasln(i) = dl(iv) - xinit(2)*fr(1)
+        gaslno(i) = gasln(i)
+       endif
+       if (vliq(i) .ne. 0.0) go to 146
+       if ( xinit(2) .eq. 0.0 ) then
+        fail      = .true.
+        write(output,2082)
+ 2082   format ('0******** Liquid volume and liquid level are both zero.
+     &')
+        go to 147
+       endif
+       if (geom .eq. 0) then
+        vliq(i)  =  avol(iv)*xinit(2)*fr(1)
+       else
+        tkrad = sqrt(avol(iv)/pi)
+        sgas = dl(iv) - xinit(2)*fr(1)
+        voltk= (4./3.)*pi*tkrad**3 - (pi/3.)*
+     &  (2.*tkrad - sgas)**2 * (tkrad + sgas)
+        vliq(i) = v(iv) - voltk
+       endif
+  146  if ( xinit(2) .eq. 0.0 ) then
+        if (geom .eq. 1) then
+         fail      = .true.
+         write(output,2088)
+ 2088    format ('0******** Initial liquid level must be specified.')
+        endif
+        go to  147
+       endif
+       if (geom .eq. 0) then
+        vliq2     =  avol(iv)*xinit(2)*fr(1)
+       else
+        tkrad = sqrt(avol(iv)/pi)
+        sgas = dl(iv) - xinit(2)*fr(1)
+        voltk= (4./3.)*pi*tkrad**3 - (pi/3.)*
+     &          (2.*tkrad - sgas)**2 * (tkrad + sgas)
+        vliq2 = v(iv) - voltk
+       endif
+       if ( abs(vliq(i) - vliq2)/vliq2 .lt. 1.0e-5 )  go to  147
+ 1461  fail      = .true.
+       write(output,2043)
+ 2043  format ('0******** Values of initial liquid volume and level are
+     &inconsistent.')
+  147  if (vliq(i) .le. v(iv)) go to 242
+       fail = .true.
+       write(output, 2061)
+ 2061  format ('0******** Tank liquid volume exceeds tank volume, reset
+     &to tank volume for continued checking.')
+       vliq(i) = v(iv)
+  242  lnlen(i) = xinit(3)*fr(1)
+       if (lnlen(i) .lt. 0.0) then
+         lnlen(i) = 1.0
+         write (output,2044)
+ 2044  format ('0******** Surge line length less than or equal to 0.0, s
+     &et to 1.0 and continue checking.')
+         fail = .true.
+       endif
+       lnelv(i) = xinit(4)*fr(1)
+      if (abs(lnelv(i)) .le. abs(lnlen(i))) go to 158
+      fail = .true.
+      write(output, 2062)
+ 2062 format ('0******** Surge line elevation drop exceeds the surge lin
+     &e length, reset to surge line length with appropriate sign for con
+     &tinued checking.')
+      lnelv(i) = lnlen(i)*sign(1.0, lnelv(i))
+!  Begin the tank wall input.
+  158  thick(i) = xinit(5)*fr(1)
+       if (thick(i) .le. 0.0) then
+         thick(i) =  1.0
+         write(output,2046)
+ 2046  format ('0******** Tank thickness less than or equal to 0.0, set
+     &to 1.0 for continued checking.')
+         fail = .true.
+       endif
+       htxr(i) = 1.0
+       if (init(6) .eq. 1) htxr(i) = 0.0
+       if (init(6).ne.0 .and. init(6).ne.1) then
+         htxr(i) = 0.0
+         fail = .true.
+         write(output,2051)
+ 2051  format ('0******** Heat transfer flag incorrect, set to 0.0 for c
+     &ontinued checking.')
+       endif
+       rhot(i) = xinit(7)*fr(4)
+       if (rhot(i) .lt. 0.0) then
+         rhot(i)  = 1.0
+         write(output,2047)
+ 2047  format ('0******** Tank density less than 0.0, set to 1.0 for con
+     &tinued checking.')
+         fail = .true.
+       endif
+       htcap(i) = xinit(8)*fr(5)
+       if (htcap(i) .lt. 0.0) then
+         htcap(i) = 1.0
+         write(output,2048)
+ 2048  format ('0******** Tank heat capacity less than 0.0, set to 1.0 f
+     &or continued checking.')
+         fail = .true.
+       endif
+!  Set and check the accumulator isolation trip.
+       tfail = .false.
+       acctrp(i) = init(9)
+       tfail = (init(9) .lt. 0) .or. (init(9) .gt. 2000)
+       if (tfail) write(output, 2120) l3e(1), init(9)
+ 2120  format ('0******** Card',i10,' contains an invalid trip number',
+     & i10,'.')
+       fail = fail .or. tfail
+       tfail = .false.
+!  Include the line volume in the liquid and total volume.
+  243  vline = ajun(ij)*lnlen(i)
+       vtank(i) = v(iv)
+       atank(i) = avol(iv)
+       diamtk(i) = diamv(iv)
+       v(iv) = v(iv) + vline
+       vliq(i) = vliq(i) + vline
+       vdm(i) = v(iv) - vliq(i)
+       dl(iv) = dl(iv) + lnlen(i)
+       avol(iv) = v(iv)/dl(iv)
+       dumr = -sign(1.0,hydzc(iv))
+       dztank(i) = hydzc(iv)
+       hydzc(iv) = dumr*(dumr*dztank(i) - lnelv(i))
+       if (lnlen(i) .gt. 0.0) diamv(iv) = 4.0*v(iv)*diamtk(i)*dialn(i)/
+     & ((atank(i) - ajun(ij)) + 4.0*(vtank(i)*dialn(i) +
+     &  vline*diamtk(i)))
+       if (vdm(i) .le. 0.0) then
+         write (output,2054)
+ 2054  format ('0******** Initial accumulator gas volume is .le. zero.')
+         fail  = .true.
+       endif
+!  Set defaults.
+       if (rhot(i) .eq. 0.0) rhot(i) = 7800.0
+       if (htcap(i) .eq. 0.0) htcap(i) = 473.0
+       thcnd(i) = 0.0262
+!  Edit component input.
+       ij = ijs
+       n = i
+       l3b(1) = nc*1000000 + 10000
+       volno(iv) = l3b(1)
+       cmphld(nc)%volp(1)%volno = l3b(1)
+       if (iand(ihlppr(2),ishft(1,22)).ne.0) then
+         write (output,2105)
+ 2105  format ('0  Vol no.',5x,'flow area',8x,'flow length',6x,'volume',
+     & 11x     ,'horiz. angle',5x,'vert. angle',6x,'elev. chng.')
+         if (.not.unito) then
+           write (output,2106)
+ 2106  format (15x,'(ft2)',12x,'(ft)',13x,'(ft3)',12x,'(deg)',12x,
+     & '(deg)',12x,'(ft)')
+         else
+           write (output,2107)
+ 2107  format (15x,'(m2)',13x,'(m)',14x,'(m3)',13x,'(deg)',12x,'(deg)',1
+     +2x,'(m)')
+         endif
+         if (unito) then
+           write (output,2102) l3b(1),avol(iv),dl(iv),v(iv),rhof(iv),
+     &     rho(iv),hydzc(iv)
+ 2102  format (i10,1p,6e17.6)
+         else
+           xinit(2) = avol(iv)/ft2
+           xinit(3) = dl(iv)/ft
+           xinit(4) = v(iv)/ft3
+           xinit(5) = hydzc(iv)/ft
+           write (output,2102) l3b(1),(xinit(ihf),ihf=2,4),rhof(iv),
+     &     rho(iv),xinit(5)
+         endif
+         write (output,2108)
+ 2108  format ('0  Vol no.',5x,'roughness',8x,'hydraulic diam.',4x,
+     & 'volume  geometry  init. cond.',5x,'i.c. value 1',5x,
+     & 'i.c. value 2',5x,'i.c. value 3')
+         if (.not.unito) then
+           write (output,2109)
+ 2109  format (15x,'(ft)',13x,'(ft)',16x,'flags',6x,'flag',9x,'flag')
+         else
+           write (output,2110)
+         endif
+ 2110  format (15x,'(m)',14x,'(m)',17x,'flags',6x,'flag',9x,'flag')
+         ihf = 1000000*iand(ishft(vctrl(iv),-2),1) +
+     &   100000*iand(ishft(imap(iv),-28),1) +
+     &   10000*iand(ishft(vctrl(iv),-7),1) +
+     &   1000*iand(ishft(imap(iv),-9),1) +
+     &   100*iand(ishft(vctrl(iv),-30),1) +
+     &   200*iand(ishft(imap(iv),-27),1) +
+     &   10*iand(ishft(imap(iv),-13),1) +
+     &   iand(ishft(vctrl(iv),-1),1)
+         geom = iand(ishft(cmpopt(i),-8),1)
+         init(1) = iand(ishft(vctrl(iv),-8),1023)
+         if (unito) then
+           xinit(2) = p(iv)
+           xinit(3) = temp(iv)
+           xinit(4) = boron(iv)
+           write (output,2103) l3b(1),roughv(iv),diamv(iv),ihf,geom,
+     &     init(1),(xinit(k),k=2,4)
+ 2103  format (i10,1p,2e17.6,i13.3,i10.7,i13,3e17.6)
+         else
+           xinit(2) = roughv(iv)/ft
+           xinit(3) = diamv(iv)/ft
+           xinit(4) = p(iv)/psia
+           xinit(5) = (temp(iv) - degf2)/degf1
+           xinit(6) = boron(iv)
+           write (output,2103) l3b(1),xinit(2),xinit(3),ihf,geom,
+     &     init(1),(xinit(k),k=4,6)
+         endif
+         if (fshapl) then
+           write (output,2164)
+ 2164  format ('0  Vol no.            shape ratio      visc. ratio .....
+     &user factor-A    user factor-B    user factor-C')
+           write (output,2165) volno(iv),fshape(iv),fmurex(iv),
+     &     frica(iv),fricb(iv),fricc(iv)
+ 2165  format (i10,7x,1p,5g17.6)
+         else
+           write (output,2166)
+ 2166  format ('0Default friction shape ratio (1.0) and visc. ratio (0.0
+     &) being used and no user friction input entered.')
+         endif
+         write (output,2111)
+ 2111  format ('0  Jun.no. from vol.   to vol.',5x,'junction area',
+     & 4x,'junction')
+         if (.not.unito) then
+           write (output,2112)
+ 2112  format (35x,'(ft2)',12x,'flags')
+         else
+           write (output,2113)
+ 2113  format (35x,'(m2)',13x,'flags')
+         endif
+         do i = ijs,ije,ijskp
+           ihf =
+     &     1000000*iand(ishft(jcex(i),-15),1) +
+     &     100000*iand(ishft(jcex(i),-2),1) +
+     &     10000*iand(ishft(jc(i),-17),3) +
+     &     1000*iand(ishft(jc(i),-4),1) +
+     &     100*iand(ishft(jc(i),-8),1) +
+     &     10*iand(ishft(jc(i),-9),1) +
+     &     iand(ishft(jc(i),-12),3)
+           if (.not.unito) then
+             xinit(2) = ajun(i)/ft2
+             write (output,2026) junno(i),ij1(i),ij2(i),xinit(2),
+     &       fjunf(i),fjunr(i),ihf
+           else
+             write (output,2026) junno(i),ij1(i),ij2(i),ajun(i),
+     &       fjunf(i),fjunr(i),ihf
+ 2026    format (3i10,1p,3e17.6,i15.7)
+           endif
+         enddo
+  180    write (output,2121)
+ 2121  format ('0  Jun.no.',5x,'forward loss ',3x,'forward loss',4x,'for
+     &ward loss',4x,'reverse loss ',3x,'reverse loss',4x,'reverse loss')
+         write (output,2127)
+ 2127  format (15x,'coefficient  ',3x,'multiplier  ',4x,'exponent
+     &  ',6x,'coefficient  ',3x,'multiplier  ',4x,'exponent ')
+         do i = ijs,ije,ijskp
+           write (output,2128) junno(i),fjunf(i),fjunfb(i),fjunfc(i),
+     &     fjunr(i),fjunrb(i),fjunrc(i)
+         enddo
+ 2128  format(i10,1x,1p,6e16.6)
+         ixp =  0
+         write (output,2114) labl1(ixp+1),labl1(ixp+1)
+ 2114  format ('0  Jun.no.',25x,'init. liq.',a5,2x,'init. vap.',a5)
+         if (.not.unito) then
+           write (output,2115) labl2(ixp+1),labl2(ixp+1)
+ 2115  format (35x,a10,7x,a10)
+           do i = ijs,ije,ijskp
+             if (init(1) .eq. 0) then
+               xinit(2) = velfj(i)/ft
+               xinit(3) = velgj(i)/ft
+             else
+               xinit(2) = velfj(i)/xlbsec
+               xinit(3) = velgj(i)/xlbsec
+             endif
+             write (output,2028) junno(i),(xinit(ihf),ihf=2,3)
+ 2028  format (i10,20x,1p,2e17.6)
+           enddo
+         else
+           write (output,2116) labl3(ixp+1),labl3(ixp+1)
+ 2116  format (35x,a10,7x,a10)
+           write (output,2028) (junno(i),velfj(i),velgj(i),
+     &     i=ijs,ije,ijskp)
+         endif
+         if (any(guinval(ijs:ijs+1).ne.0.0)) then
+           write (output,"('0  Jun.no.  Noding diagram modification:  fr
+     &om value',7x,'from angle',7x,'to value',9x,'to angle')")
+           xinit(1:2) = guinval(ijs:ijs+1)
+           if (.not.unito) xinit(1:2) = xinit(1:2)/ft
+           write (output,"(i10,27x,4es17.6)") l3c(1),xinit(1),
+     &     guinang(ijs),xinit(2),guinang(ijs+1)
+         endif
+       endif
+!  Compute terms for the accumulator edit.
+       xinit( 1) = atank(n)
+       xinit( 2) = ajun(ijs)
+       xinit( 3) = htxr(n)
+       if (geom .eq. 0) then
+        xinit( 4) = vtank(n) / atank(n)
+       else
+        xinit( 4) = tklen(n)
+       endif
+       xinit( 5) = lnlen(n)
+       xinit( 6) = thick(n)
+       xinit( 7) = vtank(n)
+       xinit( 8) = vline
+       xinit( 9) = rhot(n)
+       xinit(10) = rhof(iv)
+       xinit(11) = 0.0
+       xinit(12) = htcap(n)
+       xinit(13) = rho(iv)
+       xinit(14) = 57.29577951*asin(-lnelv(n)/
+     & max(1.0e-15, abs(lnlen(n))))
+       xinit(15) = dztank(n)
+       xinit(16) = lnelv(n)
+       xinit(17) = roughv(iv)
+       xinit(18) = roughv(iv)
+       xinit(19) = diamtk(n)
+       xinit(20) = dialn(n)
+       xinit(22) = vliq(n) - vline
+       if (geom .eq. 0) then
+        xinit(21) = xinit(22)*abs(dztank(n))/(xinit(4)*atank(n))
+       else
+        xinit(21) = tkht
+       endif
+       init(23) = acctrp(n)
+       if (geom .eq. 0) then
+        xinit(24) = vdm(n) / atank(n)
+       else
+        xinit(24) = gasln(n)
+       endif
+       xinit(25) = vdm(n)
+       dumr = -sign(1.0, dztank(n))
+       xcl = 0.5*dl(iv)
+       hydzc(iv) = dumr*(dumr*(hydzc(iv) -
+     & dztank(n)*max(0.0, min(xinit(4), xcl))/xinit(4)) +
+     & lnelv(n)*max(0.0, min(lnlen(n), xcl - xinit(4)))/
+     & max(1.0e-15, lnlen(n)))
+       xcl = hydzc(iv)
+       jlbl = 1
+       if (.not.unito) then
+         xinit(1) = xinit(1)/ft2
+         xinit(2) = xinit(2)/ft2
+         xinit(4) = xinit(4)/ft
+         xinit(5) = xinit(5)/ft
+         xinit(6) = xinit(6)/ft
+         xinit(7) = xinit(7)/ft3
+         xinit(8) = xinit(8)/ft3
+         xinit(9) = xinit(9)*ft3/xlbsec
+         xinit(12) = xinit(12)/xcp
+         xinit(15) = xinit(15)/ft
+         xinit(16) = xinit(16)/ft
+         xinit(17) = xinit(17)/ft
+         xinit(18) = xinit(18)/ft
+         xinit(19) = xinit(19)/ft
+         xinit(20) = xinit(20)/ft
+         xinit(21) = xinit(21)/ft
+         xinit(22) = xinit(22)/ft3
+         xinit(24) = xinit(24)/ft
+         xinit(25) = xinit(25)/ft3
+         xcl = xcl/ft
+         jlbl = 2
+       endif
+       lblx(3, jlbl) = ihton
+       if (htxr(n) .ne. 1.0) lblx(3, jlbl) = ihtoff
+       hydzc(iv) = 2.0*hydzc(iv)
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+!  Write warnings and notes.
+       if (geom .eq. 0) then
+        if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &  write(output,2095)
+ 2095   format ('0$$$$$$$$ Accumulator tank is cylindrical.')
+       else
+        if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &  write(output,2096)
+ 2096   format ('0$$$$$$$$ Accumulator tank is spherical.')
+       endif
+       if (lnelv(n) .lt. 0.0) then
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2045)
+ 2045  format ('0$$$$$$$$ Surge line height is negative (means surge lin
+     &e height is an elevation rise).')
+       else
+         if (lnelv(n) .ne. 0.0) then
+           if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &     write (output, 2050)
+ 2050  format ('0$$$$$$$$ Surge line height is positive (means surge lin
+     &e height is an elevation drop).')
+         endif
+       endif
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output, 2064) xcl,lablen(jlbl)
+ 2064  format ('0$$$$$$$$ Equivalent elevation change from the accumulat
+     &or tank, surge line centroid to the junction is ',1p,g14.6,a10)
+       if (lnlen(n) .le. 0.0) then
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write(output, 2065)
+ 2065  format ('0$$$$$$$$ Surge line not modeled in the input.')
+       endif
+!  Edit accumulator properties.
+       write (output,2052)
+ 2052  format ('0Accumulator properties'/
+     & 3x,'tank',34x,'surge line',36x,'heat transfer')
+       write (output,2053) (xinit(i),lblx(i,jlbl),i=1,22),
+     & init(i),lblx(23,jlbl),(xinit(i),lblx(i,jlbl),i=24,25)
+ 2053  format (3x,'area.........',1p,g14.6,a10,' area.................',
+     & g14.6,a10,' option........',g14.6,a10/3x,'length.......',g14.6,
+     & a10,' length...............',g14.6,a10,' wall thickness',g14.6,
+     & a10/3x,'volume.......',g14.6,a10,' volume...............',
+     & g14.6,a10,' wall density..',g14.6,a10/3x,'horiz angle..',
+     & g14.6,a10,' horiz angle..........',g14.6,a10,' wall heat cap.',
+     & g14.6,a10/3x,'vert angle...',g14.6,a10,' vert angle...........',
+     & g14.6,a10,' (gas properties, reference'/
+     & 3x,'elev change..',g14.6,a10,' elev drop (-elev chg)',g14.6,
+     & a10,'  noncondensibles card 110)'/
+     & 3x,'roughness....',g14.6,a10,' roughness............',g14.6,a10,
+     & /3x,'hydralic diam',g14.6,a10,' hydralic diam........',g14.6,
+     & a10/3x,'liquid level.',g14.6,a10,' (liquid full assumed)'/
+     & 3x,'liquid volume',g14.6,a10,' isolation trip number',i9,a10/
+     & 3x,'gas dome hgt.',g14.6,a10/3x,'gas dome vol.',g14.6,a10)
+       endif
+!  Set hydxc, hydyc, and hydzc for use in remaining routines.
+       do k = 1,12
+         hydxc(iv+k-1) = 0.0
+       enddo
+       hydzc(iv) = 0.5*hydzc(iv)
+       hydzc(iv+1) = hydzc(iv)
+       do k = 15,18
+         hydxc(iv+k-1) = 0.0
+       enddo
+       return
+       end

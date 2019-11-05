@@ -1,0 +1,97 @@
+*mlist
+       subroutine htlev (subcoo,prandl,jakob,z,hifnat,hiflev,i)
+!
+!  Computes interphase heat transfer to liquid when level models
+!  finds a level.
+!
+!  Cognizant engineer:  rws
+c
+c  Argument list definitions:
+c    i      - volume index                        (input),
+c    subcoo - volume liquid subcooing            (input),
+c    prandl - volume liquid prandl number        (input),
+c    jakob  - volume liquid jakob number          (input),
+c    z      - liquid height in volume             (input),
+c    hifnat - liquid coefficient from natural conv(input),
+c    hiflev - interfacial HTC*A/Vol to liquid     (output)
+c
+       implicit none
+       include 'fast.h'
+       include 'contrl.h'
+       include 'cons.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'stcom.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer i
+       real hiflev,hifnat,hifturb,ren,prandl,nusselt
+       real subcoo,atheo,hiftheo,hifhelm,hifkhoo,v2fount,zodo
+       real vjet,djet,z,zod,vkut,h,stanton,jakob
+       real aflat,qflat,qtheo,qsum
+c hifnat = hif*area/vol
+       hifturb = 0.0
+       if (velfj(jjet(i)) .le. 0) go to 300
+       zod = z/diamv(i)
+c The superfical velocity must be used just incase steam backflow has oc
+       vjet = voidfj(jjet(i))*velfj(jjet(i))
+       djet = diamj(jjet(i))
+       if (athrot(jjet(i)) .ne. 0.0) then
+c Find the 'real' junction velocity.
+         vjet = vjet/athrot(jjet(i))
+         djet = max(1.0e-4,diamj(jjet(i))*sqrt(athrot(jjet(i))))
+       endif
+       ren = rhof(i)*vjet*djet/viscf(i)
+       if (zod .gt. 3.2) then
+         call khoo(subcoo,ren,prandl,jakob,zod,hifturb,i)
+         hifturb = hifturb/dl(i)
+       elseif (zod .gt. 2.5) then
+         zodo = zod
+         zod = 3.2
+         call khoo(subcoo,ren,prandl,jakob,zod,hifkhoo,i)
+         zod = 2.5
+         call helm(ren,prandl,jakob,zod,hifhelm,i)
+         zod = zodo
+         hifturb = hifkhoo - 1.42857*(hifkhoo-hifhelm)*(3.2 - zod)
+c 1.42857=1/(3.2-2.5)
+         hifturb = hifturb/dl(i)
+       else
+         call helm(ren,prandl,jakob,zod,hifhelm,i)
+         hifturb = hifhelm/dl(i)
+         if (zod .lt. 1.) then
+c Critical Kutadeladze Number per Thomas
+c Based on Sonin-Shimko-Chun data at high water levels do not rely on
+c the critical velocity for high water levels.
+           aflat = 0.25*pi*diamv(i)**2
+           qflat = hifhelm*aflat*subcoo
+           vkut  = .46*z*((rhof(i)-rhog(i))*gravcn*sigma(i))**.25
+     &            /(djet*sqrt(rhof(i)))
+           if (vjet .gt. vkut) then
+             v2fount = vjet**2 - vkut**2
+             h  = v2fount/(gravcn*2.)
+c Theofanous bare jet equation
+             stanton = 0.02*sqrt(djet/h)
+             ren     = rhof(i)*sqrt(v2fount)*djet/viscf(i)
+             nusselt = stanton*prandl*ren
+             hiftheo = nusselt*thconf(i)/djet
+c Arbitrarily assume fountian area = 2 pi D H
+             atheo   = twopi*djet*h
+             qtheo   = hiftheo*atheo*subcoo
+             if (zod .gt. .5) then
+               qtheo = qtheo*(1.0 - zod)*2.0
+             endif
+           else
+             qtheo = 0.0
+           endif
+c Ramp the Theofanus bare jet contribution to zero between zod of .5-1.
+c Thomas' critical velocity data was taken between z/D=.5 & 1.1
+           qsum = sqrt(qtheo**2 + qflat**2)
+           hifturb = qsum/(aflat*subcoo)
+           hifturb = hifturb/dl(i)
+         endif
+       endif
+  300  continue
+       hiflev = max(hifnat,hifturb)
+       return
+       end

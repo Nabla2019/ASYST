@@ -1,0 +1,606 @@
+*mlist
+       subroutine wrplid
+cmpfversion_aptplot_latest
+c  Write two records on rstplt to identify data on pltrec records
+c  for stripping and plotting.
+c
+c  First word of each record is 'plotalf' and 'pltnum'.  Remaining words
+c  are alphanumeric and number portions of variable request codes for
+c  information placed on 'plotrec' records.  There is a one to one
+c  correspondence between the positons of each record.
+c
+c  Cognizant engineer: rjw.
+c
+*in32 ibuf
+*in32 info
+*in32end
+$if def,rk3d,1
+       use rkinc
+$if def,rma,1
+       use interfaces
+       use lpdatc
+       use vreqsd
+       use usrvarc
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'cmpdat.h'
+       include 'cmpdtv.h'
+       include 'convarc.h'
+       include 'htsrcm.h'
+       include 'jundat.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'scddat.h'
+       include 'ndxara.h'
+       include 'scntl.h'
+       include 'cpmdat.h'
+       include 'coupl.h'
+       include 'iparm.h'
+c  Local variables.
+       integer i,ibuf(l_),in,info(3),is,isfdes,isn,iv,ive,ix,iy,
+     & j,jl,js,k,kl,ks,l,len,lx,lcontg,m,n,num,num1
+       real buf(l_),fid,ftbnid
+       integer(8) ibuf8(l_),xnfo(3)
+       equivalence (ibuf8(1),buf(1),ibuf(1),fa(1)),(xnfo(1),info(1))
+       integer kkmax,jjmax
+       logical dupl
+       character chwrd*8
+       type srch
+         integer num,typ,pos,bpos
+         character*8 alf
+       end type srch
+       type (srch), allocatable :: sr(:)
+       integer, allocatable :: indx(:)
+$if def,extvol
+       integer kevmax
+$if def,extv20,1
+       character*8 evt2(20)
+$if def,extv100,1
+       character*8 evt2(100)
+$endif
+$if def,extjun
+       integer kejmax
+       character*8 ejt3(20)
+$endif
+       integer iwrd8
+$if def,npa,1
+       character channm*20,channx*20
+       data iwrd8/8/
+$if def,extvol
+$if def,extv20
+c  This one is for the extra 20 volume slot labels
+       data evt2/
+     & 'extv01', 'extv02', 'extv03', 'extv04', 'extv05',
+     & 'extv06', 'extv07', 'extv08', 'extv09', 'extv10',
+     & 'extv11', 'extv12', 'extv13', 'extv14', 'extv15',
+     & 'extv16', 'extv17', 'extv18', 'extv19', 'extv20'/
+$endif
+$if def,extv100
+c  This one is for the extra 100 volume slot labels
+       data evt2/
+     & 'extv01', 'extv02', 'extv03', 'extv04', 'extv05',
+     & 'extv06', 'extv07', 'extv08', 'extv09', 'extv10',
+     & 'extv11', 'extv12', 'extv13', 'extv14', 'extv15',
+     & 'extv16', 'extv17', 'extv18', 'extv19', 'extv20',
+     & 'extv21', 'extv22', 'extv23', 'extv24', 'extv25',
+     & 'extv26', 'extv27', 'extv28', 'extv29', 'extv30',
+     & 'extv31', 'extv32', 'extv33', 'extv34', 'extv35',
+     & 'extv36', 'extv37', 'extv38', 'extv39', 'extv40',
+     & 'extv41', 'extv42', 'extv43', 'extv44', 'extv45',
+     & 'extv46', 'extv47', 'extv48', 'extv49', 'extv50',
+     & 'extv51', 'extv52', 'extv53', 'extv54', 'extv55',
+     & 'extv56', 'extv57', 'extv58', 'extv59', 'extv60',
+     & 'extv61', 'extv62', 'extv63', 'extv64', 'extv65',
+     & 'extv66', 'extv67', 'extv68', 'extv69', 'extv70',
+     & 'extv71', 'extv72', 'extv73', 'extv74', 'extv75',
+     & 'extv76', 'extv77', 'extv78', 'extv79', 'extv80',
+     & 'extv81', 'extv82', 'extv83', 'extv84', 'extv85',
+     & 'extv86', 'extv87', 'extv88', 'extv89', 'extv90',
+     & 'extv91', 'extv92', 'extv93', 'extv94', 'extv95',
+     & 'extv96', 'extv97', 'extv98', 'extv99', 'extv100'/
+$endif
+$endif
+$if def,extjun
+$if def,extj20
+c  This one is for the extra 20 junction slot labels
+       data ejt3/
+     & 'extj01', 'extj02', 'extj03', 'extj04', 'extj05',
+     & 'extj06', 'extj07', 'extj08', 'extj09', 'extj10',
+     & 'extj11', 'extj12', 'extj13', 'extj14', 'extj15',
+     & 'extj16', 'extj17', 'extj18', 'extj19', 'extj20'/
+$endif
+$endif
+c
+       fid = ftbnid(1)
+       l = lcontg(1)
+c  Get remaining amount of storage and divide into two buffers.
+       l = iand(l,not(1))
+       if (l .lt. 6) go to 201
+       call ftbrsv (fid,l,1,ix)
+       j = ix
+       iy = ix + l/2
+       k = iy
+       kl = ix + l
+       chwrd = 'plotalf'
+       read (chwrd,'(a8)') ibuf8(j)
+       chwrd = 'plotnum'
+       read (chwrd,'(a8)') ibuf8(k)
+       j = j + 1
+       k = k + 1
+       do i = 1,4
+         read (t1(i),'(a8)') ibuf8(j)
+         ibuf(k) = 0
+         j = j + 1
+         k = k + 1
+       enddo
+c  Put out hydrodynamic component data.
+       if (filid(3) .ne. 0) then
+         n = filndx(3)
+         do i = 1,ncmps(n)
+           if (cmptyp(n) .eq. 4) then
+             if (k+3 .gt. kl) go to 201
+             read (t5(1),'(a8)') ibuf8(j)
+             read (t5(2),'(a8)') ibuf8(j+1)
+             read (t5(3),'(a8)') ibuf8(j+2)
+             ibuf(k) = cmpnum(n)
+             ibuf(k+1) = ibuf(k)
+             ibuf(k+2) = ibuf(k)
+             j = j + 3
+             k = k + 3
+           elseif (cmptyp(n) .eq. 12) then
+             if (k+1 .gt. kl) go to 201
+             read (t5(4),'(a8)') ibuf8(j)
+             ibuf(k) = cmpnum(n)
+             j = j + 1
+             k = k + 1
+             if (k+1 .gt. kl) go to 201
+             read (t5(5),'(a8)') ibuf8(j)
+             ibuf(k) = ibuf(k-1)
+             j = j + 1
+             k = k + 1
+           elseif (cmptyp(n) .eq. 13) then
+             if (k+5 .gt. kl) go to 201
+             read (t5(6),'(a8)') ibuf8(j)
+             read (t5(7),'(a8)') ibuf8(j+1)
+             read (t5(8),'(a8)') ibuf8(j+2)
+             read (t5(9),'(a8)') ibuf8(j+3)
+             read (t5(10),'(a8)') ibuf8(j+4)
+             ibuf(k) = cmpnum(n)
+             ibuf(k+1) = ibuf(k)
+             ibuf(k+2) = ibuf(k)
+             ibuf(k+3) = ibuf(k)
+             ibuf(k+4) = ibuf(k)
+             j = j + 5
+             k = k + 5
+           elseif (cmptyp(n) .eq. 14) then
+             if (k+4 .gt. kl) go to 201
+             read (t5(11),'(a8)') ibuf8(j)
+             read (t5(12),'(a8)') ibuf8(j+1)
+             read (t5(13),'(a8)') ibuf8(j+2)
+             read (t5(14),'(a8)') ibuf8(j+3)
+             ibuf(k) = cmpnum(n)
+             ibuf(k+1) = ibuf(k)
+             ibuf(k+2) = ibuf(k)
+             ibuf(k+3) = ibuf(k)
+             j = j + 4
+             k = k + 4
+           elseif (cmptyp(n) .eq. 17) then
+             if (k .gt. kl) go to 201
+             read (t5(15),'(a8)') ibuf8(j)
+             ibuf(k) = cmpnum(n)
+             j = j + 1
+             k = k + 1
+           endif
+           n = n + cmplen(n)
+         enddo
+       endif
+c  Put out hydrodynamic volume data.
+       if (filid(4) .ne. 0) then
+         i = filndx(4)
+$if -def,hydrolod,1
+         kkmax = 22
+$if def,hydrolod,1
+         kkmax = 25
+         if (k+kkmax*nvols(i) .gt. kl) go to 201
+         do m = 1,nvols(i)
+           do l = 1,kkmax
+$if -def,hydrolod,1
+             read (t2(l),'(a8)') ibuf8(j)
+$if def,hydrolod
+             if (l .le. 22) then
+               read (t2(l),'(a8)') ibuf8(j)
+             else
+               read (t2(l+49),'(a8)') ibuf8(j)
+             endif
+$endif
+             ibuf(k) = volno(i)
+             j = j + 1
+             k = k + 1
+           enddo
+           i = i + ivskp
+         enddo
+$if def,extvol
+c  Construct extra 20 or 100 volume block labels for plot file
+         i = filndx(4)
+$if def,extv20,1
+         kevmax = 20
+$if def,extv100,1
+         kevmax = 100
+         if (k+kevmax*nvols(i) .gt. kl) go to 201
+         do m = 1,nvols(i)
+           do l = 1,kevmax
+             read (evt2(l),'(a8)') ibuf8(j)
+             ibuf(k) = volno(i)
+             j = j + 1
+             k = k + 1
+           enddo
+           i = i + ivskp
+         enddo
+$endif
+       endif
+c  Construct junction block labels for plot file
+       if (filid(5) .ne. 0.0) then
+         i = filndx(5)
+$if -def,hydrolod,1
+         jjmax = 10
+$if def,hydrolod,1
+         jjmax = 11
+         if (k+jjmax*njuns(i) .gt. kl) go to 201
+         do m = 1,njuns(i)
+           do l = 1,jjmax
+$if -def,hydrolod,1
+             read (t3(l),'(a8)') ibuf8(j)
+$if def,hydrolod
+             if (l .le. 10) then
+               read (t3(l),'(a8)') ibuf8(j)
+             else
+               read (t3(l+16),'(a8)') ibuf8(j)
+             endif
+$endif
+             ibuf(k) = junno(i)
+             j = j + 1
+             k = k + 1
+           enddo
+           i = i + ijskp
+         enddo
+$if def,extjun
+c  Construct 20 extra junction block labels for plot file
+         i = filndx(5)
+         kejmax = 20
+         if (k+kejmax*njuns(i) .gt. kl) go to 201
+         do m = 1,njuns(i)
+           do l = 1,kejmax
+             read (ejt3(l),'(a8)') ibuf8(j)
+             ibuf(k) = junno(i)
+             j = j + 1
+             k = k + 1
+           enddo
+           i = i + ijskp
+         enddo
+$endif
+       endif
+c  Construct heat structure block labels for plot file
+       if (filid(8) .ne. 0.0) then
+         iv = filndx(8)
+         ive = iv + nhtstr(iv) - 1
+         if (k + 9*nhtstr(iv) .gt. kl) go to 201
+         do i = iv,ive
+           lx = ihtptr(i) + filndx(8)
+           num = htstno(lx)
+           read (t4(1),'(a8)') ibuf8(j)
+           ibuf(k) = num
+           num = num*100
+           num1 = num + 1
+           read (t4(2),'(a8)') ibuf8(j+1)
+           ibuf(k+1) = num
+           read (t4(2),'(a8)') ibuf8(j+2)
+           ibuf(k+2) = num1
+           read (t4(3),'(a8)') ibuf8(j+3)
+           ibuf(k+3) = num
+           read (t4(3),'(a8)') ibuf8(j+4)
+           ibuf(k+4) = num1
+           read (t4(4),'(a8)') ibuf8(j+5)
+           ibuf(k+5) = num
+           read (t4(4),'(a8)') ibuf8(j+6)
+           ibuf(k+6) = num1
+           read (t4(5),'(a8)') ibuf8(j+7)
+           ibuf(k+7) = num1
+           read (t4(5),'(a8)') ibuf8(j+8)
+           ibuf(k+8) = num + htnmpt(lx)
+           j = j + 9
+           k = k + 9
+         enddo
+       endif
+c  Put out reactor kinetics data.
+       if (filid(21) .ne. 0.0) then
+$if def,rk3d,1
+         if (.not. pt3dflag) then
+         if (k+5 .gt. kl) go to 201
+         do i = 1,5
+           read (t6(i),'(a8)') ibuf8(j)
+           ibuf(k) = 0
+           j = j + 1
+           k = k + 1
+         enddo
+$if def,rk3d,1
+         endif
+       endif
+c  Put out control component data.
+       if (filid(27) .ne. 0.0) then
+         iv = filndx(27)
+         if (k + cnvnum(iv) .gt. kl) go to 201
+         do i = 1,cnvnum(iv)
+           read (t7(1),'(a8)') ibuf8(j)
+           ibuf(k) = cnvpnm(iv)
+           iv = iv + cnvlen(iv)
+           j = j + 1
+           k = k + 1
+         enddo
+       endif
+$if def,selap
+       if (scntrl(1)) then
+c  Scdap system variables.
+         do i=1,10
+           read (t9a(i),'(a8)') ibuf8(j)
+           ibuf(k) = 0
+           j = j + 1
+           k = k + 1
+         enddo
+c  Scdap component variables.
+         do i=1,ncomp
+           do l=1,2
+             read (t9b(l),'(a8)') ibuf8(j)
+             ibuf(k) = i
+             j = j + 1
+             k = k + 1
+           enddo
+         enddo
+c  Axially dependent variables.
+         do i=1,ncomp
+           do l=1,naz
+             read (t9d,'(a8)') ibuf8(j)
+             ibuf(k) = nrods2(l,i)*10000 + l*100 + i
+             read (t9d,'(a8)') ibuf8(j+1)
+             ibuf(k+1) = 10000 + l*100 + i
+             read (t9c(3),'(a8)') ibuf8(j+2)
+             ibuf(k+2) = l*100 + i
+             read (t9c(6),'(a8)') ibuf8(j+3)
+             ibuf(k+3) = l*100 + i
+             read (t9c(7),'(a8)') ibuf8(j+4)
+             ibuf(k+4) = l*100 + i
+             read (t9c(8),'(a8)') ibuf8(j+5)
+             ibuf(k+5) = l*100 + i
+             j = j + 6
+             k = k + 6
+           enddo
+         enddo
+c  COUPLE.
+         mcp = 1
+         if (icoup(mcp).gt.0) then
+           do i=1,28
+             read (t10a(i),'(a8)') ibuf8(j)
+             ibuf(k) = 1
+             j = j + 1
+             k = k + 1
+           enddo
+           do i=1,numnp
+             read (t10b(1),'(a8)') ibuf8(j)
+             ibuf(k) = i
+             j = j + 1
+             k = k + 1
+           enddo
+         endif
+       endif
+$endif
+c  Allocate space for sorting and duplication check and copy
+c  information generated above to this space.
+       if (nusrvar.ne.0 .or. nplotrq.ne.0) then
+         js = j; ks = k
+         isn = 0
+         do m = 1,nplotrq
+           isn = isn + size(plotrq(m)%pl)
+         enddo
+         isn = j - ix - 1 + nusrvar + isn
+         allocate (sr(isn),indx(isn))
+         is = 1
+         kl = iy + 1
+         do jl = ix+1,j-1
+           write (sr(is)%alf,"(a8)") ibuf8(jl)
+           sr(is)%num = ibuf(kl)
+           sr(is)%typ = 0
+           sr(is)%pos = 0
+           sr(is)%bpos = 0
+           is = is + 1
+           kl = kl + 1
+         enddo
+c  Put out user-supplied rstplt variables.
+         do i = 1,nusrvar
+           sr(is)%alf = usrvar(i)%ntabla
+           read (usrvar(i)%ntabla,"(a8)") ibuf8(j)
+           ibuf(k) = usrvar(i)%ntabl
+           sr(is)%num = usrvar(i)%ntabl
+           sr(is)%typ = 1
+           sr(is)%pos = i
+           sr(is)%bpos = k
+           j = j + 1
+           k = k + 1
+           is = is + 1
+         enddo
+c  Put out plot variables.
+         do i = 1,nplotrq
+           do m = 1,size(plotrq(i)%pl(:))
+             read (plotrq(i)%pl(m)%ntabla,"(a8)") ibuf8(j)
+             sr(is)%alf = plotrq(i)%pl(m)%ntabla
+             ibuf(k) = plotrq(i)%pl(m)%ntabl
+             sr(is)%num = plotrq(i)%pl(m)%ntabl
+             sr(is)%typ = 2
+             sr(is)%pos = ior(i,ishft(m,16))
+             sr(is)%bpos = k
+             j = j + 1
+             k = k + 1
+             is = is + 1
+           enddo
+         enddo
+c  Set up indexes to search table and sort the search table by sorting
+c  the indexes.
+         do i = 1,isn
+           indx(i) = i
+         enddo
+         call qsortsr (indx,1,isn)
+c  Check for duplicates; if present, set marker in user-supplied or
+c  plot lists and mark numeric part of data to be written with a
+c  blank.
+         dupl = .false.
+         do i = 2,isn
+           if (sr(indx(i))%alf.eq.sr(indx(i-1))%alf .and.
+     &     sr(indx(i))%num.eq.sr(indx(i-1))%num) then
+             dupl = .true.
+             ibuf(sr(indx(i))%bpos) = -1
+             iv = iand(sr(indx(i))%pos,z'ffff')
+             if (sr(indx(i))%typ .eq. 1) then
+               usrvar(iv)%ntabno = ior(usrvar(iv)%ntabno,ishft(1,30))
+               ive = iand(usrvar(iv)%ntabno,z'fffff') + 20800000
+               write (output,
+     & "('0$$$$$$$$ User supplied rstplt variable entered on card,'i9,
+     & ' is not needed since code has already entered that variable.')")
+     &         ive
+             else
+               m = iand(ishft(sr(indx(i))%pos,-16),z'ffff')
+               plotrq(iv)%pl(m)%ntabno = ior(plotrq(iv)%pl(m)%ntabno,
+     &         ishft(1,30))
+             endif
+           endif
+         enddo
+         deallocate (sr,indx)
+c  Eliminate duplications from lists to be written to restart-plot file.
+         if (dupl) then
+           kl = ks
+           do jl = js,j-1
+             ibuf8(js) = ibuf8(jl)
+             ibuf(ks) = ibuf(kl)
+             if (ibuf(kl) .ne. -1) then
+               js = js + 1
+               ks = ks + 1
+             endif
+             kl = kl + 1
+           enddo
+           j = js
+           k = ks
+         endif
+       endif
+c
+       chwrd = 'plotinf'
+       read (chwrd,'(a8)') xnfo(1)
+       info(2) = j - ix
+       info(3) = info(2)/2 + 1
+       iplotlen = info(2)
+       if (iand(print,1).ne.0 .and. iextra.ne.0) then
+         len = 3
+         write (rstplt) len,iwrd8
+         write (rstplt) (xnfo(in),in=1,3)
+         write (rstplt) info(2),iwrd8
+         write (rstplt) (ibuf8(in),in=ix,j-1)
+         write (rstplt) info(2),iwrd8
+         write (rstplt) (ibuf8(in),in=iy,k-1)
+       endif
+c
+$if def,npa
+       if (iand(print,32) .ne. 0) then
+         k = info(2) - 1
+         kl = k
+         do i = 1,k
+           channm = ' '
+           channx = ' '
+           write (channm(1:8),'(a8)') ibuf8(ix+i)
+           write (channm(10:20),'(i10)') ibuf(iy+i)
+           channm(9:9) = '-'
+           j = 1
+           do m = 1,20
+             if (channm(m:m) .ne. ' ') then
+               channx(j:j) = channm(m:m)
+               j = j + 1
+             endif
+           enddo
+           call floadc (kl,channx,0,' ')
+           if (kl .ne. 0) then
+             fail = .true.
+             write (tty,2003) kl
+ 2003  format (' Error number',i5,' returned from NPA load routine.')
+             go to 40
+           endif
+         enddo
+       endif
+$endif
+c
+   40  if (isfdes(fid) .ne. 0) call ftbdel (fid)
+$if def,rma,2
+       call relsim (2)
+       call simstate
+       return
+c
+  201  write (output,2001)
+ 2001  format ('0******** Insufficient space to write plot record identi
+     &fications.')
+       call dmplst
+  900  fail = .true.
+       go to 40
+!
+       contains
+!
+       recursive subroutine qsortsr (ipntr,m1,m2)
+!  Sorts an array, ipntr(m1:m2), which contains indexes to a derived
+!  type array, sr, using the quicksort algorithm.
+!
+       implicit none
+       integer m1,m2
+       integer ipntr(*)
+!
+       integer i1,i2,is
+!
+!  Initialize left and right pointers.
+       i1 = m1 + 1
+       i2 = m2
+!  Move data such that data less than value now in first element is to
+!  the left and data greater than that value is to the right.
+       outer: do
+!  Move left pointer to the right.
+         do
+           if (i1 .gt. i2) exit outer
+           if (sr(ipntr(i1))%alf .gt. sr(ipntr(m1))%alf) exit
+           if (sr(ipntr(i1))%alf .eq. sr(ipntr(m1))%alf) then
+             if (sr(ipntr(i1))%num .gt. sr(ipntr(m1))%num) exit
+             if (sr(ipntr(i1))%num .eq. sr(ipntr(m1))%num) then
+               if (sr(ipntr(i1))%typ .gt. sr(ipntr(m1))%typ) exit
+             endif
+           endif
+           i1 = i1 + 1
+         enddo
+!  Move right pointer to the left.
+         do
+           if (i2 .lt. i1) exit outer
+           if (sr(ipntr(i2))%alf .lt. sr(ipntr(m1))%alf) exit
+           if (sr(ipntr(i2))%alf .eq. sr(ipntr(m1))%alf) then
+             if (sr(ipntr(i2))%num .lt. sr(ipntr(m1))%num) exit
+             if (sr(ipntr(i2))%num .eq. sr(ipntr(m1))%num) then
+               if (sr(ipntr(i2))%typ .lt. sr(ipntr(m1))%typ) exit
+             endif
+           endif
+           i2 = i2 - 1
+         enddo
+         is = ipntr(i2)
+         ipntr(i2) = ipntr(i1)
+         ipntr(i1) = is
+       enddo outer
+!  Move data in first element to divide the left and right regions.
+       is = ipntr(i2)
+       ipntr(i2) = ipntr(m1)
+       ipntr(m1) = is
+!  Set up and call for recursive sorts of the two regions if necessary.
+       i2 = i2 - 1
+       if (i2 .gt. m1) call qsortsr (ipntr,m1,i2)
+       if (m2 .gt. i1) call qsortsr (ipntr,i1,m2)
+       return
+       end subroutine qsortsr
+       end subroutine wrplid

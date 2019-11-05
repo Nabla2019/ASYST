@@ -1,0 +1,252 @@
+*mlist
+*if def,selap
+       subroutine zofail (naz,nfi,tox,tsur,tsur0,tzr,wuo2,wzr,kfail,
+     # ifrag,woxzr,sighbr,sigabr,sigrbr,nbrmod,winrem,ruliq,
+     # oxdwc, rnoxd,rci,rco,rpel,kfaila,wremzr,kfail1,dz)
+c
+c
+c  calculates the timing and location of failure of zr-o2 outer
+c  layer in cladding, with result that melted Zr and Zr-U-O contained
+c  by oxide shell is released and slumps downward.
+c
+c  Cognizant engineer: ljs (wjs).
+c#    calling routine:     liqsol
+c#    subroutines called:  zoemod, zopoir, zorup , zuden , zufrdn,
+c#                         zuhfus, zuvisc
+c#    engineer/programmer: l.j.siefken/w.j.suitt
+c#    input variables:        description
+c#    faxial              axial force in the cladding.
+c#    naz                 number of axial nodes.
+c#    nfi                 indicator of breach at axial zone k.
+c#    tox(z)              thickness of zr-o2 layer on outside of claddin
+c#    tsur(z)             temperature of surface over which slug flows a
+c                         (end of time step)
+c     tsur0(k)            temperature of surface at start of time step (
+c#    tzr(k)              thickness of zr portion of cladding in zone k.
+c#    winrem              mass of inconel removed from axial node
+c#    wuo2                weight of dissolved uo2.
+c#    wzr                 weight of dissolved zr.
+c#    z                   elevations of axial nodes.
+c       tmpfal = maximum temperature that cladding oxide
+c                can withstand without failure (k) (input)
+c        ifrag(k) = variable indicating whether or not in-
+c                    tact fuel rod, debris region, or void
+c                    region exists in axial zone k.
+c                    0 = intact fuel rod
+c                    1 or 2 = debris region
+c                    3 = void region
+c        woxzr(k)  = oxygen absobed by in situ cladding
+c                    in axial zone k (kg)  (input)
+c       kfail1(k)=indicator of oxide shell breach at axial node k;
+c                 0=no, 1=yes.
+c#
+c#    output variables:       description
+c#    kfail               number of axial zone in which failure of cladd
+c          sighbr    = zro2 hoop stress at just prior to
+c                      breach (n/m**2)  (output)
+c          sigabr    = zro2 axial stress just prior to
+c                      breach. (n/m**2)  (output)
+c          sigrbr=   = zro2 rupture stress at time of breach.
+c                      (n/m**2)  (output)
+c          nbrmod    = indicator of mode of failure of
+c                      zro2.
+c                      1 = flow of zr-u-o thru existing breach
+c                      2 = user prescribed failure
+c                      3 = excessive hoop stress
+c                      4 = excessive axial stress
+c                      5 = buckling because of axial compressionc;
+c     kfaila(k) = indicator of whether oxide shell failed during this
+c                 time step at axial node k.
+c
+       implicit none
+*call fast
+*call voldat
+*call contrl
+*call ufiles
+*call comctl
+*call scddat
+*call cmatp
+cljs   include 'fast.h'
+cljs   include 'voldat.h'
+cljs   include 'contrl.h'
+cljs   include 'ufiles.h'
+cljs   include 'comctl.h'
+cljs   include 'scddat.h'
+cljs   include 'cmatp.h'
+       integer naz,nfi,kfail,ifrag,nbrmod
+       integer kfail1(ndax)
+       real tox,tsur,tsur0,tzr,wuo2,
+     * wzr,woxzr,sighbr,sigabr,sigrbr,winrem,ruliq
+       real wremzr,dz
+       real oxdwc,rnoxd,rci,rco,rpel
+       dimension tox(*),tsur(ndax),tsur0(ndax),wuo2(ndax),wzr(ndax),
+     *           winrem(*),ruliq(*),
+     *           tzr(ndax)
+      dimension wremzr(*),dz(*)
+      dimension ifrag(*) , woxzr(*)
+      dimension oxdwc(*),rnoxd(*),rci(*),rco(*),rpel(*)
+      dimension nfi(ndax)
+      dimension kfaila(ndax)
+*call cons
+*call miscon
+*call buntim
+c    following three RELAP5 common blocks go together.
+*call tblsp
+*call dbacct
+c
+c  Local variables.
+       integer ibelow,k,noxshl
+       real afraco,afracu,afracz,densol,denzu,frcfal,frcfun,
+     * sigrup,stzro1,tmelt,tmltme,tmpfl2,tdrslm
+       real pliq,zorup,zuden,zufusn,zuvisc
+       external pliq,zorup,zuden,zufusn,zuvisc
+       external atomfr
+       external vsfunc
+       real vsfunc
+       real vtot,vsol,frcdis,frcdeb,dtrate
+       real tzomlt,tzoml2
+       integer kdyn,ngshtr
+       integer kfaila,nl
+       integer kk,kk1
+       real fracox,wtlimd,lslump,nmdrps
+c
+c  Data statements.
+c     tzomlt must be less than temperature at which location is
+c     transformed from rod-like geometry to cohesive debris in
+c     subroutine rubtrn.
+c      tzomlt=temperature at which liquefied zr dissolves oxide shell
+c             of any thickness.
+c      tzomlt is from KfK eutectic melting for uo2 - zro2.
+c      tzoml2 = failure temperature of oxide shell during reflood (K).
+       data tzomlt / 2873. /, tzoml2 / 4000./
+c      The data statement value for frcdeb is preliminary - the
+c      value eventually should be made a user-defined quantity.
+c      This value should be less than the value at which subrutines
+c      rubtrn and heatld signal transition from intact geometry to
+c      molten pool due to liquefaction by dissolution.
+c      Subroutine rubtrn signals loss of of intact geometry due to
+c      dissolution with dissolution of 50% of fuel pellet (parameter
+c      rliqsw).
+c      Upper bound of this value is also maximum amount of relocation
+c      that subroutine liqsol can represent.
+       data frcdeb / 1.00/
+c      tdrslm = threshold temperature for reslumping of previously
+c               frozen drops (K)
+      data tdrslm / 5000.0/
+      kfail=0
+      sighbr=0.0
+      sigabr=0.0
+      sigrbr=0.0
+      tmpfl2=tmpfal
+      do 30 k=1,naz
+        if(kfail1(k).eq.1)go to 30
+        if(wremzr(k).gt.1.e-10)go to 30
+c If relocated cladding is currently melting and slumping from
+c outside surface of this location, then preclude failure of oxide
+c shell of intact cladding.
+        if(idrfz2(k,icomp).eq.2)go to 30
+c If more than certain fraction of fuel is liquefied, then do
+c not flag failure of oxide shell. Instead of considering of
+c liquefied material in intact geometry, model location as
+c molten pool. Subroutine RUBTRN signals molten pool.
+        vtot=rpel(k)**2
+        vsol=ruliq(k)**2
+        frcdis=1.-vsol/vtot
+        if(frcdis.gt.frcdeb)go to 30
+c if cladding is liquefied at axial node k, check to see whether
+c liquefied material can flow through existing breach.
+        ibelow=0
+        if(wzr(k).lt.1.e-10)go to 30
+        wtlimd=wtgnmx(k,icomp)/(2.*pi*rco(k))
+c for breakout of metallic Zr, oxdwc applies
+c without needing to consider for double-sided
+c oxidation.
+        fracox=oxdwc(k)/wtlimd
+        if(rnoxd(k).le. (rci(k)+1.e-6))fracox=1.
+        if(fracox.gt.1.)fracox=1.
+        noxshl=0
+c If durability threshold reached, then preclude metallic Zr
+c dissolving oxide shell.
+        if(fracox.gt.frcoxf)noxshl=1
+c   If only single-sided cladding oxidation, then assume that melted
+c   cladding does not breach outer oxide shell and stays in fuel-cladding
+c   gap at about same position in elevation.
+c   nsmdif = user defined variable; 1 = oxide failure independent of
+c            whether double-sided oxidation or not, = 0 oxide
+c            failure only if double-sided oxidation.
+c   double-sided oxidation, > 0 = oxide failure independent of whether
+c   double-sided or not.
+        if(int(brchv(k,icomp)).eq.0.and.nsmdif.ge.1)noxshl=1
+c presence of one or more frozen drops at location is assumed to
+c preclude failure of oxide shell.
+        if(ndrfz2(k,icomp).ge.1.and.nsmdif.ge.1)noxshl=1
+c account for drops flowing through node that leave residue of
+c cladding that reinforces oxide layer.
+        lslump=0.0
+        if(k.lt.naz)then
+          kk1=k+1
+          do10kk=kk1,naz
+            lslump=lslump+fdrmn1(kk,icomp)*dz(kk)
+   10     continue
+        end if
+c check to see whether flowing drops reached this elevation.
+        kk1=k
+        nmdrps=0.0
+        if(kk1.ge.1)then
+          do20kk=1,kk1
+            nmdrps=nmdrps+ndrfz1(kk,icomp)
+   20     continue
+        end if
+c If reflood conditions, assume rapid oxidation prevents dissolution
+c oxide shell by metallic Zr.
+        nl=nvad((icomp-1)*ndax+k)+filndx(4)
+        if(voidf(nl).ge.0.0001)noxshl=1
+c tdrslm = temperature at which frozen drops of
+c relocated cladding slump again.
+        if(noxshl.eq.1.and.tsur(k).lt.tdrslm)go to 30
+c if debris already at node, do not check for failure.
+        if(ifrag(k).eq.1)go to 30
+        call atomfr(wuo2(k), wzr(k), woxzr(k), afracu, afracz, afraco)
+        denzu=zuden(afracu, afracz, tsur(k))
+        tmelt=pliq(afraco,afracu,afracz)
+        tmltme=tmelt-50.
+        densol=zuden(afracu, afracz, tmltme)
+        if(densol .ne. (1. 1* denzu)) densol = 1. 1* denzu
+c calculate net internal pressure acting on the
+c inside of the zr-o2 layer.
+c on inside surface oxide layer has stoichiometry of
+c about 1.85 and on outside surface 2.0. average of these
+c two values is used in calculating failure stress.
+        stzro1=1.93
+        sigrup=zorup(tsur(k),stzro1)
+        ngshtr=0
+c If liquid droplets of water contacting surface of fuel rods,
+c then oxide shell on surface of fuel rod that contains liquefied
+c Zr is assumed to be disrupted and release liquefied Zr.
+        dtrate=(tsur(k)-tsur0(k))/dt
+*              Correct channel box bugs.
+        if(tsur(k).gt.tmpfl2.or.ibelow.eq. 1.or.ngshtr.eq.1)then
+          kfail=k
+          kfaila(k)=kfail
+          sighbr=sigrup
+          sigrbr=sigrup
+          nbrmod=2
+          nfi(k)=1
+c**       write(output,905)timehy,icomp,k
+c905       format(' zofail: core degradation event - slumping',
+c     #    ' of melted cladding; time =',e12.6,' s,  comp. no.',i5,
+c     #    ' , axial node',i5) 
+c          write(output,907)tsur(k),tmpfal
+c907       format(' temperature =',e10.4,' K,  oxide failure temp. =',
+c     #    e10.4,' K')
+c          write(output,909)fracox,frcoxf,noxshl
+c909       format(' fraction oxidized =',e10.4,' durability fraction =',
+c     #    e10.4,' noxshl=',i5)
+c          write(output,911)voidf(nl),volno(nl)
+c911       format(' void fraction liquid =',e10.4,' vol. no. =',i10)
+         end if
+   30 continue
+   40 continue
+      return
+      end
+*endif

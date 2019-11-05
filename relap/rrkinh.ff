@@ -1,0 +1,228 @@
+*mlist
+       subroutine rrkinh
+c
+c
+c  Computes initial conditions of fission product decay groups
+c  from input power history for point kinetics.
+c
+c  Cognizant engineer: rjw.
+c
+       implicit none
+       include 'contrl.h'
+       include 'fast.h'
+       include 'rkinc.h'
+       include 'rrkinc.h'
+       include 'ufiles.h'
+c
+       real powhi(l_),durtim(l_)
+       equivalence (powhi(1),fa(1)),(durtim(1),fa(2))
+       real rkdpvn(l_),rkrf0(l_),rkrf2(l_),rkrf3(l_),rkrfx(l_),
+     & rkcnfx(l_),rkfif(l_)
+       equivalence (rkdpvn(1),fa(1)),(rkrf0(1),fa(2)),(rkrf2(1),fa(3)),
+     & (rkrf3(1),fa(4)),(rkrfx(1),fa(5)),(rkcnfx(1),fa(6)),
+     & (rkfif(1),fa(7))
+       integer i,icc,j,k,kk,kl,m,mm
+       real c0,c1,c2,c3,c4,c5,c6,c7,dd,dd2,gf,h,pow,psif,qval,tem,tx,x
+c
+c  Data statements.
+       data c0/0.33333333333/, c1/8.33333333333e-2/,
+     & c2/1.66666666667e-2/, c3/2.77777777778e-3/,
+     & c4/3.968253968e-4/, c5/4.960317460e-5/,
+     & c6/5.511463845e-6/, c7/5.511463845e-7/
+c
+       gf = 1.020
+       qval = 1.0/rkqval(lx)
+       rkcapt(lx) = 0.0
+       psif = 3.24e-6*rkpsi(lx)
+       k = ix
+       do 11 i = lxd,lxa,9
+         rkfif(k) = rkfi(i)
+         k = k + 7
+   11  continue
+       mm = 2
+       if (idin(1) .eq. 3) mm = 5
+       do 10 j = ld,lde,mm
+         tx = durtim(j)
+         if (tx .ne. 0.0) then
+           dd = min(1.0,durtim(j))
+           dd2 = 0.5*dd
+           icc = 2
+           if (idin(1) .eq. 3) then
+             k = ix
+             kl = lxd - 9
+             do 12 m = 1,3
+               kk = kl + 9
+               kl = kl + 9*idin(m+5)
+               do 13 i = kk,kl,9
+                 rkfif(k) = rkfi(i)*durtim(j+m)
+                 k = k + 7
+   13          continue
+   12        continue
+           endif
+c  Logic for cn(h/2).
+   15      if (icc .ne. 0) then
+             k = 0
+             h = dd2
+             if (icc .eq. 2) go to 30
+             if (icc .gt. 0) go to 37
+             do 35 i = lxd,lxa,9
+               rkcnf1(i) = rkcnh1(i)
+               rkcnf2(i) = rkcnh2(i)
+               rkcnf3(i) = rkcnh3(i)
+   35        continue
+             go to 30
+   37        do 28 i = lxd,lxa,9
+               rkcnh1(i) = rkcnf1(i)
+               rkcnh2(i) = rkcnf2(i)
+               rkcnh3(i) = rkcnf3(i)
+   28        continue
+c  Logic for cn(h).
+   31        if (icc .le. 0) go to 46
+             k = 3
+             h = dd
+c  Evaluate functions.
+   30        do 33 i = lxd,lxa,9
+               x = -h*rklmda(i)
+               if (abs(x) .gt. 1.0) then
+                 tem = 1.0/x
+                 rkcnh1(i+k) = (exp(x) - 1.0)*tem*h
+                 rkcnh2(i+k) = (rkcnh1(i+k) - h)*tem
+                 rkcnh3(i+k) = (2.0*rkcnh2(i+k) - h)*tem
+               else
+   34            rkcnh3(i+k) = (((((((c7*x + c6)*x + c5)*x + c4)*x +
+     &           c3)*x + c2)*x + c1)*x + c0)*h
+                 rkcnh2(i+k) = 0.5*(x*rkcnh3(i+k) + h)
+                 rkcnh1(i+k) = (x*rkcnh2(i+k) + h)
+               endif
+   33        continue
+             if (k .eq. 0) go to 31
+           endif
+c  Apply stage 1.
+   46      if (iand(rkopt(lx),16384) .eq. 0) gf = 1.0 +
+     &     psif*(rkcapt(lx) + dd2)**0.4
+           pow = 0.0
+           k = ix
+           do 41 i = lxd,lxa,9
+             pow = pow + rkfif(k)*rkdepv(i)
+             k = k + 7
+   41      continue
+           pow = max(powhi(j) - pow*gf,0.0)*qval
+           k = ix
+           do 43 i = lxd,lxl,9
+             rkrf0(k) = rklmda(i)*pow
+             k = k + 7
+   43      continue
+           if (rkfu38(lx) .ne. 0.0) rkrf0(k) = rkfu38(lx)*rkdepv(lxl-8)
+           k = ix
+           do 44 i = lxd,lxa,9
+             rkrfx(k) = rkrf0(k) - rklmda(i)*rkdepv(i)
+             rkdpvn(k) = rkdepv(i) + rkrfx(k)*rkcnh1(i)
+             k = k + 7
+   44      continue
+c  Apply stage 2.
+           pow = 0.0
+           k = ix
+           do 51 i = lxd,lxa,9
+             pow = pow + rkfif(k)*rkdpvn(k)
+             k = k + 7
+   51      continue
+           pow = max(powhi(j) - pow*gf,0.0)*qval
+           k = ix
+           do 53 i = lxd,lxl,9
+             rkrf2(k) = rklmda(i)*pow
+             k = k + 7
+   53      continue
+           if (rkfu38(lx) .ne. 0.0) rkrf2(k) = rkfu38(lx)*rkdpvn(k-7)
+           k = ix
+           do 54 i = lxd,lxa,9
+             rkdpvn(k) = rkdpvn(k) + (rkrf2(k) - rkrf0(k))*rkcnh2(i)
+             k = k + 7
+   54      continue
+c  Apply stage 3.
+           rkcapt(lx) = rkcapt(lx) + dd
+           if (iand(rkopt(lx),16384) .eq. 0) gf = 1.0 +
+     &     psif*rkcapt(lx)**0.4
+           pow = 0.0
+           k = ix
+           do 61 i = lxd,lxa,9
+             pow = pow + rkfif(k)*rkdpvn(k)
+             k = k + 7
+   61      continue
+           pow = max(powhi(j) - pow*gf,0.0)*qval
+           k = ix
+           do 63 i = lxd,lxl,9
+             rkrf2(k) = rklmda(i)*pow
+             k = k + 7
+   63      continue
+           if (rkfu38(lx) .ne. 0.0) rkrf2(k) = rkfu38(lx)*rkdpvn(k-7)
+           k = ix
+           do 64 i = lxd,lxa,9
+             rkdpvn(k) = rkdepv(i) + rkrfx(k)*rkcnf1(i) + 2.0*
+     &       (rkrf2(k) - rkrf0(k))*rkcnf2(i)
+             k = k + 7
+   64      continue
+c  Apply stage 4.
+           pow = 0.0
+           k = ix
+           do 71 i = lxd,lxa,9
+             pow = pow + rkfif(k)*rkdpvn(k)
+             k = k + 7
+   71      continue
+           pow = max(powhi(j) - pow*gf,0.0)*qval
+           k = ix
+           do 73 i = lxd,lxl,9
+             rkrf3(k) = rklmda(i)*pow
+             k = k + 7
+   73      continue
+           if (rkfu38(lx) .ne. 0.0) rkrf3(k) = rkfu38(lx)*rkdpvn(k-7)
+           k = ix
+           do 74 i = lxd,lxa,9
+             rkcnfx(k) = 2.0*rkcnf3(i) - rkcnf2(i)
+             rkdpvn(k) = rkdpvn(k) + (rkrf0(k) - 2.0*rkrf2(k) +
+     &       rkrf3(k))*rkcnfx(k)
+             k = k + 7
+   74      continue
+c  Apply stage 5.
+           pow = 0.0
+           k = ix
+           do 81 i = lxd,lxa,9
+             pow = pow + rkfif(k)*rkdpvn(k)
+             k = k + 7
+   81      continue
+           pow = max(powhi(j) - pow*gf,0.0)*qval
+           k = ix
+           do 83 i = lxd,lxl,9
+             rkrf2(k) = rklmda(i)*pow
+             k = k + 7
+   83      continue
+           if (rkfu38(lx) .ne. 0.0) rkrf2(k) = rkfu38(lx)*rkdpvn(k-7)
+           k = ix
+           do 84 i = lxd,lxa,9
+             rkdepv(i) = rkdpvn(k) + (rkrf2(k) - rkrf3(k))*rkcnfx(k)
+             k = k + 7
+   84      continue
+           tx = tx - dd
+           if (tx .gt. 0.0) then
+             dd2 = dd
+             dd = dd + dd
+             icc = 1
+             if (dd .le. tx) go to 15
+             dd = tx
+             dd2 = 0.5*dd
+             icc = 2
+             go to 15
+           endif
+         endif
+   10  continue
+       if (rkpsi(lx) .ne. 0.0) then
+         if (rkcapt(lx) .gt. 1.2614e8) then
+           write (output,2001) rkcapt(lx)
+ 2001  format ('0******** Power history data extended to ',1p,g14.6,
+     & ' which is beyond time allowed in neutron capture effect.')
+           fail = .true.
+         endif
+         rkpsi(lx) = rkpsi(lx)*rkcapt(lx)**0.4
+         rkcapt(lx) = 0.0
+       endif
+       return
+       end

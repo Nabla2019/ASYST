@@ -1,0 +1,355 @@
+*mlist
+       subroutine htrc1 (id)
+c
+c  Computes heat transfer coefficient from correlations.
+c
+c  Cognizant engineer: rjw,rws.
+c
+c  If the reflooding option is switched-on, the PSI reflooding heat
+c  transfer model is activated.
+c
+*in32 is
+*in32 ls
+*in32end
+c
+       implicit none
+       integer id
+c
+c    mode 0  -- air-water mixture convection
+c    mode 1  -- single phase liquid convection (p .ge. pcrit)
+c    mode 2  -- single phase liquid convection (subcooled wall, low void
+c    mode 3  -- subcooled nucleate boiling
+c    mode 4  -- saturated nucleate boiling
+c    mode 5  -- subcooled transition film boiling
+c    mode 6  -- saturated transition film boiling
+c    mode 7  -- subcooled film boiling
+c    mode 8  -- saturated film boiling
+c    mode 9  -- single phase vapor convection
+c    mode 10 -- condensation when void=.lt. 1.
+c    mode 11 -- condensation when void .eq. 1.
+c    add 20 to mode number if quala .gt. 1.0e-9
+       include 'fast.h'
+       include 'contrl.h'
+       include 'flood.h'
+       include 'htrcom.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       real enmix,envap,peclet,s(36),xflow,xmg,qffos,htcfs
+       integer is(36)
+       logical ls(36)
+       equivalence (is(1),ls(1),s(1))
+       logical err
+$if def,mmfld,1
+       real radout,radinn,ratiox,thconm
+c
+c  Assure proper steam tables are used.
+       if (volmat(iv) .ne. nfluid) call stcset (volmat(iv))
+       if (iand(vctrl(iv),ishft(1,30)) .ne. 0 .or.
+     &   (htopta .gt. 9 .and. htopta .lt. 14)) then
+         ibundl =  1
+       else
+         ibundl =  0
+       endif
+       if(onrefl .eq. 1 .and. ibundl .eq. 1) then
+         refbun = 1
+       else
+         refbun = 0
+       endif
+       sathfp = sathf(iv)
+       htgamg = 0.0
+       htgamf = 0.0
+c
+$if def,mmfld
+       if (voidm(iv) .ne. 0) then
+c  0.25*4.18 = 1.045
+         thconm = 1.045
+         peclet = diamv(iv1)*csubpm(iv)*rhomt(iv)*velmt(iv)/thconm
+         radout = 1.0
+         radinn = 0.5
+         ratiox = radout/radinn
+         hwm(iv) = (thconm/diamv(iv1))*0.8*ratiox**3
+     &   *(5.1 + 0.028*peclet**0.8)
+         qwmt(iv) = hwm(iv)*(tw - tempmt(iv))
+       else
+         hwm(iv) = 0.0
+         qwmt(iv) = 0.0
+       endif
+$endif
+c  Define variables and initialize.
+       irwt = iand(ishft(imap(iv),-11),1)
+       if (dlev(iv) .gt. 0.0) then
+         irwt = irwt + 1
+       endif
+       htcoef= 0.0
+       htcf  = 0.0
+       htcg  = 0.0
+       alpf10 = -1.0
+       dtsat = tw - tsatt(iv)
+       if (help.ne.0 .and. iand(ihlppr(1),ishft(1,13)).ne.0) then
+         if (iand(vctrlx(iv),1).ne.0)
+     &   write (output,5151) id, volno(iv), irwt, ncount, timehy, tw,
+     &   htdiam, htsa, p(iv), tsatt(iv), satt(iv), voidg(iv), g, v(iv),
+     &   tempf(iv), tempg(iv)
+       endif
+ 5151  format('o  htrc1 initial :   id =', i10,',  volno =', i10,
+     & ',  irwt =',i3,', ncount= ',i9,', timehy',f14.4,
+     & / 5x,'tw',12x,'htdiam',10x,'htsa',10x,'p',
+     & 13x,'tsatt',9x,'satt',10x,'voidg',9x,'g',13x,'v'/
+     & 3x,1p,9e14.6/5x,'tempf',9x,'tempg'/3x,2e14.6)
+c  Check fluid conditions; If p.gt.pcrit use Dittus-Boelter with gas pro
+       if (p(iv) .gt. pcrit) then
+         mode = 1
+         go to 100
+       endif
+c
+       if (quala(iv) .gt. 0.99999999) then
+         mode = 0
+         go to 100
+       endif
+c
+       if (tw .lt. (satt(iv) - 0.001)) then
+c  zbrent has a hard time finding the root of the interfacial temp when
+c  Twall<Tsat(partial pressure steam).
+c  Do not let the condensation process operate all the way to the
+c  single phase liquid limit unless stratified.
+         if (voidg(iv) .lt. 0.1) then
+           mode = 2
+           go to 100
+         endif
+c
+c  Do not have condensation when the gas is mainly noncon.
+         if (quala(iv) .gt. 0.999) then
+c  Gas-Water Mixture: assume water controls wall HT until alpha=.9; add
+c  gas mass flux.
+           mode = 0
+           go to 100
+         endif
+c
+         go to 600
+c
+c  Next consider that Twall<Tsat(total pressure) so no boiling can
+c  occur.
+       elseif (dtsat .le. 0.0) then
+c  Caught in 'no man's land'.
+         if (irwt .eq. 0) then
+           mode = 0
+           go to 100
+         else
+           xmg = voidg(iv)
+           if (dlev(iv) .gt. 0.0) xmg = 1.0 - dlev(iv)/dl(iv)
+c  Do both a liquid and vapor call to Dittus.
+           rhos = rhof(iv)
+           tf = tempf(iv)
+           thcons = thconf(iv)
+           viscs = viscf(iv)
+           cps = csubpf(iv)
+           beta = betaff(iv)
+           mode = 2
+c
+           call  dittus
+c
+           htcfs = htcoef*(1.-xmg)
+           qffos = qfluxo*(1.-xmg)
+           rhos = rhog(iv)
+           tf = tempg(iv)
+           thcons = thcong(iv)
+           viscs = viscg(iv)
+           cps = csubpg(iv)
+           beta = betagg(iv)
+           mode = -9
+c
+           call  dittus
+c
+           htcg = htcoef*xmg
+           qfgo = qfluxo*xmg
+           htcf = htcfs
+           qffo = qffos
+c If the wall temperature is within 1 degree of satt; smooth to qfgo
+c to agree with conden. Conden would yield qfgo=0 at tw=satt.
+           if ( tw -1. .lt. satt(iv)) then
+             htcg = htcg*(tw - satt(iv))
+             qfgo = htcg*(tw - tempg(iv))
+           endif
+           qfluxo = qfgo + qffo
+           htcoef = htcg + htcf
+           htzht = htcoef
+           htzhff = htcf
+           htzhgg = htcg
+           htqot = qfluxo
+           htqof = qffo
+           htqog = qfgo
+           mode = 0
+         endif
+       else
+c  Next section for Twall>Tsat(total pressure)
+c  Groeneveld tables are not well defined at high quality.
+c  Use MOD2 criteria for switching to single phase vapor heat transfer.
+         if (voidg(iv) .ge. 0.999) go to 500
+c
+         rhos = rhof(iv)
+         tf = tempf(iv)
+         thcons = thconf(iv)
+         viscs = viscf(iv)
+c Base boiling enthalpy on total pressure.
+c
+         enliq = uf(iv) + p(iv)/rhof(iv)
+         if (quala(iv) .gt. 1.0e-9) then
+           s(2) = p(iv)
+           if(s(2).lt.ptrip .or. s(2).gt.pcrit) then
+             write (output,9010) volno(iv),p(iv)
+ 9010  format (' $$$$$$$$$ Pressure in volume ',i9,
+     & ' exceeds saturation bounds ',1p,e15.5)
+             s(2)=max(s(2),ptrip)
+             s(2)=min(s(2),pcrit)
+           endif
+           s(9) = 0.0
+           if (nfluid .eq. 1) then
+             call sth2x2 (fa(ndxstd),s,err)
+           elseif (nfluid .eq. 2) then
+             call std2x2 (fa(ndxstd),s,err)
+           else
+             call strpx (fa(ndxstd),s,err)
+           endif
+           if (err) call fabend
+           hfgp = s(16) - s(15)
+           sathfp = s(15)
+c  Recalculate quale for CHFCAL based on total pressure.
+c  Minimun velocity use 1 cm/sec to obtain flow quality.
+c  Calculate flow quality first.
+           xflow = (ggasa + 0.01*voidg(iv)*rhog(iv)*avol(iv))/
+     &             (ggasa + gliqa + 0.01*rho(iv)*avol(iv))
+           envap = ug(iv) + p(iv)/rhog(iv)
+           if (p(iv) .lt. pcrit) then
+             enmix = enliq + xflow*(envap - enliq)
+             qualep = (enmix - sathfp)/hfgp
+           else
+             qualep = quals(iv)
+           endif
+         else
+           hfgp = hfg
+           qualep = quale(iv)
+         endif
+c  See if cpu time can be saved.
+         if ( dtsat .gt. 600.) go to 2000
+c  The critical heat flux is needed in nucleate and transition;
+c  chf is set to zero in htcond but not in qfhtrc;
+c  chfcal is already called in qfhtrc before calling htrc1.
+         if (chf .lt. 0.0001) then
+           call chfcal
+         endif
+c  Do not call prednb if tw is too hot for nucleate boiling.
+         if (dtsat .gt. 100.0) go to 2000
+         if (htopta .lt. 34 .or. htopta .gt. 50) then
+           call prednb
+         else
+           if(chf .gt. 0.) then
+c                      Horizontal Bundle.
+             call prebun
+           else
+             qfluxo = 0.
+           endif
+         endif
+c  Transition and film boiling heat transfer.
+         if (qfluxo .ge. chf) go to 2000
+           if (qfluxo .gt. 0.) then
+c  Mode=3 if liquid is subcooled; mode=4 if not.
+             if (tempf(iv) .lt. tsatt(iv)) then
+               mode = 3
+             else
+               mode = 4
+             endif
+             call suboil
+           else
+             mode = 1
+           endif
+         go to 3000
+ 2000    continue
+         call pstdnb
+         call suboil
+       endif
+       go to 3000
+c  Single phase liquid heat transfer.
+c  Make a transition to the vapor value at high void fractions.
+  100  if (voidg(iv) .gt. 0.99) then
+         alpf10 = voidf(iv)*100.0
+         alpg10 = 1.0 - alpf10
+         rhos = rhof(iv)*alpf10 + alpg10*rhog(iv)
+         tf = tempf(iv)*alpf10 + alpg10*tempg(iv)
+         thcons = thconf(iv)*alpf10 + alpg10*thcong(iv)
+         viscs = viscf(iv)*alpf10 + alpg10*viscg(iv)
+         cps = csubpf(iv)*alpf10 + alpg10*csubpg(iv)
+         beta = betaff(iv)*alpf10 + alpg10*betagg(iv)
+         gliqa = gliqa*alpf10 + ggasa*alpg10
+         call  dittus
+       else
+         rhos = rhof(iv)
+         tf = tempf(iv)
+         thcons = thconf(iv)
+         viscs = viscf(iv)
+         cps = csubpf(iv)
+         beta = betaff(iv)
+         call  dittus
+         if (irwt .gt. 0) then
+           xmg = voidg(iv)
+           if (dlev(iv) .gt. 0.0) xmg = 1.0 - dlev(iv)/dl(iv)
+           qffo = qffo*(1.-xmg)
+           htcf = htcf*(1.-xmg)
+           htcoef = htcf + htcg
+           qfluxo = qffo + qfgo
+           htzht = htcoef
+           htzhff = htcf
+           htqot = qfluxo
+           htqof = qffo
+         endif
+       endif
+c
+       go to 3000
+c  Single phase gas heat transfer.
+  500  rhos = rhog(iv)
+       tf = tempg(iv)
+       thcons = thcong(iv)
+       viscs = viscg(iv)
+       cps = csubpg(iv)
+       beta = betagg(iv)
+       mode = 9
+       call dittus
+       go to 3000
+c  Vapor condensation heat transfer.
+cjmk-b
+ 600  continue
+c
+      if (chngno(45)) then
+         call condn2
+cdbg
+c      write (output,9001) iv,htcf,htcg,qffo,qfgo,gamw
+c 9001 format (2x,'HTRC1: ',i5,1p,6e14.4)
+cdbg
+      else
+         call conden
+           if (incnd .eq. 2) then
+c  When incnd=2 zbrent failed to find an interfacial temperature.
+             mode = 2
+             go to 100
+           endif
+      endif
+cjmk-e
+c
+ 3000  if (help .ne. 0) then
+         if (iand(ihlppr(1),ishft(1,13)) .ne. 0) then
+           if (iand(vctrlx(iv),1) .ne. 0) then
+             write (output,5150) mode,chf,htcoef,htcf,htcg,qfluxo,qffo,
+     &       qfgo,gamw,fstrt(iv1),quala(iv),quale(iv),dtsat,sathfp
+           endif
+         endif
+       endif
+ 5150  format(3x,'htrc1 final output :'/ 5x,'mode',5x,'chf',11x,
+     & 'htcoef',8x,'htcf',10x,'htcg',10x,'qfluxo',8x,
+     & 'qffo',10x,'qfgo',10x/ 5x,i4,3x,1p,7e14.6/
+     & 14x,'gamw',10x,'fstrt',10x,'quala',10x,'quale',10x,'dtsat'
+     & ,10x,'sathfp',/ 12x,6e14.6)
+       return
+       end

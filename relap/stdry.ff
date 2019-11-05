@@ -1,0 +1,114 @@
+*mlist
+       subroutine stdry (i1,n,i)
+c  Combined separator/dryer model.
+c
+c  Cognizant engineer: rjw.
+c
+       implicit none
+c
+       integer i1,n,i
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'przdat.h'
+       include 'scrtch.h'
+       include 'separ.h'
+       include 'statec.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+       real vel, voidfl
+       real vodfaa, vodgaa, voidfb, voidgb
+       real vvj
+       real alpgj1, alpfj1, alpgj2, alpfj2
+       real rovj, rolj
+       real wga, wfa, wg1, wf1, wg2, wf2, wg3, wf3
+       real cdim, dim, alpj, gdry
+       integer ix, k, l, i1j, i2j, i3j
+c
+c  Start with the standard relap5 separator model.
+c
+c  Loop over junctions.
+       i1j = i
+       i2j = i + ijskp
+       i3j = i2j + ijskp
+c  k is the from volume, l is the to volume.
+       k = ij1nx(i3j)
+       l = ij2nx(i3j)
+c  Gas exiting the separator.
+       vodgaa = 1.0
+       if (vover(n) .eq. 0.0) then
+         if (voidg(l) .le. 0.0) vodgaa = 0.0
+       else
+         if (voidg(l) .le. vover(n)) vodgaa = voidg(l)/vover(n)
+       endif
+       vel = max(abs(velgj(i)),1.0e-20)
+       vodfaa = 1.0 - vodgaa
+       vodgaa = min(vodgaa, 0.9*voidg(l)*v(l)/(ajun(i)*vel*dt))
+c liquid return from separator
+       voidfl = 1.0
+       if (vunder(n) .eq. 0.0) then
+         if (voidf(l) .le. 0.0) voidfl = 0.0
+       else
+         if (voidf(l) .le. vunder(n)) voidfb = voidf(l)/vunder(n)
+       endif
+       vel = max(abs(velfj(i)),1.0e-20)
+       voidgb = 1.0 - voidfb
+c
+       wga = voidg(k)*rhog(k)*ajun(i3j)*velgj(i3j) -
+     & voidgb*rhog(l)*ajun(i2j)*velgj(i2j)
+       wfa = voidf(k)*rhof(k)*ajun(i3j)*velfj(i3j) -
+     & voidfb*rhof(l)*ajun(i2j)*velfj(i2j)
+c  Now do the dryer model.
+c  This part of the routine computes the exiting volume fraction of a
+c  dryer using the GE dryer method.
+c  Written by   w l weaver       sept. 1984 (for TRACB).
+       vvj = velgj(i1j)*vodgaa + velfj(i1j)*vodfaa
+       vvj = max(vvj ,0.0)
+       alpj = vodgaa
+       rolj = rhof(l)
+       rovj = rhog(l)
+c  Compute dryer capacity factor and donor void fraction.
+       cdim = 1. - (vvj - vdryl(n))/(vdryu(n) - vdryl(n))
+       cdim = max(0.0, min(1.0 ,cdim))
+       dim = 1. - alpj/(alpj + (1. - alpj)*rolj/rovj)
+       gdry = 1.
+       if (dim.gt.cdim) then
+         gdry = 1. + (cdim - dim)/deldim(n)
+         gdry = max(0.0, gdry)
+       endif
+c  Now compute exit volume fractions.
+       alpgj1 = 1.0
+       alpgj2 = 0.0
+       if (velfj(i1j) .gt. 1.e-3) then
+         alpgj1 = gdry + alpj*(1.0 - gdry)
+         vel = max(abs(velgj(i1j)), 1.0e-20)
+         alpgj1 = min(alpgj1, 0.9*voidg(l)*v(l)/(ajun(i1j)*vel*dt))
+         alpfj1 = 1.0 - alpgj1
+         alpfj2 = 1.0
+         alpgj2 = 0.0
+       endif
+       wf3 = voidfj(i3j)*velfj(i3j)*rhofj(i3j)
+       wg3 = voidgj(i3j)*velgj(i3j)*rhogj(i3j)
+       wf1 = alpfj1*velfj(i1j)*rhofj(i1j)
+       wg1 = alpgj1*velgj(i1j)*rhogj(i1j)
+       wf2 = wf3 - wf1
+       wg2 = wg3 - wg1
+       wf2 = max(wf2, 0.0)
+       wg2 = max(wg2, 0.0)
+c
+       ix = jcnxs(i1j)
+       voidgj(i1j) = alpgj1
+       vodgjr(i1j) = voidgj(i1j)/voidg(ihh2(ix))
+       voidfj(i1j) = alpfj1
+       vodfjr(i1j) = voidfj(i1j)/voidf(ihh1(ix))
+       ix = jcnxs(i2j)
+       voidgj(i2j) = wg2/(wg2 + wf2*rhofj(i2j)/rhogj(i2j))
+       vodgjr(i2j) = voidgj(i2j)/voidg(ihh2(ix))
+       voidfj(i2j) = 1. - voidgj(i2j)
+       vodfjr(i2j) = voidfj(i2j)/voidf(ihh1(ix))
+       return
+       end

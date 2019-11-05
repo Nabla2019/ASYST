@@ -1,0 +1,231 @@
+*mlist
+*if def,selap
+       subroutine qdlmax (rhog, rhof, viscg, viscf, hfg, e, d, gflux,
+     & re, ndim, nex, smax, qdo)
+c
+c  calculates lipinski debris bed dryout heat flux.
+c
+c  Cognizant engineer: gaj.
+c
+c       input -
+c         rhog   = density of sat. steam, kg/m**3
+c         rhof   = density of sat. liquid, kg/m**3
+c         viscg  = viscosity of sat. steam, pa-s
+c         viscf  = viscosity of sat liquid, pa-s
+c         hfg    = enthalpy of sat. steam - that of sat liquid, j/kg
+c         e      = porosity of debris bed
+c         d      = diameter of debris bed particles
+c         gflux  = mass flux, kg/m**2-s
+c         re     = reynolds number
+c         ndim   = correlation indicator;
+c                    0 = 0-d lipinski model
+c                    1 = 1-d lipinski model
+c         nex    = exponent on s and 1-s terms; nex = 3,4,5, or 6;
+c                    s = effective saturation, 0<s<1.
+c
+c       output -
+c         smax   = s which gives maximum qdo
+c         qdo    = dryout heat flux, w/m**2
+c
+       implicit none
+c
+       integer ndim,nex
+       real rhog,rhof,viscg,viscf,hfg,e,d,gflux,re,smax,qdo
+*call ufiles
+c
+c  Local variables.
+       integer i,idbug,m,nit,nsval
+       real alp,am,avvf,bet,bm,c0,cm,de,de3,de180,ds,ex,g,ghfg,gv35,
+     * gv175,ql,qlcon,qmax,qt,qtcon,qval,ref,reg,rhfg,s,s1,seps,
+     * sval,vf,vg,vvf,vvg
+      dimension sval(9), qval(9)
+       external qdl0,qdl1
+c
+c  Data statements.
+      data sval / 0.001,0.05, 0.10, 0.15, 0.20, 0.25, 0.40, 0.80, 0.99 /
+      data nsval  / 9 /
+c
+       data idbug / 0/
+      data s1, seps / 0.001, 1.0e-6 /
+c
+c     g      = accelaration of gravity, m/s**2
+      data g / 9.87049 /
+c
+      if (idbug. gt. 1) then
+        write (output,10)  rhog, rhof, viscg, viscf, hfg,
+     1                     e, d, re, gflux, ndim, nex
+   10   format ('0qdlmax - rhog, rhog, viscg, viscf, hfg =', 5e13.5 /
+     1          '          e, d, re, gflux, ndim, nex =', 4e13.5, 2i4)
+      end if
+c
+      if (ndim .lt. 0 .or. ndim .gt. 1) then
+        write (output,20) ndim
+   20   format ('0**** qdlmax error - ndim =',i5,'; must be 0 or 1')
+        go to 1000
+      end if
+      if (nex .lt. 3 .or. nex .gt. 6) then
+        write (output,30) nex
+   30   format ('0**** qdlmax error - nex =',i5,'; must be 3,4,5, or 6')
+        go to 1000
+      end if
+      qdo = 0.0
+      smax = 0.0
+c     calculate constants used by either the 0-d or the 1-d equations.
+      vg = 1.0 / rhog
+      vf = 1.0 / rhof
+      vvg = vg * viscg
+      vvf = vf * viscf
+      c0 = g * (rhof - rhog)
+      de = (1.0 - e) / d
+      de3 = de / e**3
+      if (ndim .eq. 0) then
+c       lipinski's 0-d model
+        alp = 150.0 * de * de3
+        bet = 1.75 * de3
+        qlcon = c0 * hfg / alp
+        qtcon = c0 * hfg * hfg / bet
+        if (re .lt. 5.0) then
+c         laminar flow.  use equation 2-18 in egg-tmi-7757.
+c
+          qdo = qlcon * rhog / (viscg *
+     1            ((1.0 + ((rhog*viscf)/(rhof*viscg))**0.25)**4))
+          if (idbug .gt. 0) then
+            write (output,310) qdo
+  310       format ('0qdlmax - qdo laminar =', e13.5)
+          end if
+          go to 1000
+        else if (re .gt. 1000.0) then
+c         turbulent flow.  use equation 2-24 in egg-tmi-7757.
+          ex = nex
+          qdo = sqrt (rhog * qtcon) /
+     1           ((1.0 + (rhog/rhof)**(1.0/(ex+1.0)))**((ex+1.0)/2.0))
+          if (idbug .gt. 0) then
+            write (output,330) qdo
+  330       format ('0qdlmax - qdo turbulent =', e13.5)
+          end if
+          go to 1000
+        else
+c         transition between laminar and turbulent flow.
+c         iterate below to find maximum 0-d qdo = f(s),
+c         using equation 2-30 in egg-tmi-7757.
+        end if
+      else
+c       lipinski's 1-d model
+        rhfg = 1.0 / hfg
+        bm = de3 * rhfg
+        am = 1.75 * bm * rhfg
+        de180 = 180.0 * de
+        avvf = de180 * vvf
+        ghfg = gflux * hfg
+        cm = de3 * gflux
+        gv35  = 3.5  * gflux * vf
+        gv175 = 1.75 * gflux * vf
+        if (idbug .gt. 2) then
+          write (output,40)  vg, vf, viscf, viscg, hfg, e, d, gflux
+   40     format (' qdlmax - vg, vf, viscf, viscg, hfg, e, d, gflux =',
+     1             8e11.3)
+          write (output,50) am, bm, cm, c0, gv35, gv175, avvf, de
+   50     format ('         am, bm, cm, c0, gv35, gv175, avvf, de =',
+     1             8e11.3)
+        end if
+c       iterate below to find maximum 1-d qdo = f(s),
+c       using equation 27 in egg-cdd-5728.
+      end if
+      if (idbug .gt. 1) then
+c       calculate and print the shape of the dryout curve.
+        do 60 m=1,nsval
+        s = sval(m)
+        if (ndim .eq. 0) then
+          call qdl0 (vg, vf, vvg, vvf, qlcon, qtcon,
+     1               s, nex, idbug, qdo, ql, qt)
+        else
+          call qdl1 (vg, vf, vvg, vvf, de180, ghfg, gv35, gv175,
+     1               avvf, am, bm, cm, c0, s, nex, idbug, qdo)
+        end if
+        qval(m) = qdo
+   60   continue
+        write (output,70) (sval(m),m=1,nsval)
+   70   format ('0  eff. sats.  =', 9f10.4)
+        write (output,75) (qval(m),m=1,nsval)
+   75   format ('  curve of qdo =', 9e10.3)
+      end if
+c     begin iteration to find the maximum dryout flux
+      s = s1
+      smax = s
+      qmax = 0.0
+      if (ndim .eq. 0) then
+        call qdl0 (vg, vf, vvg, vvf, qlcon, qtcon,
+     1             s, nex, idbug, qdo, ql, qt)
+      else
+        call qdl1 (vg, vf, vvg, vvf, de180, ghfg, gv35, gv175,
+     1             avvf, am, bm, cm, c0, s, nex, idbug, qdo)
+      end if
+      nit = 1
+      if (qdo .gt. qmax) then
+        smax = s
+        qmax = qdo
+      end if
+      s = 0.0
+      ds = 0.1
+   80 continue
+c
+      do 100 i=1,9
+      s = s + ds
+      if (ndim .eq. 0) then
+        call qdl0 (vg, vf, vvg, vvf, qlcon, qtcon,
+     1             s, nex, idbug, qdo, ql, qt)
+      else
+        call qdl1 (vg, vf, vvg, vvf, de180, ghfg, gv35, gv175,
+     1             avvf, am, bm, cm, c0, s, nex, idbug, qdo)
+      end if
+      nit = nit + 1
+      if (qdo .gt. qmax) then
+        smax = s
+        qmax = qdo
+      else
+        go to 120
+      end if
+  100 continue
+c
+  120 ds = 0.1 * abs(ds)
+      if (ds .lt. 0.00095) then
+        go to 250
+      end if
+c       get slope direction at qmax
+      s = smax + seps
+      if (ndim .eq. 0) then
+        call qdl0 (vg, vf, vvg, vvf, qlcon, qtcon,
+     1             s, nex, idbug, qdo, ql, qt)
+      else
+        call qdl1 (vg, vf, vvg, vvf, de180, ghfg, gv35, gv175,
+     1             avvf, am, bm, cm, c0, s, nex, idbug, qdo)
+      end if
+      nit = nit + 1
+      if (qdo .lt. qmax) then
+        if (smax .le. s1) then
+          go to 250
+        end if
+        ds = - ds
+      end if
+      s = smax
+      go to 80
+c
+  250 qdo = qmax
+c
+      if (idbug .gt. 0) then
+        if (ndim .eq. 0) then
+          write (output,320) qdo, smax, nit, ql, qt
+  320     format (' qdlmax, qdo transition =', e13.5,
+     1            '       smax, nit, ql, qt =', f8.5, i6, 2e13.5)
+        else
+          reg = (d / (1.0 - e)) * gflux / viscg
+          ref = (d / (1.0 - e)) * gflux / viscf
+          write (output,350) qdo, nex, smax, nit, gflux, reg, ref
+  350     format (' qdlmax - 1-d qdo        =', e13.5, '   nex =',i3,
+     1            '    smax, nit, g, reg, ref =', f8.5, i6, 3e13.5)
+        end if
+      end if
+ 1000 continue
+      return
+      end
+*endif

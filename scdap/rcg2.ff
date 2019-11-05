@@ -1,0 +1,215 @@
+*mlist
+*if def,selap
+       subroutine rcg2(ih, hcoef1, ncf2, te2, ntf2, areac, tc, r,
+     & z,ir5vol,icvnod,imetsw,ihsave,arsave,htcmet,icomp)
+c
+c  rcg2 processes the new style convective data input.
+c
+c  Cognizant engineer: ewc.
+c
+*in32 ih
+*in32 ncf2
+*in32 ntf2
+*in32 ir5vol
+*in32 icvnod
+*in32 imetsw
+*in32 ihsave
+*in32 idat
+*in32end
+c      imetsw(n)=indicator of corium convection for convective
+c                node n; 0=no, 1=yes.
+c      ihsave(n)=input set values for array ih.
+c      arsave(n)=input set values for array areac.
+c      htcmet(n)=input gap h.t.c.
+c
+       implicit none
+c
+*call iparm
+*call parm
+*call ufiles
+*call fast
+*call contrl
+*call comctl
+*call alcm
+       integer ih(*),ncf2(*),ntf2(*),ir5vol(*),icvnod(*),imetsw(*),
+     * ihsave(*),icomp
+       real hcoef1(*),te2(*),areac(*),tc(*),r(*),z(*),htcmet(*),
+     * arsave(*)
+c
+c  Local variables.
+       integer i,i1,i2,i11,i12,ir5v1,itl,itr,j,j1,j2,j11,j22,jj,k,kt,
+     * linea,m1j,n442,n443
+       integer node,l32
+       external node
+       real d,dsq,dsqm,pd,rs,sint,x,x250,x251,y
+       external hdwr
+       integer idat(13),inext,nstart,ndata
+       real rdat(13)
+       integer l11(12)
+       equivalence(idat(1),rdat(1))
+       data l11 /0,0,4,6,0,1,0,0,0,0,1,0 /
+c
+      rtemp = 0.0
+      do 10 i = 1,ncev
+        ih(i) = 0
+        hcoef1(i) = 0.0
+        ncf2(i) = 0
+        te2(i) = 0.0
+        ntf2(i) = 0
+        areac(i) = 0.0
+   10 continue
+      do 20 i=1,ncevr5
+   20 ir5vol(i) = 0
+c*******************************************
+      k=0
+      line = 10
+c read all cards into temporary array
+      l11(1)=50110001+1000000*icomp
+      l32=l11(1)+98
+      call inplnk(l11(1),inext,nstart,ndata,fa(filndx(1)))
+      if(ndata.eq.0)then
+        if(inext.le.l32)then
+          l11(1)=inext
+        endif
+      endif
+   30 call inp2(fa(filndx(1)),rdat,l11)
+      if(l11(6).lt.0)then
+        fail=.true.
+      else
+      i1=idat(1)
+      j1=idat(2)
+      i2=idat(3)
+      j2=idat(4)
+      ir5v1=idat(6)
+      x250=rdat(5)
+      n442=0
+      x251=0.0
+      n443=0
+      if(i1.eq.0)go to 80
+      if (x250 .le. 0.0) then
+        write(output,9000)i1,j1,i2,j2,ir5v1
+ 9000 format ('0Points(i,j coordinates)',i3,' ,',i3,' and',i3, ' ,',i5,
+     +' connected to relap5 volume ',i10)
+ 9010 format (i10)
+      else
+        n443=-1
+      end if
+      k=k+1
+      m1j=k
+      do 50 kt=m1j,ncev
+   50 tc(kt)=0.0
+      ih(k)=i1
+      if(j1.ne.-1) ih(k)=node(i1,j1)
+      if (rtemp.lt.x250) rtemp=x250
+      hcoef1(k)=x250
+      ncf2(k)=n442
+      if (x250 .le. 0.0) then
+        icvnod(k) = ih(k)
+        ir5vol(k)=ir5v1
+        write(output,9020)k,ir5vol(k),icvnod(k)
+ 9020 format (' For convective node',i3,' relap5 volume connection',
+     +' is',i10,' couple node number is',i5)
+      end if
+      te2(k)=x251
+      ntf2(k)=n443
+      i11=min(i1,i2)
+      i12=max(i1,i2)
+      j11=min(j1,j2)
+      j22=max(j1,j2)
+      if(j1.eq.-1) i11=1
+      if(j1.eq.-1) i12=(i2-i1)/j2
+      if(j1.eq.-1) j11=1
+      if(j1.eq.-1) j22=1
+      itr=i1
+      do 60 i=i11,i12
+        do 60 j=j11,j22
+          itr=itr+j2
+          if(j1.ne.-1) itr=node(i,j)
+          if(itr.eq.ih(k)) go to 60
+          k=k+1
+          ih(k)=itr
+          if (x250 .le. 0.0) then
+            icvnod(k)=ih(k)
+            ir5vol(k)=ir5v1
+            write(output,9020)k,ir5vol(k),icvnod(k)
+          end if
+          itl=ih(k-1)
+          hcoef1(k)=x250
+          ncf2(k)=n442
+          te2(k)=x251
+          ntf2(k)=n443
+          d=sqrt((r(itr)-r(itl))**2+(z(itr)-z(itl))**2)
+c      check for case of two gap elements crossing each other and
+c      producing zero surface area.
+c      ts(k)=surface area for convective heat transfer for k-th
+c            convective node (m**2/m)
+          if(d.lt.1.e-10)then
+            d=1.e-20
+            tc(k-1)=tc(k-1)+0.5*d
+            tc(k)=tc(k)+0.5*d
+          else
+            sint=abs((r(itr)-r(itl))/d)
+            if(npp.eq. 0.and. sint.lt.1.0e-05) d=abs(z(itr)-z(itl))*r
+     +      (itl)
+            if(npp.eq. 0.and. sint.ge.1.0e-05) d=(r(itr)**2-r(itl)**2)
+     +      /2./sint
+            d=abs(d)
+            rs=r(itr)+r(itl)
+            pd=d
+            if(npp.eq.0) d=pd*(.5+r(itl)/rs)
+            tc(k-1)=tc(k-1)+d/2.
+            if(npp.eq.0) d=pd*(.5+r(itr)/rs)
+            tc(k)=tc(k)+d/2.
+          end if
+   60 continue
+      do 70 i=m1j,k
+   70 areac(i)=tc(i)
+      endif
+      l11(1)=l11(1)+1
+      call inplnk(l11(1),inext,nstart,ndata,fa(filndx(1)))
+      if(ndata.gt.0)goto 30
+      if(inext.gt.l11(1) .and. inext.le.l32)then
+        l11(1)=inext
+        goto 30
+      endif
+   80 continue
+      do90i=1,ncev
+        imetsw(i)=0
+        ihsave(i)=ih(i)
+        arsave(i)=areac(i)
+        htcmet(i)=hcoef1(i)
+   90 continue
+      numhc=k
+      write (output,9060) numhc
+      write (output,9030)
+      do 120 i=1,k
+        if(ntf2(i).ne.-1) go to 110
+        x=r(ih(i))
+        y=z(ih(i))
+        dsqm=1.e10
+        jj=ih(i)
+        do 100 j=1,numnp
+          if(j.eq.ih(i)) go to 100
+          dsq=(r(j)-x)**2+(z(j)-y)**2
+          if(dsq.lt.dsqm) jj=j
+          if(dsq.lt.dsqm) dsqm=dsq
+  100   continue
+        ntf2(i)=-jj
+  110   continue
+        write (output,9040) ih(i),hcoef1(i),ncf2(i),te2(i),ntf2(i),
+     +  areac(i)
+        line = line + 1
+        linea = line
+        if(line .ge. 55) call hdwr(line)
+        if(linea .ge. 55) write (output,9030)
+  120 continue
+ 9030 format(' convection     coefficient    coefficient    temperature
+     +  temperature      surface '/ ' node number    or multiplier  tabl
+     +e          or multiplier      table        area    '/)
+ 9040 format(i6,11x,1p,e11.4,i6,13x,e11.4,i9,9x,e11.4)
+ 9050 format(4i5,e10.0,5x,i5,e10.0,5x,i5)
+ 9060 format(1h0,'numhc  =',i5)
+ 9070 format(1h0,' amult must be increased')
+      return
+      end
+*endif

@@ -1,0 +1,729 @@
+*mlist
+       subroutine pimplt
+c
+c  Subroutine carries out the back substitution to obtain the new
+c  time pressure as well as the intermediate time liquid specific
+c  internal energy, vapor specific internal energy, void fraction, and
+c  noncondensible quality. It also computes the vapor generation rate
+c  and the remainder of the source terms for the mass and energy
+c  equations used in the implicit solution scheme.
+c
+c  Cognizant engineer: rar rjw wlw (jat).
+c
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'cmpdac.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer i,i1,ih1,ih2,ih3,ih4,ii,il,iptr,ix,j,k,kk,kp,l,ll,lp,m,n,
+     & nh1,nh2,nh3,nh4,nn
+       logical lairap,ltst,lptst
+       real conbor,gmw,gmc,rdt,rhofd,rhogd,sorci,tem1,
+     & ttempf,ttempg,voidam
+cc
+       integer is
+cc
+c
+c  Initialize air appearance flag.
+       lairap = .false.
+c
+       rdt = 1.0/dt
+       iptr = 1 - lpdat(issys)%livnn
+c  Loop over all volumes and load explicit source terms needed for
+c  implicit calculation.
+       if (lvaccm(lpdat(issys)%llvect) .ne. 0) then
+         i1 = lvaccm(lpdat(issys)%llvect)
+cdir$ ivdep
+         do m=1,lvptr(i1)
+           i1 = i1 + 1
+           n = lvptr(i1)
+           i = nvco(n) + filndx(4)
+           if (iand(vctrl(i),32) .ne. 0) then
+             j = njco(n) + filndx(5)
+             p(i) = po(i) + dpd(n) - dpddp(n)*velfj(j)
+           endif
+         enddo
+       endif
+       l = ixvff
+       i = lpdat(issys)%liv
+       do k = 1,lpdat(issys)%livn
+         sourcp(k) = sourcq(l)
+         sorp(l) = sourcq(l)
+         sourgg(l) = sourcg(l) + hyarug(i)*(v(i) - vo(i))
+         sourff(l) = sourcf(l) + hyaruf(i)*(v(i) - vo(i))
+         l = l + scskp
+         i = i + ivskp
+       enddo
+c
+c  Loop over all junctions, convective terms to sourc terms, and
+c  convect boron in accumulator.
+       ix = ixjff
+       i = lpdat(issys)%lij
+cdir$ ivdep
+       do m = 1,lpdat(issys)%lijn
+         scv1(ix) = dt*ajun(i)
+         tem1 = scv1(ix)*voidfj(i)*velfj(i)
+         scv8(ix) = po(ij1nx(i))*tem1
+         scv10(ix) = po(ij2nx(i))*tem1
+         conmf(ix) = tem1*rhofj(i)
+         tem1 = ufj(i)*conmf(ix)
+         scv4(ix) = tem1 + scv8(ix)
+         scv6(ix) = tem1 + scv10(ix)
+         tem1 = scv1(ix)*voidgj(i)*velgj(i)
+         scv7(ix) = po(ij1nx(i))*tem1
+         scv9(ix) = po(ij2nx(i))*tem1
+         conmg(ix) = tem1*rhogj(i)
+         tem1 = ugj(i)*conmg(ix)
+         scv3(ix) = tem1 + scv7(ix)
+         scv5(ix) = tem1 + scv9(ix)
+         cond(ix) = conmg(ix) - conmf(ix)
+         conm(ix) = conmg(ix) + conmf(ix)
+         scv2(ix) = qualaj(i)*conmg(ix)
+         ix = ix + scskp
+         i = i + ijskp
+       enddo
+c
+       do nn = 1,lpdat(issys)%lnoncn
+         ix = ixjff
+         i = lpdat(issys)%lij
+         do m = 1,lpdat(issys)%lijn
+           scv2n(ix+nn-1) = qualnj(i+nn-1)*scv2(ix)
+           ix = ix + scskp
+           i = i + ijskp
+         enddo
+       enddo
+c
+c  Mass, energy and quality contributions to cells k and l from
+c  junction i.
+       i1 = lvjusr(lpdat(issys)%llvect)
+       if (lvptr(i1) .ne. 0) then
+         do ii = 1,lvptr(i1)
+           i1 = i1 + 1
+           ih1 = i1
+cdir$ ivdep
+           do m = 1,lvptr(i1)
+             i1 = i1 + 1
+             i = lvptr(i1)
+             ix = jcnxs(i)
+             k = jcnx1(i)
+             kp = ij1vn(i) + iptr
+             sourca(k) = sourca(k) - scv2(ix)
+             sourcg(k) = sourcg(k) - scv3(ix)
+             sourcf(k) = sourcf(k) - scv4(ix)
+             sourcm(k) = sourcm(k) - cond(ix)
+             sourcp(kp) = sourcp(kp) - conm(ix)
+             sourgg(k) = sourgg(k) - scv7(ix)
+             sourff(k) = sourff(k) - scv8(ix)
+             sorp(k) = sorp(k) - conm(ix)
+             l = jcnx1(i+1)
+             lp = ij2vn(i) + iptr
+             sourca(l) = sourca(l) + scv2(ix)
+             sourcg(l) = sourcg(l) + scv5(ix)
+             sourcf(l) = sourcf(l) + scv6(ix)
+             sourcm(l) = sourcm(l) + cond(ix)
+             sourcp(lp) = sourcp(lp) + conm(ix)
+             sourgg(l) = sourgg(l) + scv9(ix)
+             sourff(l) = sourff(l) + scv10(ix)
+             sorp(l) = sorp(l) + conm(ix)
+           enddo
+c
+           do nn = 1,lpdat(issys)%lnoncn
+             i1 = ih1
+             do m = 1,lvptr(i1)
+               i1 = i1 + 1
+               i = lvptr(i1)
+               ix = jcnxs(i)
+               k = jcnx1(i)
+               l = jcnx1(i+1)
+               sourcn(k+nn-1) = sourcn(k+nn-1) - scv2n(ix+nn-1)
+               sourcn(l+nn-1) = sourcn(l+nn-1) + scv2n(ix+nn-1)
+             enddo
+           enddo
+c
+c  Boron in accumulator.
+           if (.not.chngno(23)) then
+             i1 = ih1
+cdir$ ivdep
+             do m = 1,lvptr(i1)
+               i1 = i1 + 1
+               i = lvptr(i1)
+               ix = jcnxs(i)
+               kk = ij1nx(i)
+               conbor = borono(kk)*velfj(i)*scv1(ix)*vodfjr(i)
+               if (iand(vctrl(ij1nx(i)),32) .ne. 0) boron(ij1nx(i)) =
+     &         ((boron(ij1nx(i)) + gamas(ij1nx(i))*dt)*v(ij1nx(i)) -
+     &         conbor)*recipv(ij1nx(i))
+             enddo
+           endif
+         enddo
+       endif
+       i1 = i1 + 1
+       if (lvptr(i1) .ne. 0) then
+         ih1 = i1
+cdir$ nextscalar
+         do m = 1,lvptr(i1)
+           i1 = i1 + 1
+           i = lvptr(i1)
+           ix = jcnxs(i)
+           k = jcnx1(i)
+           kp = ij1vn(i) + iptr
+           sourca(k) = sourca(k) - scv2(ix)
+           sourcg(k) = sourcg(k) - scv3(ix)
+           sourcf(k) = sourcf(k) - scv4(ix)
+           sourcm(k) = sourcm(k) - cond(ix)
+           sourcp(kp) = sourcp(kp) - conm(ix)
+           sourgg(k) = sourgg(k) - scv7(ix)
+           sourff(k) = sourff(k) - scv8(ix)
+           sorp(k) = sorp(k) - conm(ix)
+           l = jcnx1(i+1)
+           lp = ij2vn(i) + iptr
+           sourca(l) = sourca(l) + scv2(ix)
+           sourcg(l) = sourcg(l) + scv5(ix)
+           sourcf(l) = sourcf(l) + scv6(ix)
+           sourcm(l) = sourcm(l) + cond(ix)
+           sourcp(lp) = sourcp(lp) + conm(ix)
+           sourgg(l) = sourgg(l) + scv9(ix)
+           sourff(l) = sourff(l) + scv10(ix)
+           sorp(l) = sorp(l) + conm(ix)
+         enddo
+c
+         do nn = 1,lpdat(issys)%lnoncn
+           i1 = ih1
+cdir$ nextscalar
+           do m = 1,lvptr(i1)
+             i1 = i1 + 1
+             i = lvptr(i1)
+             ix = jcnxs(i)
+             k = jcnx1(i)
+             l = jcnx1(i+1)
+             sourcn(k+nn-1) = sourcn(k+nn-1) - scv2n(ix+nn-1)
+             sourcn(l+nn-1) = sourcn(l+nn-1) + scv2n(ix+nn-1)
+           enddo
+         enddo
+c
+c  Boron in accumulator.
+         if (.not.chngno(23)) then
+           i1 = ih1
+cdir$ nextscalar
+           do m = 1,lvptr(i1)
+             i1 = i1 + 1
+             i = lvptr(i1)
+             ix = jcnxs(i)
+             kk = ij1nx(i)
+             conbor = borono(kk)*velfj(i)*scv1(ix)*vodfjr(i)
+             if (iand(vctrl(ij1nx(i)),32) .ne. 0) boron(ij1nx(i)) =
+     &       ((boron(ij1nx(i)) + gamas(ij1nx(i))*dt)*v(ij1nx(i)) -
+     &       conbor)*recipv(ij1nx(i))
+           enddo
+         endif
+       endif
+cc
+$if def,dbgprnt
+       if (help .ne. 0) then
+         write (12,7775)
+ 7775  format(2x,'volno(i),sourca(ix),sourcf(i),sourcg(i),',
+     & 'sourcm(ix),sourff(ix),sourgg(ix),sourcp(is)',/)
+         i = lpdat(issys)%liv
+         ix = ixvff
+         do is = 1,lpdat(issys)%livn
+           write (12,7776) volno(i),sourca(ix),sourcf(i),
+     &     sourcg(i),sourcm(ix),sourff(ix),sourgg(ix),sourcp(is)
+ 7776  format ('@@1',i10,1p,7e14.6)
+           i = i + ivskp
+           ix = ix + scskp
+         enddo
+       endif
+$endif
+cc
+c
+c  Debug printout.
+$if def,dbgprnt
+       if (help.ne.0 .and. iand(ihlppr(1),ishft(1,21)).ne.0) then
+         call helphd ('pimplt',10)
+         write (output,2001)
+ 2001  format ('0Common junction data'/1x,110('=')/' junno',9x,
+     & 'i',2x,'ajun(i)',6x,'voidfj(i)',4x,'rhofj(i)',5x,'velfj(i)',5x,
+     & 'ufj(i)',7x,'conmf(i)',5x,'conm(i)'/18x,
+     & 'qualaj(i)',4x,'voidgj(i)',4x,'rhogj(i)',5x,'velgj(i)',5x,
+     & 'ugj(i)',7x,'conmg(i)',5x,'cond(i)'/1x,110('='))
+         ll = 1
+         ix = ixjff
+         i = lpdat(issys)%lij
+         do m = 1,lpdat(issys)%lijn
+           if (iand(jcex(i),ishft(1,20)).ne.0) then
+             write (output,2002) junno(i),ll,ajun(i),voidfj(i),rhofj(i),
+     &       velfj(i),ufj(i),conmf(ix),conm(ix),qualaj(i),voidgj(i),
+     &       rhogj(i),velgj(i),ugj(i),conmg(ix),cond(ix)
+ 2002  format(i10.9,i6,1p,7g13.5/16x,7g13.5)
+           endif
+           ix = ix + scskp
+           ll = ll + 1
+           i = i + ijskp
+         enddo
+         write (output,2003)
+ 2003  format('0From-to contributions to source terms'/1x,119('=')/
+     & 1x,'junno',9x,'i',12x,'k',2x,'scv2(i)',6x,'scv3(i)',6x,'scv4(i)',
+     & 16x,'l',2x,'scv2(i)',6x,'scv5(i)',6x,'scv6(i)'/31x,'scv7(i)',
+     & 6x,'scv8(i)',32x,'scv9(i)',6x,'scv10(i)'/1x,119('='))
+         ll = 1
+         ix = ixjff
+         i = lpdat(issys)%lij
+         do m = 1,lpdat(issys)%lijn
+           if (iand(jcex(i),ishft(1,20)).ne.0) then
+             write (output,2004) junno(i),ll,ij1vn(i),scv2(ix),scv3(ix),
+     &       scv4(ix),ij2vn(i),scv2(ix),scv5(ix),scv6(ix),scv7(ix),
+     &       scv8(ix),scv9(ix),scv10(ix)
+           endif
+ 2004  format(i10.9,i6,i13,1p,3g13.5,i13,3g13.5/29x,2g13.5,
+     & 26x,2g13.5)
+           ll = ll + 1
+           ix = ix + scskp
+           i = i + ijskp
+         enddo
+       endif
+$endif
+$if def,nanscr
+c  Nan out conmf,conmg,cond,conm
+       call nanscj(3,6)
+$endif
+c
+c  Loop over all volumes, compute pressure, tilde variables, and
+c  source terms needed for implicit calculation.
+       ih1 = ixvff
+       ih2 = ixvff
+       nh1 = 0
+       nh2 = 0
+       i = lpdat(issys)%liv
+cdir$ ivdep
+       do m = 1,lpdat(issys)%livn
+         if (iand(vctrl(i),33) .eq. 0) then
+           ihld1(ih1) = i
+           ih1 = ih1 + scskp
+           nh1 = nh1 + 1
+         else
+           ihld2(ih2) = i
+           ih2 = ih2 + scskp
+           nh2 = nh2 + 1
+         endif
+         i = i + ivskp
+       enddo
+c
+       ih2 = ixvff
+cdir$ ivdep
+       do m = 1,nh2
+         i = ihld2(ih2)
+         ix = vctrls(i)
+         tuf(ix) = 0.0
+         tug(ix) = 0.0
+         hydltf(ix) = 0.0
+         hydltg(ix) = 0.0
+         hydltt(ix) = 0.0
+         hydltp(ix) = 0.0
+         ih2 = ih2 + scskp
+       enddo
+c
+       ih1 = ixvff
+cdir$ ivdep
+       do m = 1,nh1
+         i = ihld1(ih1)
+         ix = vctrls(i)
+c  Load b vector.
+         b1(ix) = sourca(ix)*recipv(i)
+         b2(ix) = sourcg(ix)*recipv(i)
+         b3(ix) = sourcf(ix)*recipv(i)
+         b4(ix) = sourcm(ix)*recipv(i)
+         bb5(ix) = sourcp(vctrln(i)+iptr)*recipv(i)
+c 
+c  Modify coefficients to account for linearization around point
+c  other than beginning of advancement values for air appearance.
+         if (iand(imap(i),64).ne.0) then
+           b1(ix) = b1(ix) + v(i)*
+     &     (hyarg(i)*qualao(i) - voidg(i)*rhog(i)*quala(i))*recipv(i)
+           b2(ix) = b2(ix) + v(i)*
+     &     (hyarug(i) - voidg(i)*rhog(i)*ug(i))*recipv(i)
+           b3(ix) = b3(ix) + v(i)*
+     &     (hyaruf(i) - voidf(i)*rhof(i)*uf(i))*recipv(i)
+           b4(ix) = b4(ix) + v(i)*
+     &     (hyarg(i) - hyarf(i) - (voidg(i)*rhog(i) -
+     &     voidf(i)*rhof(i)))*recipv(i)
+           bb5(ix) = bb5(ix) + v(i)*
+     &     (hyarg(i) + hyarf(i) - (voidg(i)*rhog(i) +
+     &     voidf(i)*rhof(i)))*recipv(i)
+         endif
+cc
+c        if (help .ne. 0) then
+c          write (output,7761) volno(i),b1(ix),b2(ix),b3(ix),b4(ix),
+c     &    bb5(ix)
+c7761    format ('@@2',i10,1p,5e14.6)
+c        endif
+c
+c  Solve a*x = b using factors of matrix a.
+c  Initially, solve l*y = b.
+         b2(ix) = b2(ix) + a21(ix)*b1(ix)
+         b3(ix) = b3(ix) + a32(ix)*b2(ix) + a31(ix)*b1(ix)
+         b4(ix) = b4(ix) + a43(ix)*b3(ix) + a42(ix)*b2(ix) +
+     &   a41(ix)*b1(ix)
+         bb5(ix) = bb5(ix) + a54(ix)*b4(ix) + a53(ix)*b3(ix) +
+     &   a52(ix)*b2(ix) + a51(ix)*b1(ix)
+cc
+c        write (output,7761) volno(i),b1(ix),b2(ix),b3(ix),b4(ix),
+c    &   bb5(ix)
+cc
+c  Then, solve u*x = y.
+         bb5(ix) = bb5(ix)/a55(ix)
+         b4(ix) = (b4(ix) - a45(ix)*bb5(ix))*a44(ix)
+         b3(ix) = (b3(ix) - a34(ix)*b4(ix) - a35(ix)*bb5(ix))*a33(ix)
+         b2(ix) = (b2(ix) - a23(ix)*b3(ix) - a24(ix)*b4(ix) -
+     &   a25(ix)*bb5(ix))*a22(ix)
+         b1(ix) = (b1(ix) - a12(ix)*b2(ix) - a14(ix)*b4(ix) -
+     &   a15(ix)*bb5(ix))*a11(ix)
+cc
+c        write (output,7761) volno(i),b1(ix),b2(ix),b3(ix),b4(ix),
+c    &   bb5(ix)
+cc
+c  Compute new time pressure and intermediate tilde variables.
+         tquala(ix) = quala(i) + b1(ix)
+         tug(ix) = ug(i) + b2(ix)
+         tuf(ix) = uf(i) + b3(ix)
+         tvoidg(ix) = voidg(i) + b4(ix)
+         if( iand(imdctl(1),1).ne.0 ) voidg(i) = tvoidg(ix)
+         p(i) = po(i) + bb5(ix)
+c
+c  Compute mixture density for use in air appearance logic.
+         rhom(i) = hyarg(i) + hyarf(i) + recipv(i)*sorp(ix)
+cc
+c        if (help .ne. 0) then
+c          rhofd  = rhof(i) + drfduf(i)*b3(ix) + drfdp(i)*bb5(ix)
+c          rhogd = rhog(i) + drgdxa(i)*b1(ix) +
+c    &     drgdug(i)*b2(ix) + drgdp(i)*bb5(ix)
+c          ttempf = tempf(i) + dtfduf(i)*b2(ix) + dtfdp(i)*bb5(ix)
+c          ttempg = tempg(i) + dtgdxa(i)*b1(ix) +
+c    &     dtgdug(i)*b2(ix) + dtgdp(i)*bb5(ix)
+c          write(output,7773)
+c7773  format(1x,'volno(i),p(i),tuf(ix),tug(ix),tvoidg(ix),tquala(ix)'/
+c    &     1x,'         ttempf,ttempg,rhofd,rhogd',/)
+c          write (output,7774) volno(i),p(i),tuf(ix),tug(ix),tvoidg(ix),
+c    &     tquala(ix)
+c7774  format ('@@3',1p,i10,5g13.5)
+c          write (output,7784) ttempf,ttempg,rhofd,rhogd
+c7784  format (13x, 1p4g13.5)
+c        endif
+cc
+         ih1 = ih1 + scskp
+       enddo
+c
+       if (lpdat(issys)%lnoncn .ne. 0) then
+c
+c  Check for non-condensible appearance.
+c
+c  Determine if this is a repeat for air appearance in at least one
+c  volume in this system.
+         lptst = .false.
+         ih1 = ixvff
+         do m = 1,nh1
+           i = ihld1(ih1)
+           if (iand(imap(i),64).ne.0) then
+             lairap = .true.
+             ltst = (abs(po(i) - p(i)).gt.min(po(i),p(i),50000.0))
+             if (ltst) vctrlx(i) = ior(vctrlx(i),ishft(1,2))
+             lptst = lptst .or. ltst
+           endif
+           ih1 = ih1 + scskp
+         enddo
+         if (lptst) lpdat(issys)%lsuces = 1
+         ih1 = ixvff
+         do m = 1,nh1
+           i = ihld1(ih1)
+           ix = vctrls(i)
+c          if ((qualao(i).eq.0.0 .and. tquala(ix).ne.0.0) .or.
+c    &     lairap) then
+           if ((voidgo(i).ne.0.0 .and. qualao(i).eq.0.0 .and.
+     &     tquala(ix).ne.0.0) .or. lairap) then
+             if (.not.lairap) then
+               imap(i) = ior(imap(i),64)
+               lpdat(issys)%lsuces = 5
+             elseif (iand(imap(i),64).ne.0) then
+               if (tvoidg(ix).le.0.0) then
+                 hifhdt(ix) = ff(ix) + fxaa(ix)*b1(ix) +
+     &           fug(ix)*b2(ix) + fuf(ix)*b3(ix) + fal(ix)*b4(ix) +
+     &           fp(ix)*bb5(ix)
+                 voidam = max(5.0e-08*(1.0 + sign(1.0,hifhdt(ix))),
+     &           1.0e-9)
+                 if (sourca(ix).gt.0.0) then
+                   if (tvoidg(ix).gt.0.0) then
+                     if (srcamn(i).gt.0.0) then
+                       srcamn(i) = min(5.0*srcamn(i),sourca(ix)*
+     &                 voidam/(dt*max(1.e-10,tvoidg(ix))))
+                     else
+                       srcamn(i) = sourca(ix)*voidam/
+     &                 (dt*max(1.e-10,tvoidg(ix)))
+                     endif
+                   else
+                     if (srcamn(i).gt.0.0) then
+                       srcamn(i) = min(5.0*srcamn(i),sourca(ix)*
+     &                 (voidam - tvoidg(ix))/
+     &                 (dt*max(1.e-10,tvoidg(ix))))
+                     else
+                       srcamn(i) = sourca(ix)*(voidam-tvoidg(ix))/
+     &                 (dt*max(1.e-10,tvoidg(ix)))
+                     endif
+                   endif
+                 endif
+               else if (tquala(ix).lt.1.e-09) then
+c  New new air source term.
+                 srcamn(i) = 1.0e-09*min(1.0,tvoidg(ix))*rhogo(i)*
+     &           vo(i)*rdt
+c  Zero air source term.
+               else
+                 srcamn(i) = 0.0
+               endif
+               vctrlx(i) = ior(vctrlx(i),2)
+               imap(i) = iand(imap(i),not(64))
+             endif
+           endif
+           ih1 = ih1 + scskp
+         enddo
+c  End of air appearance backup check.
+         ih1 = ixvff
+         ih2 = ixvff
+         nh2 = 0
+cdir$ ivdep
+         do m = 1,nh1
+           i = ihld1(ih1)
+           ix = vctrls(i)
+           if (tquala(ix) .gt. 1.0e-20) then
+             ihld2(ih2) = i
+             ih2 = ih2 + scskp
+             nh2 = nh2 + 1
+           endif
+           ih1 = ih1 + scskp
+         enddo
+c
+         if (nh2 .ne. 0) then
+           ih2 = ixvff
+cdir$ ivdep
+           do m = 1,nh2
+             i = ihld2(ih2)
+             ix = vctrls(i)
+             scv1(ix) = 0.0
+             scv2(ix) = voidg(i)*quala(i)*rhog(i)*v(i)
+             scv3(ix) = 1.0/(tvoidg(ix)*tquala(ix)*rhog(i)*v(i))
+             ih2 = ih2 + scskp
+           enddo
+c
+           do i1 = 1,lpdat(issys)%lnoncn
+             ih2 = ixvff
+cdir$ ivdep
+             do m = 1,nh2
+               i = ihld2(ih2)
+               ii = i + i1
+               ix = vctrls(i)
+               il = ix + i1
+               qualan(ii-1) = max(0.0,min((scv2(ix)*qualan(ii-1) +
+     &         sourcn(il-1))*scv3(ix),1.0))
+               if (qualan(ii-1) .lt. 1.e-10) qualan(ii-1) = 0.0
+               scv1(ix) = scv1(ix) + qualan(ii-1)
+               ih2 = ih2 + scskp
+             enddo
+           enddo
+c
+           ih2 = ixvff
+           ih3 = ixvff
+           nh3 = 0
+cdir$ ivdep
+           do m = 1,nh2
+             i = ihld2(ih2)
+             ix = vctrls(i)
+             if (scv1(ix) .gt. 0.0) then
+               scv1(ix) = 1.0/scv1(ix)
+               ihld3(ih3) = i
+               ih3 = ih3 + scskp
+               nh3 = nh3 + 1
+             else
+               tquala(ix) = 0.0
+             endif
+             ih2 = ih2 + scskp
+           enddo
+c
+           if (nh3 .ne. 0) then
+             do i1 = 1,lpdat(issys)%lnoncn
+               ih3 = ixvff
+cdir$ ivdep
+               do m = 1,nh3
+                 i =  ihld3(ih3)
+                 ix = vctrls(i)
+                 ii = i + i1
+                 il = ix + i1
+                 qualan(ii-1) = qualan(ii-1)*scv1(ix)
+                 ih3 = ih3 + scskp
+               enddo
+             enddo
+           endif
+         endif
+       endif
+c
+c  Calculate vapgen and load implicit source terms needed for the
+c  implicit calculation.
+       ih1 = ixvff
+cdir$ ivdep
+       do m = 1,nh1
+         i = ihld1(ih1)
+         ix = vctrls(i)
+         gg(ix) = high(ix)*(satt(i) - tempg(i))
+         ff(ix) = hifh(ix)*(satt(i) - tempf(i))
+         highdt(ix) = gg(ix) + gxaa(ix)*b1(ix) + gug(ix)*b2(ix) +
+     &   gal(ix)*b4(ix) + gp(ix)*bb5(ix)
+         hifhdt(ix) = ff(ix) + fxaa(ix)*b1(ix) + fug(ix)*b2(ix) +
+     &   fuf(ix)*b3(ix) + fal(ix)*b4(ix) + fp(ix)*bb5(ix)
+         hydltf(ix) = dtfduf(i)*b3(ix) + dtfdp(i)*bb5(ix)
+         hydltg(ix) = dtgdxa(i)*b1(ix) + dtgdug(i)*b2(ix) +
+     &   dtgdp(i)*bb5(ix)
+         hydltt(ix) = dttdp(i)*bb5(ix)
+         hydltp(ix) = dtdxa(i)*b1(ix) + dtdug(i)*b2(ix) +
+     &   dtdp(i)*bb5(ix)
+         gmw = htgwff(ix)*hydltf(ix) + htgwfg(ix)*hydltg(ix) +
+     &   htgwft(ix)*hydltt(ix) + htgwfp(ix)*hydltp(ix)
+         gmc = htgcgf(ix)*hydltf(ix) + htgcgg(ix)*hydltg(ix) +
+     &   htgcgt(ix)*hydltt(ix) + htgcgp(ix)*hydltp(ix)
+         if (chngno(25)) then
+           dotm(i) = (-highdt(ix) - hifhdt(ix) - fgrw(ix)*b4(ix))*rdt
+         else
+           dotm(i) = (-highdt(ix) - hifhdt(ix))*rdt
+         endif
+         gammaw(i) = gammsw(ix) + gmw*rdt
+         gammac(i) = gammsc(ix) + gmc*rdt
+         vapgen(i) = dotm(i) + gammaw(i) + gammac(i)
+         sorci = (a1(ix)*b1(ix) + a2(ix)*b2(ix) + a3(ix)*b3(ix) +
+     &   (a4(ix) + po(i))*b4(ix) + a5(ix)*bb5(ix) - gmc*sathf(i) -
+     &   gmw*sathg(i))*v(i)
+cc
+c        if (help .ne. 0) then
+c          write(output, 7710)
+c7710  format(/1x, 'values to calculate vapgen(i) in volno(i)',/,
+c    &        1x,'b1(ix),b2(ix),b3(ix),b4(ix),b5(ix)',/,
+c    &        1x,'gxaa(ix),gug(ix),        gal(ix),gp(ix)',/,
+c    &        1x,'fxaa(ix),fug(ix),fuf(ix),fal(ix),fp(ix)',/,
+c    &        1x,'gg(ix),ff(ix),highdt(ix),hifhdt(ix),fgrw(ix),',/,
+c    &        1x,'vapgen(i),dotm(i),gammaw(i),gammac(i)',/)
+c          write(output,7711) volno(i),
+c    &     b1(ix),b2(ix),b3(ix),b4(ix),b5(ix),
+c    &     gxaa(ix),gug(ix),gal(ix),gp(ix),
+c    &     fxaa(ix),fug(ix),fuf(ix),fal(ix),fp(ix),
+c    &     gg(ix),ff(ix),highdt(ix),hifhdt(ix),fgrw(ix),
+c    &     vapgen(i),dotm(i),gammaw(i),gammac(i)
+c7711  format(1x, i10,/,1p5g13.5/,1p2g13.5,13x,1p2e13.5/,1p5g13.5,/,
+c    &     1p5g13.5,/,1p5g13.5,/)
+c          write(output, 7720)
+c7720  format(/1x, 'values to calculate sorci in volno(i)',/,
+c    &        1x,'b1(ix),b2(ix),b3(ix),b4(ix),b5(ix)',/,
+c    &        1x,'a1(ix),a2(ix),a3(ix),a4(ix),a5(ix)',/,
+c    &        1x,'po(i),gmc,sathf(i),gmw,sathg(i),v(i)',/,
+c    &        1x,'sorci,sourgg(ix)',/)
+c          write(output,7721) volno(i),
+c    &     b1(ix),b2(ix),b3(ix),b4(ix),b5(ix),
+c    &     a1(ix),a2(ix),a3(ix),a4(ix),a5(ix),
+c    &     po(i),gmc,sathf(i),gmw,sathg(i),v(i),
+c    &     sorci,sourgg(ix)
+c7721  format(1x, i10,/,1p5g13.5/,1p5g13.5,/,1p6g13.5,/,
+c    &     1p5g13.5,/)
+c        endif
+cc
+         sourgg(ix) = sourgg(ix) - sorci + (htcgf(ix)*hydltf(ix) +
+     &   htcgg(ix)*hydltg(ix) + htcgt(ix)*hydltt(ix) +
+     &   htcgp(ix)*hydltp(ix))*v(i)
+         sourff(ix) = sourff(ix) + sorci + (htcff(ix)*hydltf(ix) +
+     &   htcfg(ix)*hydltg(ix) + htcft(ix)*hydltt(ix) +
+     &   htcfp(ix)*hydltp(ix))*v(i)
+         ih1 = ih1 + scskp
+       enddo
+c
+c  Debug printout.
+$if def,dbgprnt
+       if (help.ne.0 .and. iand(ihlppr(1),ishft(1,21)).ne.0) then
+         call helphd ('pimplt',10)
+         write (output,2005)
+ 2005  format('0Volume data'/1x,132('=')/1x,'volno',9x,'i',2x,
+     & 'sourcf(i)',4x,'sourcm(i)',4x,'sourcp(i)',4x,'po(i)',8x,'ugo(i)',
+     & 7x,'ufo(i)',7x,'voidgo(i)',4x,'qualao(i)',4x,'sourff(ix)'/18x,
+     & 'sourcg(i)',4x,'sourca(i)',4x,'dotm(i)',6x,'p(i)',9x,'tug(ix)',
+     & 6x,'tuf(ix)',6x,'tvoidg',7x,'tquala',7x,'sourgg(ix)'/
+     & 1x,132('='))
+         ix = ixvff
+         ll = 1
+         i = lpdat(issys)%liv
+         do k = 1,lpdat(issys)%livn
+           if (iand(vctrlx(i),1).ne.0) then
+             write (output,2006) volno(i),ll,sourcf(ix),sourcm(ix),
+     &       sourcp(k),po(i),ugo(i),ufo(i),voidgo(i),qualao(i),
+     &       sourff(ix),sourcg(ix),sourca(ix),dotm(i),p(i),tug(ix),
+     &       tuf(ix),tvoidg(ix),tquala(ix),sourgg(ix)
+           endif
+ 2006  format(i10.9,i6,1p,9g13.5/16x,9g13.5)
+           ix = ix + scskp
+           ll = ll + 1
+           i = i + ivskp
+         enddo
+         if (lpdat(issys)%lnoncn .ne. 0) then
+           write (output,2007)
+ 2007  format ('0noncondensibles'/1x,132('=')/1x,'volno',9x,'i',2x,
+     & 'sourcn(1)',4x,'sourcn(3)',4x,'sourcn(5)',4x,'qualno(1)',4x,
+     & 'qualno(2)',4x,'qualno(3)',4x,'qualno(4)',4x,'qualno(5)'/18x,
+     & 'sourcn(2)',4x,'sourcn(4)',17x,'qualan(1)',4x,'qualan(2)',4x,
+     & 'qualan(3)',4x,'qualan(4)',4x,'qualan(5)'/1x,132('='))
+           ix = ixvff
+           ll = 1
+           i = lpdat(issys)%liv
+           do m = 1,lpdat(issys)%livn
+             if (iand(vctrlx(i),1).ne.0 ) then
+               write (output,2008) volno(i),ll,sourcn(ix),sourcn(ix+2),
+     &         sourcn(ix+4),qualno(i),qualno(i+1),qualno(i+2),
+     &         qualno(i+3),qualno(i+4),sourcn(ix+1),sourcn(ix+3),
+     &         qualan(i),qualan(i+1),qualan(i+2),qualan(i+3),qualan(i+4)
+             endif
+ 2008  format(i10.9,i6,1p,8g13.5/16x,2g13.5,13x,5g13.5)
+             ix = ix + scskp
+             ll = ll + 1
+             i = i + ivskp
+           enddo
+         endif
+       endif
+$endif
+$if def,nanscr
+c  Nan out b1,b2,b3,b4,bb5
+       call nanscv(1,5)
+c  Nan out scv1,scv2,scv3,scv4,scv5,scv6,scv7,scv8,scv9,scv10,scv2n(5)
+       call nanscj(7,21)
+c  Nan out ihld1,ihld2,ihld3
+       call nanscv(42,44)
+c  Nan out a11,a12
+       call nanscv(45,46)
+c  Nan out a14,a15,a21,a22,a23,a24,a25,a31,a32,a33,a34,a35
+c          a41,a42,a43,a44,a45,a51,a52,a53,a54,a55
+c          a1,a2,a3,a4,a5,high,hifh
+       call nanscv(48,76)
+c  Nan out ff,gg
+       call nanscv(81,82)
+c  Nan out fal,gal
+       call nanscv(89,90)
+c  Nan out fp,gp,gug
+       call nanscv(95,97)
+c  Nan out fug,fuf
+       call nanscv(99,100)
+c  Nan out sourcq
+       call nanscv(111,111)
+c  Nan out a23,a24
+       call nanscv(52,53)
+$endif
+       return
+       end

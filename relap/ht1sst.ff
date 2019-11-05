@@ -1,0 +1,294 @@
+*mlist
+       subroutine ht1sst (ih,index,time,errsw)
+c
+c  Solves the 1-d steady-state heat problem.
+c
+c  Cognizant engineer: rjw.
+c
+       use gentblc
+$if def,rk3d,1
+       use rkinc
+       implicit none
+c
+       integer ih,index,errsw
+       real time
+c
+c  Subroutine arguments.
+c  ih      index to heat structure number and pointer.
+c  index   starting index of scratch space.
+c  time    problem time.
+c  errsw   error switch  (0 => no error,  1 => error)
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'convarc.h'
+       include 'gapvar.h'
+       include 'htrcom.h'
+       include 'htscr.h'
+       include 'htsrcm.h'
+       include 'rkinc.h'
+       include 'trpblk.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer cols,hindex,i,idx,idxo,inde,indk,indt,initem,
+     & iplas,irewet,irupt,iter,nn,probid,temidx
+       logical avg,bcflag,fini
+       real aam,block,ccm,cltave,den,dtdt,eps,powin(1)
+c
+c  Data statements.
+       data eps/0.001/
+c
+       hindex = ihtptr(ih) + filndx(8)
+       probid = htstno(hindex)
+       gamw = 0.
+       htcf = 0.
+       htcg = 0.
+       qffo = 0.
+       qfgo = 0.
+       qfgox(1) = 0.
+       qfgox(2) = 0.
+       fini = errsw.eq.0
+       errsw = 0
+       cols = htnmpt(hindex)
+       nn  = cols - 1
+       i = htsrt(hindex)
+       if (i .le. 0) then
+         powin(1) = 0.0
+       elseif (i .ge. 1000) then
+         if (i .lt. 10000 .or. i.gt.100000 ) then
+           powin(1) = fa(htsrt(hindex+1)+filndx(21))
+$if def,rk3d
+         elseif (i .eq. 100000) then
+             powin(1) = rk4o(htsrt(hindex+1))%htpow
+$endif
+         else
+           powin(1) = cnvarn(htsrt(hindex+1)+filndx(27))
+         endif
+       else
+         i = htsrt(hindex+1)
+         den = time
+         if (gen(i)%gttrp(1) .ne. 0) then
+           idx = gen(i)%gttrp(2)
+           if (trptm(idx) .lt. 0.0) then
+             den = trptm(idx)
+           else
+             den = den - trptm(idx)
+           endif
+         endif
+         if (den .eq. gen(i)%gtarg) then
+           powin(1) = gen(i)%gtval(1)
+         else
+           call gtpolat (gen(i)%gtinfo,gtptr(i)%gtbl,den,powin(1:1),
+     &     bcflag)
+           gen(i)%gtarg = time
+           gen(i)%gtval(1)  = powin(1)
+         endif
+       endif
+       htpown(hindex) = powin(1)
+       powin(1) = powin(1)*htfctr(hindex)
+       temidx = htxft(hindex) + filndx(8)
+       initem = htxit(hindex) + filndx(8)
+       idxo = htgom(hindex) + filndx(8)
+       avg = .true.
+       iter = 10
+       call ftbmov (httmp(temidx),httmp(initem),cols)
+c   Set up pressures for gap deformation model.
+       if (htnusr(hindex) .ne. 0) then
+         pgas = 0.0
+         if (gpintp(idxo) .le. 0.0) go to 96
+         i = htgap(hindex+1)
+         pgas = gpintp(idxo)*max(satt(i),tempg(i))
+       else
+         if (gpintp(idxo) .le. 0.0) go to 96
+       endif
+       i = htbvo(hindex+1)
+       pfluid=p(i)
+c  Evaluate property data.
+   96  irupt=0
+       iplas=0
+       call madata (temidx,index,idxo,cols,probid,.true.,errsw,hindex,
+     & 0.5,dtdt,cltave,block,irupt,iplas)
+       irewet = 0
+       call htcond (hindex,index,temidx,temidx+nn,time,0.0,probid)
+       if (fini .or. errsw.ne.0) go to 200
+c  Set up arrays for gaussian elimination.
+       bcflag = .false.
+       inde = index
+       idx = idxo
+       ccm = -httc(inde)*htsrwt(idx)
+       if (htflag(index) .lt. 2) then
+c  Case 1  surface temperature = co.
+         hte(inde) = 0.0
+         htf(inde) = htqost(index)
+       else
+         if (htflag(index) .eq. 2) then
+c  Case 2  heat flux = co.
+           bcflag = .true.
+         else
+c  Case 3  convective bc.
+           if (hthht(index) .eq. 0.0) hthht(index) = 1000.0
+           bcflag = areao(idx) .eq. 0.0
+         endif
+         den = 1.0/(areao(idx)*hthht(index) - ccm)
+         hte(inde) = ccm*den
+         htf(inde) = (powin(1)*htsrc(idx) + areao(idx)*
+     &   (hthht(index)*httmp(temidx) - htqost(index)))*den
+       endif
+       inde = inde + htscrp
+       idx = idx + htgskp
+       if (nn .ge. 2) then
+         if (.not.bcflag) then
+           do 105 i=2,nn
+             aam = ccm
+             ccm = -httc(inde)*htsrwt(idx)
+             den = -1.0/(ccm + aam*(1.0 + hte(inde-htscrp)))
+             hte(inde) = ccm*den
+             htf(inde) = (powin(1)*htsrc(idx) - aam*htf(inde-htscrp))*
+     &       den
+             idx = idx + htgskp
+             inde = inde + htscrp
+  105      continue
+         else
+           do 135 i=2,nn
+             aam = ccm
+             ccm = -httc(inde)*htsrwt(idx)
+             hte(inde) = -1.0
+             htf(inde) = -(powin(1)*htsrc(idx) - aam*htf(inde-htscrp))/
+     &       ccm
+             idx = idx + htgskp
+             inde = inde + htscrp
+  135      continue
+         endif
+       endif
+       indt = temidx + nn
+       if (htflag(index+1) .lt. 2) then
+c  Case 1  surface temperature = cn.
+         httmp(indt) = htqost(index+1)
+       else
+         if (htflag(index+1) .eq. 2) then
+c  Case 2  heat flux = cn.
+           if (bcflag) then
+             write (output,125) probid
+  125  format ('0******** Heat transfer rate specified for both boundari
+     &es of heat structure',i8,' is illegal for steady state.')
+             errsw = 1
+             go to 200
+           endif
+         else
+c  Case 3  convective bc.
+           if (hthht(index+1) .eq. 0.0) hthht(index+1) = 1000.0
+         endif
+         den = arean(idxo)*hthht(index+1) - ccm*(1.0 +
+     &   hte(inde-htscrp))
+         httmp(indt) = (powin(1)*htsrc(idx) + arean(idxo)*
+     &   (hthht(index+1)*httmp(indt) - htqost(index+1)) -
+     &   ccm*htf(inde-htscrp))/den
+       endif
+       indk = initem + nn
+       den = abs(httmp(indt) - httmp(indk))
+       do 114 i = 1,nn
+         indt = indt - 1
+         inde = inde - htscrp
+         indk = indk - 1
+         httmp(indt) = htf(inde) - hte(inde)*httmp(indt+1)
+         den = max(den,abs(httmp(indt) - httmp(indk)))
+  114  continue
+c  Check if thermal properties and boundary conditions converged.  If
+c  not, check if averaging should be done before next iteration.
+       if (den .gt. eps) then
+         iter = iter - 1
+         if (iter .le. 0) then
+           if (.not.avg) go to 120
+           avg = .false.
+           iter = 15
+         endif
+         do 115 i = 1,cols
+           if (avg) then
+             den = (httmp(indt) - httmp(indk))*0.5
+             if (httmp(indk) .ne. 0) den = sign(min(abs(den),
+     &       0.2*abs(httmp(indk))),den)
+             httmp(indt) = httmp(indk) + den
+           endif
+           httmp(indk) = httmp(indt)
+           indt = indt + 1
+           indk = indk + 1
+  115    continue
+         go to 96
+c
+  120    if(iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,117) probid,den
+  117  format ('0$$$$$$$$ Maximum no. of iterations reached before conve
+     &rgence in heat structure-geometry',i8,', max.dev. =',1p,e13.5,'.')
+       endif
+c  Compute volume averaged temperature.
+  200  htvatp(hindex) = 0.0
+       idx = idxo
+       indt = temidx
+       do 201 i = 1,cols
+         htvatp(hindex) = htvatp(hindex)  + htavwt(idx)*httmp(indt)
+         idx = idx + htgskp
+         indt = indt + 1
+  201  continue
+c  Compute heat transfer rates for both boundaries.
+       htdtmo(hindex) = httmp(temidx) - httmp(initem)
+       if (htflag(index) .eq. 3) then
+         htrnro(hindex) = hthht(index)*htdtmo(hindex) +
+     &   htqost(index)
+         htrgno(hindex) = (hthhgg(index) + hthhgt(index) +
+     &   hthhgp(index))*htdtmo(hindex) + htqosg(index)
+       elseif (htflag(index) .eq. 2) then
+         htrnro(hindex) = htqost(index)
+         htrgno(hindex) = 0.5*htrnro(hindex)
+       else
+         htrnro(hindex) = ((httmp(temidx+1) - httmp(temidx))*
+     &   httc(index)*htsrwt(idxo) + powin(1)*htsrc(idxo))/areao(idxo)
+         htrgno(hindex) = 0.5*htrnro(hindex)
+       endif
+       htrnso(hindex) = htrnro(hindex)
+       htrgoo(hindex) = htrgno(hindex)
+       if (htbvc(hindex) .gt. 0) then
+         indt = htbvo(hindex)
+         aam = max(satt(indt) - tempf(indt),0.0001)
+         ccm = max(abs(ggas(indt)) + abs(gliq(indt)),0.001)
+         stanto(hindex) = (htrnro(hindex) - htrgno(hindex))/(ccm*
+     &   csubpf(indt)*aam)
+         peclo(hindex) = ccm*hthdmo(hindex)*csubpf(indt)/thconf(indt)
+       else
+         stanto(hindex) = 0.0
+         peclo(hindex) = 0.0
+       endif
+       indt = temidx + nn
+       htdtmn(hindex) = httmp(indt) - httmp(initem+nn)
+       if (htflag(index+1) .eq. 3) then
+         htrnrn(hindex) = hthht(index+1)*htdtmn(hindex) +
+     &   htqost(index+1)
+         htrgnn(hindex) = (hthhgg(index+1) + hthhgt(index+1) +
+     &   hthhgp(index+1))*htdtmn(hindex) + htqosg(index+1)
+       elseif (htflag(index+1) .eq. 2) then
+         htrnrn(hindex) = htqost(index+1)
+         htrgnn(hindex) = 0.5*htrnrn(hindex)
+       else
+         inde = index + htscrp*nn
+         idx = idxo + htgskp*nn
+         htrnrn(hindex) = ((httmp(indt-1) - httmp(indt))*
+     &   httc(inde-htscrp)*htsrwt(idx-htgskp) + powin(1)*htsrc(idx))/
+     &   arean(idxo)
+         htrgnn(hindex) = 0.5*htrnrn(hindex)
+       endif
+       htrnsn(hindex) = htrnrn(hindex)
+       htrgon(hindex) = htrgnn(hindex)
+       if (htbvc(hindex+1) .gt. 0) then
+         indt = htbvo(hindex+1)
+         aam = max(satt(indt) - tempf(indt),0.0001)
+         ccm = max(abs(ggas(indt)) + abs(gliq(indt)),0.001)
+         stantn(hindex) = (htrnrn(hindex) - htrgnn(hindex))/(ccm*
+     &   csubpf(indt)*aam)
+         pecln(hindex) = ccm*hthdmn(hindex)*csubpf(indt)/thconf(indt)
+       else
+         stantn(hindex) = 0.0
+         pecln(hindex) = 0.0
+       endif
+       return
+       end

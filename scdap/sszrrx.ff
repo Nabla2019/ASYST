@@ -1,0 +1,170 @@
+*mlist
+*if def,selap
+      subroutine sszrrx(ijk,i,k,j,dtm,mfesol,dhsszr)
+c
+c  sszrrx computes the reaction of stainless steel and Zircaloy
+c  (if any) and the resultant chemical heat of reaction
+c
+c  Cognizant engineer: ewc (ljo fpg).
+c
+c******************************************************************
+c
+c     sszrrx               1-April-96
+c
+c     the BWR canister/control blade modules were developed at ORNL
+c     by L.J.Ott under the auspices of the NRC sponsored Boiling
+c     Water Reactor Severe Accident Technologies programs.
+c
+c     for information or assistance, call
+c                 L.J.Ott (fts)-624-0324 or (615)-574-0324
+c                 F.P.Griffin (fts)-626-4684 or (615)-576-4684
+c
+c******************************************************************
+c
+c
+c     argument definition:
+c        ijk   = 1, interstitial side of canister
+c              = 2, fuel side of canister
+c        i     = axial node
+c        k     = azimuthal (or segment) node
+c        j     = SCDAP structure number
+c        dtm   = computational time step, min
+c        mfesol= mass of solid iron available for reaction with zr, lbm
+c        dhsszr= heat of reaction (or mixing) for this time step, btus
+c
+      implicit none
+c
+      real            amzrrx, delhmx, dhfeni, dhfezr, dhnizr, dhsszr,
+     *                dtm   , wfe   , wni   , wzr   , x     , xfe   ,
+     *                xni   , xzr   , xszrio, xszroo, xszriu, xszrou,
+     *                tk    , lbox  , lzro2 , mfesol, mzrmax, xrxmax
+c
+      integer         i     , ijk   , j     , k
+c
+c-----common blocks
+c
+*call scddat
+*call axtrns
+*call blinit
+*call blkage
+*call cboilx
+*call cr2
+c
+c *** statement functions:
+c
+c     The equations for the enthalpies of mixing of the binary
+c     pairs (Fe-Ni,Fe-Zr,Ni-Zr) were taken from an article entitled
+c     'Thermodynamic Investigation on Liquid Iron-Nickel-Zirconium
+c      Alloys' by Wang,Luck,and Predel in the 'Journal of Phase
+c      Equilibria',14,48-53,1993.
+c     This paper also suggested the use of Hillert's method ('Calphad',
+c     4,1,1980) to calculate the enthalpy of mixing of Fe-Ni-Zr from
+c     the binary data. It is believed that the ternary system of
+c     Fe-Ni-Zr adequately represents the Zircaloy-stainless steel
+c     interaction products (in regards to the calculation of the
+c     heat of reaction). This is based on Hofmann's (KfK 4670)
+c     posttest analyses of his separate-effects experiments in which
+c     the integrated composition of the interaction products were
+c     83% Zr, 12% Fe, 3% Ni, 2% Cr (% by weight) whereas the composition
+c     of the stainless steel is nominally 74% Fe, 18% Cr, and 8% Ni.
+c     The ammount of Zr (83%) in the interaction compounds is
+c     approximately the eutectic composition for all the binaries
+c     of Zr with Fe, Ni, and Cr; but it appears from the chemical
+c     analyses that Cr is less a participant than Fe and Ni.
+c
+c     Fe-Ni heat of mixing (x=xni): kj/gmole
+      dhfeni(x) = x*(1.0-x)*(-7.09-23.26*x)
+c
+c     Fe-Zr heat of mixing (x=xzr): kj/gmole
+      dhfezr(x) = x*(1.0-x)*(-89.663-92.411*x)
+c
+c     Ni-Zr heat of mixing (x=xzr): kj/gmole
+      dhnizr(x) = x*(1.0-x)*(-285.467+255.114*x)
+c
+c     If wzr=0.83 below is changed, then wsszr=0.83 must also be changed
+c     in subroutines BMELT and BKMELT
+      wzr=0.83
+      wfe=0.12
+      wni=1.0-wzr-wfe
+      xzr=(wzr/91.22)/(wzr/91.22+wfe/55.847+wni/58.71)
+      xfe=(wfe/55.847)/(wzr/91.22+wfe/55.847+wni/58.71)
+      xni=1.0-xzr-xfe
+c
+c     calculate enthalpy of mixing of Fe-Ni-Zr (by Hillert's method)
+c     (kj/gmole)
+c
+      if(xzr.ge.0.9999.or.(xfe.ge.0.9999.or.xni.ge.0.9999))then
+         delhmx=0.0
+      else
+         delhmx=-1.0*(4.0*xfe*xni/((2.0*xfe+xzr)*(2.0*xni+xzr))*
+     *          dhfeni(1.0-xfe-xzr/2.0)+xni/(1.0-xzr)*dhnizr(xzr)+
+     *          xfe/(1.0-xzr)*dhfezr(xzr))
+      end if
+      lbox=csabox(k,j)/boxl(k,j)*30.48
+c     the constant 0.74031=91.22/123.219 below is the zr/zro2 mass ratio
+      lzro2=0.74031*wzcan(i,k,j,2)/rhocld/hdz(i,j)/boxl(k,j)*30.48
+c
+c     reaction of stainless steel and zircaloy
+c     (P.Hofmann,et.al.,'Results of Separate-Effects Tests,'
+c     International CORA Workshop 1990,KfK,Karlsruhe,FRG,Oct.1,1990;
+c     also, P.Hofmann and M.Markiewicz,'Chemical Behavior of
+c     (Ag,In,Cd) Absorber Rods in Severe LWR Accidents,'
+c     KfK 4670, CNEA NT-16/89, August 1990)
+c
+c     The reaction equations were developed from data collected
+c     over a temperature range of 1000-1200 C, the following
+c     formulation allows extrapolation down to 900 C (ie,no
+c     interaction below 900 C).
+c
+    8 xszrio=xsszri(i,k,j)
+      xszroo=xsszro(i,k,j)
+      dhsszr=0.0
+      if(scn(i,k,j).ne.0.0)then
+         if(fsszr(i,k,j).ne.1.0)then
+            tk=(tboxo(i,k,j)+459.67)/1.8
+            if(tk.ge.1173.0)then
+               mzrmax=mfesol*wzr/wfe
+               xrxmax=mzrmax/rhocld/hdz(i,j)/boxl(k,j)*30.48
+               if(ijk.eq.1)then
+                  xszriu=(xsszri(i,k,j)**2+(dtm*60.0)*
+     *                    2.78e19*exp(-642864.0/(8.314*tk)))**0.5
+                  xszriu=max(min(xszriu,xrxmax),xsszri(i,k,j))
+                  if(xszriu+xsszro(i,k,j).gt.lbox)then
+                     xsszri(i,k,j)=lbox-xsszro(i,k,j)
+                     fsszr(i,k,j)=1.0
+                  else
+                     xsszri(i,k,j)=xszriu
+                     fsszr(i,k,j)=min((xsszro(i,k,j)+xsszri(i,k,j))/
+     *               (lbox-lzro2),1.0)
+                  end if
+               else if(ijk.eq.2)then
+                  xszrou=(xsszro(i,k,j)**2+(dtm*60.0)*
+     *                    2.78e19*exp(-642864.0/(8.314*tk)))**0.5
+                  xszrou=max(min(xszrou,xrxmax),xsszro(i,k,j))
+                  if(xszrou+xsszri(i,k,j).gt.lbox)then
+                     xsszro(i,k,j)=lbox-xsszri(i,k,j)
+                     fsszr(i,k,j)=1.0
+                  else
+                     xsszro(i,k,j)=xszrou
+                     fsszr(i,k,j)=min((xsszro(i,k,j)+xsszri(i,k,j))/
+     *               (lbox-lzro2),1.0)
+                  end if
+               end if
+c
+c     mass of Zircaloy reacted this time step (gmoles)
+c
+               amzrrx=hdz(i,j)*boxl(k,j)/30.48*
+     *                ((xsszri(i,k,j)-xszrio)+(xsszro(i,k,j)-xszroo))*
+     *                rhocld*453.6/91.22
+c
+c     heat of mixing (ergo, reaction): btus
+c
+               dhsszr=amzrrx*delhmx*1000.0/1054.8
+c
+            end if
+         end if
+      end if
+c
+      return
+      end
+*endif

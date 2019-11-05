@@ -1,0 +1,560 @@
+*mlist
+*if def,selap
+      subroutine bmltcb(ijk,i,k,j,kc)
+c
+c
+c  bmltcb performs structural melting/freezing calculations for the
+c  BWR control blade
+c
+c  Cognizant engineer: ewc (ljo fpg).
+c
+c******************************************************************
+c
+c     bmltcb               1-April-96
+c
+c     the BWR canister/control blade modules were developed at ORNL
+c     by L.J.Ott under the auspices of the NRC sponsored Boiling
+c     Water Reactor Severe Accident Technologies programs.
+c
+c     for information or assistance, call
+c                 L.J.Ott (fts)-624-0324 or (615)-574-0324
+c                 F.P.Griffin (fts)-626-4684 or (615)-576-4684
+c
+c******************************************************************
+c
+c
+c     There are 2 separate segments within BMLTCB. Logic
+c     transfer within BMLTCB (ie,which of the 2 segments is control
+c     switched to) depends on the input value of IJK.
+c
+c  Statement  IJK                    Function discription:
+c     No.    Value
+c
+c     30       1   calc. control blade temp. > melting temp. and solid
+c                  mat. exists; determines amount of c.b.mat. melted and
+c                  adjusts temperature and nodal material balances
+c
+c    310       2   calculated control blade temp. < melting temp. and
+c                  liq. mat. exists; determines amt. of material solid.
+c                  and adjusts temperature and nodal material balances
+c
+      implicit none
+c
+      real            cpsmel, scp   , delt  ,
+     *                ducb  , duccb , dumel4, dumelx,
+     *                fss(11)       , fwssoo, sum(4),
+     *                sum1t3, sumcb , sumsox, sumss1, sumss2, sumss3,
+     *                sumss4, sumss5, tsscb ,
+     *                w1t2  , w1t3  ,
+     *                wcrtm , wfetm , wnitm , woxtm , wssi
+c
+      integer         i     , ijk   , j     , k     ,
+     *                kc    , l     , m
+c
+c-----common blocks
+c
+*call scddat
+*call axtrns
+*call blinit
+*call cboilx
+*call cr2
+c
+c  use conversions of k = (f + 459.67)/1.8
+c  and btu/(lbm*f) = j/(kg*k) / 4186.8
+         cpsmel=scp((tmelcb+459.67)/1.8)/4186.8
+         fwssoo=(1.0/(1.0-fwssss)-1.0)
+c
+      go to(30,310),ijk
+c
+c-**-determine amount of control blade melted and adjust temperature
+c    and material balances
+c
+   30 sum(1)=0.0
+      sum(2)=0.0
+      sum(3)=0.0
+      sum(4)=0.0
+      do 40 m=1,2
+         do 40 l=1,7
+   40       sum(m)=sum(m)+wsscb(i,j,l,m)
+      do 50 m=1,2
+         do 50 l=1,11
+   50       sum(m+2)=sum(m+2)+wsscbb(i,j,l,m)
+      sum(1)=sum(1)+wfe3o(i,j)+wfe3i(i,j)
+      sum(2)=sum(2)+wfe2o(i,j)+wfe2i(i,j)
+      sumss1=wsscb(i,j,1,1)+wsscb(i,j,2,1)+wsscb(i,j,3,1)+
+     *       wfe3o(i,j)+wfe3i(i,j)
+      sumss2=wsscb(i,j,1,2)+wsscb(i,j,2,2)+wsscb(i,j,3,2)+
+     *       wfe2o(i,j)+wfe2i(i,j)
+      sumss3=wb4c(i,j)+wb2o3(i,j)+wb(i,j)+wc(i,j)
+      sumss4=wsscbb(i,j,1,2)+wsscbb(i,j,2,2)+wsscbb(i,j,3,2)
+      go to (60,150),kc
+c
+c----control blade outer stainless steel sheath
+c
+   60 if(icb(i,3,j).eq.1)then
+c    melting at ss/b4c liquefaction temperature
+         if(sumss4.ge.1.0e-20)then
+            ducb=(sum(1)+sum(3)+sum(4))*cpsmel*(tcb3(i,j)-tmelcb)
+            if(ducb.le.0.0)return
+            dumelx=sumss4*hfssb
+            if(ducb.ge.dumelx .or. sumss4.lt.1.0e-15)then
+               do 70 l=1,11
+                  wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wsscbb(i,j,l,2)
+   70             wsscbb(i,j,l,2)=0.0
+               ducb=max(ducb-dumelx,0.0)
+               if(sum(1)+sum(3)+sum(4).ge.1.0e-20)then
+                  delt=ducb/((sum(1)+sum(3)+sum(4))*cpsmel)
+               else
+                  delt=0.0
+               end if
+               twscbb(i,k,j)=max(min(tmelcb+delt,tcb3(i,j)),tmelcb)
+               tcb3(i,j)=twscbb(i,k,j)
+            else
+               w1t3=ducb/hfssb
+               do 80 l=1,3
+                  fss(l)=wsscbb(i,j,l,2)/sumss4
+                  wssi=min(fss(l)*w1t3,wsscbb(i,j,l,2))
+                  wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wssi
+   80             wsscbb(i,j,l,2)=max(wsscbb(i,j,l,2)-wssi,0.0)
+               woxtm=fwssoo*w1t3
+               sumsox=sum(4)-sumss4
+               if(sumsox.gt.0.0)then
+                  if(woxtm.ge.sumsox)then
+                     do 90 l=4,11
+                        wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wsscbb(i,j,l,2)
+   90                   wsscbb(i,j,l,2)=0.0
+                  else
+                     do 100 l=4,11
+                        fss(l)=wsscbb(i,j,l,2)/sumsox
+                        wssi=min(fss(l)*woxtm,wsscbb(i,j,l,2))
+                        wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wssi
+  100                   wsscbb(i,j,l,2)=max(wsscbb(i,j,l,2)-wssi,0.0)
+                  end if
+               end if
+               twscbb(i,k,j)=tmelcb
+               tcb3(i,j)=tmelcb
+            end if
+         end if
+c    melting at pure ss melting temperature
+         if(tcb3(i,j).gt.tmelss)then
+            ducb=(sum(1)+sum(3)+sum(4))*cpsmel*(tcb3(i,j)-tmelss)
+            if(ducb.le.0.0)return
+            dumelx=sumss1*hfssb
+            if(ducb.ge.dumelx.or.sum(1).lt.0.02*wsscbi(i,j,1))then
+               do 110 l=1,7
+                  wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wsscb(i,j,l,1)
+  110             wsscb(i,j,l,1)=0.0
+               wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfe3o(i,j)+wfe3i(i,j)
+               wfe3o(i,j)=0.0
+               wfe3i(i,j)=0.0
+               ducb=max(ducb-dumelx,0.0)
+               if(sum(1)+sum(3)+sum(4).ge.1.0e-20)then
+                  delt=ducb/((sum(1)+sum(3)+sum(4))*cpsmel)
+               else
+                  delt=0.0
+               end if
+               twscbb(i,k,j)=max(min(tmelss+delt,tcb3(i,j)),tmelss)
+               tcb3(i,j)=tmelss
+               icb(i,3,j)=0
+            else
+               w1t3=ducb/hfssb
+               fss(1)=(wsscb(i,j,1,1)+wfe3o(i,j)+wfe3i(i,j))/sumss1
+               fss(2)=wsscb(i,j,2,1)/sumss1
+               fss(3)=wsscb(i,j,3,1)/sumss1
+               wfetm=fss(1)*w1t3
+               if(wfetm.le.wfe3o(i,j))then
+                  wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfetm
+                  wfe3o(i,j)=max(wfe3o(i,j)-wfetm,0.0)
+               else
+                  wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfe3o(i,j)
+                  wfetm=wfetm-wfe3o(i,j)
+                  wfe3o(i,j)=0.0
+                  if(wfetm.le.wfe3i(i,j))then
+                     wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfetm
+                     wfe3i(i,j)=max(wfe3i(i,j)-wfetm,0.0)
+                  else
+                     wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfe3i(i,j)
+                     wfetm=wfetm-wfe3i(i,j)
+                     wfe3i(i,j)=0.0
+                     if(wfetm.le.wsscb(i,j,1,1))then
+                        wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfetm
+                        wsscb(i,j,1,1)=max(wsscb(i,j,1,1)-wfetm,0.0)
+                     else
+                        wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wsscb(i,j,1,1)
+                        wsscb(i,j,1,1)=0.0
+                     end if
+                  end if
+               end if
+               wcrtm=fss(2)*w1t3
+               if(wcrtm.le.wsscb(i,j,2,1))then
+                  wsscbb(i,j,2,1)=wsscbb(i,j,2,1)+wcrtm
+                  wsscb(i,j,2,1)=max(wsscb(i,j,2,1)-wcrtm,0.0)
+               else
+                  wsscbb(i,j,2,1)=wsscbb(i,j,2,1)+wsscb(i,j,2,1)
+                  wsscb(i,j,2,1)=0.0
+               end if
+               wnitm=fss(3)*w1t3
+               if(wnitm.le.wsscb(i,j,3,1))then
+                  wsscbb(i,j,3,1)=wsscbb(i,j,3,1)+wnitm
+                  wsscb(i,j,3,1)=max(wsscb(i,j,3,1)-wnitm,0.0)
+               else
+                  wsscbb(i,j,3,1)=wsscbb(i,j,3,1)+wsscb(i,j,3,1)
+                  wsscb(i,j,3,1)=0.0
+               end if
+               woxtm=fwssoo*w1t3
+               sumsox=sum(1)-sumss1
+               if(sumsox.gt.0.0)then
+                  if(woxtm.ge.sumsox)then
+                     do 120 l=4,7
+                        wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wsscb(i,j,l,1)
+  120                   wsscb(i,j,l,1)=0.0
+                  else
+                     do 130 l=4,7
+                        fss(l)=wsscb(i,j,l,1)/sumsox
+                        wssi=min(fss(l)*woxtm,wsscb(i,j,l,1))
+                        wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wssi
+  130                   wsscb(i,j,l,1)=max(wsscb(i,j,l,1)-wssi,0.0)
+                  end if
+               end if
+               twscbb(i,k,j)=tmelss
+               tcb3(i,j)=tmelss
+            end if
+         end if
+         return
+      end if
+      return
+c
+c----control blade absorber tube stainless steel sheath
+c
+  150 if(icb(i,1,j).eq.1)then
+         ducb=0.0
+         if(tcb1(i,j).gt.tmelcb)then
+            ducb=ducb+sumss3*cpsmel*(tcb1(i,j)-tmelcb)
+            tcb1(i,j)=tmelcb
+         end if
+         ducb=ducb+sum(2)*cpsmel*(tcb2(i,j)-tmelcb)
+         if(ducb.le.0.0)return
+         dumelx=sumss2*hfssb
+         tcb2(i,j)=tmelcb
+         icb(i,2,j)=2
+         if(ducb.ge.dumelx.or.sum(2).lt.0.02*wsscbi(i,j,2))then
+            do 160 l=1,7
+               wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wsscb(i,j,l,2)
+  160          wsscb(i,j,l,2)=0.0
+            wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfe2o(i,j)+wfe2i(i,j)
+            wfe2o(i,j)=0.0
+            wfe2i(i,j)=0.0
+            icb(i,2,j)=0
+            icb(i,1,j)=0
+            fcbm(i,j)=1.0
+            wsscbb(i,j,8,1)=wsscbb(i,j,8,1)+wb4c(i,j)
+            wsscbb(i,j,9,1)=wsscbb(i,j,9,1)+wb2o3(i,j)
+            wsscbb(i,j,10,1)=wsscbb(i,j,10,1)+wb(i,j)
+            wsscbb(i,j,11,1)=wsscbb(i,j,11,1)+wc(i,j)
+            wb4c(i,j)=0.0
+            wb2o3(i,j)=0.0
+            wb(i,j)=0.0
+            wc(i,j)=0.0
+            ducb=max(ducb-dumelx,0.0)
+            if(sum(2)+sum(3)+sum(4)+sumss3.ge.1.0e-20)then
+               twscbb(i,k,j)=(twscbb(i,k,j)*(sum(3)+sum(4))+tmelcb*
+     *            (sumss3+sum(2))+ducb)/(sum(3)+sum(4)+sumss3+sum(2))
+            end if
+         else
+            w1t3=ducb/hfssb
+            fss(1)=(wsscb(i,j,1,2)+wfe2o(i,j)+wfe2i(i,j))/sumss2
+            fss(2)=wsscb(i,j,2,2)/sumss2
+            fss(3)=wsscb(i,j,3,2)/sumss2
+            wfetm=fss(1)*w1t3
+            if(wfetm.le.wfe2o(i,j))then
+               wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfetm
+               wfe2o(i,j)=max(wfe2o(i,j)-wfetm,0.0)
+            else
+               wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfe2o(i,j)
+               wfetm=wfetm-wfe2o(i,j)
+               wfe2o(i,j)=0.0
+               if(wfetm.le.wfe2i(i,j))then
+                  wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfetm
+                  wfe2i(i,j)=max(wfe2i(i,j)-wfetm,0.0)
+               else
+                  wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfe2i(i,j)
+                  wfetm=wfetm-wfe2i(i,j)
+                  wfe2i(i,j)=0.0
+                  if(wfetm.le.wsscb(i,j,1,2))then
+                     wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfetm
+                     wsscb(i,j,1,2)=max(wsscb(i,j,1,2)-wfetm,0.0)
+                  else
+                     wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wsscb(i,j,1,2)
+                     wsscb(i,j,1,2)=0.0
+                  end if
+               end if
+            end if
+            wcrtm=fss(2)*w1t3
+            if(wcrtm.le.wsscb(i,j,2,2))then
+               wsscbb(i,j,2,1)=wsscbb(i,j,2,1)+wcrtm
+               wsscb(i,j,2,2)=max(wsscb(i,j,2,2)-wcrtm,0.0)
+            else
+               wsscbb(i,j,2,1)=wsscbb(i,j,2,1)+wsscb(i,j,2,2)
+               wsscb(i,j,2,2)=0.0
+            end if
+            wnitm=fss(3)*w1t3
+            if(wnitm.le.wsscb(i,j,3,2))then
+               wsscbb(i,j,3,1)=wsscbb(i,j,3,1)+wnitm
+               wsscb(i,j,3,2)=max(wsscb(i,j,3,2)-wnitm,0.0)
+            else
+               wsscbb(i,j,3,1)=wsscbb(i,j,3,1)+wsscb(i,j,3,2)
+               wsscb(i,j,3,2)=0.0
+            end if
+            sum1t3=w1t3
+            woxtm=fwssoo*w1t3
+            sumsox=sum(2)-sumss2
+            if(sumsox.gt.0.0)then
+               if(woxtm.ge.sumsox)then
+                  sum1t3=sum1t3+sumsox
+                  do 170 l=4,7
+                     wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wsscb(i,j,l,2)
+  170                wsscb(i,j,l,2)=0.0
+               else
+                  sum1t3=sum1t3+woxtm
+                  do 180 l=4,7
+                     fss(l)=wsscb(i,j,l,2)/sumsox
+                     wssi=min(fss(l)*woxtm,wsscb(i,j,l,2))
+                     wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wssi
+  180                wsscb(i,j,l,2)=max(wsscb(i,j,l,2)-wssi,0.0)
+               end if
+            end if
+            if(sum1t3+sum(3)+sum(4).ge.1.0e-20)then
+            twscbb(i,k,j)=(twscbb(i,k,j)*(sum(3)+sum(4))+tmelcb*sum1t3)/
+     *                    (sum(3)+sum(4)+sum1t3)
+            end if
+         end if
+      else if(icb(i,2,j).ge.1)then
+         ducb=0.0
+         if(tcb1(i,j).gt.tmelcb)then
+            ducb=ducb+sumss3*cpsmel*(tcb1(i,j)-tmelcb)
+            tcb1(i,j)=tmelcb
+         end if
+         ducb=ducb+(sum(2)+sum(3)+sum(4))*cpsmel*(tcb2(i,j)-tmelcb)
+         if(ducb.le.0.0)return
+         dumelx=(sumss2+sumss4)*hfssb
+         tcb2(i,j)=tmelcb
+         icb(i,2,j)=2
+         if(ducb.ge.dumelx.or.sum(2).lt.0.02*wsscbi(i,j,2))then
+            do 200 l=1,11
+               wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wsscbb(i,j,l,2)
+  200          wsscbb(i,j,l,2)=0.0
+            do 210 l=1,7
+               wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wsscb(i,j,l,2)
+  210          wsscb(i,j,l,2)=0.0
+            wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfe2o(i,j)+wfe2i(i,j)
+            wfe2o(i,j)=0.0
+            wfe2i(i,j)=0.0
+            icb(i,2,j)=0
+            icb(i,1,j)=0
+            fcbm(i,j)=1.0
+            wsscbb(i,j,8,1)=wsscbb(i,j,8,1)+wb4c(i,j)
+            wsscbb(i,j,9,1)=wsscbb(i,j,9,1)+wb2o3(i,j)
+            wsscbb(i,j,10,1)=wsscbb(i,j,10,1)+wb(i,j)
+            wsscbb(i,j,11,1)=wsscbb(i,j,11,1)+wc(i,j)
+            wb4c(i,j)=0.0
+            wb2o3(i,j)=0.0
+            wb(i,j)=0.0
+            wc(i,j)=0.0
+            ducb=max(ducb-dumelx,0.0)
+            if(sum(2)+sum(3)+sum(4)+sumss3.ge.1.0e-20)then
+               delt=ducb/((sum(2)+sum(3)+sum(4)+sumss3)*cpsmel)
+            else
+               delt=0.0
+            end if
+            twscbb(i,k,j)=max(min(tmelcb+delt,tcb1(i,j)),tmelcb)
+         else
+            dumel4=sumss4*hfssb
+            twscbb(i,k,j)=tmelcb
+            if(ducb.gt.dumel4.or.sumss4.lt.1.0e-15)then
+               do 220 l=1,11
+                  wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wsscbb(i,j,l,2)
+  220             wsscbb(i,j,l,2)=0.0
+               w1t3=(ducb-dumel4)/hfssb
+               if(w1t3.ge.sumss2)then
+                  do 230 l=1,7
+                     wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wsscb(i,j,l,2)
+  230                wsscb(i,j,l,2)=0.0
+                  wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfe2o(i,j)+wfe2i(i,j)
+                  wfe2o(i,j)=0.0
+                  wfe2i(i,j)=0.0
+                  icb(i,2,j)=0
+                  icb(i,1,j)=0
+                  fcbm(i,j)=1.0
+                  wsscbb(i,j,8,1)=wsscbb(i,j,8,1)+wb4c(i,j)
+                  wsscbb(i,j,9,1)=wsscbb(i,j,9,1)+wb2o3(i,j)
+                  wsscbb(i,j,10,1)=wsscbb(i,j,10,1)+wb(i,j)
+                  wsscbb(i,j,11,1)=wsscbb(i,j,11,1)+wc(i,j)
+                  wb4c(i,j)=0.0
+                  wb2o3(i,j)=0.0
+                  wb(i,j)=0.0
+                  wc(i,j)=0.0
+               else
+                  fss(1)=(wsscb(i,j,1,2)+wfe2o(i,j)+wfe2i(i,j))/sumss2
+                  fss(2)=wsscb(i,j,2,2)/sumss2
+                  fss(3)=wsscb(i,j,3,2)/sumss2
+                  wfetm=fss(1)*w1t3
+                  if(wfetm.le.wfe2o(i,j))then
+                     wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfetm
+                     wfe2o(i,j)=max(wfe2o(i,j)-wfetm,0.0)
+                  else
+                     wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfe2o(i,j)
+                     wfetm=wfetm-wfe2o(i,j)
+                     wfe2o(i,j)=0.0
+                     if(wfetm.le.wfe2i(i,j))then
+                        wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfetm
+                        wfe2i(i,j)=max(wfe2i(i,j)-wfetm,0.0)
+                     else
+                        wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfe2i(i,j)
+                        wfetm=wfetm-wfe2i(i,j)
+                        wfe2i(i,j)=0.0
+                        if(wfetm.le.wsscb(i,j,1,2))then
+                          wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wfetm
+                          wsscb(i,j,1,2)=max(wsscb(i,j,1,2)-wfetm,0.0)
+                        else
+                          wsscbb(i,j,1,1)=wsscbb(i,j,1,1)+wsscb(i,j,1,2)
+                          wsscb(i,j,1,2)=0.0
+                        end if
+                     end if
+                  end if
+                  wcrtm=fss(2)*w1t3
+                  if(wcrtm.le.wsscb(i,j,2,2))then
+                     wsscbb(i,j,2,1)=wsscbb(i,j,2,1)+wcrtm
+                     wsscb(i,j,2,2)=max(wsscb(i,j,2,2)-wcrtm,0.0)
+                  else
+                     wsscbb(i,j,2,1)=wsscbb(i,j,2,1)+wsscb(i,j,2,2)
+                     wsscb(i,j,2,2)=0.0
+                  end if
+                  wnitm=fss(3)*w1t3
+                  if(wnitm.le.wsscb(i,j,3,2))then
+                     wsscbb(i,j,3,1)=wsscbb(i,j,3,1)+wnitm
+                     wsscb(i,j,3,2)=max(wsscb(i,j,3,2)-wnitm,0.0)
+                  else
+                     wsscbb(i,j,3,1)=wsscbb(i,j,3,1)+wsscb(i,j,3,2)
+                     wsscb(i,j,3,2)=0.0
+                  end if
+                  woxtm=fwssoo*w1t3
+                  sumsox=sum(2)-sumss2
+                  if(sumsox.gt.0.0)then
+                     if(woxtm.ge.sumsox)then
+                        do 240 l=4,7
+                          wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wsscb(i,j,l,2)
+  240                     wsscb(i,j,l,2)=0.0
+                     else
+                        do 250 l=4,7
+                          fss(l)=wsscb(i,j,l,2)/sumsox
+                          wssi=min(fss(l)*woxtm,wsscb(i,j,l,2))
+                          wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wssi
+  250                     wsscb(i,j,l,2)=max(wsscb(i,j,l,2)-wssi,0.0)
+                     end if
+                  end if
+               end if
+            else
+               w1t3=ducb/hfssb
+               do 270 l=1,3
+                  fss(l)=wsscbb(i,j,l,2)/sumss4
+                  wssi=min(fss(l)*w1t3,wsscbb(i,j,l,2))
+                  wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wssi
+  270             wsscbb(i,j,l,2)=max(wsscbb(i,j,l,2)-wssi,0.0)
+               woxtm=fwssoo*w1t3
+               sumsox=sum(4)-sumss4
+               if(sumsox.gt.0.0)then
+                  if(woxtm.ge.sumsox)then
+                     do 280 l=4,11
+                        wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wsscbb(i,j,l,2)
+  280                   wsscbb(i,j,l,2)=0.0
+                  else
+                     do 290 l=4,11
+                        fss(l)=wsscbb(i,j,l,2)/sumsox
+                        wssi=min(fss(l)*woxtm,wsscbb(i,j,l,2))
+                        wsscbb(i,j,l,1)=wsscbb(i,j,l,1)+wssi
+  290                   wsscbb(i,j,l,2)=max(wsscbb(i,j,l,2)-wssi,0.0)
+                  end if
+               end if
+            end if
+         end if
+      end if
+      return
+c
+c-**-determine amount of control blade solidified and adjust temperature
+c    and material balances
+c
+  310 sum(1)=0.0
+      sum(2)=0.0
+      sum(3)=0.0
+      sum(4)=0.0
+      do 320 m=1,2
+         do 320 l=1,7
+  320       sum(m)=sum(m)+wsscb(i,j,l,m)
+      do 330 m=1,2
+         do 330 l=1,11
+  330       sum(m+2)=sum(m+2)+wsscbb(i,j,l,m)
+      sum(1)=sum(1)+wfe3o(i,j)+wfe3i(i,j)
+      sum(2)=sum(2)+wfe2o(i,j)+wfe2i(i,j)
+      sumss5=wsscbb(i,j,1,1)+wsscbb(i,j,2,1)+wsscbb(i,j,3,1)
+      sumcb=sum(1)+sum(2)+sum(3)+sum(4)
+      if(icb(i,3,j).eq.1)then
+         tsscb=tcb3(i,j)
+      else
+         tsscb=tcb2(i,j)
+      end if
+      duccb=sumcb*cpsmel*(tmelcb-tsscb)
+      dumelx=sumss5*hfssb
+      if(duccb.gt.dumelx.or.sumss5.lt.1.0e-15)then
+         do 340 l=1,11
+            wsscbb(i,j,l,2)=wsscbb(i,j,l,2)+wsscbb(i,j,l,1)
+  340       wsscbb(i,j,l,1)=0.0
+         if(sumcb.ge.1.0e-20)then
+            delt=(duccb-dumelx)/(sumcb*cpsmel)
+         else
+            delt=0.0
+         end if
+         if(icb(i,3,j).eq.1)then
+            tcb3(i,j)=min(max(tmelcb-delt,tcb3(i,j)),tmelcb)
+            tcb2(i,j)=tcb3(i,j)
+            tcb1(i,j)=tcb2(i,j)
+         else
+            tcb2(i,j)=min(max(tmelcb-delt,tcb2(i,j)),tmelcb)
+            tcb1(i,j)=tcb2(i,j)
+            tcb3(i,j)=tcb2(i,j)
+         end if
+      else
+         w1t2=duccb/hfssb
+         do 350 l=1,3
+            fss(l)=wsscbb(i,j,l,1)/sumss5
+            wssi=min(fss(l)*w1t2,wsscbb(i,j,l,1))
+            wsscbb(i,j,l,2)=wsscbb(i,j,l,2)+wssi
+  350       wsscbb(i,j,l,1)=max(wsscbb(i,j,l,1)-wssi,0.0)
+         woxtm=fwssoo*w1t2
+         sumsox=sum(3)-sumss5
+         if(sumsox.gt.0.0)then
+            if(woxtm.ge.sumsox)then
+               do 360 l=4,11
+                  wsscbb(i,j,l,2)=wsscbb(i,j,l,2)+wsscbb(i,j,l,1)
+  360             wsscbb(i,j,l,1)=0.0
+            else
+               do 370 l=4,11
+                  fss(l)=wsscbb(i,j,l,1)/sumsox
+                  wssi=min(fss(l)*woxtm,wsscbb(i,j,l,1))
+                  wsscbb(i,j,l,2)=wsscbb(i,j,l,2)+wssi
+  370             wsscbb(i,j,l,1)=max(wsscbb(i,j,l,1)-wssi,0.0)
+            end if
+         end if
+         if(icb(i,3,j).eq.1)then
+            tcb3(i,j)=tmelcb
+            tcb2(i,j)=tcb3(i,j)
+            tcb1(i,j)=tcb2(i,j)
+         else
+            tcb2(i,j)=tmelcb
+            tcb1(i,j)=tcb2(i,j)
+            tcb3(i,j)=tcb2(i,j)
+         end if
+      end if
+c
+      return
+      end
+*endif

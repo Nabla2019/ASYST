@@ -1,0 +1,459 @@
+*mlist
+       subroutine accum
+c
+c  Accumulator mass, wall heat transfer, and momentum model.
+c
+c  Cognizant engr: kec.
+c
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'cmpdac.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'stcom.h'
+       include 'trpblk.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'cons.h'
+c  Local variables.
+       integer i1,iix,it,ix,izz,j,k,kx,l,m,n,geom
+       real abotf,acylo,aliq,aratf,aratg,aspho,asphs,chard,conrat,
+     & convfj,convgj,difcof,dptest,dpzrho,dzgas,dzline,dzliq,
+     & dzsign,dztk,elevat,elvln,elvtk,finert,flowj,form,frict,fwalfa,
+     & fwalga,gamnet,ginert,gr,qwgold,htc1,htc2,pr,qcon,qliq,
+     & qtot,qvap,ra,rareas,ratank,rtank,rxline,rxtank,sadtem,sumff,
+     & sumld,term1,thdif,trm1,trm2,trm3,trm4,trm5,tsteam,vaprat,velfjx,
+     & velgjx,vis,xfg,xfline,xftank,xgcg,xgline,xgtank,xlnln,xlntk,
+     & xloc,xn,xtank,zfg,zgcg,zjun,epsln
+       logical isolat
+c
+       data epsln/1.0e-2/, xn/0.3333333333/
+c
+c  Function to calculate the elevation given the length.
+       elevat(elvtk,xlntk,xloc,elvln,xlnln) = elvtk*max(0.0,
+     & min(xlntk,xloc)) + elvln*max(0.0, min(xlnln,(xloc - xlntk)))
+c
+c  Set values to allow debug to print in all cases.
+       aratf = 0.0
+       aratg = 0.0
+       fwalfa = 0.0
+       fwalga = 0.0
+       convfj = 0.0
+       convgj = 0.0
+       velfjx = 0.0
+       velgjx = 0.0
+       form = 0.0
+       finert = 0.0
+       ginert = 0.0
+       sumff = 0.0
+       sumld = 0.0
+       qliq = 0.0
+       qcon = 0.0
+       qvap = 0.0
+       xfg = 0.0
+       xgcg = 0.0
+       zgcg = 0.0
+       zfg = 0.0
+       zjun = 0.0
+       dzgas = 0.0
+       dzliq = 0.0
+       finert = 0.0
+       ginert = 0.0
+c
+       i1 = lvaccm(lpdat(issys)%llvect)
+       do m = 1,lvptr(i1)
+         i1 = i1 + 1
+         n = lvptr(i1)
+         j = njco(n) + filndx(5)
+         ix = jcnxs(j)
+         k = ij1nx(j)
+         l = ij2nx(j)
+c  Get the geometry flag
+         geom = iand(ishft(cmpopt(n),-8),1)
+c  Check for a successful time step.
+         if (lpdat(issys)%lsuces .eq. 0) then
+c  Obtain dvliq for the current time step.
+           if (geom .eq. 1) dvliq(n) = vliqo(n) - vliq(n)
+           cmpopt(n) = ior(iand(cmpopt(n),not(224)),iand(ishft(
+     &     cmpopt(n),3),224))
+           vdmo(n) = vdm(n)
+           rhono(n) = rhon(n)
+           tvapo(n) = tempg(k)
+           vliqo(n) = vliq(n)
+           ttanko(n) = ttank(n)
+           qtanko(n) = qtank(n)
+           gaslno(n) = gasln(n)
+         endif
+c  Set the general terms.
+         kx = jcnx1(j)
+         qwgold = qwg(k)
+         qwg(k) = 0.0
+         qliq = 0.0
+         vaprat = 0.0
+         conrat = 0.0
+c  For calculation of draining time, use the following special code
+c        dptest = 0.
+c  Instead of
+         dptest = po(k) - po(l)
+c  End of special code.
+c  The calculation of variables xtank and
+c  xgtank depends on the tank geometry
+         if (geom .eq. 0) then
+           chard = min(vtank(n),vdm(n))
+           ratank = 1.0/atank(n)
+           xtank = vtank(n)*ratank
+           xgtank = chard*ratank
+         else
+           rtank = sqrt(atank(n)/pi)
+           xtank = tklen(n)
+           if (gaslno(n).gt.epsln*2.0*rtank .and.
+     &     gaslno(n).lt.(1-epsln)*2.0*rtank) then
+             gasln(n) = gaslno(n) + dvliq(n)/(pi*gaslno(n)*
+     &       (2.0*rtank-gaslno(n)))
+           elseif (gaslno(n) .le. epsln*2.0*rtank) then
+             gasln(n) = sqrt(vdm(n)/(pi*rtank))
+           else
+             gasln(n) = 2*rtank - sqrt(max(0.,(4./3.)*pi*rtank**3 -
+     &       vdm(n))/(pi*rtank))
+           endif
+           gasln(n) = min(gasln(n),xtank)
+           xgtank = gasln(n)
+         endif
+         xgline = max(0.0,(vdm(n) - vtank(n)))/ajun(j)
+         xftank = max(0.0,(xtank - xgtank))
+         xfline = max(0.0,(lnlen(n) - xgline))
+         xfg = xgtank + xgline
+         if (xftank .gt. 0.) then
+           xgcg = xgtank
+         else
+           xgcg = xtank
+         endif
+c  Energy transport by heat and mass transfer.
+         if (htxr(n) .eq. 1.0) then
+           vis = aviscn(n)/rhon(n)
+           thdif = thcnd(n)/(rhon(n)*acpnit(n))
+           pr = vis/thdif
+           if (geom .eq. 0) then
+             acylo = pi*diamtk(n)*xgtank
+             rareas = 1.0/(acylo + (2.0*atank(n) - ajun(j)))
+           else
+             aspho = 2.*pi*xgtank*rtank
+             asphs = pi*xgtank*(2.*rtank-xgtank)
+             rareas = 1.0/(aspho + asphs - ajun(j))
+           endif
+           chard = 4.0*min(vtank(n),vdm(n))*rareas
+           aliq = ajun(j)
+           if (vtank(n) .gt. vdm(n)) then
+             if (geom .eq. 0) then
+               aliq = atank(n)
+             else
+               aliq = asphs
+             endif
+           endif
+c  Heat transfer part.
+           if (geom .eq. 0) then
+             abotf = atank(n) - aliq
+             sadtem = rareas*((acylo + atank(n) + abotf)*
+     &       abs(ttanko(n)-tvapo(n)) + aliq*abs(tempf(k)-tvapo(n)))
+           else
+             abotf = asphs - aliq
+             sadtem = rareas*((aspho + abotf)*
+     &       abs(ttanko(n)-tvapo(n)) + aliq*abs(tempf(k)-tvapo(n)))
+           endif
+           gr = gravcn*sadtem*(chard**3)/(tvapo(n)*vis*vis)
+           htc2 = thcnd(n)*((gr*pr)**xn)*(xgtank/chard)
+           if (geom .eq. 0) then
+             htc1 = 0.2*htc2/diamtk(n)
+             htc2 = 0.3*htc2/xgtank
+             qwg(k) = (acylo*htc1 + (atank(n) + abotf)*htc2)*
+     &       (ttanko(n) - tvapo(n))
+           else
+             htc2 = 0.2*htc2/xgtank
+             qwg(k) = (aspho + abotf)*htc2*(ttanko(n) - tvapo(n))
+           endif
+           q(k) = qwg(k)
+           qtank(n) = qwg(k)
+           if (geom .eq. 0) then
+             rareas = pi*diamtk(n)*vtank(n) +
+     &       atank(n)*(2.0*atank(n) - ajun(j))
+             ttank(n) = ttanko(n) - (qwg(k)*atank(n)*dt/
+     &       (rhot(n)*htcap(n)*thick(n)*rareas))
+           else
+             rareas = aspho + asphs - ajun(j)
+             ttank(n) = ttanko(n) - (qwg(k)*dt/
+     &       (rhot(n)*htcap(n)*thick(n)*rareas))
+           endif
+c  Mass transfer part.
+           if (iand(cmpopt(n),16) .eq. 0) then
+             htc2 = htc2*xgtank/(xgtank + xgline)
+             qliq = aliq*htc2*(tempf(k) - tvapo(n))
+             tsteam = max(ttrip,tvapo(n))
+             difcof = 4.7464337e-6*(tsteam**2.334)/po(k)
+             vaprat = difcof*(pps(k)*betav(n) + claptf(n))/
+     &       (po(k)*avgtg(n)*thcnd(n))*((thdif/difcof)**xn)
+             vaprat = aliq*htc2*vaprat*(tempf(k) - tvapo(n))
+             qvap = vaprat*ahgtf(n)
+             vaprat = qvap/ahfgtf(n)
+             trm1 = dmgdt(n)
+             trm2 = vdmo(n)*rhono(n)*cvnit(n)
+             trm3 = dpd(n)*ajun(j)*velfjo(j)
+             trm4 = qtank(n) + qliq + qvap
+             trm5 = po(k)*ajun(j)*velfjo(j)
+             qtot = trm2/(trm2 + trm1*ahfgtg(n))*(trm4 +
+     &       (vaprat + trm1*trm5/trm2 + trm3)*ahfgtg(n))
+             qcon = qtot - qtank(n) - qliq - qvap
+             conrat = vaprat - qcon/ahfgtg(n)
+             if (conrat .lt. 0.0) then
+               conrat = 0.0
+               qcon = 0.0
+             endif
+             qtank(n) = qtank(n) + qliq + qvap + qcon
+           endif
+         endif
+         conrat = -conrat
+         gamnet = recipv(k)*(vaprat + conrat)
+         if (iand(cmpopt(n),16) .ne. 0) then
+c  Accumulator is an active volume, zero the flags in jc and vctrl.
+c  32832 = 32768 + 64
+           jc(j) = iand(jc(j),not(32832))
+           vctrl(k) = iand(vctrl(k),not(32))
+c  Set the source terms for the volume.
+           sourcg(kx) = sourcg(kx) + (qwg(k) - qwgold)*dt
+           qtank(n) = qwg(k)
+c  Get the junction flow direction.
+           flowj = sign(1.0,(voidfj(j)*velfjo(j) + voidgj(j)*velgjo(j)))
+c  Elevation head.
+           dpzrho = rho(k)
+           if (iand(jc(j),4) .ne. 0) dpzrho = -dpzrho
+           dpzrho = gravcn*hydzc(k+1)*dpzrho
+         else
+c  Accumulator is an accumulator, set the flags in jc and vctrl.
+c  32832 = 32768 + 64
+           jc(j) = ior(jc(j),32832)
+           vctrl(k) = ior(vctrl(k),32)
+c  Set the sourc terms for the accumulator volume.
+           sourcg(kx) = qtank(n)*dt
+           sourcf(kx) = 0.0
+           sourcm(kx) = 0.0
+           hif(k) = 1.0e+12
+           hig(k) = 1.0e+12
+           gammaw(k) = 0.0
+           gammac(k) = 0.0
+           iix = vctrls(k)
+           gammsw(iix) = 0.0
+           gammsc(iix) = 0.0
+c  Get the junction flow direction.
+           flowj = sign(1.0,velfjo(j))
+c  Elevation head.
+           rxtank = 1.0/xtank
+           rxline = 1.0/max(1.0e-15,lnlen(n))
+           dzsign = 1.0
+           if (iand(jc(j),4) .ne. 0) dzsign = -dzsign
+           dztk = dzsign*dztank(n)*rxtank
+           dzline = -lnelv(n)*rxline
+           zgcg = elevat(dztk,xtank,xgcg,dzline,lnlen(n))
+           zfg = elevat(dztk,xtank,xfg,dzline,lnlen(n))
+           zjun = dzsign*dztank(n) - lnelv(n)
+           dzgas = dzsign*gravcn*(zfg - zgcg)
+           dzliq = dzsign*gravcn*(zjun - zfg)
+c  For calculation of draining time, use the following special code
+c          dpzrho = dzsign*dzliq*rhof(k)
+c  Instead of
+           dpzrho = dzsign*(dzgas*rhog(k) + dzliq*rhof(k))
+c  End of special code.
+         endif
+c  Turn accumulator on or off.
+         dptest = dptest - dpzrho
+         isolat = acctrp(n) .ne. 0
+         if (isolat) isolat = trptm(acctrp(n+1)) .lt. 0.0
+         if ((iand(cmpopt(n),4).ne.0 .and. dptest.le.0.0) .or.
+     &   flowj.lt.0.0 .or. isolat) go to 1000
+cc  Temporary patch (one if test).
+c        if (dptest .le. -1.0e5) go to 1000
+         if (iand(cmpopt(n),16) .ne. 0) go to 2010
+c
+c  Solve the liquid momentum equation for the explicit new time
+c  liquid velocity and d(velfj)/d(dp).
+c  Implicit coupled calculation for velocity and dome pressure using
+c  the momentum equation and the nitrogen mass balance with implicit
+c  vapor temperature (to be solved for in state).
+c  Compute the convective terms.
+         if (xftank .gt. 0.0) then
+           aratg = 1.
+           if (geom .eq. 0) then
+             aratf = ajun(j)/atank(n)
+           else
+             aratf = ajun(j)/max(ajun(j),pi*gaslno(n)*(2*rtank -
+     &       gaslno(n)))
+           endif
+         else
+           aratf = 1.
+           if (geom .eq. 0) then
+             aratg = ajun(j)/atank(n)
+           else
+             aratg = ajun(j)/(vdm(n)/xtank)
+           endif
+         endif
+         convfj = 1.0 - aratf*aratf
+         convgj = 1.0 - aratg*aratg
+c  Compute the inertia terms.
+         if (xftank .gt. 0.0) then
+           ginert = 0.0
+           if (geom .eq. 1) then
+             aratf = ajun(j)/((vtank(n) - vdm(n))/xftank)
+           endif
+           finert = xftank*aratf + xfline
+         else
+           finert = xfline
+           ginert = xgline
+         endif
+c  Wall friction terms.
+         aliq = ajun(j)
+         if (xftank .gt. 0.0) aliq = vliq(n)/(xftank + xfline)
+         aratf = ajun(j)/aliq
+         aratg = ajun(j)*(xgtank + xgline)/vdm(n)
+         if (iand(imap(k),8192) .eq. 0) then
+           frict = 1.74 - 0.8685889638065*log(2*roughv(k))
+           frict = 1.0/( frict*frict*diamv(k) )
+         else
+           frict = 0.0
+         endif
+         fwalfa = abs(velfjo(j))*frict*(xftank + xfline)*aratf*aratf
+         fwalga = abs(velgjo(j))*frict*(xgtank + xgline)*aratg*aratg
+         fwalfj(j) = fwalfa
+         fwalgj(j) = fwalga
+c  Form loss terms.
+         form = rxline*(max(0.0,velfjo(j)*fjunf(j)) -
+     &   min(0.0,velfjo(j)*fjunr(j)))
+         fjunft(j) = fjunf(j)
+         fjunrt(j) = fjunr(j)
+c  Compute the sum equation terms.
+         sumff = rhof(k)*(finert + 0.5*dt*(fwalfa + form*xfline +
+     &   2.0*convfj*velfjo(j))) +
+     &   rhog(k)*(ginert + 0.5*dt*(fwalga + form*xgline +
+     &   2.0*convgj*velgjo(j)))
+         sumld = rhof(k)*(finert + 0.5*dt*convfj*velfjo(j))*velfjo(j) +
+     &   rhog(k)*(ginert + 0.5*dt*convgj*velgjo(j))*velgjo(j) +
+     &   dt*dptest
+c  Compute the new time explicit velfj and d(velfj)/d(dp).
+         velfj(j) = sumld/sumff
+         velfjx = velfj(j)
+         velgjx = velfjx
+         if (velfj(j) .le. 0.0) go to 1000
+         velgj(j) = velfj(j)
+c  For calculation of draining time, use the following special code
+c        vfdpk(ix) = 0.
+c  Instead of
+         vfdpk(ix) = dt/sumff
+c  End of special code.
+         vgdpk(ix) = vfdpk(ix)
+         vfdpl(ix) = vfdpk(ix)
+         vgdpl(ix) = vfdpk(ix)
+ 2010    jc(j) = iand(jc(j),not(2))
+         cmpopt(n) = iand(cmpopt(n),not(4))
+         go to 3000
+c
+ 1000    velfj(j) = 0.0
+         velgj(j) =  0.0
+         vfdpk(ix) = 0.0
+         vgdpk(ix) = 0.0
+         vfdpl(ix) = 0.0
+         vgdpl(ix) = 0.0
+         jc(j) = ior(jc(j),2)
+         cmpopt(n) = ior(cmpopt(n),4)
+c  Solve the combined energy...state equations for the coefficients
+c  used in preseq.
+ 3000    ra = 0.0
+         izz = k
+         do it = 1,noncn
+           ra = rax(it)*qualan(izz) + ra
+           izz = izz + 1
+         enddo
+         term1 = 1.0/(vdmo(n)*cvnit(n))
+         dpddp(n) = term1*po(k)*acpnit(n)*ajun(j)*dt
+         dpd(n) = term1*ra*qtank(n)*dt
+c
+c  In preseq, the pressure equation now looks like
+c     (1.0 + dpddp(n)*vfdpk(ix)) * (p(k)-po(k))
+c          - dpddp(n)*vfdpl(ix)) * (p(l)-po(l))
+c          = dpd(n) - dpddp(n) * velfj(j)
+c
+c  Diagnostic print.
+$if def,dbgprnt
+         if (help.ne.0 .and. iand(ihlppr(1),1).ne.0) then
+           if (iand(vctrlx(k),1).ne.0 .or.
+     &     iand(jcex(j),ishft(1,20)).ne.0) then
+             call helphd ('accum',15)
+             write (output,9020) volno(k),volno(l),junno(j)
+ 9020  format ('0Accumulator data'/
+     & 2x,' from volno =',i10,' to volno =',i10,' junno =',i10)
+             write (output,9030) cmpopt(n),dialn(n),lnelv(n),thick(n),
+     &       lnlen(n),ttank(n),ttanko(n),thcnd(n),htcap(n),rhot(n),
+     &       htxr(n),qtank(n),vdm(n),vdmo(n),vliq(n),vliqo(n),rhon(n),
+     &       rhono(n),tvapo(n),cvnit(n),vtank(n),betav(n),dpd(n),
+     &       dpddp(n),ahfgtf(n),ahfgtg(n),avgtg(n),avfgtf(n),ahftg(n),
+     &       ahgtf(n),acpgtg(n),acvgtg(n),aviscn(n),acpnit(n),atank(n),
+     &       diamtk(n),qtanko(n),dmgdt(n),claptf(n),isolat,acctrp(n),
+     &       gasln(n),gaslno(n),tklen(n)
+ 9030  format ('0Accumulator terms, cmpopt=',i12/
+     & 2x,' dialn=',1p,g13.5,'  lnelv=',   g13.5,'  thick=',   g13.5,
+     & 2x,' lnlen=',   g13.5,'  ttank=',   g13.5,' ttanko=',   g13.5/
+     & 2x,' thcnd=',   g13.5,'  htcap=',   g13.5,'   rhot=',   g13.5,
+     & 2x,'  htxr=',   g13.5,'  qtank=',   g13.5,'    vdm=',   g13.5/
+     & 2x,'  vdmo=',   g13.5,'   vliq=',   g13.5,'  vliqo=',   g13.5,
+     & 2x,'  rhon=',   g13.5,'  rhono=',   g13.5,'  tvapo=',   g13.5/
+     & 2x,' cvnit=',   g13.5,'  vtank=',   g13.5,'  betav=',   g13.5,
+     & 2x,'   dpd=',   g13.5,'  dpddp=',   g13.5,' ahfgtf=',   g13.5/
+     & 2x,'ahfgtg=',   g13.5,'  avgtg=',   g13.5,' avfgtf=',   g13.5,
+     & 2x,' ahftg=',   g13.5,'  ahgtf=',   g13.5,' acpgtg=',   g13.5/
+     & 2x,'acvgtg=',   g13.5,' aviscn=',   g13.5,' acpnit=',   g13.5,
+     & 2x,' atank=',   g13.5,' diamtk=',   g13.5,' qtanko=',   g13.5/
+     & 2x,' dmgdt=',   g13.5,' claptf=',   g13.5,' isolat=',   l3,
+     & 2x,'acctrp=',i5/
+     & 2x,' gasln=',   g13.5,' gaslno=',   g13.5,'  tklen=',   g13.5)
+             izz = iand(jc(j),not(128))
+             write (output,9040) ij1(j),vctrl(k),imap(k),izz,
+     &       qwg(k),q(k),sourcg(kx),sourcf(kx),sourcm(kx),qliq,qvap,
+     &       qcon,vaprat,conrat,gamnet,velfj(j),vfdpk(ix),voidfj(j),
+     &       rhofj(j),ufj(j),velgj(j),vgdpk(ix),voidgj(j),rhogj(j),
+     &       ugj(j)
+ 9040  format ('0Volume and junction terms computed in accum'/
+     & 2x,' ij1(j)=',i10,' vctrl(k)=',z10,' imap(k)=',z10,' jc(j)=',z10/
+     & 2x,'   qwg=',1p,g13.5,'      q=',   g13.5,' sourcg=',   g13.5,
+     & 2x,'sourcf=',   g13.5,' sourcm=',   g13.5,'   qliq=',   g13.5/
+     & 2x,'  qvap=',   g13.5,'   qcon=',   g13.5,' vaprat=',   g13.5,
+     & 2x,'conrat=',   g13.5,' gamnet=',   g13.5/
+     & 2x,' velfj=',   g13.5,'   vfdp=',   g13.5,' voidfj=',   g13.5,
+     & 2x,' rhofj=',   g13.5,'    ufj=',   g13.5/
+     & 2x,' velgj=',   g13.5,'   vgdp=',   g13.5,' voidgj=',   g13.5,
+     & 2x,' rhogj=',   g13.5,'    ugj=',   g13.5)
+             write (output,9050) flowj,dptest,po(k),po(l),dpzrho,aratf,
+     &       roughv(k),fwalfa,fwalga,form,aratg,convfj,convgj,sumff,
+     &       sumld, velfjo(j), velfjx, velgjo(j), velgjx, xtank, xftank,
+     &       xgtank,xfline,xgline,xfg,xgcg,zgcg,zfg,zjun,dzgas,
+     &       dzliq,finert,ginert
+ 9050  format ('0Accumulator momentum equation terms'/
+     & 2x,' flowj=',1p,g13.5,' dptest=',   g13.5,'  po(k)=',   g13.5,
+     & 2x,' po(l)=',   g13.5,' dpzrho=',   g13.5,'  aratf=',   g13.5/
+     & 2x,'roughv=',   g13.5,' fwalfa=',   g13.5,' fwalga=',   g13.5,
+     & 2x,'  form=',   g13.5,'  aratg=',   g13.5,' convfj=',   g13.5/
+     & 2x,'convgj=',   g13.5,'  sumff=',   g13.5,'  sumld=',   g13.5,
+     & 2x,'velfjo=',   g13.5,' velfjx=',   g13.5,' velgjo=',   g13.5/
+     & 2x,'velgjx=',   g13.5,'  xtank=',   g13.5,' xftank=',   g13.5,
+     & 2x,'xgtank=',   g13.5,' xfline=',   g13.5,' xgline=',   g13.5/
+     & 2x,'   xfg=',   g13.5,'   xgcg=',   g13.5,'   zgcg=',   g13.5,
+     & 2x,'   zfg=',   g13.5,'   zjun=',   g13.5,'  dzgas=',   g13.5/
+     & 2x,' dzliq=',   g13.5,' finert=',   g13.5,' ginert=',   g13.5)
+           endif
+         endif
+$endif
+         ahgtf(n) = gamnet
+       enddo
+       return
+       end

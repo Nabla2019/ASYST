@@ -1,0 +1,381 @@
+*mlist
+       subroutine mdata2 (jo)
+c  mdata2 computes the thermal conductivity and volumetric heat capacity
+c  at the center of each x-direction interval for 2-d heat conduction
+c  calculations.
+c
+c  Cognizant engineer: rjw.
+c
+c
+       implicit none
+       integer jo
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'gapvar.h'
+       include 'htrflb.h'
+       include 'htscr1.h'
+       include 'htscr2.h'
+       include 'htsrcm.h'
+       include 'mtbls.h'
+       include 'rflhtc.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  filndx(9) index of material property data - main program must arrange
+c  data in the following order.
+c         ia (filndx(9)) = no. of materials
+c         ia(filndx(9)+1) = offset of data for matrl 1
+c         ia(filndx(9)+2) = offset of data for matrl 2, etc.
+c matidx  index of data for matrl n  (thermal cond,  vol heat cap)
+c         ia(matidx  ) = kfcnsw (0 => tabular thcon data,
+c         1 => functional relation for data)
+c         ia(matidx+1) = cfcnsw (0 => tabular rhocp data,
+c         1 => functional relation for data)
+c         if kfcnsw=1 coefficient data follows and
+c         ia(matidx+2) = number of functional descriptions (nkfcn)
+c         fa(matidx+3)    = low limit of validity range for fcn 1
+c         fa(matidx+4)    = high limit of validity range for fcn 1
+c         fa(matidx+5)    = coefficient ao
+c         fa(matidx+6)    = coefficient a1, etc. thru a5, c   where
+c         k(t)=ao+a1*(t-c)+a2*(t-c)**2+a3*(t-c)**3+a4*(t-c)**4+a5/(t-c)
+c         fa(matidx+12)   = low  limit of validity for fcn 2 if
+c         nkfcn > 1, ect.
+c         if kfcnsw=0 tabular data follows and
+c         ia(matidx+2) = length of table (no. of data pairs)
+c         fa(matidx+3) = t1
+c         fa(matidx+4) = t2, etc
+c         fa(matidx+length+3)=k1
+c         a table length of 1 => the property is a constant and
+c         fa(matidx+3)=k
+c         volumetric heat cap data follows conductivity data
+c         if cfcnsw=1 coefficient data follows in the same order
+c         as for k(t) and has the same functional form as k(t)
+c         if cfcnsw=0 tabular data follows and
+c         ia(matidx+n)= +-length (negative value => use temp fa
+c         for k table, pos length => indep table for rhocp
+c  subroutine variables
+c  value(1)   value of thermal conductivity returned
+c  value(2)   value of volumetric heat capacity returned
+c  mtrl       material no. for which properties are requested
+c  tempn      current value of temperature
+c
+c      Local variables.
+       integer colbdy,csw(2),hindex,i,icol,idxo,idxoz,idxtop,
+     & igas,indgas(7),indy,indz,index,indhxo,initem,iplas,irup,irupt,
+     & iy,jnde,jndi,k,kidx,kidy,kint,l,length,lim,locc,locx,m,matidx,
+     & matinx,midx,mtrl,mtrlo,temidx,tidx
+       real block,cltave,coeff,dtdt,molgas(7),t,tclad,
+     & tempn,term,tfuel,tmax,tmin,value(2),valuek
+c
+       indz = inscr2
+       colbdy = htnmpt(jo) - 1
+       kidx = inscr2+mesh4
+       midx = htgom(jo) + filndx(8)
+       locc = 1
+       do 300 icol=1,colbdy
+         mtrl = htcmp(midx+1)
+         matidx = mtbptr(filndx(9)+mtrl) + filndx(9)
+         csw(1) = mtbl(matidx)
+         csw(2) = mtbl(matidx+1)
+       matinx=matidx+2
+       iy = inscr1
+       do 204 m = 1,meshy
+       htb2(iy)=(tmpscr(indz)+tmpscr(indz+mesh4))*0.5
+         iy = iy + nscra1
+  204  indz=indz+nscra2
+       tmax=htb2(inscr1)
+       tmin=htb2(inscr1)
+       indy=inscr1+nscra1
+       do 208 iy = 2,meshy
+         tmax = max(tmax,htb2(indy))
+         tmin = min(tmin,htb2(indy))
+         indy = indy + nscra1
+  208  continue
+      tmax=max(tmin+0.1,tmax)
+       iy=(tmax-tmin)*0.05
+       kint=min(max(2,iy),htnusr(jo))
+       term=(tmax-tmin)/float(kint)
+       htc2(inscr1)=tmin
+       indy=inscr1+nscra1
+       do 212 iy=2,kint
+       htc2(indy)=htc2(indy-nscra1)+term
+  212  indy=indy+nscra1
+       htc2(indy)=tmax
+       jnde=inscr1+kint*nscra1
+       do 200 iy=inscr1,jnde,nscra1
+       matidx=matinx
+       tempn=htc2(iy)
+       do 160 l=1,2
+c    l=1 computes conductivity; l=2 volumetric heat capacity
+c
+       if(csw(l) -  1) 104,140,100
+c
+c     gap conductance model with gas mole fractions
+  100  length = mtbl(matidx)
+       jndi=matidx+1
+      index=jndi+length-1
+       indy=1
+      do 102 i=jndi,index
+         indgas(indy) = mtbl(i)
+         molgas(indy) = mtblr(i+length)
+  102  indy=indy+1
+       call gasthc(value(l),length,indgas,molgas,tempn)
+       matidx=matidx+length+length+1
+       go to 160
+c
+c     data in tabular form
+c     get table length
+  104  length = mtbl(matidx)
+c     check table length
+      if (length.ne.1) go to 105
+c   constant material properties
+       value(l) = mtblr(matidx+1)
+      matidx=matidx+2
+      go to 160
+ 105  if(length.lt.0) go to 135
+      if (locc.lt.1.or.locc.gt.length) locc=1
+c     test position of tempn within table
+      index=matidx+locc
+       if (tempn .gt. mtblr(index)) then
+         go to 115
+       elseif (locc .eq. 1) then
+         coeff = 0.0
+         go to 132
+       endif
+c     tempn less than preceeding value
+      do 110 i=2,locc
+      index=index-1
+       if (tempn .gt. mtblr(index)) go to 125
+ 110  continue
+c      tempn outside the table
+      coeff=0.0
+      go to 132
+c     tempn > or = to preceeding value
+ 115  lim=length-1
+      do 120 i=locc,lim
+       if (tempn .le. mtblr(index+1)) go to 125
+        index=index+1
+ 120  continue
+c      tempn outside the table
+      index=index-1
+      coeff=1.0
+      go to 132
+  125  coeff = (tempn - mtblr(index))/(mtblr(index+1) - mtblr(index))
+c     position in table located
+ 132  locc=index-matidx
+      index=index+length
+c
+c     use two-point lagragian interpolation (linear)
+       value(l) = coeff*(mtblr(index+1) - mtblr(index)) + mtblr(index)
+      matidx = matidx + 2*length + 1
+      go to 160
+c
+c       rhocp uses temperature table for thcon
+ 135  index=matidx+locc
+       value(l) = coeff*(mtblr(index+1) - mtblr(index)) + mtblr(index)
+      go to 160
+c
+c     functional dependence for property
+  140  lim = mtbl(matidx)
+      index=matidx
+       if (tempn .le. mtblr(index+1)) go to 150
+      do 145 i=1,lim
+       if (tempn.ge.mtblr(index+1) .and. tempn.le.mtblr(index+2))
+     & go to 150
+      index=index+9
+ 145  continue
+      index=index-9
+  150  t = tempn - mtblr(index+9)
+       value(l) = (((mtblr(index+7)*t + mtblr(index+6))*t +
+     & mtblr(index+5))*t + mtblr(index+4))*t + mtblr(index+3) +
+     & mtblr(index+8)/t
+      matidx=matidx+9*lim+1
+ 160  continue
+       htv1(iy)    = value(1)
+       htv2(iy)    = value(2)
+  200  continue
+       jnde=inscr1+(kint-1)*nscra1
+       jndi=inscr1+nscra1
+       locx=jndi
+       iy = inscr1
+       do 270 m = 1,meshy
+       tempn=htb2(iy)
+       if(tempn.gt.htc2(locx)) go to 255
+       do 250 i=jndi,locx,nscra1
+       index=i
+       if(tempn.le.htc2(i)) go to 265
+  250  continue
+       i=locx
+       go to 265
+  255  do 260 i=locx,jnde,nscra1
+       index=i+nscra1
+       if(tempn.le.htc2(index)) go to 265
+  260  continue
+       i=jnde
+  265  locx=i
+       coeff=(tempn-htc2(index-nscra1))/(htc2(index)-htc2(index-nscra1))
+       httc2(kidx)=htv1(index-nscra1)+coeff*(htv1(index)
+     1            -htv1(index-nscra1))
+       htvhc2(kidx)=htv2(index-nscra1)+coeff*(htv2(index)
+     1            -htv2(index-nscra1))
+       kidx = kidx + nscra2
+         iy = iy + nscra1
+  270  continue
+       midx = midx + htgskp
+  300  continue
+c
+c     do the gap conductance again,
+c      this time with the gap conductance model (call gapcon)
+c      but only do it for the coarse nodes; and set all the fine nodes"
+c      gap effective k"s to the corresponding coarse node value.
+c
+c                            first check if fluid is on the right side
+       if (idrfl .ne. 1) go to 600
+c  Yes, go for it.
+       indz   = inscr1 + nqfmov
+c  Get the gas pressure for the rod.
+       hindex = indzhs(inscr1)
+       pgas   = 0.0
+       idxoz  = htgom(hindex) + filndx(8)
+c  Any gas?  if not go to 600 (exit routine).
+       if (gpintp(idxoz) .le. 0.0) go to 600
+       i      = htgap(hindex+1)
+       pgas   = gpintp(idxoz)*max(satt(i), tempg(i))
+c  Save index to first structure in set.
+       idxtop = hindex
+c  Calc plastic strain and rod not ruptured?
+         iplas  = ishft( iand(imw(idxtop),2048) ,-11)
+         irupt  = ishft( iand(imw(idxtop),512 ) ,-9 )
+c  iplas=1 if plastk deform calc,  irupt=1 if rod ruptured.
+c            -----if rod ruptured then set pgas to pfluid-
+         if(irupt.eq.1) pgas=p(htbvo(idxtop+1))
+c  Loop over the axial nodes.
+       indhxo = 0
+c          -------kidy points to gap information ---
+       kidy = inscr2 + (mesh4) *(iand(imw(hindex),511) - 2) + mesh4
+       do 590 k = inscr1, indz, nscra1
+         hindex = indzhs(k)
+c  Skip to 580 if this fine zone is in same coarse node as previous
+c  fine zone.
+         if (hindex .eq. indhxo) go to 580
+         indhxo = hindex
+         idxo  = htgom(hindex) + filndx(8)
+         initem = htxit(hindex) + filndx(8)
+         temidx = htxft(hindex) + filndx(8)
+         i      = htbvo(hindex + 1 )
+         pfluid = p(i)
+c  Initialize.
+       block=0.0
+c
+         dtdt = hetrat(hindex)
+         kidx   = inscr2
+         midx   = idxo
+         tidx   = initem
+         mtrlo  = 0
+c  Loop over radial nodes to position ourself at gap.
+         do 560 icol = 1, colbdy
+           mtrl   = htcmp(midx +1)
+           aijt(kidx) = 0.5 * (httmp(tidx) + httmp(tidx+1) )
+c  Same material?  if yes, skip to 550.
+           if (mtrlo .eq. mtrl) go to 550
+c  No.
+           mtrlo = mtrl
+           matidx = mtbptr(filndx(9)+mtrl) + filndx(9)
+c  Conductivity switch.
+           csw(1) = mtbl(matidx)
+           csw(2) = mtbl(matidx+1)
+           matidx = matidx + 2
+           do 1160 l = 1, 2
+c  l = 1 is conductivity, l=2 is heat capacity.
+c  Jump to 1104 or 1140 if csw indicates this is not a gap.  Increase
+c   pointer there and continue.
+           if (csw(l) - 1) 1104, 1140, 540
+c
+c  Csw indicates gas information in material table, so begin gap
+c  conductance calculation procedure.
+  540      length = mtbl(matidx)
+           jndi   = matidx + 1
+           index  = jndi + length - 1
+           lim    = 1
+c  Loop over number of gases in gap.
+           do 520 igas = jndi, index
+             indgas(lim) = mtbl(igas)
+             molgas(lim) = mtblr(igas+length)
+             lim         = lim + 1
+  520      continue
+           call gasthc (valuek, length, indgas, molgas, aijt(kidx))
+           matidx = matidx + 2 * length + 1
+c  Average clad temperature.
+       aijt(kidx+nscra2) = 0.5 * (httmp(tidx+1) + httmp(initem+colbdy) )
+       cltave = aijt(kidx+nscra2)
+c  Note, one node gap assumed.
+       tfuel  = httmp(tidx)
+       tclad  = httmp(tidx+1)
+       irup   = 0
+       if( cladex(hindex).lt.0.0) irup=1
+c--irupt=1 if the rod is ruptured, and..
+c--irup=1 if this node is ruptured node, 0 otherwise.
+c--irup=1 flags gapcon to use ruptured geometry for gapconduc calc.
+c                ----inscr2+3 is location of aijt(avg temp) entries --
+           call gapcon (inscr2+3 , nscra2 , idxo  , hindex, icol  ,
+     &                  length, indgas, molgas, valuek,
+     &                  dtdt  , cltave, block , irup  , iplas ,
+     &                  tfuel , tclad )
+c                            have done the gap, now jump out of
+c                            loop over radial nodes, and go check
+c                            for rupture.
+           go to 570
+c                          --data in tabular form-- therefore not gap
+c                          --so increase matidx and continue
+ 1104      length = mtbl(matidx)
+           if (length .ne. 1) go to 1105
+c                            constant material properties
+           matidx = matidx + 2
+           go to 1160
+ 1105      if (length .lt. 0) go to 1160
+           matidx = matidx + 2 * length + 1
+           go to 1160
+c                            functional form, therefore not gap,
+c                            so increase matidx and continue
+ 1140      lim    = mtbl(matidx)
+           matidx = matidx + 9 * lim + 1
+ 1160      continue
+  550      continue
+           midx = midx + htgskp
+           kidx = kidx + nscra2
+           tidx = tidx + 1
+  560    continue
+  570    continue
+c                            calculate the plastic strain?
+       if (iplas .eq. 0) go to 580
+c                            yes, has the clad ruptured?
+       if (block .le. 0.0) go to 580
+c                            yes, is it first time?
+c                            first time is indicated by loss flag = 0
+       if (iand(imw(idxtop),1024) .ne. 0) go to 580
+c                         yes, set some variables
+c                         loss flag,rupture flag for set of heat strs,
+c                         rupture flag for ruptured node,
+c                         inside mwr for str where rupture occurred
+c                           -exhaust the gas-
+         imw(idxtop) = ior(imw(idxtop),512 )
+         imw(hindex) = ior(imw(hindex),512 )
+         imw(idxtop) = ior(imw(idxtop),1024)
+         imw(hindex) = ior(imw(hindex),8192)
+         irupt  = 1
+         pgas   = pfluid
+c  Alter the loss coeff if asked on 1cccg004.
+c  4096 bit in imw on if loss coef to be altrd.
+         if (iand(imw(idxtop),4096) .ne. 0) call kloss (block, hindex)
+c  Write rupture message.
+          write(output,9123) htstno(hindex),timeht,block
+ 9123 format('1Heat structure ',i9,' ruptured at ',1p,g12.5,' sec with
+     xa channel blockage of ',g12.3, ' percent.')
+c  Put in the new gas conductivity.
+  580  httc2(kidy) = valuek
+       kidy  = kidy + nscra2
+  590  continue
+  600  continue
+       return
+       end

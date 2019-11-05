@@ -1,0 +1,340 @@
+*mlist
+*if def,selap
+       subroutine couple (tz, tc, tlast, ncslp, af, wsltot,
+     1 porave, powave, pdbtot, tave, pdmave, rhg, cpg, tkg,
+     2 rhl, amul, amug, hl, hg, tfluid, tsat, voidfr, icoup,
+     3 stmass, nstslp, nslphs, nobrok, pgas, tvapor)
+c
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: ewc.
+c
+c This is a COUPLE ROUTINE
+c
+c     nslphs = 0 = LWR lower head and debris being analyzed.
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'cpmdat.h'
+       include 'alcm.h'
+       include 'iparm.h'
+       include 'iparmc.h'
+       include 'parm.h'
+       include 'parmc.h'
+       include 'scntl.h'
+       include 'scddat.h'
+       include 'tblsp.h'
+       include 'ufiles.h'
+       include 'contrl.h'
+c
+c  Local variables.
+       integer i,icout,ier,j,j1,j2,lck,n,n380,nflagq,nnn,nocalc
+       real eps,heigti,qd,tbflx1,tbflx2,tq,vr,vz,pgas,tvapor
+       integer ncslp,icoup,nstslp,nobrok
+       real tc,tz,tlast,af,wsltot,porave,powave,pdbtot,tave,pdmave,rhg,
+     & cpg,tkg,rhl,amul,amug,hl,hg,tfluid,tsat,voidfr,stmass
+       real sumal, sumuo2
+       integer nslphs
+       integer ndbg
+       dimension tc(*),tlast(*),tz(*)
+       dimension af(maxcon)
+c
+       n380 = nnli
+       ndbg=0
+cljs     if(timehy.ge.24495.0.and.timehy.le.24515.0)ndbg=8
+           if(ndbg.eq.8)then
+           write(output,9005)timehy
+9005       format(' COUPLE entered; timehy=',e14.8)
+           end if
+       nflagq = 0
+       qd = 0.0
+c  Zero arrays that at each time step get fed into relap5 energy terms.
+       call cour5z (ncevr5, a(ivcnpt), a(iqcopt), a(iqwcpt), a(igmcpt))
+c
+       if (ncpow .eq. 0.or.ncpow.eq.3) then
+c  Power defined in slumping material.
+         call egen1(a(i27),a(i28),a(i29),a(inetco),a(i107),a(i108),
+     &   a(i8),a(n20),a(i20),a(i21),a(n103),a(iratpo),a(i6),a(i7),
+     &   a(iptiel),a(iptjel),a(ipteij),a(i105),ncslp)
+       elseif (ncpow.lt.3) then
+c  Calculate power as determined by associated Scdap components.
+         call tcspow (a(i27), a(n103), a(i100), a(iratpo),
+     &   a(iwurce), a(iwuoce), a(iwalce), a(i107),
+     &   a(i108), a(iptspd), a(iptsmx), a(i8), numnp, numel)
+       endif
+c
+c      if ncslp=1, then slumping this time step, ncslp=0=no slumping
+c
+c   Get masses of u, uo2, and al in elements.
+c
+       if (.not.scntrl(13) .and. npp.eq.0) then
+         call calmas (a(iwurce), a(iwuoce), a(iwalce), sumal, sumuo2)
+       endif
+c
+       if (ncslp.ne.0) then
+c  New coding to account for new material being transported to the
+c  various elements.
+         call mupdat(a(i74),a(i76),a(i78),a(i80),a(i82),a(i84),a(i86),
+     &   a(i88), a(iptalf), a(iptlif), a(iptcdf), a(iptsif),
+     &   a(i70),a(i100),wsltot,porave,af,tave,a(i105),a(i8),
+     &   a(i6),a(i7),a(i102),a(i103),a(i72),pdmave,
+     &   a(i107),a(i108),powave,a(n100),a(i109),a(i110),a(i111),rhg,
+     &   cpg, a(i112), a(iptspd), a(iptsmx), a(ilayer), a(inelms),
+     &   a(iptspl), a(iratpo))
+c  Update power to account for relocated material.
+         call egen2(a(i8), a(i107), a(i27), a(i28), a(i29), a(n20),
+     &   a(n103), a(i110), a(iratpo))
+       endif
+c
+c  If nstslp=0, then slumped material is solid; nstslp=1=liquid.
+       if (icoup.lt.2 .and. idhint.gt.0) go to 700
+       if ((icoup.lt.2. .or. nslph.eq.-1) .and. idhint.eq.0) then
+c  Turn off until material relocation the convective heat transfer
+c  at nodes that are located in fluid field.
+         call dhcoef (a(i40),a(i41),a(i42),a(i43),a(i44),a(i51),a(i6),
+     &   a(i7),a(i8),a(i105),a(i74),a(i76),a(i78),
+     &   a(i80),a(i82),a(i84),a(i86),a(iptalf),a(iptlif),
+     &   a(iptcdf),a(iptsif),a(iptiel),a(iptjel),a(ipteij),a(iptfml),
+     &   a(i22),a(iptmet),a(i108),a(i107),a(iptihs),a(iptmlt),
+     &   a(iptars), a(ipthtm), a(ipttsm), a(idetop),a(inussn),a(iratpo),
+     &   a(ihtcto),a(i113),a(i115),ncslp)
+         idhint = 1
+         go to 700
+       endif
+c
+       if (voidfr.lt.0.9999) then
+         heigti = height - dh
+c  tq=total power in debris bed in spherical lower head (w).
+cc  (rjw) This call does not seem to do anything except cause a stop.
+cc       call bedflx (a(i27), a(n103), heigti, tbflx1, tbflx2, tq,
+cc   &   a(i105), a(i8), a(i107), a(i108),a(iratpo))
+c
+c  Determine if debris bed is quenched or dry using Lipinski zero
+c  degree dryout model. If quenched we will set the temperature of all
+c  porous material to the saturation temperature otherwise it will be
+c  assumed that the debris bed is dry and all the internal heat
+c  generation goes into heating the bed.
+c  Note: dryout correlation uses porosity of last material slumped,
+c  not an average for the whole debris bed.
+c
+c  Since output of dryout heat flux is not being applied, cancel call
+c  to calculate the dryout heat flux and instead set it to dummy value.
+cljs To avoid always setting temperature of debris to tsat in tpgset for
+cljs of user defined debris breakup, need to set qd to 0.0 always.
+cljs     qd=1.e+6
+         qd=0.0
+c    voidfr = volume fraction of vapor phase
+           if(voidfr.lt.0.8)then
+           qd=1.e+6
+           else
+           qd=0.0
+           end if
+c***     call ddryot (rhg,rhl,amug,amul,hg,hl,porave,pdmave,press,
+c***     heigti,qd)
+         if (nobrok.eq.1 .or. nobrok.eq.2) qd = 0.0
+         nocalc = 0
+       else
+         nocalc = 1
+       endif
+c
+      stmass = 0.0
+c  Start if block B-B.
+      if (nocalc .eq. 0) then
+c***  if(tbflx1.lt.qd) then
+c  Note. Above line should replace line below when in event of bed power
+c  greater than dryout heat flux the code has capability to partition
+c  bed into two parts, an upper part in which vapor generation is taking
+c  place and heat input to vapor generation equals the dryout heat flux,
+c  and a lower part that is not penetrated by liquid water.  Until this
+c  extension is made, any bed with porosity and water present is best
+c  modeled as being quenched.
+c  Start if block A-A.
+       if (qd .gt. 1.0) then
+         if (nflagq.le.0 .or. ncslp.ne.0) nflagq = 1
+c  Call subroutine that calculates vapor generation internal to debris
+c  region.
+         call dbvpgn(a(i40), a(i105), a(i8), a(i107), a(ivcnpt),
+     &   a(iqcopt), a(iqwcpt), a(igmcpt), a(iratpo), a(inodpt), a(i70),
+     &   a(itsink))
+         nunqsw=1
+         go to 700
+       endif
+c  Endif block A-A.
+      endif
+c  End if block B-B.
+c      iflagc is set by input for convectset.
+        if(iflagc.eq.1) then
+          call dhcoef(a(i40),a(i41),a(i42),a(i43),a(i44),a(i51),a(i6),
+     # a(i7),a(i8),a(i105),       a(i74),a(i76),a(i78),
+     # a(i80),a(i82),a(i84),a(i86),a(iptalf),a(iptlif),
+     # a(iptcdf),a(iptsif),a(iptiel),a(iptjel),a(ipteij),a(iptfml),
+     # a(i22),a(iptmet),a(i108),a(i107),a(iptihs),a(iptmlt),
+     # a(iptars), a(ipthtm), a(ipttsm), a(idetop),a(inussn),a(iratpo),
+     # a(ihtcto),a(i113),a(i115),ncslp)
+        endif
+  693   continue
+c
+  700 continue
+c     call routine to compute aluminum-uranium oxidation for debris
+c     bed.
+      if(.not.scntrl(13))then
+       if (npp.eq.0 .and. sumal.gt.1.0e-3) then
+       call oxdebr (a(i8), a(iptihs), a(iptgav),   a(i105),
+     #         a(idetop), a(iptiel), a(iptjel), a(ipteij),    a(i22),
+     #           a(i108),   a(i100),     a(i7),    a(i74),    a(i76),
+     #            a(i78),    a(i80),    a(i82),    a(i84),    a(i86),
+     #         a(iptalf), a(iptlif), a(iptcdf), a(iptsif), a(iwurce),
+     #         a(iwuoce), a(iwalce), a(ipwxl2),
+     #         a(ipexlm), a(iph2lm), a(ipoxth),     dtcpl,   a(i107),
+     #            a(i70),     a(i6),
+     #            neltop,     ncev,     numel,       maxj,    ncevr5,
+     #               npp                                            )
+       endif
+      end if
+c
+c
+      if(ifluid.eq.0) go to 19
+c  Velocity section.
+      if(ivsol.eq.0.and.istep.gt.1) go to 20
+      if(ivsol.eq.1.and.istep.gt.1) go to 21
+c  Obtain velocity solution.
+      call poten(a(i8),fa(ixpc),a(i6),a(i7),a(i10))
+      call vbnd(a(m1),a(m2),a(m3),a(m6),a(m7),fa(ixpc),a(i20),a(i21))
+      eps=1.e-15
+      call gelb(a(m7),fa(ixpc),numnp,1,mud,mld,eps,ier)
+      if(ier .lt. 0) then
+      write (output,3000) ier, numnp, mud, mld
+ 3000 format('0**** fatal **** subr. gelb - ier, numnp, mud, mld =',4i5)
+      write(output,3005)timehy,heigti
+3005  format(' COUPLE model, fatal error in matrix solver; time=',
+     & e12.6,' s, debris height=',e10.4,' m')
+      stop 'couple-1'
+      end if
+      call vrvz(a(i8),a(m8),a(m9),a(i6),a(i7),a(m7),a(i10),numel)
+   21 continue
+c     scale velocity solution
+      call scalev(time,numel,numvt,a(i8),a(m8),a(m9),a(m1),a(m2),a(m3),
+     *            a(i20),a(i21),a(i10),a(m10))
+      call vnode(numnp,numel,a(m8),a(m9),a(m14),a(m15),a(m12),a(m13),
+     *           a(i8))
+   20 continue
+   19 continue
+c     solve non-linear problem by successive aproximation
+   80 lck=0
+      do 81 i=1,numnp
+   81 tc(i) = tz(i)
+      nnli=n380
+      do 800 nnn=1,nnli
+      niter=nnn
+c    After first iteration, update rate of change of temperature
+c    at each node.
+        if(nnn.ge.2)then
+        do796i=1,numnp
+        a(i115+i-1)=(tz(i)-tlast(i))/dt
+796     continue
+        end if
+c     write (output,1111) nnli,niter
+c     form system matrices
+c***********************************************************************
+c     form total conductance matrix
+c***********************************************************************
+       call cnduct(a(i8),a(i9),a(i22),fa(ixpc),a(i6),a(i7),a(i5),a(i20),
+     * a(i21),a(n100),a(n102),a(n20),a(m8),a(m9),a(i10),
+     * a(i70),a(i72),a(i74),a(i76),a(i78),a(i80),a(i82),a(i84),
+     # a(i86), a(iptalf), a(iptlif), a(iptcdf), a(iptsif), a(i99),
+     # rhg, cpg, tkg, a(i109), a(iptkfz), a(iptkfr), a(iptmlt),
+     # a(iptmdt), a(iptfml), a(ipthfs), a(i107), a(i108), a(n3),
+     # a(n4),a(iptiel),a(iptjel),a(ipteij),a(i105),a(i113),a(i115),
+     # pgas,ncslp)
+       call bound (a(i61), a(i62), a(n132), a(i60), a(i20), a(i43),
+     * a(i44),a(i41),a(i42),a(i40),a(i27),a(n103),a(i48),a(i49),a(i46),
+     * a(i47),a(i45),fa(ixpc),a(n102),a(i21),a(i22),a(i51),a(i50),
+     * a(m1),a(m2),a(m3),a(m4),a(m5),a(m6),a(i5),a(m14),a(m15),
+     * a(ir5pt),a(i8))
+c***********************************************************************
+c     solve for temperatures
+c***********************************************************************
+      if(rlxn.eq.1.0) go to 802
+c     insert for very non-linear problems
+c     makes the successive approximation of such
+c     problems more stable
+      do 803 i=1,numnp
+      j=n150+i-1
+  803 a(j)=tz(i)
+  802 continue
+      eps=1.e-15
+       call gelb(a(n102),fa(ixpc),numnp,1,mud,mld,eps,ier)
+      if(ier .lt. 0) then
+      write (output,3000) ier, numnp, mud, mld
+      stop 'gelcouple-2'
+      else if (ier .gt. 0) then
+      write (output,3010) ier,nnn
+ 3010 format('0**** warning **** subr. gelb - ier, nnn =',2i5)
+      end if
+      do 3001 i=1,numnp
+      j1=i22+i-1
+      j2=n102+i-1
+ 3001 a(j1)=a(j2)
+      if(itran.eq.0 .and. numrc.eq.0) go to 810
+      icout = 0
+      call check(lck,icout,a(i22),a(n101))
+      if(lck.eq.0)go to 810
+      if(rlxn.eq.1.0) go to 804
+      do 801 i=1,numnp
+      j=n150+i-1
+  801 tz(i)=rlxn*tz(i)+rlxo*a(j)
+  804 continue
+  800 continue
+  810 continue
+       call tgpset(a(i40),a(i41),a(i42),a(i43),a(i44),a(i51),a(i6),
+     # a(i7),a(i8),a(i105),       a(i74),a(i76),a(i78),
+     # a(i80),a(i82),a(i84),a(i86),a(iptalf),a(iptlif),
+     # a(iptcdf),a(iptsif),a(iptiel),a(iptjel),a(ipteij),a(iptfml),
+     # a(i22),a(iptmet),a(i108),a(i107),a(iptihs),a(iptmlt),
+     # a(iptars), a(ipthtm), a(ipttsm), a(idetop),a(inussn),a(iratpo),
+     # tvapor,tave,a(i111),a(i70),tsat,qd,ncslp)
+c      update arrays storing heat transferred to the fluid
+       call couqot(a(i22), a(i51), a(i40), a(ivcnpt), a(iqcopt),
+     # a(iqwcpt), a(igmcpt), a(itsink), a(ihtcto),
+     # a(i107), porave, pdbtot, a(i108), a(i90), a(iratpo), a(i8),
+     # a(i27), a(n103), a(iptiel), a(iptjel), a(ipteij))
+c      calculate fission product - aerosol transport from debris bed
+c      to relap5 volume and between couple elements
+c
+       if (nspdeb .gt. 0) then
+          call debfpr (a(i8), a(iptihs), a(iptspl), a(iptfpv),
+     *                 a(iptgav), a(  i105), a(idetop), a(iptiel),
+     *                 a(iptjel), a(ipteij), a(   i22),     dtcpl,
+     *      a(  i108), a(iptspd), a(iptsmx), a( ipafp), a( ipbfp),
+     *                 a( iptfp), a( ipxfp), a(inussn),    neltop,
+     *             nspdeb,  ncev,     numel,      maxj,    ncevr5,
+     *         iptfpv, iptgav, a(i100), a(i7), a(iptnbu),
+     *         a(iptsif), npp )
+       endif
+c
+      if (ifluid .ne. 0) then
+c       calculate beta array.
+        do 23 n=1,numel
+        vr=a(m8+n-1)
+        if (vr .ne. 0.0) then
+          vz=a(m9+n-1)
+          a(i9+n-1)=atan2(vz,vr)
+        end if
+   23   continue
+      end if
+c
+      do 61 i=1,numnp
+c   store final rate of change of temperatures.
+      a(i115+i-1)=(tz(i)-tlast(i))/dt
+   61 tlast(i)=tz(i)
+      do65n=1,numel
+c     store for next time step the start of time step thickness of
+c     crust.
+      a(iptmdt+n-1)=a(iptfml+n-1)
+65    continue
+c
+c
+      return
+      end
+*endif

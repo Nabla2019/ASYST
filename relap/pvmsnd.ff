@@ -1,0 +1,145 @@
+*mlist
+       subroutine pvmsnd
+c
+c  Sends data to companion code.
+c
+c  Cognizant engineer: rjw.
+c
+*if def,pvmcoupl
+c
+       use tstpctc
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'ufiles.h'
+       include 'r5pvmcp.h'
+       include 'pvmvr5.h'
+c  Local variables.
+       integer info,msgtag,idx,idx1,msgs,msgr,j,j1,i,ii,
+     &  offs,offs3
+       real*8 grab
+       real dmd1,dmd2,fq
+      idx = filndx(31)
+      msgs = nr5ccp(idx)
+      msgr = nr5ccp(idx+1)
+      offs = nr5ccp(idx+2)
+      idx1 = idx + offs
+c
+c  If chdprc = 0, this is the RELAP5 master process
+c  If timeho = -1, this is the first time through coding
+c
+      if (chdprc .eq. 0 .and. timeho .eq. -1.0)  then
+c
+c   Sort Data to be Sent by message tag
+c
+      if (msgs .gt. 0) then
+         do 1 i = 0,msgs
+            nr5cst(i)=i
+   1     continue
+            nr5cst(msgs+1)=1
+         do i = 2,msgs
+            do ii = i-1,1,-1
+               j = idx1+(nr5cst(ii)-1)*10
+               j1 = idx1+(nr5cst(ii+1)-1)*10
+               if (nr5cmt(j1) .lt. nr5cmt(j)) then
+                  j = nr5cst(ii)
+                  nr5cst(ii) = nr5cst(ii+1)
+                  nr5cst(ii+1) = j
+               endif
+            enddo
+         enddo
+      endif
+c
+c   Start and End Times
+      call pvmfinitsend(1,info)
+      call pvmfpack(6,timehy,1,1,info)
+      call pvmfpack(6,tstpctc(curclm)%tspend,1,1,info)
+      call pvmfsend(chdtid,0,info)
+      call pvmfxrecv(chdtid,0,info)
+c
+c   Send I/O information
+      call pvmfinitsend(1,info)
+      call pvmfpack(3,msgs,1,1,info)
+      call pvmfpack(3,msgr,1,1,info)
+      call pvmfpack(3,offs,1,1,info)
+      do i = 0,offs+1
+         call pvmfpack(6,fr5cfq(idx+i),1,1,info)
+      enddo
+      call pvmfsend(chdtid,1,info)
+      call pvmfxrecv(chdtid,1,info)
+      if (pvmerr .lt. 0) return
+c
+c   Send labels and message tag info
+      if (msgs .gt. 0) then
+         do i = 1,msgs
+            j = nr5cst(i)-1
+            call pvmfinitsend(1,info)
+            call pvmfpack(6,ar5ctb(idx1+10*j+2),1,1,info)
+            call pvmfpack(3,nr5ctb(idx1+10*j+2),1,1,info)
+            call pvmfpack(6,ar5ctb(idx1+10*j+4),1,1,info)
+            call pvmfpack(3,nr5ctb(idx1+10*j+4),1,1,info)
+            call pvmfpack(3,nr5cmt(idx1+10*j),1,1,info)
+            call pvmfsend(chdtid,2,info)
+            call pvmfxrecv(chdtid,2,info)
+            if (pvmerr .lt. 0) return
+         enddo
+      endif
+      if (msgr .gt. 0) then
+         do i = 1,msgr
+            j = msgs + i - 1
+            call pvmfinitsend(1,info)
+            call pvmfpack(6,ar5ctb(idx1+10*j+2),1,1,info)
+            call pvmfpack(3,nr5ctb(idx1+10*j+2),1,1,info)
+            call pvmfpack(6,ar5ctb(idx1+10*j+4),1,1,info)
+            call pvmfpack(3,nr5ctb(idx1+10*j+4),1,1,info)
+            call pvmfpack(3,nr5cmt(idx1+10*j),1,1,info)
+            call pvmfsend(chdtid,3,info)
+            call pvmfxrecv(chdtid,3,info)
+            if (pvmerr .lt. 0) return
+         enddo
+c
+c    Initialize variable used in modifying tmdpvol and tmdpjun
+c
+         do 8 i=1,msgr
+            j = idx1 + (msgs + i - 1)*10
+            recvar(i) = fa(filndx(nr5cin(j)) + nr5cin(j+1))
+   8     continue
+      endif
+      endif
+c
+c   Manage time dependent I/O frequency
+      offs3 = offs/2
+      if(timehy .gt. fr5cfq(idx+1)) then
+         do i=0,offs3
+            fr5cfq(idx+i*2) = fr5cfq(idx+(i+1)*2)
+            fr5cfq(idx+i*2+1) = fr5cfq(idx+(i+1)*2+1)
+         enddo
+      endif
+c
+c   Check if it is time to send data to the coupled code
+c
+      fq = fr5cfq(idx)
+      if (fq .eq. 0.0) fq = dthy
+      dmd1 = mod(timehy,1.000001*fq)
+      dmd2 = mod(timehy+dthy,1.000001*fq)
+      if(dmd2 .lt. dmd1 .or. dmd1 .eq. 0.0)
+     &  then
+c
+c   Send msgs variable data
+      if(msgs .gt. 0) then
+         do i=1,msgs
+            j = nr5cst(i)-1
+            msgtag = nr5cmt(idx1+10*j)
+            grab = fa(filndx(nr5cin(idx1+10*j)) + nr5cin(idx1+10*j+1))
+            call pvmfinitsend(1,info)
+            call pvmfpack(6,grab,1,1,info)
+            call pvmfsend(chdtid,msgtag,info)
+            call pvmfxrecv(chdtid,msgtag,info)
+            if (pvmerr .lt. 0) return
+         enddo
+      endif
+      endif
+*endif
+      return
+      end

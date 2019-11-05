@@ -1,0 +1,872 @@
+*mlist
+       subroutine trnset
+*in32 lvjun
+*in32 lvvol
+*in32end
+!
+!  Protects and checks coding for transient and steady state advance-
+!  ment, load required files from disk, computes indexes of actual loc-
+!  ations for component blocks, calls subroutines to acquire matrix
+!  solutions space and controls for loading matrix, and calls subroutine
+!  to release excess space.
+!
+!  Cognizant engineer: rjw
+!
+       use gentblc
+       use invhtb
+       use invtbl
+       use lpdatc
+$if def,rk3d,1
+       use rkinc
+       use sscntrc
+       use tdpptr
+       use tstpctc
+       use usrvarc
+       implicit none
+       include 'fast.h'
+       include 'scntl.h'
+       include 'cpmdat.h'
+       include 'cmpdac.h'
+       include 'cmpdat.h'
+       include 'cmpdtv.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fpfast.h'
+       include 'htrflb.h'
+       include 'htscr.h'
+       include 'htsrcm.h'
+       include 'radhtc.h'
+       include 'jundat.h'
+       include 'lcntrl.h'
+       include 'levtbl.h'
+       include 'lvectr.h'
+       include 'miedtc.h'
+       include 'przdat.h'
+       include 'pumpblk.h'
+       include 'rflhtc.h'
+       include 'rkinc.h'
+       include 'k3point.h'
+       include 'scrtch.h'
+       include 'stcblk.h'
+       include 'trpblk.h'
+       include 'turbin.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'coupl.h'
+       include 'iparm.h'
+!
+!  Local variables.
+       integer nd,lls,ii
+       integer lvjun(l_),lvvol(l_)
+       equivalence (lvjun(1),ia(1)),(lvvol(1),ia(2))
+       integer i,idxo,is,ivb,ix,j,jo,k,kx,l,lcontg,lics,lijs,
+     & livs,ll,ls,lv,lx,m,ms,n,nj,nv,jl,levsts
+       real ftbnid
+       integer, allocatable :: ntdpvst(:)
+       logical ldo
+!dbg,4
+       real conv
+       integer num,pckcod(2)
+       logical error
+       character alph*8,labl*64
+!
+       mmeshz = 0
+       mesh4 = 0
+c  Move thermodynamic property files to low memory.
+       if (filid(6) .ne. 0.0) call ftbsft (filid(6),filsiz(6),2,
+     & filndx(6))
+c
+       lhtsol = max(iplotlen+1,filsiz(12))
+$if def,selap,1
+       if (scntrl(1) .and. ncpmsh.gt.0) lhtsol = max(lhtsol,mmcond)
+$if def,npa,1
+       if (iand(print,32) .ne. 0) lhtsol = max(lhtsol,iplotlen+500)
+       filflg(12) = ior(filflg(12),1)
+       call fmvlwr
+c  Set control variable index for time step limiting.
+       if (tspctr(1) .ne. 0) tspctr(2) = tspctr(2) + filndx(27)
+c  Set system indexes.
+       if (nloops .ne. 0.0) then
+         lics = filndx(3) - lpdat(1)%lic
+         livs = filndx(4) - lpdat(1)%liv
+         lijs = filndx(5) - lpdat(1)%lij
+         levsts = filndx(43) - lpdat(1)%levstk
+         do is = 1,nloops
+           lpdat(is)%lic = lpdat(is)%lic + lics
+           lpdat(is)%liv = lpdat(is)%liv + livs
+           lpdat(is)%lij = lpdat(is)%lij + lijs
+           lpdat(is)%levstk = lpdat(is)%levstk + levsts
+         enddo
+       endif
+c  Set level stack indices.
+       if( filndx(43) .ne. 0.0 ) then
+         do is = 1,nloops
+           ll = lpdat(is)%levstk
+           if( levskn(ll).gt.0 ) then
+           do ls = 1,levskn(ll)
+             levskh(ll) = levskh(ll) + livs
+             if( levskl(ll) .ne. 0 ) then
+               levskl(ll) = levskl(ll) + livs
+             endif
+             if( levska(ll) .ne. -1 ) then
+               levska(ll) = levska(ll) + levsts
+             else
+               levska(ll) = 0
+             endif
+             if( levskb(ll) .ne. -1 ) then
+               levskb(ll) = levskb(ll) + levsts
+             else
+               levskb(ll) = 0
+             endif
+             ll = ll + levskp
+           enddo
+c  End of stack loop for this system.
+           endif
+         enddo
+c  End of system loop.
+       endif
+c  Set component, volume, and junction loop parameters.
+       if (filid(3) .eq. 0.0) go to 70
+       ivb = filndx(4) - ivskp
+c  Sets indexes in component block.
+       i = filndx(3)
+       do j = 1,ncmps(i)
+         if (cmptyp(i).eq.2 .or. cmptyp(i).eq.9) then
+           if (ncttrp(i) .ne. 0) ncttrx(i) = ncttrx(i) + filndx(18)
+           if (nctpc(i) .ne. 0) nctpc(i+1) = nctpc(i+1) +
+     &     filndx(nctpc(i))
+         elseif (cmptyp(i) .eq. 12) then
+           if (vlvnm(i) .eq. 2) then
+             vlvtrp(i+1) = vlvtrp(i+1) + filndx(18)
+           elseif (vlvnm(i) .eq. 4) then
+             opntrp(i+1) = opntrp(i+1) + filndx(18)
+             clstrp(i+1) = clstrp(i+1) + filndx(18)
+           elseif (vlvnm(i) .eq. 5) then
+             clstrp(i+1) = clstrp(i+1) + filndx(27)
+           endif
+         elseif (cmptyp(i) .eq. 4) then
+           if (iputrp(i) .ne. 0) iputrp(i+1) = iputrp(i+1) + filndx(18)
+           if (ipuctr(i) .ne. 0) ipuctr(i+1) = ipuctr(i+1) + filndx(18)
+           if (ipuspi(i).ne.0 .and. iand(cmpopt(i),16384).eq.0) then
+             m = ipuspi(i+1) + filndx(3)
+             if (ipmvtr(m) .ne. 0) ipmvtr(m+1) = ipmvtr(m+1) +
+     &       filndx(18)
+             if (ipmvpc(m) .ne. 0) ipmvpc(m+1) = ipmvpc(m+1) +
+     &       filndx(ipmvpc(m))
+           endif
+         elseif (cmptyp(i) .eq. 14) then
+           if (turctr(i) .ne. 0) turctr(i+1) = turctr(i+1) +
+     &     filndx(18)
+         elseif (cmptyp(i) .eq. 17) then
+           przlln(i) = filndx(4) + (przlln(i)-1)*ivskp
+           srgjun(i) = filndx(5) + (srgjun(i)-1)*ijskp
+           l = i
+           do m=1,prznds(i)
+             przvnx(l) = filndx(4) + (przvnx(l)-1)*ivskp
+             przjnx(l) = filndx(5) + (przjnx(l)-1)*ijskp
+             l = l + 2
+           enddo
+         endif
+         i = i + cmplen(i)
+       enddo
+       i = filndx(4)
+       k = 0
+       do m = 1,nvols(i)
+         k = k + 1
+         vctrln(i) = k
+         i = i + ivskp
+       enddo
+c  Set indexes in ij1-ij2 in junction block.
+       j = filndx(5)
+cdir$ ivdep
+       do m = 1,njuns(j)
+         ij1nx(j) = ij1vn(j)*ivskp + ivb
+         ij2nx(j) = ij2vn(j)*ivskp + ivb
+         j = j + ijskp
+       enddo
+c  Set indexes in inverted junction block.
+       l = 1
+       i = filndx(4)
+       j = filndx(5)
+       k = filndx(3)
+       jo = filndx(5) - invofs
+       invofs = filndx(5)
+       do n = 1,ncmps(k)
+         do nj = 1,njc(k)
+           jcnfnd(j) = k
+           j = j + ijskp
+         enddo
+         do nv = 1,nvc(k)
+           vcnfnd(i) = k
+           invfnd(i) = l
+           if (invcnt(i) .ne. 0) then
+             do jl = 1,invcnt(i)
+               invj(l)%invvnx = invj(l)%invvnx + jo
+               l = l + 1
+             enddo
+             if (jjet(i) .gt. 0) jjet(i) = jjet(i) + jo
+           endif
+           i = i + ivskp
+         enddo
+         k = k + cmplen(k)
+       enddo
+c  Set indexes in inverted heat structure block.
+       if (filid(8) .ne. 0.0) then
+         jo = filndx(8) - invhos
+         invhos = filndx(8)
+       endif
+       do l = 1,invhno
+         invh(l)%insrft = invh(l)%insrft + jo
+         invh(l)%inhtno = invh(l)%inhtno + jo
+         invh(l)%inhtns = invh(l)%inhtns + jo
+       enddo
+c  Set up indices for pressurizer related pointers.
+       i = filndx(3)
+       lp41: do l = 1,ncmps(i)
+         if (cmptyp(i) .eq. 17) then
+           j = filndx(5)
+           do k = 1,njuns(filndx(5))
+             if (junno(j) .eq. srgjun(i)) then
+               srgjun(i) = j
+               cycle lp41
+             endif
+             j = j + ijskp
+           enddo
+         endif
+         i = i + cmplen(i)
+       enddo lp41
+!  Set up indexes for time dependent volume and junction components
+!  and only those with more than one set of data by allocating largest
+!  possible array, scanning for the time dependent volumes and
+!  junctions, then moving and found indexes to correct sized array.
+       ntdpvsn = 0
+       allocate (ntdpvst(999))
+       i = filndx(3)
+       do j = 1,ncmps(i)
+         if (cmptyp(i).eq.2 .or. cmptyp(i).eq.9) then
+           if (nctble(i) .ne. nctbtn(i)) then
+             ntdpvsn = ntdpvsn + 1
+             ntdpvst(ntdpvsn) = i
+           endif
+         endif
+         i = i + cmplen(i)
+       enddo
+       if (ntdpvsn .ne. 0) then
+         allocate (ntdpvs(ntdpvsn))
+         ntdpvs = ntdpvst(1:ntdpvsn)
+       endif
+       deallocate (ntdpvst)
+c  Scan for accumulators.
+       i = filndx(3)
+       do j = 1,ncmps(i)
+         if (cmptyp(i) .eq. 13) acctrp(i+1) = acctrp(i+1) + filndx(18)
+         i = i + cmplen(i)
+       enddo
+c  Set indexes for heat structures.
+   70  if (filid(8) .ne. 0.0) then
+         ll = 0
+         i = filndx(8)
+         jo = ihtptr(i) + filndx(8)
+         do m = 1,nhtstr(i)
+           j = ihtptr(i) + filndx(8)
+           htopt(j) = iand(htopt(j),not(1))
+           htiscr(j) = ll
+           ll = ll + htnmpt(j)*htscrp + htsxrp
+           do k = 1,2
+             if (htbvc(j+k-1) .gt. 0) htbvo(j+k-1) = htbvo(j+k-1) +
+     &       filndx(4)
+             if (htivfc(j+k-1) .gt. 0) htivfo(j+k-1) = htivfo(j+k-1) +
+     &       filndx(4)
+             if (htivrc(j+k-1) .gt. 0) htivro(j+k-1) = htivro(j+k-1) +
+     &       filndx(4)
+           enddo
+           if (htnusr(j) .gt. 0) then
+             idxo = htgom(j) + filndx(8)
+             htgap(j+1) = htgap(j+1) + filndx(4)
+           endif
+           i = i + 1
+         enddo
+         i = filndx(8)
+         do m = 1,nhtstr(i)
+           jo = ihtptr(i) + filndx(8)
+           k = htnusr(jo)
+           if(k.le.0) go to 150
+           if (htrflg(jo) .ne. 0) then
+             ii = htrfpt(jo) + filndx(32)
+             ll = max(ll,htiscr(jo) + max(iglrfl(ii),htnmpt(jo))*
+     &       (nscra1 + 1) + htnusr(jo) + 1 +
+     &       iglrfl(ii)*htnmpt(jo)*nscra2)
+           endif
+  150      i = i + 1
+         enddo
+         lhtsol = max(lhtsol,ll)
+c  Set indices for reflood calculation.
+         if (filid(32) .ne. 0.0) then
+           nqfmov = 0
+           i = filndx(32)
+           do m = 1,nrflht(i)
+             l = lhtrfl(i) + filndx(8)
+             jo = ihtptr(l) + filndx(8)
+             if (htrflg(jo) .ne. 0) htrflg(jo+1) = htrflg(jo+1) +
+     &       filndx(18)
+             nqfmov = max(nqfmov,htnusr(jo))
+             k = l
+             if (iand(htopt(jo),2048) .eq. 0) then
+               do ll = 1,htnusr(jo)
+                 j = ihtptr(k) + filndx(8)
+                 htopt(j) = iand(htopt(j),not(1))
+                 k = k + 1
+               enddo
+             else
+               do ll = 1,htnusr(jo)
+                 j = ihtptr(k) + filndx(8)
+                 htopt(j) = ior(htopt(j),1)
+                 k = k + 1
+               enddo
+             endif
+             inxrfl(i) = inxrfl(i) + filndx(32)
+             inxrfl(i+1) = inxrfl(i+1) + filndx(32)
+             inxrfl(i+2) = inxrfl(i+2) + filndx(32)
+             inxrfl(i+3) = inxrfl(i+3) + filndx(32)
+             mmeshz = max(mmeshz,iglrfl(i),htnusr(jo))
+             mesh4 = max(mesh4,iglrfl(i)*htnusr(jo))
+             i = i + nhtga
+           enddo
+           mmeshz=mmeshz*(1+nscra1)+1+nqfmov
+           mesh4=mesh4*nscra2
+         endif
+       endif
+c  Set indexes for user-supplied rstplt variables.
+       do i = 1,nusrvar
+         usrvar(i)%nindx(2) = usrvar(i)%nindx(2) +
+     &   filndx(usrvar(i)%nindx(1))
+       enddo
+c  Set indexes for plot variables.
+       do i = 1,nplotrq
+         do m = 1,size(plotrq(i)%pl)
+           plotrq(i)%pl(m)%nindx(2) = plotrq(i)%pl(m)%nindx(2) +
+     &     filndx(plotrq(i)%pl(m)%nindx(1))
+         enddo
+       enddo
+c  Set indexes in reactor kinetics feedback.
+       if (filid(21) .ne. 0.0) then
+$if def,rk3d,1
+       if (.not. pt3dflag) then
+         l = 0
+         if (iand(rkopt(filndx(21)),32) .ne. 0) then
+           l = 8
+           if (iand(rkopt(filndx(21)),16) .ne. 0) l = 16
+         endif
+         lhtsol = max(lhtsol,l,9*rknum(filndx(21)))
+         if (rknsc(filndx(21)) .ne. 0) then
+           jo = rksptr(filndx(21)) + filndx(21)
+           do i = 1,rknsc(filndx(21))
+             if (rknscr(jo) .ge. 1000)
+     &       rknscr(jo+1) = rknscr(jo+1) + filndx(27)
+             jo = jo + 2
+           enddo
+         endif
+         if (rknvfb(filndx(21)) .ne. 0) then
+           jo = rknvfb(filndx(21)+1) + filndx(21)
+           do i = 1,rknvfb(filndx(21))
+             rkvoln(jo+1) = rkvoln(jo+1) + filndx(4)
+             jo = jo + 5
+           enddo
+         endif
+         if (rknsfb(filndx(21)) .ne. 0) then
+           jo = rknsfb(filndx(21)+1) + filndx(21)
+           l = 4
+           if (iand(rkopt(filndx(21)),32) .ne. 0) l = 3
+           do k = 1,rknsfb(filndx(21))
+             if (rkhtno(jo) .ge. 10000) rkhtno(jo+1) = rkhtno(jo+1) +
+     &       filndx(8)
+             jo = jo + l
+           enddo
+         endif
+$if def,rk3d,1
+       endif
+       endif
+c  Set address for trips in general tables.
+       do i = 1,ngtbls
+         if (gen(i)%gttrp(1) .ne. 0) gen(i)%gttrp(2) =
+     &   gen(i)%gttrp(2) + filndx(18)
+       enddo
+c  Set addresses for trip statements.
+       if (filid(18) .ne. 0.0) then
+       l = filndx(18)
+         if (ntrps1(l) .ne. 0) ntrps1(l+1) = ntrps1(l+1) + filndx(18)
+         if (ntrps2(l) .ne. 0) ntrps2(l+1) = ntrps2(l+1) + filndx(18)
+         do i = 1,ntrpnv(l)
+           ntrpc1(l+1) = ntrpc1(l+1) + filndx(ntrpc1(l))
+           ntrpc2(l+1) = ntrpc2(l+1) + filndx(ntrpc2(l))
+           l = l + ntvskp
+         enddo
+         if (ntrpnl(filndx(18)) .ne. 0) then
+           do i = 1,ntrpnl(filndx(18))
+             ntrtr1(l+1) = ntrtr1(l+1) + filndx(18)
+             ntrtr2(l+1) = ntrtr2(l+1) + filndx(18)
+             l = l + ntlskp
+           enddo
+         endif
+       endif
+c  Set address for minor edit saving of information.
+       if (filid(16) .ne. 0.0) then
+         l = filndx(16)
+         j = mipck(l+1)
+         do i = 1,mipck(l)
+           micode(l+1) = micode(l+1) + filndx(micode(l))
+           l = l + j
+         enddo
+         mipck(filndx(16)+2) = mipck(filndx(16)+2) + filndx(16)
+         mipck(filndx(16)+3) = mipck(filndx(16)+3) + filndx(16)
+       endif
+       if (ishft(iroute,-6) .eq. 1) then
+c  Get space and initialize steady state statistics counters.
+         allocate (sscntr(nvols(filndx(4))))
+         i = 1
+         is = filndx(4)
+         do m = 1,nvols(is)
+           sscntr(i)%smxdrh(1) = 0
+           sscntr(i)%smxdrh(2) = 0
+           sscntr(i)%smxrho(1) = 0
+           sscntr(i)%smxrho(2) = 0
+           sscntr(i)%smndrh(1) = 0
+           sscntr(i)%smndrh(2) = 0
+           sscntr(i)%smnrho(1) = 0
+           sscntr(i)%smnrho(2) = 0
+           sscntr(i)%uo = quals(is)*ug(is) + (1.0 - quals(is))*uf(is)
+           rhoo(is) = rho(is)
+           i = i + 1
+           is = is + ivskp
+         enddo
+       endif
+c  Compute list vectors.
+       filid(35) = -ftbnid(1)
+       filsiz(35) = lcontg(1)
+       call ftbrsv (filid(35),filsiz(35),-1,filndx(35))
+       filsiz(35) = filndx(35) + filsiz(35) - 2*max(nvols(filndx(4)),
+     & njuns(filndx(5)))
+c  Loop over systems, setting up list vectors for each system.
+       l = filndx(35)
+       do is = 1,nloops
+         lpdat(is)%llvect = l
+         ll = l
+         if (l + lvskp .ge. filsiz(35)) go to 200
+         do m = 1,lvskp+1
+           lvaccm(l) = 0
+           l = l + 1
+         enddo
+         if (lpdat(is)%licn .ne. 0) then
+c  Search for accumulator components.
+           ls = 0
+           i = lpdat(is)%lic
+           do m = 1,lpdat(is)%licn
+             if (cmptyp(i) .eq. 13) then
+               if (ls .eq. 0) then
+                 lvaccm(ll) = l
+                 l = l + 1
+               endif
+               if (l .ge. filsiz(35)) go to 200
+               lvptr(l) = i
+               l = l + 1
+               ls = ls + 1
+             endif
+             i = i + cmplen(i)
+           enddo
+           if (ls .ne. 0) lvptr(lvaccm(ll)) = ls
+c  Search for pump components.
+           ls = 0
+           i = lpdat(is)%lic
+           do m = 1,lpdat(is)%licn
+             if (cmptyp(i) .eq. 4) then
+               if (ls .eq. 0) then
+                 lvpump(ll) = l
+                 l = l + 1
+               endif
+               if (l .ge. filsiz(35)) go to 200
+               lvptr(l) = i
+               l = l + 1
+               ls = ls + 1
+             endif
+             i = i + cmplen(i)
+           enddo
+           if (ls .ne. 0) lvptr(lvpump(ll)) = ls
+c  Search for separator components.
+           ls = 0
+           i = lpdat(is)%lic
+           do m = 1,lpdat(is)%licn
+             if (cmptyp(i) .eq. 8) then
+               if (ls .eq. 0) then
+                 lvsepr(ll) = l
+                 l = l + 1
+               endif
+               if (l .ge. filsiz(35)) go to 200
+               lvptr(l) = i
+               l = l + 1
+               ls = ls + 1
+             endif
+             i = i + cmplen(i)
+           enddo
+           if (ls .ne. 0) lvptr(lvsepr(ll)) = ls
+c  Search for valve components.
+           ls = 0
+           i = lpdat(is)%lic
+           do m = 1,lpdat(is)%licn
+             if (cmptyp(i) .eq. 12) then
+               if (ls .eq. 0) then
+                 lvvalv(ll) = l
+                 l = l + 1
+               endif
+               if (l .ge. filsiz(35)) go to 200
+               lvptr(l) = i
+               l = l + 1
+               ls = ls + 1
+             endif
+             i = i + cmplen(i)
+           enddo
+           if (ls .ne. 0) lvptr(lvvalv(ll)) = ls
+c  Search for turbine components.
+           ls = 0
+           i = lpdat(is)%lic
+           do m = 1,lpdat(is)%licn
+             if (cmptyp(i) .eq. 14) then
+               if (ls .eq. 0) then
+                 lvturb(ll) = l
+                 l = l + 1
+               endif
+               if (l .ge. filsiz(35)) go to 200
+               lvptr(l) = i
+               l = l + 1
+               ls = ls + 1
+             endif
+             i = i + cmplen(i)
+           enddo
+           if (ls .ne. 0) lvptr(lvturb(ll)) = ls
+c  Search for jetmixer and eccmix components.
+           ls = 0
+           i = lpdat(is)%lic
+           do m = 1,lpdat(is)%licn
+             if (cmptyp(i).eq.6 .or. cmptyp(i).eq.15) then
+               if (ls .eq. 0) then
+                 lvjtmx(ll) = l
+                 l = l + 1
+               endif
+               if (l .ge. filsiz(35)) go to 200
+               lvptr(l) = i
+               l = l + 1
+               ls = ls + 1
+             endif
+             i = i + cmplen(i)
+           enddo
+           if (ls .ne. 0) lvptr(lvjtmx(ll)) = ls
+c  Search for three dimensional components.
+           ls = 0
+           i = lpdat(is)%lic
+           do m = 1,lpdat(is)%licn
+             if (cmptyp(i).eq.16 .and. iand(cmpopt(i),12).eq.0) then
+               if (ls .eq. 0) then
+                 lv3d(ll) = l
+                 l = l + 1
+               endif
+               if (l .ge. filsiz(35)) go to 200
+               lvptr(l) = i
+               l = l + 1
+               ls = ls + 1
+             endif
+             i = i + cmplen(i)
+           enddo
+           if (ls .ne. 0) lvptr(lv3d(ll)) = ls
+         endif
+c  Search for real volumes.
+         if (lpdat(is)%livn .ne. 0) then
+           i = lpdat(is)%liv
+           ls = 0
+           do m = 1,lpdat(is)%livn
+             if (iand(vctrl(i),1) .eq. 0) then
+               if (ls .eq. 0) then
+                 lvrvol(ll) = l
+                 l = l + 1
+               endif
+               if (l .ge. filsiz(35)) go to 200
+               lvptr(l) = i
+               l = l + 1
+               ls = ls + 1
+             endif
+             i = i + ivskp
+           enddo
+           if (ls .ne. 0) lvptr(lvrvol(ll)) = ls
+c  Search for time dependent volumes.
+           ls = 0
+           i = lpdat(is)%liv
+           do m = 1,lpdat(is)%livn
+             if (iand(vctrl(i),1) .ne. 0) then
+               if (ls .eq. 0) then
+                 lvtvol(ll) = l
+                 l = l + 1
+               endif
+               if (l .ge. filsiz(35)) go to 200
+               lvptr(l) = i
+               l = l + 1
+               ls = ls + 1
+             endif
+             i = i + ivskp
+           enddo
+           if (ls .ne. 0) lvptr(lvtvol(ll)) = ls
+c  Search for volumes with no friction.
+         ldo = .false.
+         lls = l
+         do nd = 0,2
+           lv = l
+           l = l + 1
+           ls = 0
+           i = lpdat(is)%liv
+           do m = 1,lpdat(is)%livn
+             if (iand(imap(i+nd),16384) .ne. 0) then
+               if (iand(imap(i+nd),8192).ne.0 .or.
+     &         iand(vctrl(i),1).ne.0) then
+                 if (ls .eq. 0) ldo = .true.
+                 if (l .ge. filsiz(35)) go to 200
+                 lvptr(l) = i
+                 l = l + 1
+                 ls = ls + 1
+               endif
+             endif
+             i = i + ivskp
+           enddo
+           lvptr(lv) = ls
+         enddo
+         if (ldo) then
+           lvnofr(ll) = lls
+         else
+           l = lls
+         endif
+c  Search for volumes with friction.
+         ldo = .false.
+         lls = l
+         do nd = 0,2
+           lv = l
+           l = l + 1
+           ls = 0
+           i = lpdat(is)%liv
+           do m = 1,lpdat(is)%livn
+             if (iand(imap(i+nd),16384) .ne. 0) then
+               if (iand(imap(i+nd),8192).eq.0 .and.
+     &         iand(vctrl(i),1).eq.0) then
+                 if (ls .eq. 0) ldo = .true.
+                 if (l .ge. filsiz(35)) go to 200
+                 lvptr(l) = i
+                 l = l + 1
+                 ls = ls + 1
+               endif
+             endif
+             i = i + ivskp
+           enddo
+           lvptr(lv) = ls
+         enddo
+         if (ldo) then
+           lvwifr(ll) = lls
+         else
+           l = lls
+         endif
+         endif
+         if (lpdat(is)%lijn .ne. 0) then
+c  Search for abrupt area change junctions.
+           ls = 0
+           i = lpdat(is)%lij
+           do m = 1,lpdat(is)%lijn
+             if (iand(jc(i),256) .ne. 0) then
+               if (ls .eq. 0) then
+                 lvabrp(ll) = l
+                 l = l + 1
+               endif
+               if (l .ge. filsiz(35)) go to 200
+               lvptr(l) = i
+               l = l + 1
+               ls = ls + 1
+             endif
+             i = i + ijskp
+           enddo
+           if (ls .ne. 0) lvptr(lvabrp(ll)) = ls
+c  Search for horizontal flow junctions.
+           ls = 0
+           i = lpdat(is)%lij
+           do m = 1,lpdat(is)%lijn
+             if (iand(jc(i),65536) .eq. 0) then
+               if (ls .eq. 0) then
+                 lvhzfl(ll) = l
+                 l = l + 1
+               endif
+               if (l .ge. filsiz(35)) go to 200
+               lvptr(l) = i
+               l = l + 1
+               ls = ls + 1
+             endif
+             i = i + ijskp
+           enddo
+           if (ls .ne. 0) lvptr(lvhzfl(ll)) = ls
+c  Search for junction-source loops.
+           i = lpdat(is)%lij
+           ix = filsiz(35)
+           k = lpdat(is)%lijn
+           do m = 1,k
+             lvjun(ix) = 0
+             i = i + ijskp
+             ix = ix + 2
+           enddo
+           jo = 0
+           lvjusr(ll) = l
+           l = l + 1
+  531      lv = l
+           l = l + 1
+           ls = 0
+           ix = filsiz(35)
+           do m = 1,lpdat(is)%livn
+             lvvol(ix) = 0
+             ix = ix + 2
+           enddo
+           ix = filsiz(35)
+           i = lpdat(is)%lij
+           do m = 1,lpdat(is)%lijn
+             if (lvjun(ix) .eq. 0) then
+               kx = filsiz(35) + 2*(ij1vn(i) - lpdat(is)%livnn)
+               lx = filsiz(35) + 2*(ij2vn(i) - lpdat(is)%livnn)
+               if (lvvol(kx).eq.0 .and. lvvol(lx).eq.0) then
+                 lvvol(kx) = 1
+                 lvvol(lx) = 1
+                 lvjun(ix) = 1
+                 k = k - 1
+                 l = l + 1
+                 if (l .gt. filsiz(35)) go to 200
+                 lvptr(l-1) = i
+                 ls = ls + 1
+               endif
+             endif
+             i = i + ijskp
+             ix = ix + 2
+           enddo
+           if (ls .gt. 5) then
+             lvptr(lv) = ls
+             jo = jo + 1
+             if (k .ne. 0) go to 531
+             go to 535
+           else
+             if (k .ne. 0) go to 542
+             if (ls .ne. 0) go to 543
+             go to  535
+  542        ix = filsiz(35)
+             i = lpdat(is)%lij
+             do m = 1,lpdat(is)%lijn
+               if (lvjun(ix) .eq. 0) then
+                 l = l + 1
+                 if (l .gt. filsiz(35)) go to 200
+                 lvptr(l-1) = i
+                 ls = ls + 1
+               endif
+               i = i + ijskp
+               ix = ix + 2
+             enddo
+  543        lvptr(lv) = ls
+           endif
+           go to 536
+  535      if (l .ge. filsiz(35)) go to 200
+           lvptr(l) = 0
+           l = l + 1
+  536      lvptr(lvjusr(ll)) = jo
+         endif
+c  Build list of all junctions.
+         ls = 0
+         i = lpdat(is)%lij
+         do m = 1,lpdat(is)%lijn
+           if( ls.eq.0 ) then
+             lvajun(ll) = l
+             l = l + 1
+           endif
+           lvptr(l) = i
+           l = l + 1
+           ls = ls + 1
+           i = i+ijskp
+         enddo!m
+         if (ls.ne.0) lvptr(lvajun(ll)) = ls
+c  Build list of all volumes.
+         ls = 0
+         i = lpdat(is)%liv
+         do m = 1,lpdat(is)%livn
+           if (ls.eq.0) then
+             lvavol(ll) = l
+             l = l + 1
+           endif
+           lvptr(l) = i
+           l = l + 1
+           ls = ls + 1
+           i = i+ivskp
+         enddo!m
+         if( ls.ne.0 ) lvptr(lvavol(ll)) = ls
+c  Set up space for scratch list vector.
+         lvscr(ll) = l
+         l = l + 1 + max(lvptr(lvavol(ll)),lvptr(lvajun(ll)))
+       enddo
+       filsiz(35) = l - filndx(35)
+       call ftbsft (filid(35),filsiz(35),3,filndx(35))
+       if (filid(40) .ne. 0.0) call ftbsft (filid(40),filsiz(40),2,
+     & filndx(40))
+c  Call subroutine to obtain solution space and set matrix solution
+c  tables.
+       call tsetsl
+       if (filid(27) .ne. 0.0) call tcnvsl
+c  Set scratch space pointers in voldat and jundat blocks.
+       if (filid(4) .ne. 0.0) then
+         ix = ixvf
+         i = filndx(4)
+         do m = 1,nvols(i)
+           vctrls(i) = ix
+           i = i + ivskp
+           ix = ix + scskp
+         enddo
+       endif
+       if (filid(5) .ne. 0.0) then
+         ix = ixvf
+         i = filndx(5)
+         do m = 1,njuns(i)
+           jcnxs(i) = ix
+           i = i + ijskp
+           ix = ix + scskp
+         enddo
+       endif
+c  Set volume and junction flags for use in Godunov method.
+       call  stgodu
+c  Release excess space to system.
+c      if (.not.fail) call ftbrdc
+c  List dynamic storage information.
+   21  if (iand(ihlppr(2),ishft(1,22)).ne.0) then
+       write (output,2004)
+ 2004  format ('0',30x,'List of dynamic storage information for transien
+     &t calculation'/'0 num.    filid  file index   file size')
+       do i = 1,nfiles
+         if (filid(i) .ne. 0.0) then
+           write (output,2005) i,filid(i),filndx(i),filsiz(i)
+         endif
+ 2005  format (i5,f10.0,2i12)
+       enddo
+       call fildmp
+       call dmplst
+       endif
+!dbg,5
+!       alph = 'tempf' 
+!       num =  112030000
+!       call scnreq(1,alph,num,1,pckcod,conv,labl,error)
+!       write (tty,"('conv:',es13.5/'labl:',a/'error:',l5/'pckcod:',2i10)
+!     &") conv,labl,error,pckcod(:)
+c  Reset value of nfluid to zero to force call to stcset before first
+c  steam tables routine call so that the value of the offset index
+c  (ndxstd) will be correct for the transient calculations;  also reset
+c  value of ndxstd.
+       nfluid = 0
+       ndxstd = 50000000
+       return
+c
+  200  write (output,2002)
+ 2002  format ('0******** Insufficient space to hold files needed for tr
+     &ansient solution.')
+  999  fail = .true.
+       go to 21
+       end

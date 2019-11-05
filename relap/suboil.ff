@@ -1,0 +1,95 @@
+*mlist
+       subroutine suboil
+c
+c
+c  Computes heat transfer coefficient from correlations.
+c
+c  Cognizant engineer: rjw.
+c
+       implicit none
+       include 'contrl.h'
+       include 'fast.h'
+       include 'htrcom.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+       real enmin, qnb
+       real peclet,st,numod,encrit,gammul, xvar
+c
+c  Partition heat flux to get direct wall flashing term, Lahey
+c  Mechanistic Model (Proceedings of the Sixth Int. Heat Transfer
+c  Conference, 1, Toronto, Canada, 1978, pp. 293-295.  Uses the
+c  Saha-Zuber correlation for onset on boiling ("Point of Net Vapor
+c  Generation and Vapor Void Fraction in Subcooled Boiling", Proc. of
+c  the 5th Int. Heat Transfer Conf., 4, 1974)
+c  1./0.0065 = 153.85; 1./445.=.0021978
+c  Coding taken from TRAC-B HTCOR subroutine.
+c
+c  Set variables to zero so that debug print uses defined rather than
+c  undefined variables even if the variable is not set otherwise.
+         gammul = 0.0
+c
+         peclet = gabs*htdiam*csubpf(iv)/thconf(iv)
+         numod = qffo*htdiam/thconf(iv)
+         enmin = min(enliq,sathfp)
+         if (peclet .gt. 7.0e4) then
+           st = numod/peclet
+           encrit = sathfp - st*csubpf(iv)*153.85
+         else
+           encrit = sathfp - numod*csubpf(iv)*0.0021978
+         endif
+         if (chngno(65)) then
+c
+c chngno 65
+c Limit Subcooling at which boiling can start
+c
+           encrit = min(encrit, sathfp - 1.e4)
+         endif
+         if (enmin .gt. encrit) then
+             if (chngno(65)) then
+c
+c chngno 65
+c Polynomial Interpolation Function (similiar to CATHARE)
+c
+               xvar = (enmin - encrit)/(sathfp - encrit)
+               gammul = (xvar * (xvar - 2.))**2
+             else
+               gammul = (enmin - encrit)/(sathfp - encrit)
+               gammul = gammul/(1. + rhof(iv)*(sathfp - enmin)/
+     &         (rhog(iv)*hfgp))
+             endif
+           gammul = gammul*htsa*recipv(iv)/max(hfgp,1.e4)
+c  The low value of 1.e4 was chosen based on Helium.
+           if (chngno(65)) then
+c
+c chngno 65
+c Apply Subcooled Boiling Fraction To Nucleate
+c Boiling Heat Flux Only.
+c
+             qnb = htzhft*dtsat
+             gamw = gammul*qnb
+             htgamf = gammul*qnb/max(qffo,1.e2)
+             htgamf = min(htgamf,1.0)
+           else
+             gamw = qffo*gammul
+             htgamf = gammul
+           endif
+         else
+           gamw = 0.0
+           htgamf = 0.0
+         endif
+       if (help .ne. 0) then
+       if( iand(ihlppr(2),ishft(1,1)).ne.0 ) then
+         if( iand(vctrlx(iv),1).ne.0 ) then
+         write (output,5150)
+     &   gamw, gammul, qffo, peclet, numod, enmin, encrit, sathfp
+         endif
+       endif
+       endif
+ 5150  format(3x,'suboil final output :'/ 5x,'gamw',8x,'gammul',11x,
+     & 'qffo',8x,'peclet',9x,'numod',9x,'enmin',8x,'encrit',
+     & 7x,'sathfp'1p/8e14.6)
+       return
+       end

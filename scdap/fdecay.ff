@@ -1,0 +1,135 @@
+*mlist
+*if def,selap
+      subroutine fdecay (ndkset,dtfail,dtdecy,fdkpwr,krap)
+c
+c  fdecay accounts for fission product decay power reduction due
+c  to loss of volatile elements after fuel disruption.
+c
+c  Cognizant engineer: ewc.
+c
+c     calling subroutines:  nheat
+c
+c     input variables                  description
+c        ndkset         decay power set identifier
+c        dtfail         interval between shutdown and fuel failure (s)
+c        dtdecy         decay time for which a decay power correction is
+c                         to be calculated (s)
+c
+c     output variables                 description
+c        fdkpwr        Fraction of decay heat remaining after loss of
+c                      volatile fission products.
+c        krap           index of errors in input
+c
+       implicit none
+*call ufiles
+c
+c  Local variables.
+       integer i,j,krap,ndebug,ndkset,ndkshi,ndkslo,npts
+       real dkdata,dtdecy,dtdkhi,dtdklo,dtfail,faillo,fdkpwr,time,xa,xb,
+     * ya,yb
+      dimension time(25), dkdata(6,25)
+      data(time(i),i=1,25)/1.0000e+1,1.7783e+1,3.1623e+1,5.6234e+1,
+     a 1.0000e+2,1.7783e+2,3.1623e+2,5.6234e+2,1.0000e+3,1.7783e+3,
+     b 3.1623e+3,5.6234e+3,1.0000e+4,1.7783e+4,3.1623e+4,5.6234e+4,
+     c 1.0000e+5,1.7783e+5,3.1623e+5,5.6234e+5,1.0000e+6,1.7783e+6,
+     d 3.1623e+6,5.6234e+6,1.0000e+7/
+      data(dkdata(1,j),j=1,25)/0.716,0.716,0.716,0.716,0.716,0.716,
+     e 0.716,0.716,0.716,0.716,0.717,0.734,0.763,0.793,0.819,0.841,
+     f 0.862,0.881,0.896,0.911,0.928,0.945,0.953,0.951,0.938/
+      data(dkdata(2,j),j=1,25)/0.689,0.689,0.689,0.689,0.689,0.689,
+     g 0.689,0.689,0.689,0.689,0.690,0.707,0.737,0.771,0.801,0.826,
+     h 0.848,0.868,0.886,0.905,0.929,0.955,0.976,0.989,0.991/
+      data(dkdata(3,j),j=1,25)/0.652,0.652,0.652,0.652,0.652,0.652,
+     i 0.652,0.652,0.652,0.652,0.652,0.662,0.686,0.713,0.738,0.758,
+     j 0.773,0.793,0.814,0.837,0.872,0.917,0.956,0.982,0.993/
+      data(dkdata(4,j),j=1,25)/0.641,0.641,0.641,0.641,0.641,0.641,
+     k 0.641,0.641,0.641,0.641,0.641,0.641,0.652,0.674,0.699,0.736,
+     l 0.769,0.813,0.839,0.855,0.880,0.911,0.927,0.932,0.942/
+c
+      ndebug = 0
+c
+      if(ndebug.ne.0) then
+           write (output,601) ndkset, dtfail, dtdecy
+      endif
+c     initialize parameters for input argument range checks
+      npts = 25
+      ndkslo = 1
+      ndkshi = 6
+      dtdklo = 10.0
+      dtdkhi = 1.0e+7
+      faillo = 0.0
+c     input argument checks
+      krap = 0
+      if(ndkset.lt.ndkslo.or.ndkset.gt.ndkshi)  then
+           fdkpwr = 1.0
+           krap = 2
+           go to 40
+      endif
+c
+      if(dtfail.gt.dtdecy)  then
+           fdkpwr = 1.0
+           krap = 2
+           go to 40
+      else if (dtfail.lt.faillo)  then
+           fdkpwr = 1.0
+           krap = 1
+      endif
+c
+c
+      if(dtdecy.lt.faillo)  then
+           fdkpwr = 1.0
+           krap = 2
+           go to 40
+      else if (dtdecy.lt.dtdklo)  then
+           fdkpwr = 1.0
+           krap = 1
+      else if (dtdecy.gt.dtdkhi)  then
+           fdkpwr = 1.0
+           krap = 1
+      endif
+c
+c  evaluate decay power fraction by linear interpolation.
+      if(krap.eq.0)  then
+           if (ndkset.eq.5) then
+                fdkpwr = 1.0
+           else if (ndkset.eq.6) then
+                fdkpwr = 0.0
+           else
+                do 10, i = 1, npts
+                if(dtdecy.eq.time(i)) then
+                     fdkpwr = dkdata(ndkset,i)
+                     go to 20
+                endif
+                if(dtdecy.lt.time(i)) then
+                     xa = time(i-1)
+                     xb = time(i)
+                     ya = dkdata(ndkset,i-1)
+                     yb = dkdata(ndkset,i)
+                     fdkpwr = ya + ((yb-ya)/(xb-xa))*(dtdecy-xa)
+                     go to 20
+                endif
+   10           continue
+   20           krap = 0
+           endif
+      endif
+   40 continue
+c
+c     write warning if serious error detected in input argument list
+      if(krap.eq.2)  then
+           write (output,602) ndkset, dtfail, dtdecy
+      endif
+c     conditionally write output debug information
+      if(ndebug.ne.0) then
+         write (output,603)  krap, fdkpwr
+      endif
+      return
+  601 format(1h ,'fdecay debug information  -  input variables:',
+     a       8x,'ndkset =',i3,8x,'dtfail =',1p,e12.5,8x,'dtdecy =',
+     b       e12.5)
+  602 format(1x,120(1h-)/'   Warning - error in fdecay input variable'
+     a       ,' list:     ndkset =',i3,8x,'dtfail =',1p,e12.5,8x,
+     b       'dtdecy =',e12.5/1x,120(1h-))
+  603 format(1h ,'fdecay debug information  -  output variables:',
+     a       7x,'  krap =',i3,8x,'fdkpwr =',1p,e12.5)
+      end
+*endif

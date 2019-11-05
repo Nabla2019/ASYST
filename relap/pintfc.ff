@@ -1,0 +1,187 @@
+*mlist
+       function pintfc(pvi)
+c
+c
+c  pintfc calculates the difference between heat flux (qfluxo) from
+c  vapor-gas mixture to liquid film and heat fluxv (phiv) from liquid
+c  film to wall for a given pressure pvi.
+c
+c  Cognizant engineer: rjw.
+c
+*in32 ls
+*in32end
+c
+       implicit none
+       real pintfc,pvi
+       include 'contrl.h'
+       include 'comctl.h'
+       include 'fast.h'
+       include 'htrcom.h'
+       include 'htsrcm.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+       real cpfi,direct,dum,filmt,ftr,hdb,hf,hfgi,hshah,hturb,
+     & pratio,qfluxv,quax,refilm,reyi,rhofi,rhogi,rhovb,s(36),
+     & thcofi,tsati,viscfi,viscgi,z
+       integer iones(2)
+c
+       logical erx
+       data iones/1,1/
+c
+czf
+      s(:) = 0.0 
+czf end
+c  Calculate properties at pvi.
+c  (liquiq film - vapor interface)
+       s(2) = pvi
+       s(9) = quals(iv)
+       if (nfluid .eq. 1) then
+         call sth2x2 (fa(ndxstd),s,erx)
+       elseif (nfluid .eq. 2) then
+         call std2x2 (fa(ndxstd),s,erx)
+       endif
+       if (erx) go to 1000
+c
+       rhofi = 1.0/s(11)
+       rhogi = 1.0/s(12)
+       tsati = s(1)
+       hfgi = s(16) - s(15)
+c  thcofi
+       call thcond(nfluid,iones,iones,dum,1,1,
+     & tsati,pvi,rhofi,'liquid',thcofi,erx)
+c  viscfi
+       call viscos(nfluid,iones,iones,1,1,
+     & tsati,pvi,rhofi,tsati,'liquid',viscfi,erx)
+c  viscgi
+       call viscos(nfluid,iones,iones,1,1,
+     & tsati,pvi,rhogi,tsati,'vapor',viscgi,erx)
+       cpfi = s(21)
+c
+c  Condensation heat transfer.
+c  Initialize htc.
+       htcg = 0.0
+       htcnon = 0.0
+       hturb = 0.0
+       qfluxo = 0.0
+       qfluxv = 0.0
+c
+c  Condensation cal. within zbrent in sub. noncnd.
+       if (help .ne. 0) then
+         if (iand(ihlppr(1),ishft(1,22)).ne.0) then
+           if (iand(vctrlx(iv),1).ne.0) then
+             write (output,50) hfgi,rhofi,rhogi,thcofi,
+     &       thcong(iv),viscfi,viscgi,cpfi,csubpg(iv),tempg(iv),
+     &       tempf(iv),hydzc(iv),dl(iv)
+   50  format (5x,'pintfc - hfgi',11x,'rhofi',11x,'rhogi',11x,'thconf',
+     & 8x,'thcong',8x,'viscf',9x,'viscg',11x,'cpfi',/,12x,8es14.6/
+     & 14x,'csubpg',8x,'tempg',9x,'tempf',9x,'elev.chng.',2x,'dl'/
+     & 12x,5es14.6)
+           endif
+         endif
+       endif
+c
+       if (tw .ge. tsati) go to 350
+c
+       if (abs(delgrv) .lt. 0.001) then
+c  Laminar film condensation --- Nusselt ---
+c  Horizontal stratified condensation heat transfer.
+         htcg = 0.296*((rhofi*max((rhofi - rhogi),0.0)*gravcn*
+     &   hfgi*thcofi**3)/(htdiam*viscfi*(max(1.0,(tsati-tw)))))**.25
+       else
+c  Condnsation inside a vertical pipe or plate.
+c  Base it on film thickness to make it a local form
+c  instead of the average value used in MOD3 up to 3.1.1.1
+c  Local Form of Nusselt for Vertical Surfaces.
+c     -  calculate film thickness from film Re.
+c     -  direct is the direction cosine for the gravity vector.
+c     -  it is assumed that a slanted surface is facing up.
+         direct = abs(delgrv/dl(iv1))
+c
+         refilm = abs(gliqa)* htdiam/viscfi
+         filmt = 0.9086*(refilm*(viscfi/rhofi)**2/direct)**0.33333
+c
+c     -  limit film thickness : > 10 microns.
+c
+         filmt = max(1.0e-05,filmt)
+c
+c     -  compute Nusselt HTC.
+         htcg = thcofi / filmt
+c     -  do not allow the HTC to be less than that for laminar flow.
+         htcg = max(htcg,4.36*thcofi/htdiam)
+       endif
+c
+       htcnon = htcg
+c
+c  --- turbulent condensation heat transfer correlation ---
+       if (abs(velg(iv)) .le. .001) go to 200
+c
+c  Turbulent  *** Shah  correlation
+       quax = max(min(quale(iv), 1.0),1.0e-9)
+       reyi = gabs*htdiam/viscfi
+       pr = viscfi*cpfi/thcofi
+       hdb = 0.023*thcofi*reyi**0.8*pr**0.4/htdiam
+       hf = hdb*(1.0 - quax)**0.8
+       z = (pvi/pcrit)**0.4*(1.0/quax - 1.0)**0.8
+       ftr = 1.0
+       if (z.ne.0.0) ftr = 1.0 + 3.8/z**0.95
+       hshah = hf*ftr
+       hturb = hshah
+c
+       if (help .ne. 0) then
+         if (iand(ihlppr(1),ishft(1,22)).ne.0) then
+           if (iand(vctrlx(iv),1).ne.0) then
+             write(output,150) htcg, hturb
+  150  format(14x,'htc horz =',es14.6,'   hturb =',es14.6)
+           endif
+         endif
+       endif
+c
+c   --- take maximum of the two correlation results ---
+c
+c      htcg = max(htcg, hturb)*voidg(iv)
+       htcg = max(htcg, hturb)
+       htcnon = htcg
+c
+  200  qfluxo = htcnon*(tw - tsati)
+c
+       if (incnd .eq. 1) then
+c  Final call to pintfc from noncnd.
+         hcond = htcnon
+         qfluxo = hcond*(tw - tsati)
+       endif
+c  Vapor calculation.
+  350  pratio = (p(iv) - pvi)/(p(iv) - pvblk)
+       pratio = max(pratio,1.0e-9)
+       rhovb = (1.0 - quala(iv))*rhog(iv)
+       qfluxv = -hd*(sathg(iv) - sathf(iv))*rhovb*log(pratio)
+c
+  400  pintfc = qfluxo - qfluxv
+c
+       if (help.ne.0) then
+         if (iand(ihlppr(1),ishft(1,22)).ne.0) then
+           if (iand(vctrlx(iv),1).ne.0) then
+             write(output,2100) p(iv),pvi,pvblk,pratio
+ 2100 format(1h ,10x,'p(iv),pvi,pvblk,pratio ',1p4e15.7)
+             z = tw-tsati
+             write(output,2200) pintfc,qfluxo,qfluxv,z,
+     &       hcond,tw,tsati,rhovb,quala(iv)
+ 2200  format(11x,'pintfc, qfluxo, qfluxv, tw-tsati =',4es15.7/
+     & 11x,'hcond, tw, tsati, rhovb, quala =', 5es15.7)
+           endif
+         endif
+       endif
+c Do not allow condensation when tw>tsat interface.
+       if (tw .gt. tsati) incnd = 2
+       return
+c
+ 1000  continue
+       write (output,2000) pvi
+ 2000  format ('0******** Subroutine sth2x2 returned an error flag for p
+     &vi =',es14.7,'.  Called from pintfc.')
+       pintfc = 0.0
+       return
+       end

@@ -1,0 +1,911 @@
+*mlist
+*if def,selap
+       subroutine rbundl
+*in32 idat
+*in32end
+c
+c  Process input data for scdap bundles.
+c
+c  Cognizant engineer: E. W. Coryell
+c
+       implicit none
+       include 'fast.h'
+       include 'contrl.h'
+       include 'comctl.h'
+       include 'ufiles.h'
+       include 'scddat.h'
+       include 'scntl.h'
+       include 'cora.h'
+       include 'debcom.h'
+       include 'debout.h'
+       include 'farays.h'
+       include 'hardpn.h'
+       include 'intcom.h'
+       include 'matdat.h'
+       include 'miscon.h'
+       include 'ndxara.h'
+       include 'scdout.h'
+       include 'scdpow.h'
+       include 'tblsp.h'
+       include 'scdcom.h'
+       include 'oxairv.h'
+c  Local variables.
+      integer next,where,nfield,idat(6)
+      real uplmt
+      integer knt,knt1,knt2,ik
+cljs  dimensions of l11 and l11b changed from 31 to ndax+6.
+      integer l1(11), l2(8), l3a(10), l3b(16), l3c(8), l3d(8),
+     #  l4(7), l5(17), l6(8), l9(8),
+     #  l10(17), l10b(12), l11(ndax+6), l11a(7), l11b(ndax+6)
+cljs  new for oxidation in presence of air
+      integer l17(14)
+cljs  new for user definition of temperature history of component
+      integer l18(8)
+      integer ndbg
+cljs  new of defining temperature history of a component
+      real rdatv(ndax)
+      character*8 itype
+      equivalence (rdatv(1),idat(1))
+c  inp2  card# card# min argument  max argument 0 1 (int*nwords)
+      data l1  /40000100,0,4,10,0,1,0,0,0,0,0/
+cljs air oxidation
+      data l17 /40000170,0,0,8,0,1,0,0,0,1,1,1,1,0/
+      data l18 /40000180,0,0,2,0,1,0,0/
+      data l2  /0       ,0,2,2,0,1,1,0/
+      data l3a /40000300,0,0,4,0,1,1,1,1,0/
+      data l3b /40000310,0,0,10,0,1,1,1,1,1,1,1,1,1,1,1/                     
+      data l3c /40000320,0,0,2,0,1,1,1/
+      data l3d /40000330,0,0,2,0,1,0,1/
+      data l4  /40000400,0,0,1,0,1,1/
+      data l5  /40000500,0,0,11,0,1,1,1,1,0,0,0,0,0,0,0,0/
+      data l6  /40000600,0,1,2,0,1,-1,0/
+      data l9  /40000900,0,0,2,0,1,1,1/
+      data l10 /40001000,0,0,11,0,1,ndgrid*1/
+      data l10b/0       ,0,6,6,0,1,0,1,1,1,1,0/
+      data l11a/40001100,0,0,1,0,1,0/
+cljs  number of words on next two cards changed from 25 to
+cljs  ndax
+      data l11 /40001101,40001199,0,ndax,0,1,ndax*0/
+      data l11b/40001201,40001299,0,ndax,0,1,ndax*1/
+      ndbg = 1
+        if(ndbg.eq.1)then
+        write(output,9305)
+9305    format(' RBUNDL entered')
+        end if
+c  40000100 card
+      if (.not.scntrl(7)) then
+        write (output,'(10x,a)') 'Global Input Parameters'
+        l1(6) = 1
+        call inp2 (fa(filndx(1)),rdatv,l1)
+        if (l1(6) .eq. 0) then
+          fail = .true.
+        else
+          naz = idat(1)
+          if (naz.lt.2 .or. naz.gt.ndax) then
+            write (output,2030) l1(1),' Range error, number of nodes'
+            write (output,*) 'number of axial nodes read in',naz
+            naz = ndax
+            write(output,*)'number of axial nodes reset to',naz,
+     #       'to allow for further input processing'
+            fail = .true.
+          endif
+          irfld = 1
+          nvirn = idat(3)
+          if (nvirn.lt.1 .or. nvirn.eq.3 .or. nvirn.gt.5 )then
+            fail=.true.
+            write (output,2030)l1(1),' Invalid Reactor Environment'
+          endif
+          cora=.false.
+          if (nvirn .eq. 5 )then
+            cora = .true.
+            nvirn = 1
+          endif
+          if (nvirn .le. 2) call zrdwr
+          ndkset = idat(4)
+          if (ndkset.lt.1 .or. ndkset.gt.6) then
+            fail=.true.
+            write(output,2030)l1(1),' Invalid power history type'
+            write(output,3080)'ndkset',ndkset
+          endif
+          if (l1(6) .ge. 5) then
+            trpfal = idat(5)
+          else
+            trpfal = 0
+          endif
+      endif
+         if(ndbg.eq.1)then
+         write(output,9405)
+9405     format(' RBUNDL; process card 40000170')
+         end if
+cljs  Card 40000170; air oxidation modeling input
+c  40000170 card
+      if(.not.scntrl(7))then
+        nsoxar = 0
+        iopair = 0
+        iopeng = 0
+        fairx1 = 1.
+        onemug = 1.e-6
+        ynlimg=0.1
+        yolimg=1.e-3
+        nobrka=1
+      end if
+      l17(6)=1
+      call inp2(fa(filndx(1)),rdatv,l17)
+          if(ndbg.eq.1)then
+          write(output,9017)l17(6)
+9017      format(' RBUNDL for card 40000170; l17(6)=',i6)
+          end if
+      if(l17(6).lt.0)then
+      fail=.true.
+      else
+c  read in index determning whether Zircaloy in presence of air
+c  oxidation is to be modeled.
+        if(l17(6).gt.0)then
+        nsoxar = idat(1)
+          if(nsoxar.eq.1)then
+          write(output,2035)
+2035      format(/,' modeling of oxidation with PSI models for',
+     &    ' steam and air, ballooning affect on oxide thickness',
+     &    ' taken into account')
+            elseif(nsoxar.eq.2)then
+            write(output,2036)
+2036        format(/,' modeling of oxdiation with PSI models', 
+     &      ' for air and steam, ballooning affect on oxide',
+     &      ' thickness not taken into account')
+            else
+            write(output,2037)
+2037        format(/,' modeling of oxidation of Zircaloy in of',
+     &      ' presence of steam and air with PSI models not turned on')
+            end if
+          end if
+        end if
+c          word 1 processed   
+        if(l17(6).ge.2)then
+        iopair = idat(2)
+        write(output,2039)iopair
+2039    format(/,' selection made of correlations for oxidation',
+     &  ' of Zr in steam or air; iopair = 100k +10l + m =',i3)
+        write(output,2043)
+2043    format('   ',
+     &' k: steam option:')
+        write(output,2045)
+2045    format('   ',
+     &  ' 0=Cathcart-Pawel/Urbanic-Heidrick',
+     &  ' 1=Leistikov-Schanz/Prater-Courtright',
+     &  ' 2=Leistikov',
+     &  ' 3=Sokolov')
+        write(output,2047)
+2047    format('   ',   
+     &  ' l: air option',
+     &  ' 0=Hofmann-Birchley',
+     &  ' 1(5)=Hayes-Roberson/Leistikov-Berg (NUREG1) (Birchley)',
+     &  ' 2(7)=Powers (NUREG2) (Birchley)')
+        write(output,2049)
+2049    format('   ',
+     &  ' 3(8) = Melcor (Birchley',
+     &  ' 4(9) = Mozart (Birchley',
+     &  ' m: oxygen',
+     &  '  0 = Hofmann')
+        else
+        write(output,2051)
+2051    format(' default correlations applied for',
+     &  ' oxidation of Zircaloy in presence of air')
+        end if
+c   word 2 processed
+        if(l17(6).ge.3)then
+        iopeng = idat(3)
+        write(output,2052)iopeng
+2052    format(' air oxidation area parameter iopen=',i5,
+     &  ' ; 1 = rco**2 -rci**2, 0 = rco**2, -1 = 3.14*len*2*rco')
+        else
+        write(output,9054)
+9054    format(' default model for area parameter in'
+     &  ' modeling oxidation in air applied')
+        end if
+c   word 3 processed
+        if(l17(6).ge.4)then
+        fairx1=rdatv(4)
+        write(output,2053)fairx1
+2053    format(/, ' tuning parameter of oxidation of Zircaloy in',
+     &  ' air (rate of transition to breakaway) =',f6.3)
+        else
+        write(output,2056)fairx1
+2056    format(' default tuning value =',f6.3)
+        end if
+c   word 4 processed
+        if(l17(6).ge.5)then
+        onemug = rdatv(5)
+        write(output,2055)onemug
+2055    format(/,' small length scale for air oxidation =',e10.4,
+     &  ' m')
+        else
+        write(output,2158)onemug
+2158    format(' small length scale for oxidation=',e10.4,
+     &  ' m')
+        end if
+c    word 5 processed
+        if(l17(6).ge.6)then
+        ynlimg=rdatv(6)
+        write(output,2057)ynlimg
+2057    format(/,' minimum mole fraction nitrogen for breakaway',
+     &  ' oxide layer in presence of air =',e10.4)
+        else
+        write(output,2062)ynlimg
+2062    format(' minimum mole fraction nitrogen for',
+     &  ' breakaway =',e10.4)
+        end if
+c    word 6 processed
+        if(l17(6).ge.7)then
+        yolimg=rdatv(7)
+        write(output,2058)yolimg
+2058    format(/,' minimun mole fraction oxygen for modeling',
+     &  ' oxidation in presence of air =',e10.4)
+        else
+        write(output,9064)yolimg
+9064    format(' minimum mole fraction oxygen for modeling',
+     &  ' oxidation in presence of air =',e10.4)
+        end if
+c    word 7 processed
+        if(l17(6).ge.8)then
+        nobrka = idat(8)
+        write(output,9066)nobrka
+9066    format(' index for control of breakup of oxide layer',
+     &  ' during air oxidation =',i3)
+        else
+        write(output,9068)nobrka
+9068    format(' index for control of breakup of oxide layer',
+     &  ' during air oxidation set to default value of',i3)
+        end if
+c    word 8 processed
+      end if
+c   card 40000180 for reading user-defined temperature history
+c   of a selected component.
+      if(.not.scntrl(7))then
+      ncmths = 0
+      ntbths = 0
+      end if
+      l18(6)=1
+      call inp2(fa(filndx(1)),rdatv,l18)
+        if(ndbg.eq.1)then
+        write(output,9315)l18(6)
+9315    format(' RBUNDL for card 40000180, l18(6)=',i6)
+        end if
+      if(l18(6).lt.0)then
+      fail=.true.
+      else
+        if(l18(6).ge.1)then
+        ncmths = idat(1)
+        write(output,9071)ncmths
+9071    format(/,' temperature history for component number',i3,
+     &  ' is being defined by user input from RELAP5 general',
+     &  ' table')
+        end if
+        if(l18(6).ge.2)then
+        ntbths = idat(2)
+        write(output,9073)ntbths
+9073    format(' temperature history is defined by RELAP5',
+     &  ' table number',i5)
+        end if
+      end if
+c  40000201-40000299  heights of axial nodes
+      if (.not.scntrl(7)) then
+        uplmt = 40000299
+        l2(1) = 40000201
+        knt1=1
+  200   call inplnk (l2(1),next,where,nfield,fa(filndx(1)))
+        if (nfield .eq. 0) then
+          if (next.gt.l2(1) .and. next.le.uplmt) then
+            l2(1) = next
+            go to 200
+          endif
+          fail = .true.
+          write (output,2020) l2(1)
+          do knt = 1,naz
+            dzcond(knt) = 0.1
+          enddo
+          write (output,*) 'Axial node heights reset to ',dzcond(1)
+        endif
+        l2(6) = 1
+        call inp2 (fa(filndx(1)),rdatv,l2)
+c  Error checking.
+        if(l2(6).gt.0)then
+          do knt = knt1,idat(2)
+            if (uniti) then
+              dzcond(knt) = rdatv(1)
+            else
+              dzcond(knt) = rdatv(1)*0.3048
+            endif
+            if (dzcond(knt) .le. 0.0) then
+               fail = .true.
+               write (output,2030)l2(1),' nonphysical input'
+               write (output,2020)l2(1)
+               dzcond(knt) = 3./naz
+            endif
+            if (dzcond(knt) .ge. 2.0)
+     &      write(output,2050)l2(1),'axial node heights'
+          enddo
+          if(idat(2) .lt. naz) then
+            knt1 = idat(2)+1
+            l2(1) = l2(1)+1
+            if(l2(1) .le. 40000299) go to 200
+          endif
+        endif
+        do knt = 1,naz
+          if (knt .eq. 1) then
+            zcond(knt) = dzcond(knt)/2.
+          else
+            zcond(knt) = zcond(knt-1) + dzcond(knt-1)/2. +
+     &      dzcond(knt)/2.
+          endif
+        enddo
+      endif
+c  40000300 card * meltdown and oxidation
+      if(.not.scntrl(7))then
+        tmpfal=2500.
+        frcoxf=0.6
+        epsox2=0.06
+        nsmdif=0
+      endif
+      l3a(6)=1
+      call inp2(fa(filndx(1)),rdatv,l3a)
+      if(l3a(6).lt.0)then
+        fail=.true.
+      else
+        if(l3a(6).gt.0)then
+          tmpfal=rdatv(1)
+          if(.not.uniti)tmpfal=(tmpfal+459.67)/1.8
+          if (tmpfal .lt.2200.0 .or. tmpfal.gt.2963.) then
+            write (output,2010)l3a(1),'ZrO2 failure temperature'
+            tmpfal=max(tmpfal,2200.)
+            tmpfal=min(tmpfal,2963.)
+          endif
+          write (output,3030) 'ZrO2 Failure Temperature',tmpfal
+        endif
+        if(l3a(6).ge.2)then
+          frcoxf=rdatv(2)
+          if (frcoxf.lt.0. .or. frcoxf.gt.1.) then
+            write (output,2010)l3a(1),'stable oxide shell fraction'
+            frcoxf=0.6
+          endif
+          write (output,3070) 'Stable oxide shell fraction',frcoxf
+        endif
+        if(l3a(6).ge.3)then
+          epsox2=rdatv(3)
+          write(output,3070)'Double sided oxidation limit',epsox2
+          if(epsox2 .lt.0.)then
+            fail=.true.
+            write(output,2010)l3a(1),'double-sided oxidation limit'
+          endif
+        endif
+        if(l3a(6).ge.4)then
+          nsmdif=idat(4)
+          if(nsmdif.gt.0)then
+            write(output,3115)                      
+3115        format(/,' frozen drops of previously slumped material',
+     &      ' at axial node prevents slumping of intact cladding',
+     &      ' at node')
+            write(output,3216)
+3216        format(' also, intact cladding does not slump unless',
+     &      ' double-sided oxidation')
+          endif
+        endif
+      endif
+c card 40000310 - metallic meltdown parameters
+      if(.not.scntrl(7))then
+        fovlap= 2.0
+        vdrop= 5.0
+        tsfrez= 1600.0
+        tdrslp= 2.0 
+        fmnrfl = 0.05
+        fredmn = 0.01
+        dtspll = 1.e-4
+        fathrs = 10.   
+        tshmax = 1550.
+        fbafll = 0.05   
+        fbtrn1 = 0.5
+        fbtrn2 = 1.0
+      endif
+      l3b(6)=1
+      call inp2(fa(filndx(1)),rdatv,l3b)
+          if(ndbg.eq.1)then
+          write(output,9309)l3b(6)
+9309      format(' RBUNDL for word 40000310; l3b(6)=',i6)
+          end if
+      if(l3b(6).lt.0)then
+        fail=.true.
+      else
+        if(l3b(6).gt.0)then
+          tdrslp=rdatv(1)
+          write(output,3151)tdrslp
+ 3151 format(' threshold value in fraction fill of space',
+     #  ' between rods that results in flow blockage = ',
+     &  e10.4)
+          if(tdrslp .lt.0.0.or.tdrslp.gt.50.)then
+            fail=.true.
+            write(output,2010)l3a(1),'fraction surface area blockage'
+          endif
+        end if
+        if(l3b(6).ge.2)then
+          tsfrez=rdatv(2)
+          if(.not.uniti)tsfrez=(tsfrez+459.67)/1.8
+          write(output,3102)tsfrez
+ 3102 format(' threshold cladding temperature for freezing',
+     #       ' drops of slumping cladding material = ',f8.2,
+     &       ' K ')
+          if(tsfrez .lt.-1. .or. tsfrez.gt.3000.)then
+            fail=.true.
+            write(output,2010)l3b(1),'freezing threshold'
+          endif
+        end if
+        if(l3b(6).ge.3)then
+          vdrop=rdatv(3)
+          write(output,3104)vdrop
+ 3104 format(' Slumping cladding drop velocity=',f8.2,' m/s')
+          if(vdrop .lt.0.)then
+            fail=.true.
+            write(output,2010)l3b(1),'drop velocity'
+          endif
+        endif
+        if(l3b(6).ge.4)then
+          fovlap=rdatv(4)
+          write(output,3129)fovlap
+ 3129 format(' factor of overlap of slumped drops of cladding;',
+     &  ' the greater the overlap, the less the surface area exposed',  
+     &  ' to steam and oxidation =',f5.2,' (unitless); <1 = no',
+     &  ' overlap')
+          if(fovlap .lt.0.0.or.fovlap.gt.50.)then
+            fail=.true.
+            write(output,2010)l3a(1),'fraction overlap drops'
+          endif
+        end if
+        if(l3b(6).ge.5)then
+          tshmax=rdatv(5)
+          write(output,3101)tshmax
+ 3101 format(' maximum temperature for shattering of oxide layer',
+     #       ' on slumped cladding =',f8.2,' K')
+          if(tshmax .lt.-1. .or. tshmax.gt.4000.)then
+            fail=.true.
+            write(output,2010)l3b(1),'shatter temperature'
+          endif
+        end if
+        if(l3b(6).ge.6)then
+        dtspll = rdatv(6)
+        write(output,3114)dtspll
+3114    format(' minimum weight gain of drops of relocated cladding',
+     &  ' before another spalling of oxide layer during reflood =',
+     &  e10.4,' kg/m2')
+        end if
+        if(l3b(6).ge.7)then
+        fathrs = rdatv(7)
+          if(fathrs.ge.0.001)then
+          write(output,3141)fathrs
+3141      format(' slumping of cladding from axial node spread over',
+     &    f8.0,' s/m of node length to smooth oxidation and',
+     &    ' temperature behavior at node receiving slumped material')
+          else
+          write(output,3143)
+3143      format(' no speading over time of material slumping from',  
+     &    ' axial node to a lower node')
+          end if
+        end if
+        if(l3b(6).ge.8)then
+        fbtrn1 = rdatv(8)
+        write(output,3122)fbtrn1
+3122    format(' fraction filled at axial node by slumped cladding',
+     &  ' for start of transition to',
+     &  ' blockage of oxidation of slumped cladding =',f6.2)
+        end if
+        if(l3b(6).ge.9)then
+        fbtrn2 = rdatv(9)
+        write(output,3124)fbtrn2
+3124    format(' fraction filled at axial node by slumped material',
+     &  ' resulting in fractional reduction',     
+     &  ' in oxidation of slumped material set by W10(R) on this',
+     &  ' card (unitless) =',f5.2)
+        end if
+        if(l3b(6).ge.10)then
+        fbafll = rdatv(10)
+        write(output,3126)fbafll
+3126    format(' fraction space between rods at axial node',              
+     &  ' filled with slumped material for fraction of oxidation',
+     &  ' of slumped material limited to value of',f5.2)
+        end if
+      endif
+c  40000320 card * movement of molten pool
+      if(.not.scntrl(7))then
+        fmdiff=1.0
+        flmpmn=0.0
+      endif
+      l3c(6)=1
+      call inp2(fa(filndx(1)),rdatv,l3c)
+      if(l3c(6).lt.0)then
+        fail=.true.
+      else
+        if(l3c(6).ge.1)then
+        fmdiff=rdatv(1)
+        write(output,3121)fmdiff
+ 3121 format(' Molten pool crust must have thickness',
+     #     ' of rod diameter*',e10.4,' to be sealed.')
+          if(fmdiff .lt.0.0)then
+            fail=.true.
+            write(output,2010)l3c(1),'factor for crust thickness'
+          endif
+        end if
+        if(l3c(6).eq.2)then
+          flmpmn=rdatv(2)
+          write(output,3123)flmpmn
+ 3123 format(' Minimum fractional flow area in outer channel',
+     #     ' of molten pool=',e10.4)
+          if(flmpmn .lt.0.0 .or. flmpmn.gt.1.)then
+            fail=.true.
+            write(output,2010)l3c(1),'factor for crust thickness'
+          endif
+        endif
+      endif
+c  40000330 card * core disintegration parameters
+      if(.not.scntrl(7))then
+        nsmgeo=1
+        tfrag=100.
+      endif
+      l3d(6)=1
+      call inp2(fa(filndx(1)),rdatv,l3d)
+      if(l3d(6).lt.0)then
+        fail=.true.
+      else
+        if(l3d(6).ge.1)then
+          nsmgeo=idat(1)
+          if(nsmgeo.eq.1)then
+            write(output,3211)nsmgeo,' not '
+          else
+            write(output,3211)nsmgeo,' '
+          endif
+ 3211 format(' Fuel rod fragmentation is',a,
+     #     'dependent on maximum historical rod temperature.')
+          if(l3c(6).eq.2)then
+            tfrag=rdatv(2)
+            if(.not.uniti)tfrag=(tfrag+459.67)/1.8
+            write(output,3212)tfrag
+ 3212 format(' Temperature above saturation for embrittled ',
+     #     ' rods to shatter=',f6.1)
+          endif
+        endif
+      endif
+c  40000400 card
+c  gamma heating
+      if(.not.scntrl(7)) fracgm=0.026
+      l4(6)=1
+      call inp2(fa(filndx(1)),rdatv,l4)
+      if (l4(6).lt.0)then
+        fail=.true.
+      else
+        if(l4(6).gt.0)then
+          fracgm=rdatv(1)
+          if(fracgm .lt.0. .or. fracgm.gt.0.057)then
+            fail=.true.
+            write(output,2010)l4(1),'gamma heat fraction'
+          endif
+        endif
+        write(output,3070)'Gamma heat fraction',fracgm
+      endif
+c  40000500 card
+        if(.not.scntrl(7))then
+cljs set default values for modidx
+          do knt = 1,10
+          modidx(knt) = 0
+          end do
+        end if
+c  cladding information parameters
+      if(.not.scntrl(7))then
+        erupt=0.2
+        ebal2=0.22
+        elim=0.33
+        npsw=0
+        modidx(1) = 1
+        modidx(2) = 1
+        modidx(3) = 1
+      endif
+      l5(6)=1
+      call inp2(fa(filndx(1)),rdatv,l5)
+      if (l5(6).lt.0)then
+        fail=.true.
+      else
+        if(l5(6).ge.1)then
+          erupt=rdatv(1)
+          if(erupt .eq. 0.) then
+            write (output,3040)
+          elseif(erupt .lt. 0.0) then
+            write (output,2010)l5(1),'rupture strain'
+            fail=.true.
+            erupt = 0.2
+          elseif(erupt .gt. rdatv(3)) then
+            write (output,2050)l5(1),' rupture strain'
+          endif
+          write (output,3070) 'Rupture strain',erupt
+        endif
+        if(l5(6).ge.2)then
+          ebal2=rdatv(2)
+          if(ebal2 .gt. 1. .or. ebal2 .lt. 0.) then
+            fail=.true.
+            write (output,2010)l5(1),'transition strain'
+            ebal2=0.15
+          elseif(ebal2 .gt. rdatv(3)) then
+            write (output,2050)l5(1),' transition strain'
+          endif
+          write (output,3070) 'Instability strain',ebal2
+        endif
+        if(l5(6).ge.3)then
+          elim=rdatv(3)
+          if(elim .lt.0.0)then
+            fail=.true.
+            write(output,2010)l5(1),'strain limit'
+            elim=0.18
+          endif
+          if (epsox2.gt.elim) write(output,4010)
+ 4010 format('0$$$$$$$$ Warning W3 on card 40000300 is outside range',
+     #       ' of normal use')
+          write(output,3070)'Strain limit',elim
+        endif
+        if(l5(6) .ge. 4) then
+          npsw=idat(4)
+          if (npsw .eq. 0) then
+            write(output,'(a)') ' Ballooning pressure drop modelled'
+          else
+            write(output,'(a)') ' Ballooning pressure drop not modeled'
+          endif
+        endif
+        if(l5(6) .ge.5) then
+cljs  set new models to be applied
+        modidx(1)=idat(5)
+          if(modidx(1) .eq. 1)then
+          write(output,9005)
+9005      format(/,' modeling of gap conductance in fuel rods with',
+     &    ' no relocated fuel and in simulator fuel rods turned on')
+          write(output,9106)
+9106      format(' input option invoked allowing generalized',    
+     &    ' definition of materials in simulator rods')
+          write(output,9108)
+9108      format(' if simulator rods present, their heat generation',
+     &    ' will be calculated by the generalized model (subroutine',
+     &    ' wolfhn)')
+          end if
+        endif
+        if(l5(6) .ge. 6)then
+        modidx(2) = idat(6)
+          if(modidx(2).eq.1)then
+          write(output,9011)
+9011      format(/,' model turned on to shatter oxide layer',
+     &    ' during reflood based on local oxide shattering',
+     &    ' criteria and conditions')
+          elseif(modidx(2).eq.2)then
+          write(output,9012)
+9012      format(/,' modeling of oxide shattering during reflood',
+     &    ' turned off')
+          else
+          write(output,9114)
+9114      format(/,' oxdide shattering when global shattering',
+     &    ' at user defined time')
+          end if
+        end if
+        if(l5(6) .ge. 7)then
+        modidx(3) = idat(7)
+        write(output,9013)
+9013    format(/,' Zr liner on bundle side of insulated shroud',
+     &  ' modeled to slump away and stop oxidizing when',
+     &  ' temperature exceeds value of W(1), card 40000300')
+        write(output,9014)
+9014    format(' Also, double-sided oxidation of Zr liner on',
+     &  ' shroud does not occur during reflood  until user-defined',
+     &  ' time of failure of shroud exceeded, W(2), Card 4ccc5000')
+        end if
+      endif
+c  40000600
+c   power source
+      if(scntrl(7))then
+        call inplnk(l6(1),next,where,nfield,fa(filndx(1)))
+      else
+        nfield=1
+      endif
+      if(nfield.ne.0)then
+        call inp2(fa(filndx(1)),rdatv,l6)
+        if (l6(6).le.0)then
+          write(output,2001)l6(1)
+          fail=.true.
+        else
+          write (itype,'(a8)')rdatv(1)
+          if (itype .eq. 'table') then
+            nspowi = 1
+            nstcno = idat(2)
+          elseif (itype .eq. 'cntrlvar') then
+            nspowi = 2
+            nstcno = idat(2)
+          elseif (itype .eq. 'kinetics') then
+            nspowi = 3
+          else
+            write (output,2020) l6(1)
+          endif
+          if(nspowi.le.2)then
+            write(output,'(/,1x,a,a,i4)')
+     #        'Source for power data is ',itype,idat(2)
+          else
+            write(output,'(/,1x,a,a)')
+     #        'Source for power data is ',itype
+          endif
+        endif
+      endif
+c  40001000 ispmat  grid spacer elevations.
+       if (.not.scntrl(7)) then
+         do knt=1,naz
+           igrdsp(knt,1) = 0
+           igrinc(knt,1) = 0
+           wincl(knt,1) = 0.0
+           thincl(knt,1) = 0.0
+           thkgpl(knt,1) = 0.0
+           retabg(knt,1) = 0.001
+         enddo
+         l10(6) = 1
+         call inp2(fa (filndx(1)),rdatv,l10)
+         if (l10(6) .eq. 0) then
+           ngrid = 0
+         else
+           ngrid = l10(6)
+           do knt = 1,ngrid
+             zgrid(knt,1) = rdatv(knt)
+             if (.not.uniti) zgrid(knt,1) = zgrid(knt,1)*0.3048
+           enddo
+         endif
+       endif
+c  40001001-40001099 - grid spacer description.
+       if (ngrid.gt.0 .and. .not.scntrl(7)) then
+         knt = 1
+         l10b(1) = 40001001
+ 1010    call inplnk (l10b(1),next,where,nfield,fa(filndx(1)))
+         if (nfield .eq. 0) then
+           if (next .le. l10b(2)) then
+             l10b(1) = next
+           else
+             fail = .true.
+             write(output,9007)40001001,40001099,' are incomplete.'
+             goto 1110
+           endif
+         endif
+         l10b(6) = 1
+         call inp2 (fa(filndx(1)),rdatv,l10b)
+         if( l10b(6) .le. 0) then
+           fail = .true.
+           goto 1110
+         endif
+         if (.not.uniti) then
+           rdatv(2) = rdatv(2)*0.4535924
+           rdatv(3) = rdatv(3)*0.3048
+           rdatv(4) = rdatv(4)*0.3048
+           rdatv(5) = rdatv(5)*0.3048
+         endif
+         do knt1 = knt,idat(6)
+c  Identify node that this grid spacer is in.
+           if (zgrid(knt,1).gt.zcond(naz) + dzcond(naz)/2. .or.
+     &     zgrid(knt,1).lt.0.) then
+             write (output,2060) '40001001-40001099 ,elevation'
+             write (output,2061) knt
+ 2061 format(' Grid Spacer',i3,' eliminated.')
+             ngrid = ngrid - 1
+             if (ngrid .ge. 1) then
+               do ik = 1,ngrid
+                 zgrid(ik,1) = zgrid(ik+1,1)
+               enddo
+             endif
+           else
+             do ik = 1,naz
+               if (zgrid(knt1,1).ge.zcond(ik) - dzcond(ik)/2 .and.
+     &         zgrid(knt1,1).le.zcond(ik) + dzcond(ik)/2) knt2 = ik
+             enddo
+             igrdsp(knt2,1) = 1
+             igrinc(knt2,1) = idat(1)
+             if (igrinc(knt1,1) .eq. 0) then
+               tmpmel(knt) = 2150.0
+             else
+               tmpmel(knt) = 1670.0
+             endif
+             wincl(knt2,1) = rdatv(2)
+             thincl(knt2,1) = rdatv(3)
+             thkgpl(knt2,1) = rdatv(4)
+             retabg(knt2,1) = rdatv(5)
+             if (wincl(knt1,1).lt.0. .or. zgrid(knt,1).lt.0.0 .or.
+     &       thincl(knt1,1).lt.0.0 .or. thkgpl(knt1,1).lt.0.0 .or.
+     &       retabg(knt1,1).lt.0.0) then
+               fail = .true.
+               write(output,2025)l10b(1)
+ 2025 format ('0******** Card(s) ',i9,' nonphysical input.')
+             elseif (wincl(knt1,1) .gt. 0.006) then
+               write (output,2060) '40001001-40001099,mass'
+             elseif (thincl(knt1,1) .gt. 0.125) then
+               write (output,2060) '40001001-40001099,height'
+             elseif (thkgpl(knt1,1).gt.0.01) then
+               write (output,2060) '40001001-40001099,plate thickness'
+             elseif (retabg(knt1,1).gt.0.002) then
+               write (output,2060) '40001001-40001099,radius of contact'
+             endif
+c  End error check.
+           endif
+         enddo
+         l10b(1) = l10b(1)+1
+         knt = idat(6)+1
+         if (knt .le. ngrid) goto 1010
+         ik = 0
+         write(output,3100) ' Node ','Material','Mass/Rod',
+     #   'Elevation','Height','Thickness','Radius'
+ 3100  format(/,'Grid Spacer Input'/,
+     # 4x,a6,5x,a8,3x,a8,7x,a9,7x,a6,8x,a9,7x,a6)
+         do knt = 1,naz
+           if (igrdsp(knt,1) .eq. 0) cycle
+           ik = ik + 1
+           write (output,'(5x,i2,10x,i3,5(5x,e10.4))') knt,
+     &     igrinc(knt,1),wincl(knt,1),zgrid(ik,1),thincl(knt,1),
+     &     thkgpl(knt,1),retabg(knt,1)
+         enddo
+       endif
+c  40001100 card.
+c  Melt radial propagation.
+ 1110 continue
+      if(.not.scntrl(7))then
+        mltprg=1
+        l11a(6)=1
+        call inp2(fa(filndx(1)),rdatv,l11a)
+        if (l11a(6).lt.0)then
+          fail=.true.
+          write(output,2020) l11a(1)
+        elseif(l11a(6).gt.0)then
+          mltprg=idat(1)
+        endif
+        if(mltprg.eq.0)then
+          write(output,3090)'latest'
+        else
+          write(output,3090)'earliest'
+        endif
+      endif
+ 3090 format('0Model resulting in ',a,
+     #        ' possible slumping applied.')
+c 40001101 Core bypass region volumes
+      if(.not.scntrl(7))then
+        l11(6)=1
+        call inp2(fa(filndx(1)),rdatv,l11)
+        nbypss = l11(6)
+        if(nbypss .gt. 0) then
+          do 150 knt=1,nbypss
+  150     lbpsin(knt)=idat(knt)
+        endif
+      endif
+c 40001201 Core bypass region volume elevations
+      if(.not.scntrl(7))then
+        l11b(6)=1
+        call inp2(fa(filndx(1)),rdatv,l11b)
+        if(nbypss .ne. l11b(6)) then
+          write(output,*)'*******Wrong number of core bypass elevations'
+          fail=.true.
+        else
+          if(nbypss.ne.0)then
+            write(output,'(a)') '0 Core bypass region information'
+            write(output,'(a)') '   RELAP5 Volume     Elevation'
+            do 175 knt=1,nbypss
+            if(.not.uniti)rdatv(knt)=rdatv(knt)*0.3048
+            zbypss(knt)=rdatv(knt)
+  175       write(output,'(4x,i12,4x,e10.4)') lbpsin(knt),zbypss(knt)
+          endif
+        endif
+      endif
+      return
+ 2001 format (/,'******** Card ',i8,' is missing.')
+ 2010 format(/,'******** Card ',i9,' - Out of range ',a,'.')
+ 2020 format(/,'******** Card(s) ',i9,' invalid.  Data reset to default'
+     *,' values to allow for further input processing.')
+ 2030 format(/,'******** Card ',i9,a,'.')
+ 9007 format(/,'******** Cards ',i9,' to ',i9,a)
+ 2050 format(/,'$$$$$$$$$ Warning, Card ',i9,a,
+     *        ' are outside range of normal use.')
+ 2060 format(/,'$$$$$$$$$ Warning, Cards ',a,
+     *      ' of grid spacer, outside range of normal use.')
+ 3030 format (1x,a,' =',f8.1)
+ 3040 format(/' Standard scdap clad rupture model used'/)
+ 3070 format (1x,a,' =',f6.4)
+ 3080 format (1x,a,' =',i10)
+      end
+*endif

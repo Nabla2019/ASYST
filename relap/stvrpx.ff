@@ -1,0 +1,195 @@
+*mlist
+       subroutine stvrpx (a,ixvffs,ihld,nh,s)
+c
+c  Vector routine which computes thermodynamic properties as a function
+c  of pressure and quality.
+c
+c  Cognizant engineer: rjw jet.
+c
+*in32 ihld
+*in32 vctrls
+*in32end
+c
+c      Calling sequence:
+c
+c                call  stvrpx (rp1,ip2,ip3,ip4,rp5)
+c
+c      Parameters:
+c
+c                rp1 = a     = steam tables (input)
+c
+c                ip2 = ixvffs = list vector pointer (input)
+c
+c                ip3 = ihld  = list vector array (input)
+c
+c                ip4 = nh    = vector length (input)
+c
+c                rp5 = s     = array into which the computed
+c                              thermodynamic properties are stored
+c                              (input,output)
+c
+c      This routine adapted from svh2x2 written by R. J. Wagner for
+c      light water steam tables
+c
+       implicit none
+c
+       real a(*),s(*)
+       integer ixvffs,ihld(*),nh
+c
+       include 'comctl.h'
+       include 'fast.h'
+       include 'stcom.h'
+       include 'voldat.h'
+       include 'scrtch.h'
+c
+$if -def,in32,2
+       integer msk
+       parameter (msk=1073741823)
+       real c2,c3,d1,d2,dpdt1,dpdt2,f11,f22,fr,fr1,hfg1,hfg2
+       real dpsdts,dum,dpdtcr
+       integer i,ih,iip,ix,jja,jjb,jp,jpp,kp,kp2,m
+       logical s2,s3,err
+c
+c--temporary patch to stay above the triple point;
+c--also guarantees that pressures used for calculations lie within
+c--saturation range
+c
+       ih = ixvffs
+cdir$ ivdep
+       do 13 m = 1,nh
+         i = ihld(ih)
+         ix = vctrls(i)
+         s(ix+1) = max ( min ( s(ix+1), 0.999 * a(nt+nsp) ), a(nt+1) )
+         s(ix+9) = s(ix+1)
+         ih = ih + scskp
+   13  continue
+c
+c--get saturation temperatures from pressures
+c
+       ih = ixvffs
+       do 14 m = 1,nh
+         i = ihld(ih)
+         ix = vctrls(i)
+         call  strsat (a,2,s(ix+1),s(ix),dpsdts,err)
+         s(ix) = max ( min ( s(ix), 0.999 * a(nst) ), a(1) )
+         ih = ih + scskp
+   14  continue
+c
+c--search both saturation tables to get closest bracketing
+c
+       ih = ixvffs
+       do 15 m = 1,nh
+         i = ihld(ih)
+         ix = vctrls(i)
+$if -def,in32,2
+         iip = ishft(is23(ix),-30)
+         jp = iand(is23(ix),msk)
+$if def,in32,2
+         iip = is23(1,ix)
+         jp = is23(2,ix)
+         s2 = .false.
+         s3 = .false.
+         if (iip.le.0 .or. iip.ge.nst) iip = 1
+         if (jp.le.0 .or. jp.ge.nsp) jp = 1
+c
+c--set indexes in temperature and pressure tables for saturation
+c--computations
+c
+   11    if (s(ix) .ge. a(iip)) go to 10
+         iip = iip - 1
+         go to 11
+   10    if (s(ix) .lt. a(iip+1)) go to 12
+         iip = iip + 1
+         go to 10
+   12    jpp = jp + nt
+  111    if (s(ix+9) .ge. a(jpp)) go to 110
+         jpp = jpp - 1
+         if (jpp .gt. nt) go to 111
+         s3 = .true.
+         go to 112
+  110    if (s(ix+9) .lt. a(jpp+1)) go to 112
+         jpp = jpp + 1
+         if ( jpp .lt. nt+nsp )  go to 110
+         s2 = .true.
+  112    jp = jpp - nt
+         kp2 = it4bp + jp*13
+         kp = it3bp + iip*13
+         if (s3 .or. a(jpp).le. a(kp)) go to 113
+         paa(ix) = a(jpp)
+         taa(ix) = a(kp2)
+         jja = kp2
+         go to 115
+  113    taa(ix) = a(iip)
+         paa(ix) = a(kp)
+         jja = kp
+  115    if (s2 .or. a(jpp+1).ge.a(kp+13)) go to 116
+         pbb(ix) = a(jpp+1)
+         tbb(ix) = a(kp2+13)
+         jjb = kp2 + 13
+         go to 117
+  116    tbb(ix) = a(iip+1)
+         pbb(ix) = a(kp+13)
+         jjb = kp + 13
+  117    ja(ix) = jja
+         jb(ix) = jjb
+$if -def,in32,1
+         is23(ix) = ior(ishft(iip,30),jp)
+$if def,in32,2
+         is23(1,ix) = iip
+         is23(2,ix) = jp
+          if ( tbb(ix) .eq. tcrit ) then
+            call  strsat (a,1,tbb(ix),dum,dpdtcr,err)
+          else  if ( pbb(ix) .eq. pcrit ) then
+            call  strsat (a,2,pbb(ix),dum,dpdtcr,err)
+          endif
+         ih = ih + scskp
+   15  continue
+c
+c--perform interpolation for two phase quantities
+c
+       ih = ixvffs
+cdir$ ivdep
+       do 16 m = 1,nh
+         i = ihld(ih)
+         ix = vctrls(i)
+         jja = ja(ix)
+         jjb = jb(ix)
+         fr1 = s(ix) - taa(ix)
+         fr = fr1/(tbb(ix) - taa(ix))
+         hfg1 = a(jja+8) - a(jja+2) + paa(ix)*(a(jja+7) - a(jja+1))
+         hfg2 = a(jjb+8) - a(jjb+2) + pbb(ix)*(a(jjb+7) - a(jjb+1))
+         dpdt1 = hfg1/(taa(ix)*(a(jja+7) - a(jja+1)))
+          if ( tbb(ix) .ne. tcrit .and. pbb(ix) .ne. pcrit ) then
+         dpdt2 = hfg2/(tbb(ix)*(a(jjb+7) - a(jjb+1)))
+          else
+            dpdt2 = dpdtcr
+          endif
+         f11 = a(jja+1)*(a(jja+3) - a(jja+4)*dpdt1)
+         f22 = a(jjb+1)*(a(jjb+3) - a(jjb+4)*dpdt2)
+         d1 = f11*(tbb(ix) - taa(ix))
+         d2 = f22*(tbb(ix) - taa(ix))
+         c2 = 3.0*(a(jjb+1) - a(jja+1)) - d2 - 2.0*d1
+         c3 = d2 + d1 - 2.0*(a(jjb+1) - a(jja+1))
+         s(ix+10) = a(jja+1) + fr*(d1 + fr*(c2 + fr*c3))
+         f11 = a(jja+7)*(a(jja+9) - a(jja+10)*dpdt1)
+         f22 = a(jjb+7)*(a(jjb+9) - a(jjb+10)*dpdt2)
+         d1 = f11*(tbb(ix) - taa(ix))
+         d2 = f22*(tbb(ix) - taa(ix))
+         c2 = 3.0*(a(jjb+7) - a(jja+7)) - d2 - 2.0*d1
+         c3 = d2 + d1 - 2.0*(a(jjb+7) - a(jja+7))
+         s(ix+11) = a(jja+7) + fr*(d1 + fr*(c2 + fr*c3))
+         s(ix+12) = a(jja+2) + (a(jjb+2) - a(jja+2))*fr
+         s(ix+13) = a(jja+8) + (a(jjb+8) - a(jja+8))*fr
+         s(ix+14) = s(ix+12) + s(ix+9)*s(ix+10)
+         s(ix+15) = s(ix+13) + s(ix+9)*s(ix+11)
+         s(ix+16) = a(jja+3) + (a(jjb+3) - a(jja+3))*fr
+         s(ix+17) = a(jja+9) + fr*tbb(ix)/s(ix)*(a(jjb+9) - a(jja+9))
+         s(ix+18) = a(jja+4) + (a(jjb+4) - a(jja+4))*fr
+         s(ix+19) = a(jja+10) + (s(ix+9) - paa(ix))/(pbb(ix) - paa(ix))*
+     &   pbb(ix)/s(ix+9)*(a(jjb+10) - a(jja+10))
+         s(ix+20) = a(jja+5) + (a(jjb+5) - a(jja+5))*fr
+         s(ix+21) = a(jja+11) + (a(jjb+11) - a(jja+11))*fr
+         ih = ih + scskp
+   16  continue
+       return
+       end

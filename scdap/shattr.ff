@@ -1,0 +1,205 @@
+*mlist
+*if def,selap
+       subroutine shattr
+c
+c  This subroutine calculates the shattering of the oxide layer
+c  at reflood
+c Cognizant engineer: ewc
+c
+       implicit none
+*call fast
+*call cons
+*call scddat
+*call blonab
+*call intcom
+*call scdout
+*call scdcom
+*call ndxara
+*call debout
+*call miscon
+*call buntim
+*call ufiles
+*call comctl
+*call voldat
+*call contrl
+*call tblsp
+*call dbacct
+*call trpblk
+*call cmatp
+c  shtflg(k,j) turned on in three different ways at axial k
+c  of component j.
+c  case of modidx(2) = 1 or 2 apply when shattering based on user
+c                      defined trip not implemented.
+c  if modidx(2)=1, then continuous oxide shattering locally based
+c                  on local temperature (oxide thickness always
+c                  assumed to be 2.5 microns.
+c  if modidx(2) =2, then oxide shattering always turned off.
+c  if modidx(2) =0 and global shattering trip turned on but time
+c                  less than user-defined time for shattering, then
+c                  shattering only on local cooling rate and local
+c                  beta oxide thickness and oxidation set to steam
+c                  flow limit.
+c  if modidx(2) =0 and global shattering trip turned on and time
+c                  greater than time for shattering, then shattering
+c                  at all axial nodes of all components and oxidation
+c                  equal to that of local steam flow limit. 
+c  Is oxidation after shattering ever limited to oxide thickness
+c  buildup between instants of shattering?
+c  Local variables.
+      dimension ptstmp(ndcomp,ndax),kntr(ndcomp,ndax),
+     #  imessg(ndcomp,ndax)
+      real ptstmp,coolrt
+      integer kntr,j,k,initl,imessg,imess1
+      integer ivol,nrfld,nrange,ndtdt
+      character message*28
+      save initl,ptstmp,kntr
+      real rcmid,thkbet
+      real dtspal,tshtup,tshtlo
+      real afraco,afracu,afracz,tmelt
+      real voidsh
+      real pliq
+      external pliq
+      logical intval,mess
+      data message/'All in-core oxide shattered.'/
+      data initl/0/
+      data imess1/0/
+c   dtspal = time between shattering of oxide layer during reflood (s).
+      data dtspal / 1.e+10/
+      data voidsh /0.0001/
+c  intval is a logical variable controlling the frequency of
+c  printout of the shatter message.  if intval is true then
+c  a message will be printed the first time the criteria is true.
+c    if intval is false the message will be printed only the
+c  first time it goes true, not on subsequent shatters.
+      intval=.true.
+      if(initl.eq.0)then
+        do 10 j=1,ndcomp
+        do 10 k=1,ndax
+        imessg(j,k)=0
+        kntr(j,k)=0
+   10   ptstmp(j,k)=0.
+        initl=1
+      endif
+       afraco=0.0
+       afracu=0.0
+       afracz=1.0
+       tmelt=pliq(afraco,afracu,afracz)
+      do 50 k=1,naz
+        if(modidx(2).eq.2)go to 50
+c  if debris already at node, do not check for failure.
+        if(ifrag((ndcomp-1)*icomp+k).eq.1)go to 50
+        ivol=nvad((icomp-1)*ndax+k)+filndx(4)
+        nrfld=0
+c  if reflood and option defined to shatter in event of reflood,
+c  then define shattering at current node.
+cljs testing
+cljs    if(voidf(ivol).ge.0.0001.and.modidx(2).eq.1.and.
+cljs    if(voidf(ivol).ge.0.00010.and.modidx(2).eq.1.and.
+        if(voidf(ivol).ge.voidsh.and.modidx(2).eq.1.and.
+     &  tcond3(nrods2(k,icomp),k,icomp).gt.1000.0.and. 
+cljs  line below best for PARAMETER FF2 test
+cljs &  tcond3(nrods2(k,icomp),k,icomp).lt.1400.0)then
+cljs &  tcond3(nrods2(k,icomp),k,icomp).lt.1560.0)then
+     &  tcond3(nrods2(k,icomp),k,icomp).lt.tshmax)then
+cljs testing
+cljs        effoxd(icomp,k)=2.55e-07
+            effoxd(icomp,k)=5.0e-7
+            effoxw(k,icomp)=zoxden*pi*((rnoxd((icomp-1)*ndax+k)
+     #      +effoxd(icomp,k))**2-rnoxd((icomp-1)*ndax+k)**2)
+     #      *(32.0/(91.22+32.0))/(twopi*rco2(k,icmp))
+            shtflg(k,icomp)=1
+        end if
+c***  deactivate line below to bypass oxide shattering during reflood
+c***  in cladding oxide layer with underlying melted metallic layer.
+c***    if(voidf(ivol).ge.0.001
+c*** #  .and.tcond3(nrods2(k,icomp),k,icomp).ge.tmelt
+c*** #  .and.tcond3(nrods2(k,icomp),k,icomp).ge.1150.0
+c*** #  .and.timehy.ge.tnxsp1(k,icomp))nrfld=1
+        if(trpfal.gt.0)then
+          if(trptm(icode+filndx(18)).ge.0.0 ) then
+            if(imess1.eq.0)then
+             write(output,1050)message
+ 1050 format('0$$$$$$$$ ',a)
+             write(tty,'(a)')message
+             imess1=1
+            endif
+            effoxd(icomp,k)=2.55e-07
+            effoxw(k,icomp)=zoxden*pi*((rnoxd((icomp-1)*ndax+k)
+     #      +effoxd(icomp,k))**2-rnoxd((icomp-1)*ndax+k)**2)
+     #      *(32.0/(91.22+32.0))/(twopi*rco2(k,icmp))
+            shtflg(k,icomp)=1
+          endif
+        else
+c  Check for potential of reflood
+c         nrange = switch for low temperature shattering of oxide layer.
+          nrange=0
+c     tshtup = upper bound of temperature that results in shattering of
+c              oxide layer (K).
+          tshtlo=1150.0
+          tshtup=1560.0
+          ndtdt=0
+          if((ptstmp(icomp,k)-tcond3(nrods2(k,icomp),k,icomp))
+     #    .gt.0.0)ndtdt=1
+cljs      if(voidf(ivol).ge.0.0001)ndtdt=1
+          if(voidf(ivol).ge.voidsh)ndtdt=1
+c***      if((ptstmp(icomp,k)-tcond3(nrods2(k,icomp),k,icomp)).gt.0.0
+c*** #    .and. tcond3(nrods2(k,icomp),k,icomp).le.1560.0
+c*** #    .and. tcond3(nrods2(k,icomp),k,icomp).le.tshtup
+          if(ndtdt.eq.1.and.tcond3(nrods2(k,icomp),k,icomp).le.tshtup
+     #    .and.tcond3(nrods2(k,icomp),k,icomp).ge.tshtlo)nrange=1
+c***   if(nrange.eq.1.or.nrfld.eq.1)then
+          if(nrange.eq.1)then
+            coolrt=(ptstmp(icomp,k)-
+     #              tcond3(nrods2(k,icomp),k,icomp))/dt
+c***        if((coolrt.ge.5..and.nrange.eq.1).or.nrfld.eq.1)then
+            if(nrange.eq.1.and.timehy.ge.tnxsp1(k,icomp))then
+              kntr(icomp,k)=kntr(icomp,k)+1
+            else
+              kntr(icomp,k)=0
+            endif
+          else
+            kntr(icomp,k)=0
+          endif
+          ptstmp(icomp,k)=tcond3(nrods2(k,icomp),k,icomp)
+c***      if(kntr(icomp,k).ge.10)then
+          if(kntr(icomp,k).ge.0.and.timehy.ge.tnxsp1(k,icomp))then
+            if(int(brchv(k,icomp)).eq.1)then
+          rcmid=sqrt(0.5*(rnoxd((icomp-1)*ndax+k)**2+rci2(k,icomp)**2))
+              thkbet=rnalf((icomp-1)*ndax+k)-rcmid
+            else
+              thkbet=rnalf((icomp-1)*ndax+k)-rci2(k,icomp)
+            endif
+c****       if(coolrt.ge.5. .and. thkbet.le.0.0001)then
+            if(thkbet.le.0.0001.and.nrange.eq.1.and.
+     #      timehy.ge.tnxsp1(k,icomp))then
+              mess=.false.
+              if(intval)then
+                if(kntr(icomp,k).eq.10)mess=.true.
+              else
+                if(imessg(icomp,k).eq.0)mess=.true.
+              endif
+              if (effoxd(icomp,k)/oxd2d(k,icomp).lt.0.5)mess=.false.
+              effoxd(icomp,k)=2.00e-06
+              effoxw(k,icomp)=zoxden*pi*((rnoxd((icomp-1)*ndax+k)
+     #        +effoxd(icomp,k))**2-rnoxd((icomp-1)*ndax+k)**2)
+     #        *(32.0/(91.22+32.0))/(twopi*rco2(k,icmp))
+              shtflg(k,icomp)=1
+              tnxsp2(k,icomp)=timehy+dtspal
+              if(mess)then
+                write(output,99)
+   99 format(/,' shattr--------------core degradation event',
+     #   '------------------------')
+                write(output,100)timehy,k,icomp
+  100  format(
+     # ' event time =',g18.10,
+     # ' oxide shattered at node',i3,
+     #         ' Component',i3)
+                imessg(icomp,k)=1
+              endif
+            endif
+          endif
+        endif
+   50 continue
+      return
+      end
+*endif

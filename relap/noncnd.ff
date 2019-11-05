@@ -1,0 +1,156 @@
+*mlist
+       subroutine noncnd
+c
+c
+c  Cognizant engineer: rjw.
+c  Calculates the condensation heat transfer coefficient when
+c  non-condensible gas is present in steam.
+c
+c  Cognizant engineer: rjw.
+c
+*in32 iprop
+*in32 lprop
+*in32end
+c
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'htrcom.h'
+       include 'htsrcm.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       real advh2o,advx,dc,dcnst,gr,hdl,hdt,hnat,molh2o,pa,pb,pintfc,
+     & prop(36),pw,ra,ray,reg,rggb,rhoai,rhomi,rhosi,rmolg,sc,tol,
+     & wmolex,x
+       integer ier,iprop(36),iter,k,nsig
+       logical erx,lprop(36)
+       equivalence (iprop(1),lprop(1),prop(1))
+       external pintfc
+c
+c  molh20 = mol.weight of water
+c  advh2o = atomic diffusion volume of water, ref.given in rnoncn
+       data molh2o,advh2o /18.0, 12.7/
+c
+c  Calculate properties at tsat.
+       pvblk = pps(iv)
+       rmolg = 8314.3
+       advx = 0.0
+       wmolex = 0.0
+       do k = 1,noncn
+         advx = advx + qualan(iv+k-1)*advn(k)
+         wmolex = wmolex + qualan(iv+k-1)*wmolea(k)
+       enddo
+       ra = rmolg/wmolex
+       rggb = (p(iv)-pvblk)/(ra*tsatt(iv))
+c
+c  Mass diffusivity is calculated using eqn.11-4.1 in the
+c  properties of gases and liquid by reid,praudnitz,sherwood,
+c  third ed. mc-graw-hill book co.,1977.
+c
+       dcnst = (sqrt(1.0/molh2o + 1.0/wmolex))/
+     & ((advh2o**0.33333 + advx**0.33333)**2)
+       dc = 0.0101325*dcnst*tempg(iv)**1.75/p(iv)
+c
+c  Calculate reynolds number.
+       reg = rhog(iv)*abs(velg(iv))*htdiam/viscg(iv)
+c
+c  For high flow - use Gilliland correlation.
+c      sc = schmidt number
+       sc = viscg(iv)/(rhog(iv)*dc)
+       hdt = 0.023*(dc/htdiam)*(reg**0.83)*(sc**0.44)
+c
+c  For laminar - use rohsenow - choi correlation.
+c  Heat and mass transfer analogy.
+       hdl = 4.0*dc/htdiam
+c
+c  Calculate saturation pressure at tw.
+       prop(1) = tw
+       if (tw .lt. ttrip) then
+         prop(1) = ttrip
+       endif
+       prop(9) = 1.0
+       if (nfluid. eq. 1) then
+         call sth2x1 (fa(ndxstd),prop,erx)
+       elseif (nfluid. eq. 2) then
+         call std2x1 (fa(ndxstd),prop,erx)
+       else
+         write(output,3010)
+ 3010  format ('0******** System fluid is not h2o, d2o, or h2on for heat
+     & structure boundary condition.')
+         call fabend
+       endif
+       pw = prop(2)
+       rhosi = 1.0/prop(3)
+       rhoai = (p(iv) - pw)/(ra*tw)
+       rhomi = rhosi + rhoai
+c  Use the density difference as the driving potential.
+c  See Eckart & Drake 2nd edition page 474.
+       gr = abs(rhomi - rhog(iv))/rhomi
+       gr = gravcn*gr*rhog(iv)**2*htlenc**3/viscg(iv)**2
+       ray = gr*sc
+c  Churchhill-Chu from Incropera & DeWitt page 501 vertical bodies;
+c  eq. 926.
+       hnat = 0.387*ray**0.1666667
+       hnat = hnat/(1.0 + (0.492/sc)**0.5625)**0.296296
+       hnat = (0.825 + hnat)**2
+       hnat = dc*hnat/htlenc
+c  Calculate max of natural, laminar and turbulent values.
+       hd = max(hdt, hdl, hnat)
+       if (help.ne.0) then
+         if (iand(ihlppr(1),ishft(1,18)).ne.0) then
+           if (iand(vctrlx(iv),1).ne.0) then
+             write(output,2220) csubpg(iv),viscg(iv),thcong(iv),
+     &       rhog(iv),tempg(iv)
+ 2220  format (5x,'noncnd - csubpg, viscg, thcong, rhog, tempg =',
+     & 5es15.7)
+             write(output,2221) volno(iv)
+ 2221  format (14x,'volno(iv)=',i15)
+           endif
+         endif
+       endif
+c
+       if (help.ne.0) then
+         if (iand(ihlppr(1),ishft(1,18)).ne.0) then
+           if (iand(vctrlx(iv),1).ne.0) then
+             write(output,2201) (qualan(iv+k-1), k=1,noncn)
+ 2201  format (14x,'qualan(iv+k-1) =',5es15.7)
+             write (output,2200) pvblk,pw,reg,sc,dc,rhog(iv),
+     &       rggb,velg(iv),viscg(iv),molh2o,advh2o,wmolex,advx
+ 2200  format (14x,'pvblk, pw, reg, sc =',4es15.7/
+     & 14x,'dc, rhog, rggb, velg, viscg  =',5es15.7/
+     & 14x,'molh2o, advh2o, wmolex, advx =',4es15.7)
+             write (output,2202) hd,hnat,hdl,hdt
+ 2202  format (14x,'hgtot,hgnat,hglam,hgturb =',4es15.7)
+           endif
+         endif
+       endif
+c
+       if (erx) then
+         write (output,2020) tw,volno(iv)
+ 2020  format ('0******** Subroutine sth2x1, std2x1, or stpu2t returned
+     &error flag for temperature = ',es13.5,' in volume = ',i10,'.')
+         call fabend
+       endif
+c
+c  Set convergence criteria and bound values for zbrent.
+       incnd = 0
+       tol = 0.0005
+       nsig = 8
+       iter = 20
+       pa = pw
+       pb = pvblk
+       call zbrent (pintfc,tol,nsig,pa,pb,iter,ier)
+       if (ier .eq. 0) then
+         incnd = 1
+         x = pintfc(pb)
+       else
+         incnd = 2
+       endif
+       return
+       end

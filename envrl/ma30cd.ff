@@ -1,0 +1,285 @@
+       subroutine ma30cd (n,icn,a,licn,lenr,lenrl,lenoff,idisp,ip,
+     & iq,x,w,mtype)
+!  Uses the factors produced by ma30ad or ma30bd to solve ax=b or a
+!  transpose x=b when the matrix p1*a*q1 (paq) is block lower triangular
+!  (including the case of only one diagonal block).
+!
+       use ma28mod
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer licn,mtype,n
+       real(kr) a(:),x(:),w(:)
+       integer icn(:),idisp(:),ip(:),iq(:),lenoff(:),lenr(:),lenrl(:)
+!
+! n       Set to the order of the matrix. It is not altered by the
+!         subroutine.
+! icn     Length licn. Entries idisp(1) to idisp(2) should be unchanged 
+!         since the last call to ma30ad. If the matrix has more than one
+!         diagonal block, then column indices corresponding to non-zeros
+!         in sub-diagonal blocks of paq must appear in positions 1 to
+!         idisp(1)-1. For the same row those entries must be contiguous,
+!         with those in row i preceding those in row i+1 (i=1,...,n-1)
+!         and no wasted space between rows. Entries may be in any order
+!         within each row. It is not altered by ma30cd.
+! a       Length licn. Entries idisp(1) to idisp(2) should be unchanged
+!         since the last call to ma30ad or ma30bd. If the matrix has
+!         more than one diagonal block, then the values of the non-zeros
+!         in sub-diagonal blocks must be in positions 1 to idisp(1)-1 in
+!         the order given by icn. It is not altered by ma30cd.
+! licn    Set to the size of arrays icn and a. It is not altered by
+!         ma30cd.
+! lenr,lenrl  Length n. Should be unchanged since the last call to
+!             ma30ad. They are not altered by ma30cd.
+! lenoff  Length n. If the matrix paq (or p1*a*q1) has more than one
+!         diagonal block, then lenoff(i), i=1,...,n should be set to the
+!         number of non-zeros in row i of the matrix paq which are in
+!         sub-diagonal blocks. If there is only one diagonal block then
+!         lenoff(1) may be set to -1, in which case the other entries of
+!         lenoff are never accessed. It is not altered by ma30cd.
+! idisp   Length 2. Should be unchanged since the last call to ma30ad.
+!         it is not altered by ma30cd.
+! ip,iq   Arrays of length n which should be unchanged since the last
+!         call to ma30ad. They are not altered by ma30cd.
+! x       Length n. It must be set by the user to the values of the
+!         right hand side vector b for the equations being solved. On
+!         exit from ma30c/cd it will be equal to the solution x
+!         required.
+! w       Length n. Used as workspace by ma30cd.
+! mtype   Must be set by the user. If mtype=1, then the solution to the
+!         system ax=b is returned; any other value for mtype will return
+!         the solution to the system a transpose x=b. It is not altered
+!         by ma30cd.
+!
+       real(kr) wi,wii
+       integer i,ib,iback,iblend,iblock,iend,ifirst,ii,iii,ilast,
+     & j,j1,j2,j3,jj,jpiv,jpivp1,k,lj1,lj2,lt,ltend,numblk
+       logical neg,nobloc
+!
+!  The final value of mresid is the maximum residual for an inconsistent
+!  set of equations.
+       mresid = 0.0_kr
+!  nobloc is .true. if subroutine block has been used previously and
+!     is .false. otherwise. The value .false. means that lenoff will
+!     not be subsequently accessed.
+       nobloc = lenoff(1).lt.0
+       if (mtype.ne.1) go to 140
+!
+!  We now solve   a * x = b.
+!  neg is used to indicate when the last row in a block has been
+!  reached. It is then set to true whereafter backsubstitution is
+!  performed on the block.
+       neg = .false.
+!  ip(n) is negated so that the last row of the last block can be
+!  recognised. It is reset to its positive value on exit.
+       ip(n) = -ip(n)
+!  Preorder vector ... w(i) = x(ip(i)).
+       do ii=1,n
+         i = ip(ii)
+         i = abs(i)
+         w(ii) = x(i)
+       enddo
+!  lt holds the position of the first non-zero in the current row of the
+!  off-diagonal blocks.
+       lt = 1
+!  ifirst holds the index of the first row in the current block.
+       ifirst = 1
+!  iblock holds the position of the first non-zero in the current row
+!  of the lu decomposition of the diagonal blocks.
+       iblock = idisp(1)
+!  if i is not the last row of a block, then a pass through this loop
+!  adds the inner product of row i of the off-diagonal blocks and w
+!  to w and performs forward elimination using row i of the lu
+!  decomposition. If i is the last row of a block then, after
+!  performing these aforementioned operations, backsubstitution is
+!  performed using the rows of the block.
+       do 120 i=1,n
+         wi = w(i)
+         if (.not.nobloc) then
+           if (lenoff(i).ne.0) then
+!  Operations using lower triangular blocks.
+!  ltend is the end of row i in the off-diagonal blocks.
+             ltend = lt + lenoff(i) - 1
+             do jj=lt,ltend
+               j = icn(jj)
+               wi = wi - a(jj)*w(j)
+             enddo
+!  lt is set the beginning of the next off-diagonal row.
+             lt = ltend + 1
+           endif
+         endif
+!  Set neg to .true. if we are on the last row of the block.
+         if (ip(i).lt.0) neg = .true.
+         if (lenrl(i).ne.0) then
+!  Forward elimination phase.
+!  iend is the end of the l part of row i in the lu decomposition.
+           iend = iblock + lenrl(i) - 1
+           do jj=iblock,iend
+             j = icn(jj)
+             wi = wi + a(jj)*w(j)
+           enddo
+         endif
+!  iblock is adjusted to point to the start of the next row.
+         iblock = iblock + lenr(i)
+         w(i) = wi
+         if (.not.neg) go to 120
+!  Back substitution phase.
+!  j1 is position in a/icn after end of block beginning in row ifirst
+!  and ending in row i.
+         j1 = iblock
+!  Are there any singularities in this block? If not, continue with
+!  the backsubstitution.
+         ib = i
+         if (iq(i).gt.0) go to 70
+         do iii=ifirst,i
+           ib = i - iii + ifirst
+           if (iq(ib).gt.0) go to 70
+           j1 = j1 - lenr(ib)
+           mresid = dmax1(mresid,dabs(w(ib)))
+           w(ib) = 0.0_kr
+         enddo
+!  Entire block is singular.
+         go to 110
+!  Each pass through this loop performs the back-substitution
+!  operations for a single row, starting at the end of the block and
+!  working through it in reverse order.
+   70    do iii=ifirst,ib
+           ii = ib - iii + ifirst
+!  j2 is end of row ii.
+           j2 = j1 - 1
+!  j1 is beginning of row ii.
+           j1 = j1 - lenr(ii)
+!  jpiv is the position of the pivot in row ii.
+           jpiv = j1 + lenrl(ii)
+           jpivp1 = jpiv + 1
+!  Jump if row  ii of u has no non-zeros.
+           if (j2.lt.jpivp1) go to 90
+           wii = w(ii)
+           do jj=jpivp1,j2
+             j = icn(jj)
+             wii = wii - a(jj)*w(j)
+           enddo
+           w(ii) = wii
+   90      w(ii) = w(ii)/a(jpiv)
+         enddo
+  110    ifirst = i + 1
+         neg = .false.
+  120  continue
+!
+!  Reorder solution vector ... x(i) = w(iqinverse(i))
+       do ii=1,n
+         i = iq(ii)
+         i = abs(i)
+         x(i) = w(ii)
+       enddo
+       ip(n) = -ip(n)
+       return
+!
+!  We now solve   transpose * x = b.
+!  Preorder vector ... w(i)=x(iq(i)).
+  140  do ii=1,n
+        i = iq(ii)
+        i = abs(i)
+        w(ii) = x(i)
+      enddo
+!  lj1 points to the beginning the current row in the off-diagonal
+!  blocks.
+       lj1 = idisp(1)
+!  iblock is initialized to point to the beginning of the block after
+!  the last one ]
+       iblock = idisp(2) + 1
+!  ilast is the last row in the current block.
+       ilast = n
+!  iblend points to the position after the last non-zero in the
+!  current block.
+       iblend = iblock
+!  Each pass through this loop operates with one diagonal block and
+!  the off-diagonal part of the matrix corresponding to the rows
+!  of this block. The blocks are taken in reverse order and the
+!  number of times the loop is entered is min(n,no. blocks+1).
+       do numblk=1,n
+         if (ilast.eq.0) exit
+         iblock = iblock - lenr(ilast)
+!  This loop finds the index of the first row in the current block..
+!  it is first and iblock is set to the position of the beginning
+!  of this first row.
+         do k=1,n
+           ii = ilast - k
+           if (ii.eq.0) exit
+           if (ip(ii).lt.0) exit
+           iblock = iblock - lenr(ii)
+         enddo
+         ifirst = ii + 1
+!  j1 points to the position of the beginning of row i (lt part) or
+!  pivot.
+         j1 = iblock
+!  Forward elimination.
+!  Each pass through this loop performs the operations for one row of
+!  the block. If the corresponding entry of w is zero then the
+!  operations can be avoided.
+         do i=ifirst,ilast
+           if (w(i).ne.0.0_kr) then
+!  Jump if row i singular.
+             if (iq(i).lt.0) go to 220
+!  j2 first points to the pivot in row i and then is made to point to
+!  the first non-zero in the u transpose part of the row.
+             j2 = j1 + lenrl(i)
+             wi = w(i)/a(j2)
+             if (lenr(i) - lenrl(i).ne.1) then
+               j2 = j2 + 1
+!  j3 points to the end of row i.
+               j3 = j1 + lenr(i) - 1
+               do jj=j2,j3
+                 j = icn(jj)
+                 w(j) = w(j) - a(jj)*wi
+               enddo
+             endif
+             w(i) = wi
+           endif
+           j1 = j1 + lenr(i)
+         enddo
+         go to 240
+!  Deals with rest of block which is singular.
+  220    do ii=i,ilast
+           mresid = dmax1(mresid,dabs(w(ii)))
+           w(ii) = 0.0_kr
+         enddo
+!  Back substitution.
+!  This loop does the back substitution on the rows of the block in
+!  the reverse order doing it simultaneously on the l transpose part
+!  of the diagonal blocks and the off-diagonal blocks.
+  240    j1 = iblend
+         do iback=ifirst,ilast
+           i = ilast - iback + ifirst
+!  j1 points to the beginning of row i.
+           j1 = j1 - lenr(i)
+           if (lenrl(i).ne.0) then
+!  j2 points to the end of the l transpose part of row i.
+             j2 = j1 + lenrl(i) - 1
+             do jj=j1,j2
+               j = icn(jj)
+               w(j) = w(j) + a(jj)*w(i)
+             enddo
+           endif
+           if (nobloc) cycle
+!  Operations using lower triangular blocks.
+           if (lenoff(i).eq.0) cycle
+!  lj2 points to the end of row i of the off-diagonal blocks.
+           lj2 = lj1 - 1
+!  lj1 points to the beginning of row i of the off-diagonal blocks.
+           lj1 = lj1 - lenoff(i)
+           do jj=lj1,lj2
+             j = icn(jj)
+             w(j) = w(j) - a(jj)*w(i)
+           enddo
+         enddo
+         iblend = j1
+         ilast = ifirst - 1
+       enddo
+!  Reorder solution vector ... x(i)=w(ipinverse(i))
+       do ii=1,n
+         i = ip(ii)
+         i = abs(i)
+         x(i) = w(ii)
+       enddo
+      return
+      end

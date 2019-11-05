@@ -1,0 +1,904 @@
+*mlist
+*if def,selap
+      subroutine dhcoef (ih,hcoef1,ncf2,te2,ntf2,areac,r,z,ix,imme,
+     &       afz,afu,afs,afa1,afa2,afux2,afzx2,
+     &afalum,aflith,afcadm,afsoil,ielem,jelem,elemij,fracml,
+     &tz,imetsw,vole,genz,ihsave,tmltel,arsave,htcmet,tskmet,
+     &nidtop,cnstop,powrat,htctot,hnatcr,hnatcz,ncslp)
+c
+c  Calculates the debris bed material interaction.
+c
+c  Cognizant engineer: ljs.
+c
+c This is a COUPLE ROUTINE
+*in32 ih
+*in32 ncf2
+*in32 ntf2
+*in32 ix
+*in32 imme
+*in32 ielem
+*in32 jelem
+*in32 elemij
+*in32 imetsw
+*in32 ihsave
+*in32 nidtop
+*in32end
+c      afz(n)=atomic fraction of zr in element n.
+c      afu(n)=metalic u.
+c      afs(n)=stainless steel.
+c      afa1(n)=silver-indium-cadmium.
+c      afa2(n)=boron carbide.
+c      afux2=uo2
+c      afzx2(n)=zro2.
+c      afalup(n)=aluminum.
+c      aflith(n)=lithium.
+c      afcadm(n)=cadmium.
+c      afsoil(n)=soil
+c      fracml(n)=fraction of element n that is melted.
+c      tz(i)=temperature of node i (k).
+c      ielem(n)=value of i coordinate for lower left corner of
+c               element n.
+c      jelem(n)=value of j coordinate for lower left corner of
+c               element n.
+c  elemij((maxj-1)*i+j)=element whose lower left corner is located
+c                           in i-j space at i,j coordinates.
+c      genz(1,n)=heat generation in first quadrant of element n (w).
+c      vole(1,n)=volume of first quadrant of element n(m**3).
+c      ihsave(n)=input set values for array ih.
+c      arsave(n)=input set values for array areac.
+c      imme(n)=indicator of how full element is with debris:
+c              0=empty; 1=partially full; 2=completely full.
+c      imetsw(n)=indicator of whether n-th convective node has
+c                convection of water or corium; 0=water, 1=corium.
+c     htcmet(n)=original input value for h.t.c. at convective node n
+c               (w/m**2.k). these h.t.c. are zero for all convective
+c      tskmet(n)=bulk fluid temperature for corium convection(k).
+c      nidtop(neltop) - identification number of neltop-th partially
+c                       filled element
+c      powrat(n) = reactor power as calculated by RELAP5 reactor
+c                  kinetics package at time that material slumped
+c                  into mesh # n (W).
+c      hnatcr(n)=molten pool natural convection heat transfer
+c                  coefficient normal to surface for element n.
+c                  (W/m2.K)
+c
+       implicit none
+       include 'iparm.h'
+       include 'parm.h'
+       include 'ufiles.h'
+       include 'contrl.h'
+       include 'comctl.h'
+       include 'fast.h'
+       include 'cmptim.h'
+       include 'scddat.h'
+       include 'scdpow.h'
+       include 'cpmdat.h'
+       include 'slumpv.h'
+       include 'hardpn.h'
+      integer ih(*),ncf2(*),ntf2(*),ix(5,*),imme(*),nidtop(*),
+     &ielem(*),jelem(*),elemij(*),imetsw(*),ihsave(*)
+      real hcoef1(*),te2(*),areac(*),r(*),z(*),cnstop(*),afz(*),
+     &afu(*),afs(*),afa1(*),afa2(*),afux2(*),afzx2(*),afalum(*),
+     &aflith(*),afcadm(*),afsoil(*),fracml(*),tz(*),vole(4,*),
+     &genz(4,*),arsave(*),htcmet(*),tskmet(*),tmltel(*)
+      real powrat(*),htctot(*)
+      real hnatcr(*),hnatcz(*)
+c     Local variables.
+      integer i,i1,idyn,is,j,
+     &j1,jj,jm1,js,k,ks,
+     &l,ls,mat,mat2,maxjm1,mij,mjk,mkl,
+     &mli,n,nn,izsw,idyn2,ntop
+      real atemp,d,dpws,dvols,pd,pwave,rs,
+     &     sint,telem,z1,z2,zmax,zmin,
+     &     tmin,vsump,raave,cnptmp,
+     &     zptopc
+      real zutco1
+      real elpow,afzsum,afusum,afssum,afa1sm,afa2sm,afux2s,afzx2s,
+     # afalsm,aflism,afcasm,afsosm
+      real afzave,afuave,afsave,afa1av,afa2av,afuxav,afzxav,afalav,
+     # afliav,afcaav,afsoav
+      real tmpsum,tmpave,tgapmx,tgapmn
+      real pwkinc,dltliq,dzflat,dum1,dtmgap,qgap2,qgapa
+      real zmintp,zmaxtp,rtempm,tmax,tsolcs,tliqcs,ralit,telmav
+      integer norent
+      integer ielcen,jelcen,ielrit,iellft,ixrit,ixlft
+      integer ncslp, nprobl
+      external fabend,racalc,zutco1
+c    dltliq = difference between solidus and liquidus temperature of
+c             debris (K).
+c    tsolcs = solidus temperature of structural material that supports
+c             debris (K).
+c    tliqcs = liquidus temperature of structural material that supports
+c              debris (K).
+      data dltliq / 43.0/, tsolcs /1700.0/, tliqcs / 1800.0/
+c     tsoldb = solidus temperature of debris that slumps to lower head
+c              (K).
+c     nprobl = switch to fix Rayleigh number for comparison of
+c              COUPLE solution with that given in literature.
+       data nprobl / 0/, ralit / 1.e+15/
+c     neltop = number of elements through which top of debris passes.
+      neltop = 0
+        if(maxj.le.5)go to 46
+c    turn off convective heat transfer at all nodes that are connected
+c    to debris elements.  After this, convective heat transfer is turn
+c    at bottom nodes of debris elements that are partially filled with
+c    debris.
+      do 40 n = 1,numel
+        mat = ix(5,n)
+        if(mat.eq.1) then
+          i = ix(1,n)
+          j = ix(2,n)
+          k = ix(3,n)
+          l = ix(4,n)
+          do 30 jj = 1,ncev
+            if(ih(jj).eq.i.and.ntf2(jj).ge.0)then
+              ih(jj) = 0
+              hcoef1(jj) = 0.0
+              htctot(jj)=0.0
+              ncf2(jj) = 0
+              te2(jj) = 0.0
+              ntf2(jj) = 0
+              areac(jj) = 0.0
+            endif
+            if(ih(jj).eq.j.and.ntf2(jj).ge.0)then
+              ih(jj) = 0
+              hcoef1(jj) = 0.0
+              htctot(jj)=0.0
+              ncf2(jj) = 0
+              te2(jj) = 0.0
+              ntf2(jj) = 0
+              areac(jj) = 0.0
+            endif
+            if(ih(jj).eq.k.and.ntf2(jj).ge.0)then
+              ih(jj) = 0
+              hcoef1(jj) = 0.0
+              htctot(jj)=0.0
+              ncf2(jj) = 0
+              te2(jj) = 0.0
+              ntf2(jj) = 0
+              areac(jj) = 0.0
+            endif
+            if(ih(jj).eq.l.and.ntf2(jj).ge.0)then
+              ih(jj) = 0
+              hcoef1(jj) = 0.0
+              htctot(jj)=0.0
+              ncf2(jj) = 0
+              te2(jj) = 0.0
+              ntf2(jj) = 0
+              areac(jj) = 0.0
+            endif
+   30       continue
+        endif
+   40   continue
+c    zero out convective heat transfer at all vessel side gap elements
+c    that are below top surface of debris bed.
+       do44n=1,numel
+       if(ix(5,n).ne.6)go to 44
+c      find next element up.
+        i1=ielem(n)
+        j1=jelem(n)
+        if(j1.ge.maxj)go to 44
+        jm1=j1+1
+        idyn=(maxj-1)*i1+jm1
+        nn=elemij(idyn)
+        if(imme(nn).eq.0)go to 44
+        i=ix(1,n)
+        j=ix(2,n)
+        k=ix(3,n)
+        l=ix(4,n)
+        do42jj=1,ncev
+            if(ih(jj).eq.i.and.ntf2(jj).ge.0)then
+              ih(jj) = 0
+              hcoef1(jj) = 0.0
+              htctot(jj)=0.0
+              ncf2(jj) = 0
+              te2(jj) = 0.0
+              ntf2(jj) = 0
+              areac(jj) = 0.0
+            endif
+            if(ih(jj).eq.j.and.ntf2(jj).ge.0.and.imme(nn).eq.2)then
+              ih(jj) = 0
+              hcoef1(jj) = 0.0
+              htctot(jj)=0.0
+              ncf2(jj) = 0
+              te2(jj) = 0.0
+              ntf2(jj) = 0
+              areac(jj) = 0.0
+            endif
+            if(ih(jj).eq.k.and.ntf2(jj).ge.0.and.imme(nn).eq.2)then
+              ih(jj) = 0
+              hcoef1(jj) = 0.0
+              htctot(jj)=0.0
+              ncf2(jj) = 0
+              te2(jj) = 0.0
+              ntf2(jj) = 0
+              areac(jj) = 0.0
+            endif
+            if(ih(jj).eq.l.and.ntf2(jj).ge.0)then
+              ih(jj) = 0
+              hcoef1(jj) = 0.0
+              htctot(jj)=0.0
+              ncf2(jj) = 0
+              te2(jj) = 0.0
+              ntf2(jj) = 0
+              areac(jj) = 0.0
+            endif
+42     continue
+44     continue
+46     continue
+      if(maxj.le.5)go to 212
+      do 210 n = 1,numel
+        mat = ix(5,n)
+cj      if material isn't debris, go to 210
+        if(mat.ne.1) go to 210
+cj      if element isn't partially full, go to 210
+        if(imme(n).ne.1) go to 210
+        i = ix(1,n)
+        j = ix(2,n)
+        k = ix(3,n)
+        l = ix(4,n)
+        if(k.ne.l) then
+c       check intersection with i-j line
+          mij=0
+          z1 = z(i)
+          z2 = z(j)
+          zmax = max(z1,z2)
+          zmin = min(z1,z2)
+          if(height.lt.zmax.and.height.gt.zmin) mij = 1
+c           check intersection with j-k line
+          mjk=0
+          z1 = z(j)
+          z2 = z(k)
+          zmax = max(z1,z2)
+          zmin = min(z1,z2)
+          if(height.lt.zmax.and.height.gt.zmin) mjk = 1
+c           check intersection with k-l line
+          mkl=0
+          z1 = z(k)
+          z2 = z(l)
+          zmax = max(z1,z2)
+          zmin = min(z1,z2)
+          if(height.lt.zmax.and.height.gt.zmin) mkl = 1
+c           check intersection with l-i line
+          mli=0
+          z1 = z(l)
+          z2 = z(i)
+          zmax = max(z1,z2)
+          zmin = min(z1,z2)
+          if(height.lt.zmax.and.height.gt.zmin) mli = 1
+          if (mij.eq.1 .or. mjk.eq.1 .or. mkl.eq.1 .or. mli.eq.1) then
+            neltop = neltop + 1
+            nidtop(neltop) = n
+          else
+            go to 210
+          end if
+c           case of debris height being bracketed by i-j and l-i lines
+          if(mij.eq.1 .and. mli.eq.1) then
+c         case of crotch element for typical couple mesh.
+            do 50 jj = 1,ncev
+              if(ihsave(jj).eq.i.and.ntf2(jj).ge.0)then
+                ih(jj) = i
+                d = sqrt((r(j)-r(k))**2 + (z(j)-z(k))**2)
+                dzflat=1.0
+              if(z(l).gt.(z(k)-1.e-6).and.z(l).lt.(z(k)+1.e-6).and.
+     #        z(j).gt.(z(k)-1.e-6).and.z(j).lt.(z(k)+1.e-6))dzflat=0.0
+                sint = abs((r(j) - r(k))/d)
+                if(npp.eq.0 .and. sint.lt.1.0e-05) d=(z(j) - z(k))*r(k)
+                if(npp.eq.0 .and. sint.gt.1.0e-05)d=(r(j)**2-r(k)**2)
+     #              /2./sint
+                d = abs(d)
+                rs = r(j) + r(k)
+                pd = d
+                if(npp.eq.0) d = pd*(.5 + r(k)/rs)
+                if(npp.eq.0) d = pd*(.5 + r(j)/rs)
+                atemp = d/2
+c***       estimate of surface area from coordinates at top of element.
+c***            if(npp.eq.0.and.dzflat.lt.1.e-6)then
+c***            areac(jj)=areac(jj)+0.5*((0.5*(r(j)+r(k)))**2
+c*** #          - (0.5*(r(k)+r(l)))**2)
+c***            atemp=0.0
+c***            end if
+                ielcen=ielem(n)
+                jelcen=jelem(n)
+                ielrit=elemij((maxj-1)*(ielcen)+jelcen-1)
+                iellft=elemij((maxj-1)*(ielcen-1)+jelcen)
+                if(npp.eq.0.and.dzflat.lt.1.e-6)then
+                ixrit=ix(1,ielrit)
+                ixlft=ix(1,iellft)
+c     Note. multiply area by 0.5 to account for subroutine couqot
+c           applying multiplication factor of 2*pi.
+c     This area is total area for node, so do not increment.
+                areac(jj)=0.5*((0.5*(r(ixrit)+r(i)))**2
+     #          - (0.5*(r(i)+r(ixlft)))**2)
+                atemp=0.0
+                end if
+                go to 60
+              endif
+   50         continue
+   60       continue
+          endif
+c           case of debris height being bracketed by l-i and j-k lines
+          if(mli.eq.1 .and. mjk.eq.1) then
+c         case for elements to left of crotch elements for typical
+c         couple mesh.
+            do 130 jj = 1,ncev
+              if(ihsave(jj).eq.j.and.ntf2(jj).ge.0)then
+                ih(jj) = j
+                d = sqrt((r(k)-r(l))**2 + (z(k)-z(l))**2)
+                dzflat=abs(z(i)-z(j))
+                sint = abs((r(k) -r(l))/d)
+                if(npp.eq.0 .and. sint.lt.1.0e-05)d=abs(z(k)-z(l))*r(l)
+                if(npp.eq.0 .and. sint.ge.1.0e-05) d = (r(k)**2 - r(l)**
+     &2)/2./    sint
+                d = abs(d)
+                rs = r(k) + r(l)
+                pd = d
+                if(npp.eq.0) d = pd*(.5 + r(l)/rs)
+                if(npp.eq.0) d = pd*(.5 + r(k)/rs)
+                atemp = d/2
+             if(npp.eq.0.and.dzflat.lt.1.e-6)then
+             areac(jj)=areac(jj)+0.5*(r(j)**2 - (0.5*(r(i)+r(j)))**2)
+             atemp=0.5*((0.5*(r(i)+r(j)))**2 - r(i)**2)
+             end if
+                go to 140
+              endif
+  130         continue
+  140       continue
+            do 150 jj = 1,ncev
+              if(ihsave(jj).eq.i.and.ntf2(jj).ge.0)then
+               ih(jj) = i
+               dzflat=abs(z(i)-z(j))
+               if(npp.eq.0.and.dzflat.lt.1.e-6)then
+               areac(jj)=areac(jj)+0.5*((0.5*(r(i)+r(j)))**2-r(i)**2)
+               end if
+               go to 160
+              endif
+  150         continue
+  160       continue
+          endif
+          if(mjk.eq.1 .and. mkl.eq.1) then
+            write (output,420)n
+  420 format('0**** dhcoef - mesh is configured wrong element number =',
+     #      i5)
+            call fabend
+          endif
+          if(mij.eq.1 .and. mkl.eq.1) then
+c     case for right side of crotch elements for typical couple mesh.
+            do 170 jj = 1,ncev
+              if(ihsave(jj).eq.i.and.ntf2(jj).ge.0)then
+                ih(jj) = i
+                d = sqrt((r(j)-r(k))**2 + (z(j)-z(k))**2)
+                dzflat=abs(z(i)-z(l))
+                sint = abs((r(j) -r(k))/d)
+                if(npp.eq.0 .and. sint.lt.1.0e-05)d=abs(z(j)-z(k))*r(k)
+                if(npp.eq.0 .and. sint.ge.1.0e-05) d = (r(j)**2 - r(k)**
+     &2)/2./    sint
+                d = abs(d)
+                rs = r(j) + r(k)
+                pd = d
+                if(npp.eq.0) d = pd*(.5 + r(k)/rs)
+                if(npp.eq.0) d = pd*(.5 + r(j)/rs)
+                atemp = d/2
+                if(npp.eq.0.and.dzflat.lt.1.e-6)then
+c      Note.  0.5 factor accounts for subroutine couqot multiplying
+c             areac by 2*pi
+                areac(jj)=areac(jj)+0.5*(r(i)**2 - (0.5*(r(i)+r(l)))**2)
+                dum1=0.5*(r(i)**2 - (0.5*(r(i)+r(l)))**2)
+                atemp=0.5*((0.5*(r(l)+r(i)))**2 - r(l)**2)
+                end if
+                go to 180
+              endif
+  170         continue
+  180       continue
+            do 190 jj = 1,ncev
+            if(ihsave(jj).eq.l.and.ntf2(jj).ge.0)then
+            ih(jj) = l
+            dzflat=abs(z(i)-z(l))
+            if(npp.eq.0.and.dzflat.lt.1.e-6)then
+c    Note.  0.5 factor accounts for subroutine couqot multiplying
+c           areac by 2*pi
+            areac(jj)=areac(jj)+0.5*((0.5*(r(i)+r(l)))**2-r(l)**2)
+            end if
+            go to 200
+            endif
+  190       continue
+  200       continue
+          endif
+        else
+          write (output,430)
+          call fabend
+        endif
+  210   continue
+212     continue
+c       check for molten debris heating up floor of structure that
+c       supports it. if so, flag nodes at interface of molten debris
+c       and floor as nodes at which convection heat transfer occurs.
+c
+c       for case of plane geometry, convection heat transfer is not
+c       considered.
+      if (npp .ne. 0) go to 410
+c
+c     by setting areac to the input area in the following loop,
+c     the fine tuning of areac done in the 700 loop above for
+c     partially filled elements is over-ridden.
+c     change made by krk, ljs, dec 1991
+c
+      do220n=1,ncev
+        if(istcou.eq.0)then
+          hcoef1(n)=htcmet(n)
+        endif
+        if(ih(n).eq.0)then
+        areac(n)=arsave(n)
+        end if
+  220   continue
+      istcou=1
+c
+c     if user specified "no" natural convection in liquified
+c     debris (ncld = 2), skip rest of routine
+c     this line has been commented out to make sure that
+c     coding is used
+c     if (ncld .eq. 2) go to 410
+c
+c     a major update has been made to subroutines dhcoef, kpool.
+c     for the debris bed, only one molten pool is considered for
+c     the entire debris bed, where previously there could be one
+c     or more molten pools.  Loop 770 defines the pool conditions,
+c     which are used in dhcoef, kpool      (krk,ljs,dec 1991)
+c
+c     find pool depth by summing volume of elements that are melted,
+c     and assuming hemisphere, back out radius (depth), to be used
+c     in calculating rayleigh number.  use this depth in subroutines
+c     dhcoef and kpool.  also set upper and lower elevation for
+c     pool.
+c
+      vsump  = 0.0
+      pwave  = 0.0
+      raave  = 0.0
+      zpbot = 1.0e6
+      zptopc = 0.0
+      izsw   = 0
+      maxjm1 = maxj - 1
+      do 141 n = 1,numel
+        mat = ix(5,n)
+        if (mat.ne.1 .or. imme(n).ne.2) go to 141
+c       get melt temperature of each element
+        call tmltmx( afz(n), afu(n), afs(n), afa1(n), afa2(n), afux2(n),
+     &  afzx2(n), afalum(n), aflith(n), afcadm(n), afsoil(n), tmltel(n))
+  141 continue
+c       determine if element is fully melted (tmin > tmelt)
+c       check to make sure that molten element is part of main pool
+c       only consider elements filled with debris near x = 0
+c         skip coding once melt front is known
+      do 142 jj=1,maxjm1
+           idyn = maxjm1 + jj
+           n  = elemij(idyn)
+           if(ix(5,n).ne.1.or.imme(n).ne.2) go to 142
+           if (izsw.eq.1) go to 142
+           i = ix(1,n)
+           j = ix(2,n)
+           k = ix(3,n)
+           l = ix(4,n)
+           idyn2 = maxjm1 + jj+1
+           ntop = elemij(idyn2)
+           if( (tz(i).ge.tmltel(n).and.tz(l).lt.tmltel(n)).or.
+     &     (tz(j).ge.tmltel(n).and.tz(k).lt.tmltel(n))) then
+                zptopc= z(k)
+                izsw = 1
+c     consider cases where elements on top of pool are completely molten
+            elseif (imme(n).eq.2.and.imme(ntop).le.1.and.
+     &      tz(k).ge.tmltel(n).and.tz(l).ge.tmltel(n))  then
+                zptopc= z(k)
+                izsw = 1
+            endif
+  142 continue
+      zptop=zptopc
+      elpow=0.0
+      afzsum=0.0
+      afusum=0.0
+      afssum=0.0
+      afa1sm=0.0
+      afa2sm=0.0
+      afux2s=0.0
+      afzx2s=0.0
+      afalsm=0.0
+      aflism=0.0
+      afcasm=0.0
+      afsosm=0.0
+      tmpsum=0.0
+      do 230 n = 1,numel
+        if (ix(5,n).ne.1 .or. imme(n).ne.2) go to 230
+        tmin  = 5000.0
+        i = ix(1,n)
+        j = ix(2,n)
+        k = ix(3,n)
+        l = ix(4,n)
+        if (tz(i) .lt. tmin) tmin = tz(i)
+        if (tz(j) .lt. tmin) tmin = tz(j)
+        if (tz(k) .lt. tmin) tmin = tz(k)
+        if (tz(l) .lt. tmin) tmin = tz(l)
+        tmax=max(tz(i),tz(k),tz(j),tz(l))
+        if (tmax .gt. tmltel(n)) then
+c       element partly liquified, check elevation and add volume to
+c       sum (vsump)
+c       determine bottom of pool and sum volume of pool
+          if (z(l).le.1.e+10) then
+            zmin   = min(z(i),z(j),z(k),z(l))
+            if (zmin .lt. zpbot) zpbot = zmin
+            dvols  = (vole(1,n)+vole(2,n)+vole(3,n)+vole(4,n))
+            vsump  = vsump + dvols
+            telem  = 0.25*(tz(i)+tz(j)+tz(k)+tz(l))
+            pwkinc=1.
+            if(ncpow.eq.3.and.powrat(k).ge.1.e-10)then
+              pwkinc=pwrfdk/powrat(k)
+            end if
+            dpws =pwkinc*(genz(1,n)+genz(2,n)+genz(3,n)+genz(4,n))/dvols
+            pwave  = pwave + dpws
+            tmpsum=tmpsum+tmax*dvols
+            elpow=elpow+pwkinc*(genz(1,n)+genz(2,n)+genz(3,n)+genz(4,n))
+            afzsum=afzsum+afz(n)*dvols
+            afusum=afusum+afu(n)*dvols
+            afssum=afssum+afs(n)*dvols
+            afa1sm=afa1sm+afa1(n)*dvols
+            afa2sm=afa2sm+afa2(n)*dvols
+            afux2s=afux2s+afux2(n)*dvols
+            afzx2s=afzx2s+afzx2(n)*dvols
+            afalsm=afalsm+afalum(n)*dvols
+            aflism=aflism+aflith(n)*dvols
+            afcasm=afcasm+afcadm(n)*dvols
+            afsosm=afsosm+afsoil(n)*dvols
+          endif
+        endif
+  230   continue
+      if (vsump .ge. 1.0e-15) then
+        pwave=elpow/vsump
+c   thkcer(9) puts average power density in molten pool into variable
+c   in common block and that can be plotted.
+        thkcer(9)=pwave
+        tmpave=tmpsum/vsump
+        tpool=tmpave
+        afzave=afzsum/vsump
+        afuave=afusum/vsump
+        afsave=afssum/vsump
+        afa1av=afa1sm/vsump
+        afa2av=afa2sm/vsump
+        afuxav=afux2s/vsump
+        afzxav=afzx2s/vsump
+        afalav=afalsm/vsump
+        afliav=aflism/vsump
+        afcaav=afcasm/vsump
+        afsoav=afsosm/vsump
+      else
+        depth  = 0.001
+        tpool  = 3115.
+        pwave  = 0.0
+        rap    = 0.0
+        rass=1.
+        if(nprobl.eq.1)rass=ralit
+        cnpool = 10.0
+c   delete statement below that precludes gap conductance for case of
+c   no molten material.
+        go to 390
+      endif
+c       for cylindrical geometry (npp = 0), multiply vsump by 2*pi
+c       for hemisphere volume
+      vsump = 6.2831953*vsump
+c     assuming hemisphere, back out radius (.5*(4/3)*pi*r**3)
+        depth = (0.47746*vsump)**0.33333
+c***  zptop = zpbot + depth
+c      store liquidus temperature of molten material.
+       call tmltmx(afzave,afuave,afsave,afa1av,afa2av,afuxav,
+     # afzxav,afalav,afliav,afcaav,afsoav,tlqpol)
+      call racalc(afzave,afuave,afsave,afa1av,afa2av,afuxav,
+     # afzxav,afalav,afliav,afcaav,afsoav,tmpave,
+     # pwave,depth,rap,cnptmp,tlqpol,rass)
+       cnpool=cnptmp
+      do388n=1,numel
+      mat=ix(5,n)
+      if (mat.ne.1 .or. imme(n).ne.2) go to 388
+      telmav=0.25*(tz(ix(1,n))+tz(ix(2,n))+tz(ix(3,n))+tz(ix(4,n)))
+      tmax=max(tz(i),tz(j),tz(k),tz(l))
+        if(tmax.gt.tmltel(n))then
+c    Since material in molten pool is assumed to be well-mixed, all
+c    molten elements have same liquidus temperature and composition.
+        tmltel(n)=tlqpol
+        afz(n)=afzave
+        afu(n)=afuave
+        afs(n)=afsave
+        afa1(n)=afa1av
+        afa2(n)=afa2av
+        afux2(n)=afuxav
+        afzx2(n)=afzxav
+        afalum(n)=afalav
+        aflith(n)=afliav
+        afcadm(n)=afcaav
+        afsoil(n)=afsoav
+        end if
+388   continue
+       if(nprobl.eq.1)rass=ralit
+c     store depth, zpbot, zptop, tpool, rap, cnpool in common
+c     parm for use in this subroutine and subroutine kpool
+cj
+cj    debug printout to check rayleigh number calculation
+cj
+cj
+390   continue
+      do 400 n = 1,numel
+        mat=ix(5,n)
+cj      if material isn't debris, go to 400
+        if(mat.ne.1)go to 400
+cj      if element isn't full, go to 400
+c***    if(imme(n).ne.2)go to 400
+        if(imme(n).eq.0)go to 400
+        tmin=min(tz(ix(1,n)),tz(ix(2,n)),tz(ix(3,n)),tz(ix(4,n)))
+        tmax=max(tz(ix(1,n)),tz(ix(2,n)),tz(ix(3,n)),tz(ix(4,n)))
+        i=ix(1,n)
+        j=ix(2,n)
+        k=ix(3,n)
+        l=ix(4,n)
+cj
+c       check to see whether bottom of element interfaces with
+c       structural element.
+        i1=ielem(n)
+        j1=jelem(n)
+        if(j1.le.1)go to 280
+        jm1=j1-1
+        idyn=(maxj-1)*i1+jm1
+        nn=elemij(idyn)
+        if(nn.le.0)go to 280
+        mat2=ix(5,nn)
+        if(mat2.ne.6)go to 280
+        ls=ix(4,nn)
+        ks=ix(3,nn)
+        is=ix(1,nn)
+        js=ix(2,nn)
+c       calculate depth of pool over structure, its average temperature,
+c       etc.
+c       calculations of depth, tpool now done in 770 loop above
+        maxjm1=maxj-1
+        if(j1.gt.maxjm1)go to 280
+c***    if(depth.lt.1.e-3)go to 280
+c             rtemp = maximum user-defined gap heat transfer coefficient
+              rtempm=rtemp
+c   10000.0 W/m2.K is assumes to be gap conductance at interface of
+c   liquid debris on top of structural material, in effect very little
+c   gap resistance.
+              if(rtempm.lt.10000.0)rtempm=10000.0
+        if(tmax.le.tmltel(n))go to 275
+c  Nusselt number correlation based on Mayinger, Jahn,
+c  Reineke, and Steinbrenner data for downward heat transfer
+c  from a two-dimensional slice (INEL/94-0174)
+c    four configurations of mesh are considered; norent =1 = crotch
+c    element at bottom of mesh, norent = 2 = all other crotch elements,
+c    norent = 3 = quadrilateral elements to left of crotch elements,
+c    norent = 4 = quadrilateral elements to right of crotch element.
+c      set default values; keffr(n)=0.0 = conductance of element is
+c      solid state conductance calculated in subroutine cnduct.
+       norent=0
+       zmintp=min(z(j),z(k),z(l))
+       zmaxtp=max(z(j),z(k),z(l))
+       if(abs(zmaxtp-zmintp).le.0.001)then
+c      "crotch element"
+       norent=2
+       if(r(i).lt.0.001)norent=1
+       endif
+       if(norent.ge.1)go to 415
+c
+c      quadrilateral element.
+c
+       zmintp=min(z(k),z(l))
+       zmaxtp=max(z(k),z(l))
+       if(abs(zmaxtp-zmintp).le.0.001)then
+       norent=3
+       else
+       norent=4
+       end if
+415    continue
+c       define convective node for nodes in element with structural
+c       material that interfaces with molten pool.
+275     continue
+        do240jj=1,ncev
+          if(ntf2(jj).ge.0)go to 240
+          if(ihsave(jj).eq.ks)then
+            ih(jj)=ks
+            areac(jj)=arsave(jj)
+            tmax=max(tz(ks),tz(-ntf2(jj)))
+            tmin=min(tz(ks),tz(-ntf2(jj)))
+              if(tmin.lt.tliqcs.and.tmax.lt.tmltel(n))then
+c     interpolate gap conductance when temperature between solidus and
+c     liquidus temperature, assume solidus temperature is 43. K below
+c     liquidus temperature.
+                if(tmin.lt.tsolcs.and.tmax.lt.(tmltel(n)-dltliq))then
+                hcoef1(jj)=rtemp
+                else
+                  if(tmin.ge.tsolcs)then
+c   structural material at interface melting.
+                  hcoef1(jj)=rtempm+(rtemp-rtempm)*
+     #            (tliqcs-tmin)/(tliqcs-tsolcs)
+                  else
+c   debris at interface melting.
+                  hcoef1(jj)=rtempm+(rtemp-rtempm)*
+     #            (tmltel(n)-tmax)/dltliq
+                  end if
+                end if
+              else
+c    Assume high temperature is on debris side of gap.  For general
+c    meshing, check for material types on each side of node.
+              tgapmx=tmax
+              tgapmn=min(tz(ks),tz(-ntf2(jj)))
+              dtmgap=tgapmx-tgapmn
+              if(abs(dtmgap).lt.1.e-3)dtmgap=1.e-3
+              qgap2=rtempm*(tgapmx-tgapmn)
+c   if structural material at debris-structure interface is molten,
+c   then gap conductance for zero gap (10,000 W/m2.K) is applied.
+              qgapa=qgap2
+              hcoef1(jj)=qgapa/abs(dtmgap)
+              if(hcoef1(jj).gt.rtempm)hcoef1(jj)=rtempm
+              end if
+          end if
+  240     continue
+        do250jj=1,ncev
+          if(ntf2(jj).ge.0)go to 250
+          if(ihsave(jj).eq.ls)then
+            ih(jj)=ls
+            areac(jj)=arsave(jj)
+            tmax=max(tz(ls),tz(-ntf2(jj)))
+            tmin=min(tz(ls),tz(-ntf2(jj)))
+              if(tmin.lt.tliqcs.and.tmax.lt.tmltel(n))then
+c     interpolate gap conductance when temperature between solidus and
+c     liquidus temperature, assume solidus temperature is 43. K below
+c     liquidus temperature.
+                if(tmin.lt.tsolcs.and.tmax.lt.(tmltel(n)-dltliq))then
+                hcoef1(jj)=rtemp
+                else
+                  if(tmin.ge.tsolcs)then
+c   structural material at interface melting.
+                  hcoef1(jj)=rtempm+(rtemp-rtempm)*
+     #            (tliqcs-tmin)/(tliqcs-tsolcs)
+                  else
+c   debris at interface melting.
+                  hcoef1(jj)=rtempm+(rtemp-rtempm)*
+     #            (tmltel(n)-tmax)/dltliq
+                  end if
+                end if
+              else
+c    Assume high temperature is on debris side of gap.  For general
+c    mes hing, check for material types on each side of node.
+              tgapmx=tmax
+              tgapmn=min(tz(ls),tz(-ntf2(jj)))
+              dtmgap=tgapmx-tgapmn
+              if(abs(dtmgap).lt.1.e-3)dtmgap=1.e-3
+              qgap2=rtempm*(tgapmx-tgapmn)
+c   if structural material at debris-structure interface is molten,
+c   then gap conductance for zero gap (10,000 W/m2.K) is applied.
+              qgapa=qgap2
+              hcoef1(jj)=qgapa/abs(dtmgap)
+              if(hcoef1(jj).gt.rtempm)hcoef1(jj)=rtempm
+              end if
+          end if
+  250     continue
+        do260jj=1,ncev
+          if(ntf2(jj).ge.0)go to 260
+          if(ihsave(jj).eq.is)then
+            ih(jj)=is
+            areac(jj)=arsave(jj)
+            tmax=max(tz(is),tz(-ntf2(jj)))
+            tmin=min(tz(is),tz(-ntf2(jj)))
+              if(tmin.lt.tliqcs.and.tmax.lt.tmltel(n))then
+c     interpolate gap conductance when temperature between solidus and
+c     liquidus temperature, assume solidus temperature is 43. K below
+c     liquidus temperature.
+                if(tmin.lt.tsolcs.and.tmax.lt.(tmltel(n)-dltliq))then
+                hcoef1(jj)=rtemp
+                else
+                  if(tmin.ge.tsolcs)then
+c   structural material at interface melting.
+                  hcoef1(jj)=rtempm+(rtemp-rtempm)*
+     #            (tliqcs-tmin)/(tliqcs-tsolcs)
+                  else
+c   debris at interface melting.
+                  hcoef1(jj)=rtempm+(rtemp-rtempm)*
+     #            (tmltel(n)-tmax)/dltliq
+                  end if
+                end if
+              else
+c    Assume high temperature is on debris side of gap.  For general
+c    mes hing, check for material types on each side of node.
+              tgapmx=tmax
+              tgapmn=min(tz(is),tz(-ntf2(jj)))
+              dtmgap=tgapmx-tgapmn
+              if(abs(dtmgap).lt.1.e-3)dtmgap=1.e-3
+              qgap2=rtempm*(tgapmx-tgapmn)
+c   if structural material at debris-structure interface is molten,
+c   then gap conductance for zero gap (10,000 W/m2.K) is applied.
+              qgapa=qgap2
+              hcoef1(jj)=qgapa/abs(dtmgap)
+              if(hcoef1(jj).gt.rtempm)hcoef1(jj)=rtempm
+              end if
+          end if
+  260     continue
+        do270jj=1,ncev
+          if(ntf2(jj).ge.0)go to 270
+          if(ihsave(jj).eq.js)then
+            ih(jj)=js
+            areac(jj)=arsave(jj)
+            tmax=max(tz(js),tz(-ntf2(jj)))
+            tmin=min(tz(js),tz(-ntf2(jj)))
+            if(tmin.lt.tliqcs.and.tmax.lt.tmltel(n))then
+c     interpolate gap conductance when temperature between solidus and
+c     liquidus temperature, assume solidus temperature is 43. K below
+c     liquidus temperature.
+                if(tmin.lt.tsolcs.and.tmax.lt.(tmltel(n)-dltliq))then
+                hcoef1(jj)=rtemp
+                else
+                  if(tmin.ge.tsolcs)then
+c   structural material at interface melting.
+                  hcoef1(jj)=rtempm+(rtemp-rtempm)*
+     #            (tliqcs-tmin)/(tliqcs-tsolcs)
+                  else
+c   debris at interface melting.
+                  hcoef1(jj)=rtempm+(rtemp-rtempm)*
+     #            (tmltel(n)-tmax)/dltliq
+                  end if
+                end if
+              else
+c    Assume high temperature is on debris side of gap.  For general
+c    mes hing, check for material types on each side of node.
+              tgapmx=tmax
+              tgapmn=min(tz(js),tz(-ntf2(jj)))
+              dtmgap=tgapmx-tgapmn
+              if(abs(dtmgap).lt.1.e-3)dtmgap=1.e-3
+              qgap2=rtempm*(tgapmx-tgapmn)
+c   if structural material at debris-structure interface is molten,
+c   then gap conductance for zero gap (10,000 W/m2.K) is applied.
+              qgapa=qgap2
+              hcoef1(jj)=qgapa/abs(dtmgap)
+              if(hcoef1(jj).gt.rtempm)hcoef1(jj)=rtempm
+              end if
+          end if
+  270     continue
+  280   continue
+  400   continue
+  410 continue
+      if(maxj.le.5)go to 448
+c     zero out gap htc for gap nodes that are above top surface of
+c     debris.
+      do446n=1,numel
+      if(ix(5,n).ne.6)go to 446
+c      find next element up.
+        i1=ielem(n)
+        j1=jelem(n)
+        if(j1.ge.maxj)go to 446
+        jm1=j1+1
+        idyn=(maxj-1)*i1+jm1
+        nn=elemij(idyn)
+        if(imme(nn).eq.2)go to 446
+        i=ix(1,n)
+        j=ix(2,n)
+        k=ix(3,n)
+        l=ix(4,n)
+        do444jj=1,ncev
+c     if imme(nn).eq.1, then the bottom two nodes, namely i and l,
+c     represent gap between debris and lower head.
+            if(ih(jj).eq.i.and.ntf2(jj).lt.0.and.imme(nn).eq.0)then
+              ih(jj) = 0
+              hcoef1(jj) = 1.e-6
+            endif
+            if(ih(jj).eq.j.and.ntf2(jj).lt.0)then
+              ih(jj) = 0
+              hcoef1(jj) = 1.e-6
+            endif
+            if(ih(jj).eq.k.and.ntf2(jj).lt.0)then
+              ih(jj) = 0
+              hcoef1(jj) = 1.e-6
+            endif
+            if(ih(jj).eq.l.and.ntf2(jj).lt.0.and.imme(nn).eq.0)then
+              ih(jj) = 0
+              hcoef1(jj) = 1.e-6
+            endif
+444     continue
+446     continue
+448     continue
+      return
+  430 format('0**** dhcoef - triangular element not allowed ')
+      end
+*endif

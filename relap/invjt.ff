@@ -1,0 +1,116 @@
+*mlist
+       subroutine invjt
+c
+c  Prepares inverted junction table and checks for proper number of
+c  junctions per volume.
+c
+c  Cognizant engineer: rjw.
+c
+       use invtbl
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+       integer i,i1,i2,ivx,j,jj,jx,k,l,m,m1,m2,n,ni(6)
+       logical fnd
+c
+c  Get space for inverted table.
+       invtno = 2*njuns(filndx(5))
+       if (allocated(invj)) call delinvjsp
+       call getinvjsp
+c  Set up loops over components and volumes.
+       k = filndx(3)
+       i = 1
+       ivx = filndx(4)
+       n = 1
+       invofs = filndx(5)
+c  Loop over components.
+       do l = 1,ncmps(k)
+         if (cmptyp(k) .ne. 0) then
+           if (nvc(k) .ne. 0) then
+c  Loop over volumes within component.
+             do m = 1,nvc(k)
+               invfnd(ivx) = n
+               invcnt(ivx) = 0
+               ni = 0
+c  Search for junctions connecting this volume.
+               jj = 1
+               j = filndx(5)
+               do m2 = 1,njuns(j)
+                 fnd = .false.
+                 jx = 0
+                 i1 = ij2vn(j)
+                 i2 = ij1vn(j)
+                 if (i1 .eq. i) then
+                   fnd = .true.
+                   m1 = iand(ishft(jcex(j),-9),7)
+                   jx = ior(jx,4)
+                   if (iand(jc(j),4096) .ne. 0) jx = ior(jx,8)
+                   if (iand(jc(j),8) .ne. 0) jx = ior(jx,3)
+                 elseif (i2 .eq. i) then
+                   fnd = .true.
+                   m1 = iand(ishft(jcex(j),-12),7)
+                   if (iand(jc(j),8192) .ne. 0) jx = ior(jx,8)
+                   if (iand(jc(j),4) .ne. 0) then
+                     jx = ior(jx,1)
+                   else
+                     jx = ior(jx,2)
+                   endif
+                 endif
+                 if (fnd) then
+                   ni(m1+1) = ni(m1+1) + 1
+                   invcnt(ivx) = invcnt(ivx) + 1
+                   invj(n)%invjun = jx
+                   invj(n)%invvno = jj
+                   invj(n)%invvnx = j
+                   n = n + 1
+                 endif
+                 jj = jj + 1
+                 j = j + ijskp
+               enddo
+c  Check connection restrictions.
+               if (invcnt(ivx) .eq. 0) then
+                 if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     &           write (output,"('0$$$$$$$$ No junctions connected to vo
+     &lume',i10,'.')") volno(ivx)
+               endif
+               if (invcnt(ivx).gt.1 .and. iand(vctrl(ivx),1).ne.0) then
+                 write (output,"('0******** More than one junction conne
+     &cted to time dependent volume',i10,'.')") volno(ivx)
+                 fail = .true.
+               endif
+               if (cmptyp(k).eq.4 .and. invcnt(ivx).gt.2) then
+                 write (output,"('0******** Junctions in addition to tho
+     &se in pump component are attached to pump'i10,'; not allowed.')")
+     &           volno(ivx)
+                 fail = .true.
+               endif
+               if (cmptyp(k).eq.13 .and. invcnt(ivx).gt.1) then
+                 write (output,"('0******** Junctions in addition to the
+     & one in the accumulator component are attached to accumulator',
+     & i10,'; not allowed.')") volno(ivx)
+                 fail = .true.
+               endif
+               if (iand(vctrl(ivx),4).ne.0 .and. (ni(1).gt.1 .or.
+     &         ni(2).gt.1 .or. ni(3).gt.1 .or. ni(4).gt.1 .or.
+     &         ni(5).gt.1 .or. ni(6).gt.1 .or. invcnt(ivx).gt.2)) then
+                 write (output,"('0******** Thermal stratification model
+     & specifies more than two junctions attached to volume',i10,'  or'/
+     & ' more than one junction per face; not now allowed.')")
+     &           volno(ivx)
+                 fail = .true.
+               endif
+               i = i + 1
+               ivx = ivx + ivskp
+             enddo
+           endif
+         endif
+         k = k + cmplen(k)
+       enddo
+       return
+       end

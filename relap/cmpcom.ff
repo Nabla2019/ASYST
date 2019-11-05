@@ -1,0 +1,344 @@
+*mlist
+       subroutine cmpcom
+c
+c Compares commons and dynamic blocks from two files.
+c
+c Cognizant engineer: rjw.
+c
+       implicit none
+c
+       include 'comctl.h'
+       include 'comlst.h'
+       include 'contrl.h'
+       include 'fast.h'
+$if def,fourbyt,2
+       integer*4 ha(2*lfsiz)
+       equivalence (ha(1),fa(1))
+       include 'maxmem.h'
+       include 'ufiles.h'
+       include 'ufilef.h'
+c
+       integer i,ias,inp8,ix(2),ix2(2),ixb,ixi,ixii,ixin,iwrd,
+     & j,k,k1p,k2p,k2,l3b(9),l1,lcontg,len(2),lens,numc,nlimit
+       integer locf4,locfi4
+       real fid,ftbnid
+       logical tfail,topen(2)
+       character ihldc*108,crstrc*24,chwrd*8,filenm(2)*8
+c
+       data l3b/1001,-1999,2,1998,0,1,2,0,0/
+       data crstrc/'testing dump file'/
+       data filenm/'dumpfil1','dumpfil2'/
+       data nlimit/50/
+c
+c  Open dump files.
+       do 11 j = 1,2
+         len(j) = 0
+         topen(j) = .false.
+         open (unit=j,file=filsch(j+12),status='old',
+     &   form='unformatted',iostat=len(j))
+         if (len(j) .ne. 0) then
+           write (tty,2013) len(j),trim(filsch(j+12))
+ 2013  format ('Open failure number',i8,' on file ',a,', perhaps file is
+     & not available.')
+           write (output,2014) len(j),trim(filsch(j+12))
+ 2014  format ('0******** Open failure number',i8,' on file ',a,' perhap
+     &s file is not available.')
+           topen(j) = .true.
+         endif
+   11  continue
+       fail = fail .or. topen(1) .or. topen(2)
+c  Process input cards.
+       fid = ftbnid(1)
+       l1 = lcontg(1)
+       if (l1 .lt. 1998) then
+         fail = .true.
+         write (output,2012)
+ 2012  format ('0******** Insufficient space to process input data.')
+       else
+         l3b(6) = 1
+         call ftbrsv (fid,l1,-1,ixin)
+         call inp2 (fa(filndx(1)),fa(ixin),l3b)
+         if (l3b(6) .lt. 0) then
+           fail = .true.
+           l3b(6) = 0
+         elseif (mod(l3b(6),2) .ne. 0) then
+           fail = .true.
+           l3b(6) = 0
+           write (output,2007)
+ 2007  format ('0******** Number of words on input data is not even.')
+         else
+           numc = l3b(6)/2
+           if (numc .gt. 1) then
+             tfail = .false.
+             j = ixin
+             do 14 i = 2,numc
+               tfail = tfail .or. ia(j+2).le.ia(j) .or.
+     &         ia(j+3).le.ia(j+1)
+               j = j + 2
+   14        continue
+             if (tfail) then
+               fail = .true.
+               write (output,2006) (ia(i+ixin-1),i=1,l3b(6))
+ 2006  format ('0******** Dump record numbers on input data are not in a
+     &scending order.'/' dumpfil1   dumpfil2'/(1x,i8,3x,i8))
+             endif
+           endif
+         endif
+         if (l3b(6) .eq. 0) then
+           call ftbdel (fid)
+         else
+           call ftbsft (fid,l3b(6),3,ixin)
+         endif
+         fail = fail .or. inp8(1,fa(filndx(1))).ne.0
+         call ftbdel (2.0)
+       endif
+c  Get space to read dump file.
+       l1 = lcontg(1)
+       if (l1 .lt. 18) then
+         fail = .true.
+         write (output,2107)
+ 2107  format ('0******** Insufficient space to read identifing records
+     &of dump files.')
+       else
+         call ftbrsv (-fid,l1,-1,ix(1))
+         l1 = l1/2
+         ix(2) = ix(1) + l1
+         ix2(1) = 2*ix(1) - 1
+         ix2(2) = ix2(1) + 2*l1
+         ias = locf4(fa(1)) - 1
+         ixb = locfi4(comdat(1)) - ias
+c  Process identifying record (first) of dump files.
+         do 12 j = 1,2
+           write (output,2009) filenm(j),trim(filsch(j+12))
+ 2009  format ('0Label ',a,' will refer to file ',a,'.')
+           if (.not.topen(j)) then
+             rewind j
+             read (j,end=27,err=28) len(j),iwrd
+             read (j,end=27,err=28) (fa(i+ix(j)-1),i=1,len(j))
+             if (len(j) .ne. 9) then
+               write (output,2016) filenm(j)
+ 2016  format ('0******** Wrong length on first record of file ',a,'.')
+               fail = .true.
+             else
+               write (ihldc(1:24),'(3a8)') (fa(i+ix(j)-1),i=4,6)
+               if (ihldc(1:24) .ne. crstrc) then
+                 fail = .true.
+                 write (output,2017) filenm(j)
+ 2017  format ('0******** Label in first record of file ',a,' is incorre
+     &ect.')
+               else
+                 write (output,2018) filenm(j),(fa(i+ix(j)-1),i=1,3),
+     &           (fa(i+ix(j)-1),i=7,9)
+ 2018  format ('0File ',a8,' was written by program ',3a8,' on ',3a8)
+               endif
+             endif
+             go to 12
+c
+   27        write (output,2010) filenm(j)
+ 2010  format ('0******** Eof encountered on first read of file ',a,'.')
+             go to 12
+   28        write (output,2015) filenm(j)
+ 2015  format ('0******** Parity error on first record of file ',a,'.')
+           endif
+   12    continue
+       endif
+       if (fail) then
+         write (output,2005)
+ 2005  format ('0******** Dump file comparison cannot proceed due to pre
+     &ceding errors.')
+         return
+       endif
+c
+       ixi = ixin
+       do 15 ixii = 1,numc
+         write (output,2109) filenm(1),ia(ixi),filenm(2),ia(ixi+1)
+ 2109  format ('0Compare requested: ',a8,i8,5x,a8,i8)
+c  Position to desired dump for each file.
+         tfail = .false.
+         do 16 j = 1,2
+   63      if (.not.topen(j)) then
+             read (j,end=74,err=62) len(j),iwrd
+$if def,in32,1
+             if (iwrd .eq. 8) then
+               read (j,end=74,err=62) (fa(i+ix(j)-1),i=1,len(j))
+$if def,in32,3
+             else
+               read (j,end=74,err=62) (ha(i+ix2(j)-1),i=1,len(j))
+             endif
+             write (chwrd,'(a8)') fa(ix(j))
+             if (chwrd .ne. 'dmpcom') go to 63
+             if (len(1).ne.3 .or. iwrd.ne.8) go to 59
+             write (output,3001) filenm(j),fa(ix(j)),ia(ix(j)+1),
+     &       ia(ix(j)+2)
+ 3001  format (' ',a8,a10,2i10)
+           endif
+c  Determine if desired block header has been read.
+           i = ia(j+ixi-1) - ia(ix(j)+2)
+           if (i .gt. 0) then
+             topen(j) = .false.
+             go to 63
+           endif
+           if (i .lt. 0) then
+             topen(j) = .true.
+             tfail = .true.
+             write (output,2108) filenm(j),ia(j+ixi-1)
+ 2108  format ('0******** File ',a8', does not contain dump number',i8,
+     & '.')
+           endif
+   16    continue
+         if (tfail) then
+           fail = .true.
+           write (output,2101)
+ 2101  format ('0******** Comparison of dump block being terminated due
+     &to missing dump file.')
+         else
+           do 67 i = 1,ncoms
+             if (comdat(i) .eq. 0) go to 71
+             do 68 j = 1,2
+$if -def,fourbyt
+               read (j,end=74,err=62) len(j),iwrd
+               if (len(j) .gt. l1) go to 78
+               read (j,end=74,err=62) (fa(k+ix(j)-1),k=1,len(j))
+$endif
+$if def,fourbyt
+               read (j,end=74,err=62) len(j),iwrd
+               if (iwrd .eq. 8) then
+                 if (len(j) .gt. l1) go to 78
+               else
+                 if (ishft(len(j) + 1,-1) .gt. l1) go to 78
+               endif
+               read (j,end=74,err=62) (ha(k+ix2(j)-1),k=1,len(j))
+               if (iwrd .ne. 8) then
+                 if (iand(len(j),1) .ne. 0) ha(ix2(j)+len(j)) = 0.0
+               endif
+$endif
+   68        continue
+             write (output,3003) comnam(i),comdln(i),len
+ 3003  format (1x,a8,3i10)
+             tfail = .false.
+             if (len(1).ne.comdln(i) .or. len(2).ne.comdln(i)) then
+               tfail = .true.
+               write (output,2042)
+ 2042  format ('0******** One or both record lengths in above record are
+     & wrong.')
+             else
+               k2 = 0
+               k1p = ix(1)
+               k2p = ix(2)
+$if -def,in32,2
+               do 30 k = 1,len(2)
+                 if (ia(k1p) .ne. ia(k2p)) then
+$if def,in32
+$if -def,fourbyt,1
+               do 30 k = 1,len(2)
+$if def,fourbyt,2
+                 lens = ishft(len(2) + 1,-2)
+                 do 30 k = 1,lens
+                 if (ia[k1p).ne.ia[k2p) .or. ia(k1p).ne.ia(k2p)) then
+$endif
+                   k2 = k2 + 1
+                   if (k2 .le. nlimit) then
+$if -def,in32,4
+                     write (output,2102) k,filenm(1),ia(k1p),fa(k1p),
+     &               filenm(2),ia(k2p),fa(k2p)
+ 2102  format (' Words',i5,' unequal ',a8,i20,1pe24.16/
+     & 20x,a8,i20,e24.16)
+$if def,in32,4
+                     write (output,2102) k,filenm(1),ia[k1p),ia(k1p),
+     &               fa(k1p),filenm(2),ia[k2p),ia(k2p),fa(k2p)
+ 2102  format (' Words',i5,' unequal ',a8,2i12,1pe24.16/
+     & 20x,a8,2i12,e24.16)
+                   endif
+                 endif
+                 k1p = k1p + 1
+                 k2p = k2p + 1
+   30          continue
+               if (k2 .gt. nlimit) then
+                 write (output,2103) nlimit
+ 2103  format ('0Number of unequal words greater than',i3,'.')
+                 tfail = .true.
+               endif
+             endif
+             if (i .eq. 1) then
+               if (tfail) then
+                 write (output,2104)
+ 2104  format ('0First record is incorrect, cannot perform checking on r
+     &emaining records.')
+                 go to 17
+               else
+$if def,in32,1
+                 if (iwrd .eq. 8) then
+                   do 38 k = 1,len(1)
+                     fa(k+ixb-1) = fa(k+ix(1)-1)
+   38              continue
+$if def,in32,5
+                 else
+                   do 39 k = 1,len(1)
+                     ha(k+ixb-1) = ha(k+ix2(1)-1)
+   39              continue
+                 endif
+               endif
+             endif
+   67      continue
+   71      do 80 i = 1,nfiles
+             if (filid(i) .ne. 0.0) then
+               do 32 j = 1,2
+                 read (j,end=74,err=62) len(j),iwrd
+                 if (len(j) .gt. l1) go to 78
+                 read (j,end=74,err=62) (fa(k+ix(j)-1),k=1,len(j))
+   32          continue
+               write (output,3004) i,filsiz(i),len
+ 3004  format (' dynamic file',i5,3i10)
+               if (len(1).ne.filsiz(i) .or. len(2).ne.filsiz(i)) then
+                 write (output,2042)
+               else
+                 k2 = 0
+                 k1p = ix(1)
+                 k2p = ix(2)
+                 do 34 k = 1,len(2)
+$if -def,in32,1
+                   if (ia(k1p) .ne. ia(k2p)) then
+$if def,in32,1
+                   if (ia[k1p).ne.ia[k2p) .or. ia(k1p).ne.ia(k2p)) then
+                     k2 = k2 + 1
+                     if (k2 .le. nlimit) then
+$if -def,in32,2
+                       write (output,2102) k,filenm(1),ia(k1p),fa(k1p),
+     &                 filenm(2),ia(k2p),fa(k2p)
+$if def,in32,2
+                       write (output,2102) k,filenm(1),ia[k1p),ia(k1p),
+     &                 fa(k1p),filenm(2),ia[k2p),ia(k2p),fa(k2p)
+                     endif
+                   endif
+                   k1p = k1p + 1
+                   k2p = k2p + 1
+   34            continue
+                 if (k2 .gt. nlimit) then
+                   write (output,2103) nlimit
+                 endif
+               endif
+             endif
+   80      continue
+         endif
+   17    ixi = ixi + 2
+   15  continue
+       return
+c
+   62  write (output,2022) filenm(j)
+ 2022  format ('0******** Parity error on file ',a8,'.')
+       fail = .true.
+       return
+   74  write (output,2023) filenm(j)
+ 2023  format ('0******** End of file on file ',a8,' occurred before end
+     & of comparison of blocks.')
+       fail = .true.
+       return
+   78  write (output,2026)
+ 2026  format ('0******** Insufficient space to read files.')
+       tfail = .true.
+       return
+   59  write (output,2037)
+ 2037  format ('0******** Wrong length record in header of dump block.')
+       fail = .true.
+       return
+       end

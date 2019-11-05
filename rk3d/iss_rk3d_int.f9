@@ -1,0 +1,224 @@
+       MODULE iss_rk3d_int
+!
+!  Contains subroutines for exchanging data between RELAP and a space kinetics
+!  code
+!      
+       include 'param.fcb'
+       include 'array.fcb'  
+       include 'thermo.fcb'
+       include 'cntl.fcb' 
+       include 'varlen.fcb'
+       include 'crod.fcb' 
+       include 'perttr.fcb'
+       include 'nonfue.fcb'
+       include 'power.fcb'  
+       include 'start.fcb'
+       include 'tim.fcb'
+          
+       LOGICAL ::  coupdone
+       CONTAINS
+!=======================================================================
+       SUBROUTINE REL_NOD_PROC
+!=======================================================================
+!
+! RELAP/3DKIND exchange data related with the number of x and y FA in 3DKIN
+!
+! IMPLICIT NONE 
+
+       use rkinc
+
+C       include 'param.fcb'
+C       include 'array.fcb' 
+C       include 'varlen.fcb'
+
+        allocate (mradconf(NX,NY))
+        DO m=1,NY
+          DO i=1,NX
+            mradconf(i,m) = 1
+            IF (AINT(LNCOL2DN+NY*(m-1)+i-1).eq.0)then
+              mradconf(i,m) = 0
+            ENDIF         
+          ENDDO
+        ENDDO
+        allocate (ppmrk3d(NXYL,NZ))
+        mnx=NX
+        mny=NY
+        mnz=NZ  
+       END SUBROUTINE REL_NOD_PROC
+!=======================================================================
+       SUBROUTINE rk3d2rel
+!=======================================================================
+!
+! Writes rk3d code power data into Relap5 heat structures
+!
+       use rkinc
+       use scdpwrkin
+       
+C       include 'param.fcb'
+C       include 'array.fcb'  
+C       include 'varlen.fcb' 
+C       include 'power.fcb'  
+C       include 'thermo.fcb' 
+C       include 'start.fcb'
+C       include 'perttr.fcb'
+
+       INTEGER*8 i,k,l,m
+       REAL*8 tpowrs4,relappow,powfact,relappow2
+!
+         rk3dpow = 0.0
+         powfact = 1.60217733E-13
+         do m = 1,size(rk4)
+           rk4o(m)%htpow = 0.0d0
+           do i = 1,size(rk4o(m)%node2p)
+             k = rk4o(m)%node2e(i)
+             l = rk4o(m)%node2p(i)
+             rk4o(m)%htpow = rk4o(m)%htpow+powfact*A(LRELPWRN
+     &       + NXYL*(k - 1)+ l - 1)*A(LVOLUN+ NXYL*(k - 1)+ l - 1)
+     &       *A(LFRACTBN+l - 1)*QT*PR
+!             hspowc(m) = hspowc(m)+tpowrs4*A(LRELPWRN+NXYL*(k-1)+l-1)
+C              relappow = relappow+powfact*A(LRELPWRN
+C     &       + NXYL*(k - 1)+ l - 1)*A(LVOLUN+ NXYL*(k - 1)+ l - 1)
+C     &       *A(LFRACTBN+l - 1)*QT*PR
+           enddo
+           rk4o(m)%htpow = rk4o(m)%htpow * POWERFRAC
+           rk3dpow = rk3dpow + rk4o(m)%htpow
+         enddo
+!        write (12,"('total power',2i5,i10)") k,l,relappow
+!        write (12,'(f20.4)') relappow
+       end subroutine rk3d2rel
+!=======================================================================
+       SUBROUTINE rel2rk3d
+!=======================================================================
+!
+! Writes relap TH data into rk3d  TH parameters
+!
+       use rkinc
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'convarc.h'
+
+C       include 'param.fcb'
+C       include 'array.fcb'  
+C       include 'varlen.fcb' 
+C       include 'power.fcb'  
+C       include 'thermo.fcb'
+C       include 'nonfue.fcb'
+C       include 'perttr.fcb' 
+!
+!      IMPLICIT NONE
+       INTEGER*8 i,j,k,l,cnvval
+       INTEGER ind
+      
+!
+          DELTAT = dt
+          do k = 1,NZ
+           do l = 1, NXYL
+            if (associated(srkptr(l,k)%tempf)) then
+! coolant temperature
+             A(LTCOLCN+NXYL*(k-1)+l-1) = 1.8*srkptr(l,k)%tempf
+     &        -459.67
+! coolant density
+             A(LRHOWN+NXYL*(k-1)+l-1) = (srkptr(l,k)%rho)/1000.0
+! fuel average temperature
+C             A(LTAVFN+NXYL*(k-1)+l-1) = 1.8*(srkptr(l,k)%httmpl) 
+C     &        -459.67
+! internal energy
+            A(LUNEWN+NXYL*(k-1)+l-1) = 6.241509e9*(srkptr(l,k)%uf)
+! Doppler temperature (¿In Rankine degrees?)
+C             j= AINT(LNCOLZN+k-1)
+C             i= AINT(LNCOLXYN+NXYLMAX*(j-1)+l-1)
+C             A(LDOPLN+NXYL*(k-1)+l-1) = 
+C     &        SQRT(1.8*((WP)*srkptr(l,k)%httmpl
+C     &        +(1.0 - WP)*srkptr(l,k)%httmpr))
+C             A(LDOPLN+NXYL*(k-1)+l-1) = A(LDOPLN+NXYL*(k-1)+l-1)
+C     &        -(A(LTFREFN+i-1)+459.67)**0.5
+            endif
+            if (associated(srkptr(l,k)%httmpl)) then
+              j= AINT(LNCOLZN+k-1)
+              i= AINT(LNCOLXYN+NXYLMAX*(j-1)+l-1)
+              if (i .gt. NFUEXY) then
+                A(LTAVFN+NXYL*(k-1)+l-1) = 1.8*((WP)*
+     &           srkptr(l,k)%httmpl+(1.0 - WP)*srkptr(l,k)%httmpr)
+                A(LDOPLN+NXYL*(k-1)+l-1) = 
+     &          SQRT(1.8*((WP)*srkptr(l,k)%httmpl
+     &          +(1.0 - WP)*srkptr(l,k)%httmpr))
+                A(LDOPLN+NXYL*(k-1)+l-1) = (A(LDOPLN+NXYL*(k-1)+l-1)
+     &          -(A(LTFREFN+i-1)+459.67)**0.5)*0.745356
+              endif
+            endif
+           enddo
+          enddo
+! Control rods position
+          ind = filndx(27)
+          DO j=1,8
+              A(LZBN+j-1)   = cnvarn(ind)*100.0+RODOFFSET
+              ind = ind + cnvlen(2,ind)                                                                      
+          ENDDO
+! Boron concentration
+          DO k=1,NZ
+            DO l=1,NXYL
+              ppmrk3d(l,k) = srkptr(l,k)%boron*1000.0
+            ENDDO
+          ENDDO
+       END SUBROUTINE rel2rk3d
+!=======================================================================
+       SUBROUTINE gencoupdata
+!=======================================================================
+!
+! Exchange general data information relevant for the coupling
+!
+       USE rkinc
+       include 'contrl.h'
+      
+C       include 'param.fcb'
+C       include 'cntl.fcb'
+C       include 'perttr.fcb'
+C       include 'tim.fcb'
+C       REAL*8  DELTAOLD, DELTAT
+!! transferring problem time
+         DELTATOLD = DELTAT
+         DELTAT = dt
+!         sstime = timehy-delt
+!         time =timehy
+!! steady state / transient flag checking for RELAP
+!         trnfsc = tranrk
+!! transferring restart edit flag for saving restart edit block
+!! in PARCS
+!         rsted = rsflag
+!         majed = rsflag
+!         plted = rsflag
+! transferring flag that indicates to PARCS that it is last RELAP time step
+          coupdone = trdone
+       END SUBROUTINE gencoupdata
+!=======================================================================
+       SUBROUTINE gencoupdatend
+!=======================================================================
+!
+! Exchange general data information relevant for the coupling for the last time step
+!
+       USE rkinc
+       include 'contrl.h'
+!!       USE thopdataM
+
+C       include 'param.fcb'       
+C       include 'perttr.fcb'
+C       include 'cntl.fcb'
+C       include 'tim.fcb'
+!! transferring problem time
+         DELTAOLD = DELTAT
+         DELTAT = dt
+!         sstime = timehy
+!         time =timehy
+! steady state / transient flag checking for RELAP
+!         trnfsc = tranrk
+!! transferring restart edit flag for saving restart edit block
+!! in PARCS 
+!         rsted = rsflag
+!         majed = rsflag
+!! transferring flag that indicates to PARCS that it is last RELAP time step
+         coupdone = trdone
+!! flag inidicating RELAP calculation is finished
+!         calcterm = .true.
+       END SUBROUTINE gencoupdatend
+       END MODULE iss_rk3d_int

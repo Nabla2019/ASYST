@@ -1,0 +1,140 @@
+      SUBROUTINE LSORB0(
+     &  SSW,ITRR,WOM,WOMO,FLUX)
+C
+C     THIS SUBROUTINE CALCULATES THE NUMBER OF INNERS PER OUTER AND THE
+C     ACCELERATION PARAMETERS FOR THE COLOR LINE SOR EQUATIONS.
+C
+      use     rk3dcode, only:fcallss   !vmq
+      use     rkinc
+
+      include 'param.fcb'
+      include 'array.fcb'
+      include 'opti.fcb'
+      include 'varlen.fcb'
+      include 'cntl.fcb'
+      include 'tim.fcb' !vmq
+      
+      DIMENSION
+     &  FLUX(NXYL,NZ,*)                 ,
+     &  SSW(NXYL,NZ,*)                  ,ITRR(*)                ,
+     &  WOM(*)                          ,WOMO(*)
+      
+C     
+C.....SET MMAX EQUAL TO MAXIMUM NUMBER OF GAUS-SEIDEL ITERATIONS ALLOWED
+C     
+      MMAX=20       
+      DO 9999 IG=1,NG
+       IF(IDRUN.NE.'AXIAL') THEN
+        DO 11 IZ=1,NZ
+         DO 1 IXY=1,NXYL
+          SSW(IXY,IZ,IG)=1.0000000000000000
+ 1       CONTINUE
+ 11     CONTINUE
+        M=0
+ 2000   SUM0=0.0
+        SUM1=0.0
+        DELUP=0.0
+        DELLO=1.E28
+ 1000   M=M+1
+        
+        SUMNORM=0.0
+        DO 12 IZ=1,NZ
+         DO 2 IXY=1,NXYL
+          SUMNORM=SUMNORM+ABS(SSW(IXY,IZ,IG))
+ 2       CONTINUE
+ 12     CONTINUE
+        SCALEN=DFLOAT(NXYL*NZ)/SUMNORM !vmq
+        
+        DO 32 IZ=1,NZ
+         DO 22 IXY=1,NXYL
+          SSW(IXY,IZ,IG)=SCALEN*SSW(IXY,IZ,IG) 
+          FLUX(IXY,IZ,IG)=SSW(IXY,IZ,IG)
+ 22      CONTINUE
+ 32     CONTINUE
+
+        CALL SETUP0(IG,A(LSSWN),A(LCWN),AINT(LIRPLANN),AINT(LIBPLANN),
+     &    AINT(LIRPLN),AINT(LIBPLN),AINT(LIYPLANN),AINT(LIYPLN),
+     &    A(LXCWVN),
+     &    A(LXSWSVN) )
+
+        IF(M .LE. 10) GOTO 1000
+        
+        DO 13 IZ=1,NZ
+         DO 3 IXY=1,NXYL
+          SUM1=SUM1+SSW(IXY,IZ,IG)*SSW(IXY,IZ,IG)
+          SUM0=SUM0+ABS(SSW(IXY,IZ,IG)*FLUX(IXY,IZ,IG))
+          IF(FLUX(IXY,IZ,IG).GT.1.E-28.AND.
+     &      SSW(IXY,IZ,IG).GT.1.E-28) THEN
+           RATO=ABS(SSW(IXY,IZ,IG)/FLUX(IXY,IZ,IG))
+           DELUP=MAX(DELUP,RATO)
+           DELLO=MIN(DELLO,RATO) 
+          ENDIF                
+ 3       CONTINUE
+ 13     CONTINUE
+
+        DELTA=SUM1/SUM0
+
+        IF(DELTA.GE.1.0.OR.DELUP.GE.1.0) THEN
+         IF(M.LT.MMAX) THEN
+          GOTO 2000
+         ELSEIF(DELTA.GE.1.0) THEN
+          WRITE(*,110)DELTA
+          WRITE(55,110)DELTA
+ 110      FORMAT(/'####FATAL ERROR: INNER ITERATION MATRIX ',
+     &      'SPECTRAL RADIUS > OR = 1.0',E13.5/)
+C          STOP 'LSORB0' !vmq
+           fcallss = .true. !vmq
+           IF(ITRAN .EQ. 'Y') trnfsc = .true. !vmq
+           repeattr = .false.!vmq
+           repeat = .false. !vmq
+           GOTO 5555 !vmq
+         ELSEIF(DELUP.GE.1.0) THEN  
+          WRITE(*,111)
+          WRITE(55,111)
+ 111      FORMAT(/'####WARNING: INNER ITERATION MATRIX ',
+     &      'SPECTRAL RADIUS MAX BOUND > OR = 1.0'/
+     &      '    OMEGA CONVERGENCE NOT ASSURED!'/) 
+         ENDIF
+        ENDIF
+        
+        IF(DELUP.GE.1) DELUP=0.999
+        OMEGA=2./(1.+SQRT(1.-DELTA))
+        OMEUP=2./(1.+SQRT(1.-DELUP))
+        OMELO=2./(1.+SQRT(1.-DELLO))
+
+        CONV0=ABS(OMEUP-OMELO)
+        CONV1=(2.-OMEGA)/5.
+        IF(CONV0.LE.CONV1 .OR. M.GE.MMAX) GOTO 3000
+        GOTO 2000
+ 3000   WOM(IG)=OMEGA
+        WOMO(IG)=1.-OMEGA
+        
+        SDELT=SQRT(DELTA)
+        SDELT1=-WOMO(IG)
+        SDELT2=SQRT(1.-DELTA)
+        
+        DO 4 I=1,25
+         I2=2*I
+         MM=I2-2
+         ZM2=DFLOAT(MM)/2.
+         T2M1=SDELT1**ZM2*SDELT*(1.+DFLOAT(MM)*SDELT2) !vmq
+         MM=I2-1
+         ZM2=DFLOAT(MM)/2.
+         T2M=SDELT1**ZM2*SDELT*(1.+DFLOAT(MM)*SDELT2) !vmq
+         ZTZ=T2M1*T2M1+T2M*T2M
+         ZTZ=SQRT(ZTZ)
+         IF(ZTZ .LE. EPSDET) GOTO 4000
+ 4      CONTINUE
+        
+ 4000   ITRR(IG)=I
+        
+       ELSEIF(IDRUN.EQ.'AXIAL') THEN
+        WOM(IG)=1.0
+        WOMO(IG)=0.0
+        ITRR(IG)=1
+       ENDIF
+ 
+ 9999 CONTINUE
+ 5555 CONTINUE !vmq
+      RETURN
+      END

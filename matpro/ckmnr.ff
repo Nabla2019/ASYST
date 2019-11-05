@@ -1,0 +1,215 @@
+       subroutine ckmnr (ctemp,deloxy,fnck,fncn,cwkf,cwnf,rstran,ak,an,
+     & am)
+!  Calculates parameters for the cladding equation of state as a
+!  function of temperature, average oxygen concentration, fast neutron
+!  fluence, and cold work.
+!
+!  The equations used in this subroutine are based on data from:
+!  (1) C. R. Woods, "Properties of Zircaloy-4 Tubing," WAPD-TM-585
+!      (1966).
+!  (2) "Ultimate Strength Data of H. C. Brassfield ,et al." GEMP-482
+!      (1968).
+!  (3) A. L. Bement, Jr., "Effects of Cold Work and Neutron Irradiation
+!      on the Tensile Properties of Zircaloy-2," HW-74955.
+!  (4) A. Cowan and W. J. Langford, J. Nuclear Mater.30 (1969)
+!      pp 271-281.
+!  (5) L. M. Howe and W. R. Thomas, J. Nuclear Mater. 1 (1960) p 248.
+!  (6) A. M. Garde, Light Water Reactor Safety Research Program
+!      Quarterly Progress Report, April - June 1975, ANL-75-58.
+!  (7) A. M. Garde, Light Water Reactor Safety Research Program
+!      Quarterly Progress Report, July - September 1975 ANL-75-72.
+!  (8) R. L. Mehan and F. W. Wiesinger, "Mechanical Properties of
+!      Zircaloy-2", KAPL-2110.
+!  (9) D. Lee and W. A. Backofen, TMS-AIME 239, (1967), pp 1034-1040.
+!  (10) P. J. Crescimanno, "High Strain Rate Tensile Tests of Zircaloy
+!       at 550 F," WAPD-TM-1263, (February 1976).
+!  (11) C. R. Hann et al, "Transient Deformation Properties of Zircaloy
+!       for LOCA Simulation", EPRI NP-526, Volume 3 (March 1978).
+!
+!  Coded by D. L. Hagrman August 1977; last modified by D. L. Hagrman
+!  July 1982 (CDF-MP-10).
+!
+!  Subroutine data are derived from:
+!  Volkov B. Yu. et. al, "Material Property Library for H1-Alloy
+!  Cladding," Preprint IAE-4941/11, 1989.
+!
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       real(kr) ctemp,deloxy,fnck,fncn,cwkf,cwnf,rstran,ak,an,am
+!
+!  ak     = output strength coefficient (pa).
+!  an     = output strain hardening exponent (unitless).
+!  am     = output strain rate sensitivity exponent (unitless).
+!  um     = estimated  uncertainty of am (not currently returned).
+!  un     = estimated uncertainty of an (not currently returned). Note
+!           an - un is negative near 1000k.
+!  uk     = estimated uncertainty of ak (not currently returned).
+!  ctemp  = input cladding meshpoint temperature (k).
+!  deloxy = input average oxygen concentration excluding oxide layer -
+!           average oxygen concentration of as received cladding (kg
+!           oxygen/kg zircaloy).
+!  fnck   = input effective fast fluence for strength coefficient
+!           (neutrons/(m**2)).
+!  fncn   = input effective fast fluence for strain hardening exponent
+!           (neutrons/(m**2)).
+!  cwkf   = input effective cold work for strength coefficient (unitless
+!           ratio of areas).
+!  cwnf   = input effective cold work for strain hardening exponent
+!           (unitless ratio of areas).
+!  rstran = input effective true plastic strain rate (s**(-1)).
+!
+       include 'wwer.h'  
+!
+       real(kr) a,akc,akf,akt,aktf,anf,ant,b,c,d,fkcc,t,uk,um,un
+       real(kr) polate
+       real(kr) cmdata(14) 
+       data cmdata/   0.025,  773.,  0.089, 1013.,
+     &                0.333, 1093.,  0.752, 1123.,
+     &                0.323, 1173.,  0.117, 1273.,
+     &                0.0,   1473. /
+       integer nmt,iu
+       data nmt/7/, iu/1/ 
+!
+       t = ctemp
+!
+!  Limit strain rate to a minimum of 1.0e-05.
+       if (rstran .lt. 1.0e-5) rstran = 1.0e-5
+!
+       if (iwwer .eq. 0) then
+!
+!  Find strain rate exponent, am.
+         if (t .le. 730.) am = 0.02
+         a = 20.63172161
+         b = -0.07704552983
+         c = 9.504843067e-5
+         d = -3.860960716e-8
+         if (t .ge. 900.) then
+           am = -6.47e-2 + t*2.203e-4
+         elseif (t .ge. 730.) then
+           am = a + t*(b + t*(c + t*d))
+         endif
+!  Modify strain rate exponent, am, in alpha - beta region.
+         if (rstran.lt.6.34e-3 .and. t.gt.1090.0 .and.
+     &   t.lt.1255.0) then
+           if (t .le. 1172.5) then
+             am = am + 6.78e-2*log(6.34e-3/rstran)*
+     &       ((t - 1090.)/82.5)
+           else
+             am = am + 6.78e-2*log(6.34e-3/rstran)*
+     &       ((1255. - t)/82.5)
+           endif
+         endif
+         if (t .gt. 900.) then
+           um = 0.16*am
+         elseif (t .gt. 700.) then
+           um = -2.97992e-2 + t*5.6856e-5
+         else
+           um = 0.01
+         endif
+         am = am*exp(-69.*deloxy)
+       else
+!  Strain rate exponent of H1-alloy.
+         if (t .le. 773.) then 
+           am = 0.025
+         else
+           am = polate(cmdata,ctemp,nmt,iu)         
+         endif
+       endif
+!  Find strain hardening exponent, an.
+       if (iwwer .eq. 0) then
+         an = -9.490e-2 + t*(1.165e-3 + t*(-1.992e-6 +
+     &   t*9.558e-10))
+         if (t .ge. 1600.000) then
+           an = 0.17344880
+         elseif (t .ge. 1099.0722) then
+           an = -0.22655119 + 2.5e-4*t
+         endif
+!  Find uncertainty.
+         if (t .gt. 1255.) then
+           un =  0.053
+         elseif (t .gt. 700.) then
+           un = -2.8405405e-2 + t*6.4864864e-5
+         else
+           un = 0.017
+         endif
+!  Find irradiation and cold work effects.
+         an = (8.47e-1*exp(-3.92e1*cwnf) + 1.53e-1 +
+     &   cwnf*(-9.16e-2 + cwnf*2.29e-1))*
+     &   exp(-((fncn)**0.33)/(3.73e7 + 2.0e8*cwnf))*an
+         an = an*(1. + (1250. - (1250./
+     &   (exp((t - 1380.)/20.) + 1.0)))*deloxy)
+         if (an .gt. 0.8) an = 0.8
+!  Lower bound on an prevents overflow in cstrni.
+         if (an .lt. 1.5e-3) an = 1.5e-3
+       else
+!  Strain hardening exponent of H1-alloy.
+         if (fncn .le. 1.03+21) then
+           anf = exp(-(8.20517e-19*fncn)**0.33288)
+         elseif (fncn .le. 6.43+24) then
+           anf = exp(-(5.086134e-19*fncn)**0.320119)
+         else
+           anf = exp(-(5.510446e-19*fncn)**0.33332)
+         endif
+         if (t .le. 873.) then
+           ant = 2.367347e-7*(t - 273.)**2 - 1.657143e-4*
+     &     (t - 273.) + 0.094
+         else
+           ant = ((0.15 - anf)/400.)*(t - 273.) +
+     &     2.5*anf - 0.225
+         endif
+         an = ant*anf
+       endif 
+!  Find strength coefficient, ak.
+       if (iwwer .eq. 0) then
+         ak = 1.17628e9 + t*(4.54859e5 + t*(-3.28185e3 +
+     &   t*1.72752))
+         if (t .gt. 2100.) then
+           ak = 1.0
+         elseif (t .ge. 1255.) then
+           ak = 4.330e7 + t*(-6.685e4 + t*(3.7579e1 -
+     &     t*7.33e-3))
+         elseif (t .ge. 1090.) then
+           ak = 184.1376039e6 - 1.4345448e5*t
+         elseif (t .ge. 750.0) then
+           ak = 2.5224880e6*exp(2.8500027e6/(t**2.0))
+         endif
+!  Find uncertainty.
+         if (t .gt. 800.) then
+           uk = ak/3.0
+         elseif (t .gt. 700.) then
+           uk = 110.43693e6 - t*4.7767045e4
+         else 
+           uk = 77.00e6
+         endif
+!  Find irradiation and cold work effects.
+         if (t .gt. 1255.) then
+           fkcc = 0.0
+         else
+           fkcc = fnck
+         endif
+         ak = ak*(1.0 + 5.46e-1*cwkf + 9.7e-27*fkcc)
+         ak = ak*(1. + (1120. - (990./
+     &   (exp((t - 1301.5)/61.) + 1.)))*deloxy)
+       else
+!  Strength coefficient of H1-alloy.
+         if (ctemp.le. 673.) then
+           akt = 41.0*exp(-1.823577e-3*(t - 273.))
+           akc = (302.264 - 0.5132*(t - 273.))*deloxy
+         else
+           akt = 3.6161+4*((t - 273.)**(-1.082621))*
+     &     exp(-2.56287e-3*(t - 273.))
+           akc = 96.984*deloxy
+         endif
+!
+         if (fnck .le. 1.0e+21) then
+           akf = 0.781e-13*fnck
+           aktf = akt + akf
+         else
+           akf = 0.13991*(1.e4*fnck)**0.0505084
+           aktf = akt*akf
+         endif     
+         ak = aktf + akc
+         ak = ak*1.0e+6*9.83
+       endif 
+       return
+       end

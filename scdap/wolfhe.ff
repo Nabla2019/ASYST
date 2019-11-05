@@ -1,0 +1,104 @@
+*mlist
+*if def,selap
+       subroutine wolfhe(unuc,unucd,pptim)
+c
+c  Calculates electric heat generation distribution for simulator rods
+c  original version modified by F. P. Griffin, ORNL, Nov. 1996
+c
+c  Cognizant engineer: ewc (fpg).
+c
+c  arguments and variables in common:
+c  unuc, unucd = linear electric power (W/m per rod)
+c  pptim       = total electric power (W per rod)
+c  flxwid      = external resistance (ohm per rod) of flexible cables
+c  iuorho      = flag that includes effect of uo2 resistivity in
+c                electric power calculation; omit=0, include=nonzero
+$if def,iua
+       use uncdata
+$endif
+       implicit none
+       include 'scddat.h'
+       include 'scdout.h'
+       include 'ufiles.h'
+       include 'ndxara.h'
+       include 'cora.h'
+       real unuc,unucd,pptim,widers
+       dimension unuc(*),unucd(*),widers(ndax)
+c  local variables
+       integer i
+       real rhocu,rhomo,tmo3,tmo,tref,wige,wisum,
+     # tcu,tmo2,rhomo2,rhomo3,rhocu2,wimoly,wicopr,
+     # hcore,hmoly,wiuo2
+       data tref /350.0/
+c  temp  resistivity  description
+c    K   (ohm*mm2)/m
+c  ----  -----------  ------------
+c  tmo3     rhomo3    molybdenum from -300 to -220 mm
+c  tmo      rhomo     molybdenum from -220 to 0 mm
+c  tmo2     rhomo2    molybdenum from top of SCDAP core to 1300 mm
+c  tcu      rhocu     copper from 1300 to 1470 mm
+c  tref     rhocu2    copper at tref (200 mm lower + 560 mm upper
+c                     = 760 mm total)
+       tmo3 = tref
+       tmo  = (tcond3(1,1,icomp) + tref) * 0.5
+       tmo2 = (tcond3(1,naz,icomp) + tref) * 0.5
+       tcu  = (tmo2 + tref) * 0.5
+       rhomo3=2.249e-2+5.36e-5*tmo3+1.38e-7*tmo3**2-2.22e-11*tmo3**3
+       rhomo =2.249e-2+5.36e-5*tmo +1.38e-7*tmo**2 -2.22e-11*tmo**3
+       rhomo2=2.249e-2+5.36e-5*tmo2+1.38e-7*tmo2**2-2.22e-11*tmo2**3
+       rhocu =-7.89e-3+9.90e-5*tcu -5.49e-8*tcu**2 +3.16e-11*tcu**3
+       rhocu2=-7.89e-3+9.90e-5*tref-5.49e-8*tref**2+3.16e-11*tref**3
+c  resistance of tungsten and molybdenum from 0 mm to top of SCDAP core
+c  tungsten diameter   = 6.0 mm, area = 28.274 mm2
+c  uo2 diameter  = 9.1 - 6.0 mm, area = 36.764 mm2
+c  molybdenum diameter = 8.6 mm, area = 58.088 mm2
+c  copper diameter     = 8.6 mm, area = 58.088 mm2
+c  hcore  = total height (m) of SCDAP core
+c  hmoly  = height (m) of molybdenum from 1000 mm to top of SCDAP core
+c  widers = resistance (ohm per rod) of SCDAP node
+c  wiuo2  = resistance (ohm per rod) of uo2 in SCDAP node
+c  wige   = total resistance (ohm per rod) of SCDAP core
+       hcore = 0.0
+       hmoly = 0.0
+       wige  = 0.0
+       do i = 1,naz
+         hcore = hcore + 0.5*dzcond(i)
+         if (hcore .lt. 1.0) then
+c  tunsten + ou2
+           widers(i) = (-0.0261 + 0.263e-3*tcond3(1,i,icomp) +
+     &     0.220e-7*tcond3(1,i,icomp)**2)*dzcond(i)/28.274
+$if def,iua
+!  Uncertianty multiplier is applied to Tungsten only
+!  One multiplier is applied to each level so that both widers and wige
+!  if selected, are modified
+           if (uncmode) call appwttungs (widers(i))
+$endif
+           if (iuorho .ne. 0) then
+             wiuo2 = max(6.548e-7*exp(28600.0/tcond3(1,i,icomp)),
+     &       0.75) * dzcond(i)/36.764
+             widers(i) = 1.0/(1.0/widers(i) + 1.0/wiuo2)
+           endif
+         else
+c  molybdenum from 1000 mm to top of SCDAP core
+           widers(i) = (2.249e-2 + 5.36e-5*tcond3(1,i,icomp) +
+     &     1.38e-7*tcond3(1,i,icomp)**2 -
+     &     2.22e-11*tcond3(1,i,icomp)**3) * dzcond(i) / 58.088
+           hmoly = hmoly + dzcond(i)
+         endif
+         hcore = hcore + 0.5*dzcond(i)
+         wige = wige + widers(i)
+       enddo
+c  wimoly = total resistance (ohm per rod) of molybdenum
+c  wicopr = total resistance (ohm per rod) of copper
+c  wisum  = total resistance (ohm per rod) of CORA bundle
+       wimoly = (rhomo3*0.08 + rhomo*0.22 +
+     # rhomo2*max(0.3-hmoly,0.0))/58.088
+       wicopr = (rhocu*0.17 + rhocu2*0.76)/58.088
+       wisum = wige + wimoly + wicopr + flxwid(icomp)
+       do i=1,naz
+         unuc(i) = widers(i)/wisum * pptim/dzcond(i)
+         unucd(i)= unuc(i)
+       enddo
+       return
+       end
+*endif

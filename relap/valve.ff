@@ -1,0 +1,525 @@
+*mlist
+       subroutine valve (reset)
+c  Computes the behavior of valves.
+c
+c  Cognizant engineer: dmk.
+c
+       use gentblc
+       use lpdatc
+       implicit none
+       logical reset
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'cmpdtv.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'cons.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'stcom.h'
+       include 'trpblk.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer i,i1,ivi,j,k,kx,kx2,l,lx,lx2,m
+       real arg(11),cvlv(2),fct(11)
+       real a1,aflap,ain,alift,alpha,angacc,areath,atc,atnew(1),aout,
+     & cofmom,csqr,delp,dpkx,dpout,drhout,drhox,dynamp,fexplt,fff,
+     & fksbar,fmom,fpres,gex,ghead,ghead1,ghead2,gin,gout,gk,gth,pback,
+     & pex,pin,pth,ptorq,rhoj,rhout,rhox,scrat1,scrat2,
+     & term1,terma,termc,terms,velin,velk,velout,velth,velx,
+     & voidsm,vsubf,vsubg,wtorq,xlift
+       logical close,err,open
+       character vname(6)*6
+c  Data statements.
+       data vname/'chkvlv','trpvlv','inrvlv','mtrvlv','srvvlv',
+     & 'rlfvlv'/
+       data arg/0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0/
+       data fct/0.617, 0.624, 0.632, 0.643, 0.659, 0.681, 0.712,
+     & 0.755, 0.813, 0.892, 1.000/
+c
+       i1 = lvvalv(lpdat(issys)%llvect)
+       do 1000 m = 1,lvptr(i1)
+         i1 = i1 + 1
+         i = lvptr(i1)
+         j = njco(i) + filndx(5)
+         k = ij1nx(j)
+         kx = iand(ishft(jcex(j),-12),7)
+         kx2 = k + kx
+         kx = k + ishft(kx,-1)
+         l = ij2nx(j)
+         lx = iand(ishft(jcex(j),-9),7)
+         lx2 = l + lx
+         lx = l + ishft(lx,-1)
+         fff = 0.5*(dl(kx)*(hyarf(k)*velfjo(j) + hyarg(k)*velgjo(j)) +
+     &   dl(lx)*(hyarf(l)*velfjo(j) + hyarg(l)*velgjo(j)))
+         ghead1 = rho(k)
+         if (iand(jc(j),4) .ne. 0) ghead1 = -ghead1
+         ghead2 = rho(l)
+         if (iand(jc(j),8) .ne. 0) ghead2 = -ghead2
+         ghead = gravcn*(hydzc(kx2)*ghead1 + hydzc(lx2)*ghead2)
+         delp  = po(k) - po(l) - ghead
+c  Debug print.
+$if def,dbgprnt
+         if (help .ne. 0) then
+           if (iand(ihlppr(2),ishft(1,5)) .ne. 0) then
+             if (iand(jcex(j),ishft(1,20)) .ne. 0) then
+               call helphd ('valve',8)
+               write (output,2010) cmpnum(i),cmpnam(i),cmptyp(i),
+     &         nvcn(i),njcn(i),cmptyp(i),junno(j),volno(k),volno(l),
+     &         fff,ghead,delp,vname(vlvnm(i))
+             endif
+ 2010  format ('0',115('-')/
+     & ' General component block'/2x,' cmpnum(i) =',
+     & i4,', cmpnam(i) =',a8,', cmptyp(i) =',i8,', nvcn(i)=',i8,
+     & ' njcn(i)=',i8/' Valve volume and junction terms'/2x,' typ=',
+     & i3,',',', junno(j) =',i10,',       volno(k) =',
+     & i10,', volno(l) =',i10/2x,' fff =',1p,g13.5,
+     & ',    ghead =',g13.5,', delp =',g13.5/' Valve component block, vl
+     &vnm(i) =',a8)
+           endif
+         endif
+$endif
+         go to (101,300,400,702,700,800), vlvnm(i)
+         call fabend
+c  Check valve.
+c  Note 1. static pressure controled = actuated by static pressure
+c  difference - elev head - pcv
+c       3. flow only control         = opens as for number 1.
+c                                    closes if flow .lt. 0
+c       4. dynamic pressure control  = number 1 + dynamic pressure
+c  Include dynamic pressure (shapek = 1.0)
+  101    open = .false.
+         if (reset) then
+           dynamp = 0.0
+           athrot(j) = max(aleak(i), vlstmo(i)*atlast(i))
+           if (athrot(j) .gt. aleak(i)) open = .true.
+         else
+           if (lpdat(issys)%lsuces .eq. 0) vlstmo(i) = vlstm(i)
+           dynamp = 0.0
+           if (iand(cmpopt(i),12) .eq. 12) dynamp = 0.5
+           dynamp = dynamp*(voidfj(j)*rhofj(j)*velfjo(j)*
+     &     abs(velfjo(j)) + voidgj(j)*rhogj(j)*velgjo(j)*abs(velgjo(j)))
+           delp = delp - pcv(i) + dynamp
+c  Test for flow only control and open condition.
+           close = .false.
+           if (iand(cmpopt(i),28) .ne. 4) then
+c  Test for close, keep as is, or open.
+             if (delp .eq. 0.0) close = .true.
+             if (delp .gt. 0.0) open = .true.
+           else
+             if (fff .ge. 0.0) close = .true.
+           endif
+c  Keep valve in current state.
+           if (close .and. iand(cmpopt(i),16) .eq. 0) open = .true.
+         endif
+c  Close valve.
+         if (open) then
+c  Open valve.
+           cmpopt(i) = iand(cmpopt(i),not(16))
+           athrot(j) = atlast(i)
+         else
+           cmpopt(i) = ior(cmpopt(i),16)
+           athrot(j) = aleak(i)
+         endif
+         vlstm(i) = athrot(j)/atlast(i)
+c  Debug print.
+         if (help .ne. 0) then
+           if (iand(ihlppr(2),ishft(1,5)) .ne. 0) then
+             if (iand(jcex(j),ishft(1,20)) .ne. 0) then
+               write (output,2012) cmpopt(i),atlast(i),pcv(i),aleak(i),
+     &         dynamp,delp
+ 2012  format (2x,' cmpopt(i) =',i22,', atlast(i) =',1p,g13.5,
+     & ', pcv(i) =',g13.5,', aleak(i) =',g13.5/' computed terms'/
+     & 2x,' dynamp =',g13.5,', delp =',g13.5)
+             endif
+           endif
+         endif
+         go to 620
+c  Trip valve.
+  300    if (reset) then
+           athrot(j) = vlstmo(i)*atlast(i)
+         else
+           if (lpdat(issys)%lsuces .eq. 0) vlstmo(i) = vlstm(i)
+           athrot(j) = max(0.0, atlast(i)*sign(1.0,trptm(vlvtrp(i+1))))
+         endif
+         vlstm(i) = athrot(j)/atlast(i)
+c  Debug print.
+         if (help .ne. 0) then
+           if (iand(ihlppr(2),ishft(1,5)) .ne. 0 ) then
+             if (iand(jcex(j),ishft(1,20)) .ne. 0 ) then
+               write (output,2013) vlvtrp(i),atlast(i),vlstm(i)
+ 2013  format (2x,' vlvtrp(i) =',i22,', atlast(i) =',1p,g13.5,
+     & ', vlstm(i) =',g13.5)
+             endif
+           endif
+         endif
+         go to 620
+c  Inertial swing check valve.
+  400 continue
+c  If bit 6 is set latching has occurred with latch option=2.
+c  Skip all motion calculations
+         if (iand(cmpopt(i),32) .gt. 0) go to 430
+         if (reset) then
+           theta(i) = thetao(i)
+           omega(i) = omegao(i)
+         else
+           if (lpdat(issys)%lsuces .eq. 0) then
+             thetao(i) = theta(i)
+             omegao(i) = omega(i)
+           endif
+c  Latch option=1 logic.
+c  Check to see if the valve has ever been fully open or closed.
+c  Then if it is a latchable valve skip motion logic.
+c  Bit 3 Set to 1 yields a value of 4.
+c  Unlatching on a code backup is not considered.
+           if (iand(cmpopt(i),4) .gt. 0) then
+             if (iand(cmpopt(i),8) .gt. 0) go to 410
+           endif
+c  First get the torque caused by weight
+           wtorq = -gravcn*vlfmas(i)*lngvlv(i)*sin(thetao(i)*
+     &     0.017453293)
+c  Area projected = pi*a*b; Burington Tables pg 13. a=r,b=rcos(phi).
+           aflap = aflapr(i)*cos(theta(i)*0.017453293)
+           ptorq = (p(k) - p(l))*aflap*lngvlv(i)
+c  Valve can move only if xlift gt wtorq the movement friction torque.
+           xlift = ptorq + wtorq
+           if (xlift .gt. pcv(i) ) then
+             xlift = xlift - pcv(i)
+           elseif (abs(xlift) .gt. pcv(i) ) then
+             xlift = xlift + pcv(i)
+           else
+             xlift = 0.0
+           endif
+           angacc = xlift/moment(i)
+           omega(i) = omegao(i) + angacc*dt
+crex       omega(i) = angacc*dt
+cc         theta(i) = thetao(i) + omega(i)*dt*57.29577951
+c Use the average velocity during the time step.
+           theta(i) = thetao(i) + 0.5*(omegao(i) + omega(i))*dt*
+     &     57.29577951
+         endif
+c  Check if the latch type is 2.
+c  If the valve is now fully open latch the valve.
+c  Unlatching on a code backup is not considered.
+         if (iand(cmpopt(i),64) .ne. 0) then
+           if (theta(i) .ge. maxtht(i)) cmpopt(i) = ior(cmpopt(i),32)
+         endif
+         if (theta(i) .ge. maxtht(i)) then
+           theta(i) = maxtht(i)
+           omega(i) = 0.0
+           cmpopt(i) = ior(cmpopt(i),4)
+         endif
+         if (theta(i) .le. mintht(i)) then
+           theta(i) = mintht(i)
+           omega(i) = 0.0
+           cmpopt(i) = ior(cmpopt(i),4)
+         endif
+  410    vlstm(i)  = (theta(i) - mintht(i))/(maxtht(i) - mintht(i))
+         if (vlstm(i) .gt. 0.0) then
+           if (velfj(j) .lt. 0.) then
+             a1 = avol(lx)
+           else
+             a1 = avol(kx)
+           endif
+c  Area projected = pi*a*b; Burington Tables pg 13. a=r,b=rcos(phi).
+           aflap = aflapr(i)*cos(theta(i)*0.017453293)
+c  Area open = maximum area minus projected area.
+           atnew(1) = (aflapr(i) - aflap)/a1
+           do 440 ivi = 2,11
+             if (arg(ivi) .ge. atnew(1)) then
+               atc = fct(ivi-1) + (fct(ivi) - fct(ivi-1))*
+     &         (atnew(1) - arg(ivi-1))/(arg(ivi) - arg(ivi-1))
+               athrot(j) = atc*max(atnew(1), aleak(i)/a1)
+               go to 430
+             endif
+  440      continue
+         else
+           athrot(j) = 0.0
+         endif
+  430    continue
+c  Debug print.
+         if (help .ne. 0) then
+           if (iand(ihlppr(2),ishft(1,5)) .ne. 0) then
+             if (iand(jcex(j),ishft(1,20)) .ne. 0) then
+               write (output,2014) cmpopt(i),atlast(i),pcv(i),aleak(i),
+     &         theta(i),thetao(i),mintht(i),maxtht(i),moment(i),
+     &         lngvlv(i),vlfmas(i),omega(i),omegao(i),rdsvlv(i),
+     &         wtorq,a1,atc,aflap,ptorq,angacc
+ 2014  format (2x,' cmpopt(i) =',i22,', atlast(i) =',1p,g13.5,
+     & ',    pcv(i) =',g13.5,',  aleak(i) =',g13.5/2x,'  theta(i) =',
+     & g13.5,9x,', thetao(i) =',g13.5,', mintht(i) =',g13.5,', maxtht(i)
+     & =',g13.5/2x,' moment(i) =',g13.5,9x,', lngvlv(i) =',g13.5,
+     & ', vlfmas(i) =',g13.5,
+     & ',  omega(i) =',g13.5/2x,' omegao(i) =',g13.5,', rdsvlv(i) =',9x,
+     & g13.5/' computed terms'/2x,
+     & ', wtorq =',g13.5,',     a1 =',g13.5/
+     & 2x,'    atc =',g13.5,', aflap =',g13.5,',  ptorq =',g13.5,
+     & ', angacc =',g13.5)
+             endif
+           endif
+         endif
+         go to  620
+c  Servo valve.
+  700    if (reset) then
+           vlstm(i) = vlstmo(i)
+         else
+           if (lpdat(issys)%lsuces .eq. 0) vlstmo(i) = vlstm(i)
+           vlstm(i) = fa(clstrp(i+1))
+c  Error trap.
+           if (vlstm(i) .gt. 1.0) then
+             if (help .ge. 0) help = 1
+             if (iand(ihlppr(2),ishft(1,5)) .ne. 0) then
+               if (iand(jcex(j),ishft(1,20)) .ne. 0) write (output,2002)
+     &         junno(j),vlstm(i)
+ 2002  format ('0******** Control variable for valve',i10,' has a stem p
+     &osition of',1p,e13.5,', which is .gt. 1.0'/' stem is reset to 1.0
+     &and transient is terminated with debug printout.')
+             endif
+             vlstm(i) = 1.0
+           endif
+         endif
+         go to 762
+c  Motor valve.
+  702    if (reset) then
+           vlstm(i) = vlstmo(i)
+         else
+           if (lpdat(issys)%lsuces .eq. 0) vlstmo(i) = vlstm(i)
+           open  = trptm(opntrp(i+1)) .ge. 0.0
+           close = trptm(clstrp(i+1)) .ge. 0.0
+           if (open .and. close) then
+             write (output,2001) opntrp(i),clstrp(i)
+ 2001  format ('0******** Open and close trips (',i10,',',i10,') are bot
+     &h true, transient terminated with debug printout.')
+             if (help .ge. 0) help = 1
+           else
+c  Opening valve.
+             if (open) vlstm(i) = max(0.0,min((vlstmo(i) +
+     &       vlvslp(i)*dt),1.0))
+c  Closing valve.
+             if (close) vlstm(i) = max(0.0,min((vlstmo(i) -
+     &       vlvslp(i)*dt),1.0))
+           endif
+         endif
+c  Debug print.
+  762    if (help .ne. 0) then
+           if (iand(ihlppr(2),ishft(1,5)) .ne. 0) then
+             if (iand(jcex(j),ishft(1,20)) .ne. 0) then
+               write (output,2015) opntrp(i),atlast(i),clstrp(i),
+     &         tblnum(i),vlvslp(i),vlvcon(i),vlstm(i),vlstmo(i)
+ 2015  format (2x,' opntrp(i) =',i22,', atlast(i) =',1p,g13.5,
+     & ', clstrp(i) =',i22,', tblnum(i) =',i10/2x,' vlvslp(i) =',
+     & g13.5,9x,', vlvcon(i) =',g13.5,',  vlstm(i) =',g13.5,9x,
+     & ', vlstmo(i) =',g13.5)
+               if (vlvnm(i) .eq. 4) write (output,2016) open,close
+ 2016  format (' Computed terms'/2x,' open =',l2,', close =',l2)
+             endif
+           endif
+         endif
+c  Valve stem position, area tables.
+         if (tblnum(i) .ne. 0) then
+           l = tblnum(i+1)
+           if (vlstm(i) .eq. gen(l)%gtarg) then
+             atnew(1) = gen(l)%gtval(1)
+           else
+             call gtpolat (gen(l)%gtinfo,gtptr(l)%gtbl,vlstm(i),
+     &       atnew(1:1),err)
+             gen(l)%gtarg = vlstm(i)
+             gen(l)%gtval(1) = atnew(1)
+           endif
+         else
+           atnew(1) = vlstm(i)
+         endif
+         athrot(j) = 0.0
+         if (atnew(1) .lt. 1.0e-10) atnew(1) = 0.0
+         athrot(j) = atnew(1)*atlast(i)
+c  Debug print.
+         if (help .ne. 0) then
+           if (iand(ihlppr(2),ishft(1,5)) .ne. 0) then
+             if (iand(jcex(j),ishft(1,20)) .ne. 0) write (output,2017)
+     &       atnew(1)
+ 2017  format (' Valve stem position, area table results'/2x,' atnew =',
+     & 1p,g13.5)
+           endif
+         endif
+c  Csubv, losses tables.
+         if (ncvtbl(i) .ne. 0) then
+           cvlv(1) = 1.0
+           cvlv(2) = 1.0
+           if (athrot(j) .gt. 0.0) then
+             call polat (cvtbl(i-3),cvtbl(i),atnew(1),cvlv,err)
+             fff = max(0.0,sign(cvlv(1),fff)) - min(0.0,sign(cvlv(2),
+     &       fff))
+             formfj(j) = min(vlvcon(i)/max(fff*fff,1.0e-30),1.0e30)
+             formgj(j) = formfj(j)
+           endif
+c  Debug print.
+           if (help .ne. 0) then
+             if (iand(ihlppr(2),ishft(1,5)) .ne. 0) then
+               if (iand(jcex(j),ishft(1,20)) .ne. 0) write (output,2018)
+     &         ncvtbl(i),cvlv(1),cvlv(2),fff,formfj(j),formgj(j)
+ 2018  format (' Valve csubv, losses table results'/2x,' ncvtbl(i) =',
+     & i22,',   cvlv(1) =',g13.5,',   cvlv(2) =',g13.5/8x,
+     & ' fff =',g13.5,9x,', formfj(j) =',g13.5,', formgj(j) =',g13.5)
+             endif
+           endif
+         endif
+         go to 620
+c  Relief valve.
+  800    if (reset) then
+           theta(i) = thetao(i)
+           velvl(i) = velvlo(i)
+           vlstm(i) = vlstmo(i)
+         else
+c  If successful, keep old time terms.
+           if (lpdat(issys)%lsuces .eq. 0) then
+             thetao(i) = theta(i)
+             velvlo(i) = velvl(i)
+             vlstmo(i) = vlstm(i)
+           endif
+c  Calculate forces and valve reaction.
+           gk = hyarf(k)*velf(kx) + hyarg(k)*velg(kx)
+           velk = gk/rho(k)
+           voidsm = max(1.0e-15, (voidfj(j) + voidgj(j)))
+           gin = mflowj(j)/adisk(i)
+           rhoj = voidsm*(rhofj(j) + rhogj(j)) - voidfj(j)*rhogj(j) -
+     &     voidgj(j)*rhofj(j)
+           velin = gin/rhoj
+           pin = rho(k)
+           if (iand(jc(j),4) .eq. 0) pin = -pin
+           pin = po(k) - gravcn*hydzc(kx2)*pin + 0.5*(gk*velk -
+     &     gin*velin)
+           pback = rho(l)
+           if (iand(jc(j),8) .eq. 0) pback = -pback
+           pback = po(l) + gravcn*hydzc(lx2)*pback
+           pex = pback
+           gex = 0.0
+           velx = 0.0
+           if (athrot(j) .gt. 0.0) then
+             areath = ajun(j)*athrot(j)
+             gth = mflowj(j)/areath
+             velth = gth/rhoj
+             pth = pin + 0.5*(gin*velin - gth*velth)
+             vsubg = 1.0/rhog(k)
+             vsubf = 1.0/rhof(k)
+             term1 = drgdug(k)*(vsubg**2) + drfduf(k)*(vsubf**2)
+             terma = voidg(k)*vsubg*drgdp(k) + voidf(k)*vsubf*drfdp(k) +
+     &       hyarf(k)*(vsubg**2)*(drgdug(k)/dtfduf(k))*(dtfdp(k) -
+     &       dtdp(k)) + hyarg(k)*(vsubf**2)*(drfduf(k)/dtgdug(k))*
+     &       (dtgdp(k) - dtdp(k)) - term1*(po(k)*dtdp(k) - temp(k))*
+     &       (voidg(k)*betagg(k) + voidf(k)*betaff(k) + dtdp(k)*
+     &       ((hyarg(k)*csubpg(k)*tempf(k) + hyarf(k)*csubpf(k)*
+     &       tempg(k))/(tempf(k)*tempg(k))))
+             fksbar = terma/(1.0 - po(k)*term1)
+             termc = fksbar*gth*velth
+             terms = fksbar/(1.0 - termc)
+             ain = arat(j)*avol(kx)
+             aout = max(1.0e-15, (arat(j+1)*avol(lx)))
+             gout = mflowj(j)/aout
+             gex = mflowj(j)/arings(i)
+             drhox = -0.5*terms*(gex + gth)*(gex - gth)
+             drhout = -0.5*terms*(gout + gth)*(gout - gth)
+             csqr = sounde(k)**2
+             dpkx = csqr*drhox
+             dpout = csqr*drhout
+             rhox = rhoj + drhox
+             rhout = rhoj + drhout
+             velx = gex/rhox
+             velout = gout/rhout
+             pex = max(pmin,pth + dpkx)
+             pback = max(pmin,pth + dpout)
+           endif
+           fpres = adisk(i)*pin - pbellw(i)*abelin(i) -
+     &     pback*abelan(i) - pex*areaxx(i) + (pex*areaxx(i) +
+     &     pback*adann(i))*max(0.0, sign(1.0, -velin))
+           fmom = mflowj(j)*(velx*cos(0.017453293*thetao(i)) - velin)
+           cofmom = vlfmas(i) + dt*(bdamp(i) + sprcon(i)*dt)
+           vlstm(i) = vlstmo(i)*(vlstmx(i) - vlsetp(i))
+           fexplt = dt*(fpres - sprcon(i)*vlsetp(i) -
+     &     vlfmas(i)*9.8066352) + (vlfmas(i)*velvlo(i) - dt*
+     &     (fmom + sprcon(i)*vlstm(i)))
+           velvl(i) = fexplt/cofmom
+           vlstm(i) = (vlstm(i) + velvl(i)*dt)/(vlstmx(i) - vlsetp(i))
+           if (vlstm(i) .ge. 1.0) then
+             velvl(i) = 0.0
+             vlstm(i) = 1.0
+           else
+             if (vlstm(i) .le. 0.0) then
+               velvl(i) = 0.0
+               vlstm(i) = 0.0
+             endif
+           endif
+         endif
+         xlift = vlstm(i)*(vlstmx(i) - vlsetp(i))
+         alift = pi*dseat(i)*xlift
+         athrot(j) = min(adisk(i),arings(i),alift)/ajun(j)
+         alpha = 90.0 - 57.29577951*atan2((hring2(i) - xlift),
+     &   0.5*max(0.0,(drings(i) - dseat(i))))
+         theta(i) = 0.5*(hring1(i) + alpha)
+c  Debug print.
+         if (help .ne. 0) then
+           if (iand(ihlppr(2),ishft(1,5)) .ne. 0) then
+             if (iand(jcex(j),ishft(1,20)) .ne. 0) then
+               write (output,2019) cmpopt(i),atlast(i),pbellw(i),
+     &         areaxx(i),theta(i),thetao(i),dseat(i),drings(i),vlstm(i),
+     &         vlstmo(i),vlfmas(i),bdamp(i),sprcon(i),velvl(i),
+     &         velvlo(i),vlsetp(i),vlstmx(i),adisk(i),abelan(i),
+     &         abelin(i),arings(i),adann(i),hring1(i),hring2(i),gk,gin,
+     &         rhoj,pin,pex,fpres,fmom,cofmom,fexplt,xlift,alpha
+ 2019  format (2x,' cmpopt(i) =',i22,', atlast(i) =',1p,g13.5,', pbellw(
+     &i) =',g13.5,', areaxx(i) =',g13.5/2x,'  theta(i) =',g13.5,9x,
+     & ', thetao(i) =',g13.5,',  dseat(i) =',g13.5,', drings(i) =',
+     & g13.5/
+     & 2x,'  vlstm(i) =',g13.5,9x,', vlstmo(i) =',g13.5,', vlfmas(i) =',
+     & g13.5,',  bdamp(i) =',g13.5/2x,' sprcon(i) =',g13.5,9x,
+     & ',  velvl(i) =',g13.5,', velvlo(i) =',g13.5,', vlsetp(i) =',
+     & g13.5/
+     & 2x,' vlstmx(i) =',g13.5,9x,',  adisk(i) =',g13.5,', abelan(i) =',
+     & g13.5,', abelin(i) =',g13.5/2x,' arings(i) =',g13.5,9x,
+     & ',  adann(i) =',g13.5,', hring1(i) =',g13.5,', hring2(i) =',
+     & g13.5/' computed terms'/2x,'     gk =',g13.5,',    gin =',
+     & g13.5,',   rhoj =',g13.5,',    pin =',g13.5,',    pex =',g13.5/
+     & 2x,'  fpres =',g13.5,',   fmom =',g13.5,', cofmom =',g13.5,
+     & ', fexplt =',g13.5,',  xlift =',g13.5/2x,'  alpha =',g13.5)
+               write (output,2030) velk,velin,gex,velx,velth,voidsm,
+     &         rho(k),rho(l),fksbar,term1,terma,termc,terms,pth,rhox,
+     &         po(k),po(l),pback,gout,areath,gth,drhox,dpkx,alift,
+     &         drhout,csqr,dpout,rhout,velout,ain,aout
+ 2030  format ('   velk =',1p,g13.5,'  velin =',g13.5,'    gex =',g13.5,
+     & '   velx =',g13.5,'  velth =',g13.5,' voidsm =',g13.5/
+     & ' rho(k) =',g13.5,' rho(l) =',g13.5,' fksbar =',g13.5,
+     & '  term1 =',g13.5,'  terma =',g13.5,'  termc =',g13.5/
+     & '  terms =',g13.5,'    pth =',g13.5,'   rhox =',g13.5,
+     & '  po(k) =',g13.5,'  po(l) =',g13.5,'  pback =',g13.5/
+     & '   gout =',g13.5,' areath =',g13.5,'    gth =',g13.5,
+     & '  drhox =',g13.5,'   dpkx =',g13.5,'  alift =',g13.5/
+     & ' drhout =',g13.5,'   csqr =',g13.5,'  dpout =',g13.5,
+     & '  rhout =',g13.5,' velout =',g13.5,'    ain =',g13.5/
+     & '   aout =',g13.5)
+             endif
+           endif
+         endif
+c  Set time dep junction flag for open or closed valve.
+  620    jc(j) = iand(jc(j),not(2))
+         if (athrot(j) .eq. 0.0) then
+           jc(j) = ior(jc(j),2)
+           velfj(j) = 0.0
+           velgj(j) = 0.0
+         endif
+c  Debug print.
+         if (help .ne. 0) then
+           if (iand(ihlppr(2),ishft(1,5)) .ne. 0) then
+             if (iand(jcex(j),ishft(1,20)) .ne. 0) then
+               write(output,2020) ij1(j),ajun(j),athrot(j),velfj(j),
+     &         velfjo(j),velgj(j),velgjo(j)
+ 2020  format(' Final junction terms'/4x,
+     & ' ij1(j) =',i22,',   ajun(j) =',1p,g13.5,', athrot(j) =',g13.5/
+     & 1x,'  velfj(j) =',g13.5,9x,', velfjo(j) =',g13.5,',  velgj(j) =',
+     & g13.5,', velgjo(j) =',g13.5)
+             endif
+           endif
+         endif
+ 1000  continue
+       return
+       end

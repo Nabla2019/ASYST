@@ -1,0 +1,287 @@
+*mlist
+*if def,selap
+       subroutine vufac (mz,n,ncomp1,idshrd,pershrd,gapshrd,idbun,pitch,
+     & radc,nrc,fcom,pathl)
+c
+c  Does the analysis for the view factors and path lengths between
+c  various rods and components.
+c
+c  Cognizant engineer: ewc.
+c
+c     pitch            : average pitch between any two rods.(input).
+c     mz x n           : size of the bundle,mz rows by n columns.(input)
+c     idshrd           : for idshrd=1, shroud exists.
+c                        for idshrd=0, shroud does not exist.(input).
+c     pershrd          : perimeter of the shroud.(input).
+c     gapshrd          : average gap between the shroud inner
+c                        surface and the surface of outer rods.(input).
+c     idbun(mz,n)      : i.d. of a rod, the component number
+c                        it belongs to. if idbun(i,j)=0, then
+c                        the rod at the location (i,j) is missing.
+c                        (input).
+c     rad(mn)          : radius of a rod.
+c     radc(ncomp1)     : radius of the rods in one component.(input).
+c     pijkl            : path length between rods ij and kl.
+c     pathl(ncomp1,ncomp1): average path length between any
+c                         two components (output).
+c     fijkl             : view factor between rods ij and kl.
+c     fcom(ncomp1,ncomp1) : average view factor between any
+c                         two components (output).
+c     fsum              : sum of view factors for a rod.
+c     ftot(ncomp1)       : sum of view factors to rods in other componen
+c     nrc(ncomp1)        : number of rods in a component.(output).
+c     vuf12             : view factor between two closest rods.
+c     vuf13             : view factor between two diagonal rods.
+c     vuf15             : view factor between two diagonal rods,which
+c                         are two rows/columns away,(sqrt(5)*pitch away)
+c      mmax = maximum number of rows.
+c      nmax = maximum number of columns.
+c      mnmn = 2*(mmax+nmax)
+c      ndcomp= maximum number of components.
+c      mnmax = mmax*nmax
+c
+       implicit none
+*call cons
+*call scddat
+c
+       integer mmax,nmax,mnmn,mnmax
+       parameter(mmax=20,nmax=20,mnmn=80,mnmax=400)
+       integer mz,n,ncomp1,idshrd,idbun,nrc
+       real pershrd,gapshrd,pitch,radc,fcom,pathl
+      dimension idbun(mmax,nmax),rad(mnmax),radc(ndcomp),nrc(ndcomp),
+     #fcom(ndcomp,ndcomp),pathl(ndcomp,ndcomp),plc(ndcomp,ndcomp),
+     #ftot(ndcomp,ndcomp),nij(mnmn)
+c
+c  Local variables.
+       integer i,i1j,id1,id2,ij,ij1,ijm,ik,ikin,il,im,in,j,jim,jl,jlin,
+     * jm,k,kl,l,nc,ncd,ncount,ni,nij,nj,nkount
+       real fcsum,fij,fijkl,fnewi,fsmshrd,fsum,ftot,p,pij,pijkl,plc,
+     * pshrd,r,rad,radius
+       real vuf12,vuf13,vuf15
+c
+c  Initialize of all the radii of the rods, rod-to-rod view factors and
+c  path lengths.
+      do 104 nc=1,ncomp1
+      if(idshrd.eq.1.and.nc.eq.ncomp1) then
+      nrc(ncomp1)=1
+      radc(ncomp1)=pershrd/(2.0*pi)
+      go to 104
+      endif
+      nrc(nc)=0
+      ncount=0
+      do 103 i=1,mz
+      do 102 j=1,n
+      ij=(i-1)*n+j
+      id1=idbun(i,j)
+c
+c     identify the numbering of a rod next to a missing rod to
+c     evaluate its view-factor with respect to the shroud.
+      if(id1.eq.0) then
+      rad(ij)=radc(nc)*0.001
+      if(i.eq.1) ni=i
+      if(i.eq.mz) ni=i-2
+      if(i.gt.1.and.i.lt.mz) ni=i-1
+      if(j.eq.1) nj=j+1
+      if(j.eq.n) nj=j-1
+      if(j.gt.1.and.j.lt.n) nj=j
+      ncount=ncount+1
+      nij(ncount)=ni*mz+nj
+      endif
+      if(id1.eq.nc) then
+      rad(ij)=radc(nc)
+      nrc(nc)=nrc(nc)+1
+      endif
+  102 continue
+  103 continue
+  104 continue
+c
+c  Initialize  all the component-to-component view factors and path
+c  lengths.
+      do i = 1,ncomp1
+        do j = 1,ncomp1
+          fcom(i,j) = 0.0
+          plc(i,j) = 0.0
+        enddo
+      enddo
+c
+c     calculate view factors of all the rods with respect to
+c     other rods.
+c     r is a dummy radius and is not used in the calculations.
+      r=pitch
+c
+      do 165 nc=1,ncomp1
+c
+c     the i.d.,(idbun), of the shroud has to be ncomp1.
+c
+      if(idshrd.eq.1.and.nc.eq.ncomp1) go to 165
+      do 116 im=nc,ncomp1
+      do 115 in=1,ncomp1
+ 115  pathl(im,in)=0.0
+ 116  continue
+c
+      do 160 i=1,mz
+      do 150 j=1,n
+      do 118 im=1,ncomp1
+      do 117 in=1,ncomp1
+      ftot(im,in)=0.0
+ 117  plc(im,in)=0.0
+ 118  continue
+      ij=(i-1)*n+j
+      id1=idbun(i,j)
+      fsum=0.0
+      fijkl=0.0
+      pijkl=0.0
+      radius=rad(ij)
+      if(id1.eq.nc) then
+c
+      do 145 k=1,mz
+      do 140 l=1,n
+      p=pitch
+c
+c     check if the distance between two rods on the periphery of
+c     the bundle is equal to p, or 2*p, or 3*p,....., due to
+c     missing rods.
+c
+      if((i-k).eq.0.and.abs(j-l).gt.1) then
+      jlin=min(j,l)
+ 120  jlin=jlin+1
+      if(idbun(i,jlin).ne.0) go to 140
+      il=1
+      p=p+pitch
+      if(idbun(i,jlin+1).ne.0) go to 130
+      go to 120
+      endif
+      if(abs(i-k).gt.1.and.(j-l).eq.0) then
+      ikin=min(i,k)
+ 122  ikin=ikin+1
+      if(idbun(ikin,j).ne.0) go to 140
+      il=1
+      p=p+pitch
+      if(idbun(ikin+1,j).ne.0) go to 130
+      go to 122
+      endif
+c
+      if(abs(i-k).gt.2.or.abs(j-l).gt.2) go to 140
+      il=abs(i-k)+abs(j-l)
+  130 kl=(k-1)*n+l
+      id2=idbun(k,l)
+      if(id2.eq.0) go to 140
+      if(il.gt.3.or.il.eq.0) go to 140
+      radius= 0.5*(rad(ij)+rad(kl))
+c
+      if(il.eq.1) then
+      fijkl=vuf12(rad(ij),rad(kl),r,r,r,p)
+      pijkl=p-radius
+      endif
+c
+      if(il.eq.2) then
+      ik=min(i,k)
+      jl=min(j,l)
+      ij1=(ik-1)*n+jl+1
+      i1j=ik*n+jl
+      fijkl=vuf13(rad(ij),rad(ij1),rad(kl),rad(i1j),r,p)
+      pijkl=p*sqrt(2.0)-radius
+      endif
+c
+      if(il.eq.3) then
+      ik=abs(i-k)
+      im=min(i,k)
+      jm=min(j,l)
+      if(ik.eq.1) then
+      ijm=(im-1)*n+(j+l)/2
+      jim=im*n+(j+l)/2
+      fijkl=vuf15(rad(ij),rad(ijm),rad(jim),r,rad(kl),p)
+      else
+      ijm=((i+k)/2-1)*n+jm
+      jim=((i+k)/2-1)*n+jm+1
+      fijkl=vuf15(rad(ij),rad(ijm),rad(jim),r,rad(kl),p)
+      endif
+      pijkl=p*sqrt(5.0)-radius
+      endif
+c
+      fsum=fsum+fijkl
+      fcom(id1,id2)=fcom(id1,id2)+fijkl
+      plc(id1,id2)=plc(id1,id2)+pijkl*fijkl
+      ftot(id1,id2)=ftot(id1,id2)+fijkl
+  140 continue
+  145 continue
+c
+c     calculate view-factor and path length to the shroud.
+c
+      if(idshrd.eq.1) then
+      if(i.eq.1.or.i.eq.mz) go to 144
+      if(j.eq.1.or.j.eq.n) go to 144
+      do 142 nkount=1,ncount
+      if(ij.eq.nij(nkount)) then
+      pshrd=gapshrd+p*sqrt(2.0)
+      go to 146
+      endif
+  142 continue
+      go to 147
+  144 pshrd=gapshrd
+  146 fcom(id1,ncomp1)=fcom(id1,ncomp1)+(1.0-fsum)
+      plc(id1,ncomp1)=plc(id1,ncomp1)+(pshrd+0.5*radc(id1))*
+     #(1.-fsum)
+      ftot(id1,ncomp1)=ftot(id1,ncomp1)+(1.0-fsum)
+      fsum=1.0
+      endif
+c
+c     calculate view factor and path length to itself.
+c
+  147 continue
+      fij=1.0-fsum
+      pij=p-radius
+      fcom(id1,id1)=fcom(id1,id1)+fij
+      plc(id1,id1)=plc(id1,id1)+pij*fij
+      ftot(id1,id1)=ftot(id1,id1)+fij
+c
+c     calculate component-to-component view factors and path lengths.
+c
+      do 148 ncd=nc,ncomp1
+      if(plc(nc,ncd).eq.0.0.and.ftot(nc,ncd).eq.0.0) go to 148
+      plc(nc,ncd)=plc(nc,ncd)/ftot(nc,ncd)
+      pathl(nc,ncd)=pathl(nc,ncd)+plc(nc,ncd)
+  148 continue
+      endif
+  150 continue
+  160 continue
+      do 162 ncd=nc,ncomp1
+      fcom(nc,ncd)=fcom(nc,ncd)/nrc(nc)
+      pathl(nc,ncd)=pathl(nc,ncd)/nrc(nc)
+  162 continue
+  165 continue
+      do 180 i=1,ncomp1
+      fcsum=0.0
+      do 175 j=1,ncomp1
+      if(i.ge.j) go to 172
+      if(fcom(i,j).gt.0.0) fcom(j,i)=fcom(i,j)*nrc(i)*radc(i)/(nrc(j)*
+     #radc(j))
+      if(fcom(i,j).gt.0.0) pathl(j,i)=pathl(i,j)
+  172 if(i.eq.j) go to 175
+       fcsum=fcsum+fcom(i,j)
+  175 continue
+      fcom(i,i)=1.0-fcsum
+  180 continue
+c
+c     adjust view-factors of shroud.
+c
+      if(idshrd.eq.1) then
+      fsmshrd=0.0
+      do 182 i=1,ncomp1
+  182 fsmshrd=fsmshrd+fcom(ncomp1,i)
+      if(fsmshrd.lt.1.0) then
+      fcom(ncomp1,ncomp1)=1.0-fsmshrd
+      go to 184
+      endif
+      do 183 i=1,ncomp1
+      fcom(ncomp1,i)=fcom(ncomp1,i)/fsmshrd
+      fnewi=fcom(ncomp1,i)*nrc(ncomp1)*radc(ncomp1)/(nrc(i)*radc(i))
+      fcom(i,i)=fcom(i,i)+fcom(i,ncomp1)-fnewi
+  183 fcom(i,ncomp1)=fnewi
+  184 continue
+       if (fcom(ncomp1,ncomp1) .ne. 0.0) pathl(ncomp1,ncomp1) =
+     * 0.25*radc(ncomp1)
+      endif
+      return
+      end
+*endif

@@ -1,0 +1,353 @@
+       subroutine rstop (keyflag)
+$if def,gui
+!  Process input for gui trips.
+!
+       use hynmod
+       use lpdatc
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+!
+       logical keyflag
+       real*8  bin(40),cde(40),conv(2)
+       integer ibin(2,40),icde(2,40)
+       equivalence (bin(1),ibin(1,1)),(cde(1),icde(1,1))
+       integer i,i2,ih,ii,ir,j,k,nwr,nbr,pckcod(2)
+       logical errx
+       character chwrd*8,labl*64
+!
+!  Convert keyed in input to binary.
+       keyflag = .false.
+       nbr = 1
+       call cvic (bcd,bin,cde,nwr,nbr)
+!  Process gui trip number field, check for deletion, replacement, or
+!  addition.
+       if (nbr .ne. 0) then
+         keyflag = .true.
+       elseif (nwr .eq. 0) then
+         keyflag = .true.
+       else
+         if (icde(2,1) .ne. 1) then
+           keyflag = .true.
+         else
+           keyflag = keyflag .or. abs(ibin(2,1)) .gt. 1000
+         endif
+       endif
+       if (keyflag) return
+!
+       if (ibin(2,1) .lt. 0) then
+!  Process deletion.
+         errx = .false.
+         do i = 1,ngtrips
+           if (gtrp(i)%gtrpnum .eq. -ibin(2,1)) then
+             errx = .true.
+             exit
+           endif
+         enddo
+         if (errx) then
+           ii = i + 1
+           do i = ii,ngtrips
+             gtrp(i-1) = gtrp(i)
+           enddo
+           ngtrips = ngtrips - 1
+         else
+           keyflag = .true.
+           return
+         endif
+       else
+!  Process replacement or addition.
+         ih = 2
+         do ii = 1,ngtrips
+           if (gtrp(ii)%gtrpnum .eq. ibin(2,1)) then
+             ih = 0
+             exit
+           elseif (gtrp(ii)%gtrpnum .gt. ibin(2,1)) then
+             ih = 1
+             exit
+           endif
+         enddo
+         keyflag = (ih.ne.0 .and. ngtrips.ge.mxtrps) .or. nwr.lt.6
+         if (keyflag) return
+!
+         i = mxtrps + 1
+         gtrp(i)%gtrpnum = ibin(2,1)
+         gtrp(i)%bcd = bcd
+         gtrp(i)%opt = 0
+         gtrp(i)%gtimeof = -1.0
+         gtrp(i)%val = .false.
+!  Check operation code.
+         if (icde(2,4).lt.0 .and. icde(2,4).ge.-8) then
+           write (chwrd,"(a8)") bin(4)
+           errx = .false.
+           do j = 1,9
+             if (chwrd .eq. chop(j)) then
+               errx = .true.
+               exit
+             endif
+           enddo
+           if (errx) then
+             gtrp(i)%op = j
+           else
+             keyflag = .true.
+           endif
+         else
+           keyflag = .true.
+         endif
+         if (keyflag) return
+!  Check varaiable fields.
+         keyflag = .false.
+         j = 2
+         ir = 0
+         do k = 1,2
+           if (icde(2,j).lt.0 .and. icde(2,j).ge.-8 .and.
+     &     (icde(2,j+1).eq.0 .or. icde(2,j+1).eq.1)) then
+             write (chwrd,"(a8)") bin(j)
+             if (chwrd .eq. 'null') then
+               keyflag = keyflag .or. ibin(2,j+1).ne.0
+               gtrp(i)%vtyp(k) = 0
+             elseif (chwrd .eq. 'trip') then
+               if (ibin(2,j+1) .lt. 0) gtrp(i)%opt =
+     &         ior(gtrp(i)%opt,2*k)
+               nbr = abs(ibin(2,j+1))
+               ir = 0
+               call itrscn (ir,nbr,pckcod(1))
+               keyflag = keyflag .or. ir .lt. 0
+               gtrp(i)%vptr(k) = filndx(18) + pckcod(1)
+               gtrp(i)%vtyp = 4
+             elseif (chwrd .eq. 'gtrip') then
+               if (ibin(2,j+1) .lt. 0) gtrp(i)%opt =
+     &         ior(gtrp(i)%opt,2*k)
+               gtrp(i)%gnum(k) = abs(ibin(2,j+1))
+               gtrp(i)%vtyp(k) = 5
+             elseif (chwrd .eq. 'timeof') then
+               ir = 0
+               call itrscn (ir,ibin(2,j+1),pckcod(1))
+               keyflag = keyflag .or. ir .lt. 0
+               gtrp(i)%vptr(k) = filndx(8) + pckcod(1)
+               gtrp(i)%vtyp(k) = 2
+               conv(k) = 1.0
+             elseif (chwrd .eq. 'gtimeof') then
+               gtrp(i)%gnum(k) = abs(ibin(2,j+1))
+               gtrp(i)%vtyp(k) = 3
+               conv(k) = 1.0
+             elseif (chwrd .eq. 'succes') then
+               gtrp(i)%vtyp(k) = 6
+               if (ibin(2,j+1) .eq. 0) then
+                 gtrp(i)%vptr(k) = 0
+               else
+                 if (ibin(2,j+1).ge.0 .and. ibin(2,j+1).le.nloops) then
+                   gtrp(i)%vptr(k) = ibin(2,j+1)
+                 else
+                   keyflag = .true.
+                 endif
+               endif
+               conv(k) = 1
+             else
+               gtrp(i)%vtyp(k) = 1
+               ir = 0
+               call scnreq (ir,chwrd,ibin(2,j+1),1,pckcod,conv(k),labl,
+     &         errx)
+               keyflag = keyflag .or. errx
+               if (.not.errx) gtrp(i)%vptr(k) = filndx(pckcod(1)) +
+     &         pckcod(2)
+             endif
+           else
+             keyflag = .true.
+           endif
+           j = j + 3
+         enddo
+         if (keyflag) return
+!  Check relationship between op code and types of variable fields.
+         if (gtrp(i)%op .le. 6) then
+           j = 8
+           keyflag = gtrp(i)%vtyp(1).eq.0 .or. gtrp(i)%vtyp(1).eq.4 .or.
+     &     gtrp(i)%vtyp(1).eq.5 .or. gtrp(i)%vtyp(2).eq.4 .or.
+     &     gtrp(i)%vtyp(2).eq.5
+           if (gtrp(i)%vtyp(2) .ne. 0) keyflag = keyflag .or.
+     &     conv(1) .ne. conv(2)
+           if (keyflag) return
+!  Process constant.
+           if (nwr .ge. 7) then
+             if (icde(2,7).ge.0 .and. icde(2,7).le.2) then
+               if (icde(2,7) .eq. 1) bin(7) = ibin(2,7)
+               if (uniti) then
+                 gtrp(i)%con = bin(7)
+               else
+                 if (conv(1) .gt. 0.0) then
+                   gtrp(i)%con = bin(7)/conv(1)
+                 else
+                   gtrp(i)%con = bin(7)/1.8
+                 endif
+               endif
+             else
+               keyflag = .true.
+             endif
+           else
+             keyflag = .true.
+           endif
+         else
+           j = 7
+           keyflag = gtrp(i)%vtyp(1).lt.4 .or.
+     &     gtrp(i)%vtyp(k).eq.6 .or. gtrp(i)%vtyp(2).eq.6 .or.
+     &     (gtrp(i)%vtyp(2).ge.1 .and. gtrp(i)%vtyp(2).le.3)
+         endif
+         if (keyflag) return
+!  Process nolatch-latch field.
+         if (nwr .ge. j) then
+           if (icde(2,j).lt.0 .and. icde(2,j).ge.-8) then
+             write (chwrd,"(a8)") bin(j)
+             if (chwrd .eq. 'l') then
+               gtrp(i)%opt = ior(gtrp(i)%opt,2)
+             elseif (chwrd .ne. 'n') then
+               keyflag = .true.
+             endif
+           else
+             keyflag = .true.
+           endif
+         else
+           keyflag = .true.
+         endif
+!  Process optional stop field.
+         if (nwr .eq. j + 1) then
+           if (icde(2,j+1).lt.0 .and. icde(2,j+1).ge.-8) then
+             write (chwrd,"(a8)") bin(j+1)
+             if (chwrd .eq. 'stop') then
+               gtrp(i)%opt = ior(gtrp(i)%opt,1)
+             else
+               keyflag = .true.
+             endif
+           else
+             keyflag = .true.
+           endif
+         endif
+         if (keyflag) return
+!  Place new field in proper position.
+         if (ih .eq. 1) then
+           i2 = ii
+           do j = ngtrips,i2,-1
+             gtrp(j+1) = gtrp(j)
+           enddo
+         endif
+         if (ih .ne. 0) ngtrips = ngtrips + 1
+         if (ih .eq. 2) ii = ngtrips
+         gtrp(ii) = gtrp(i)
+       endif
+!  Resolve gui trip numbers in variable fields.
+       do i = 1,ngtrips
+         do k = 1,2
+           if (gtrp(i)%vtyp(k).eq.3 .or. gtrp(i)%vtyp(k).eq.5) then
+             errx = .true.
+             do j = 1,ngtrips
+               if (gtrp(i)%gnum(k) .eq. gtrp(j)%gtrpnum) then
+                 gtrp(i)%vptr(k) = j
+                 errx = .false.
+                 exit
+               endif
+             enddo
+             if (errx) gtrp(i)%vptr(k) = 0
+           endif
+         enddo
+       enddo
+       call gevaltr
+       return
+       end subroutine rstop
+!
+       subroutine gevaltr
+!  Evaluate gui trips.
+!
+       use lpdatc
+$if -def,ifortc,1
+       use opengl_gl
+$if def,ifortc,1
+       use ifopngl
+       use hynmod
+       implicit none
+       include 'contrl.h'
+       include 'fast.h'
+!
+       real*8 var(2)
+       integer i,j,k
+       logical lvar(2),trold
+!
+       do i = 1,ngtrips
+         trold = gtrp(i)%val
+         if (.not.gtrp(i)%val .or. iand(gtrp(i)%opt,2).eq.0) then
+           if (gtrp(i)%op .le. 6) then
+             do k = 1,2
+               if (gtrp(i)%vtyp(k) .eq. 0) then
+                 var(k) = 0.0
+               elseif (gtrp(i)%vtyp(k) .le. 2) then
+                 var(k) = fa(gtrp(i)%vptr(k))
+               elseif (gtrp(i)%vtyp(k) .eq. 6) then
+                 if (gtrp(i)%vptr(k) .eq. 0) then
+                   var(k) = succes
+                 else
+                   var(k) = lpdat(gtrp(i)%vptr(k))%lsuces
+                 endif
+               else
+                 if (gtrp(i)%vptr(k) .eq. 0) then
+                   var(k) = -1.0
+                 else
+                   var(k) = gtrp(gtrp(i)%vptr(k))%gtimeof
+                 endif
+               endif
+             enddo
+             var(2) = var(2) + gtrp(i)%con
+             select case (gtrp(i)%op)
+             case (1)
+               gtrp(i)%val = var(1) .lt. var(2)
+             case (2)
+               gtrp(i)%val = var(1) .le. var(2)
+             case (3)
+               gtrp(i)%val = var(1) .eq. var(2)
+             case (4)
+               gtrp(i)%val = var(1) .ne. var(2)
+             case (5)
+               gtrp(i)%val = var(1) .ge. var(2)
+             case (6)
+               gtrp(i)%val = var(1) .gt. var(2)
+             end select
+           else
+             do k = 1,2
+               if (gtrp(i)%vtyp(k) .eq. 4) then
+                 lvar(k) = fa(gtrp(i)%vptr(k)) .ge. 0.0
+                 if (ishft(gtrp(i)%opt,-2) .eq. k) lvar(k) =
+     &           .not.lvar(k)
+               elseif (gtrp(i)%vtyp(k) .eq. 5) then
+                 if (gtrp(i)%vptr(k) .eq. 0) then
+                   lvar(k) = .false.
+                 else
+                   lvar = gtrp(gtrp(i)%vptr(k))%val
+                 endif
+                 if (ishft(gtrp(i)%opt,-2) .eq. k) lvar(k) =
+     &           .not.lvar(k)
+               else
+                 lvar(2) = lvar(1)
+               endif
+             enddo
+             select case (gtrp(i)%op)
+             case (7)
+               gtrp(i)%val = lvar(1) .and. lvar(2)
+             case (8)
+               gtrp(i)%val = lvar(1) .or. lvar(2)
+             case (9)
+               gtrp(i)%val = lvar(1) .xor. lvar(2)
+             end select
+           endif
+           if (trold .neqv. gtrp(i)%val) then
+             if (gtrp(i)%val) then
+               gtrp(i)%gtimeof = timehy
+               gtrp(i)%gtimeof = -1.0
+             endif
+           endif
+         endif
+       enddo
+       gstop = any(gtrp(1:ngtrips)%val .and.
+     & iand(gtrp(1:ngtrips)%opt,1).ne.0)
+       return
+       end subroutine gevaltr
+$endif
+$if -def,gui
+       end subroutine rstop
+$endif

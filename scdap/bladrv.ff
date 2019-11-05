@@ -1,0 +1,582 @@
+*mlist
+*if def,selap
+       subroutine bladrv
+c  bladrv is the main driver for the bwr control blade and
+c  channel box component (type 8).  bladrv passes data from
+c  scdap/relap5, calls the bwr blade/box subroutines, and
+c  returns data to scdap/relap5
+c
+c  Cognizant engineer: ewc.
+c
+c*****************************************************************
+c
+c     bladrv              22-may-92
+c
+c     The BWR control blade/channel box modules were developed at
+c     ORNL by L.J. Ott under the auspices of the NRC sponsored
+c     Boiling Water Reactor Severe Accident Technologies programs.
+c     The modules were integrated into SCDAP by F.P. Griffin.
+c
+c     for information or assistance, call
+c          F.P. Griffin  (615)576-4684
+c          L.J. Ott      (615)574-0324
+c
+c*****************************************************************
+c
+       use scdmod
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+!
+       include 'scddat.h'
+       include 'scntl.h'
+       include 'fast.h'
+       include 'blageo.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'intcom.h'
+       include 'ndxara.h'
+       include 'scdcom.h'
+       include 'scdout.h'
+       include 'statec.h'
+       include 'tblsp.h'
+       include 'trnot1.h'
+       include 'voldat.h'
+       include 'cpmdat.h'
+       include 'plndat.h'
+c
+c  bwr blade/box common blocks
+c
+       include 'axtrns.h'
+       include 'bcs.h'
+       include 'blinit.h'
+       include 'cboilx.h'
+       include 'cr2.h'
+       include 'za.h'
+       include 'blkage.h'
+c
+c  local variables
+c
+       integer ic1,ic2,il,in1,in2,inl1,inl2,k
+       real(kr) afrmin,co,do,uo,tempwp
+       data uo/182783.4/, co/10310.75/, do/0.52257/
+c
+       real(kr) smssb4,smssbb,
+     & smssbm,sumb4c,sumss2,sumss3,sumzc6,sumzc7,
+     & wssi,wsso
+       real(kr) cpsmel,cpzmel,fbxfs9(ndcomp),fsum9,mss9,mzr9,tml9
+       real(kr) ccp,ccpr,scp
+       real(kr) mb41,mss1,mss2,mzr1,mzr2
+       integer  i,j,l
+       integer ifs,iseg,itime1
+c  Calculate specific heats at melting temperatures of pure zircaloy
+c  and pure stainless steel. Call matpro functions with units of
+c  j/(kg*k) vs. k using temperature conversion:  k = (f + 459.67)/1.8.
+       if (chngno(70)) then
+         cpzmel = ccpr((tmelbx+459.67)/1.8)
+       else
+         cpzmel = ccp((tmelbx+459.67)/1.8)
+       endif
+       cpsmel = scp((tmelss+459.67)/1.8)
+c
+c  Interface calculations - scdap/relap5 to bwr blade/box component.
+c
+c  Convert scdap/relap5 time step (sec) to bwr blade/box time step
+c  (min).
+       dtm = dt/60.0
+c  Load scdap/relap5 parameters into bwr blade/box arrays.
+       j = iblabx(icomp)
+       ic1 = (icomp-1)*ndax
+       ic2 = (ndcomp+nsout(icomp)-1)*ndax
+       do k = 1,naz
+         ic1 = ic1 + 1
+         ic2 = ic2 + 1
+         in1 = nvad(ic1) + filndx(4)
+         in2 = nvad(ic2) + filndx(4)
+c  convert steam, hydrogen, and argon mass flow rates per individual
+c  structure using a conversion factor of 132.2774 (lbm/min)/(kg/s)
+         wsi(k)=   flstm0(ic1) * 132.2774
+         wsoo(k)=  flstm0(ic2) * 132.2774
+         whi(k)=   flwh20(ic1) * 132.2774
+         whoo(k)=  flwh20(ic2) * 132.2774
+         wari(k)=  flnrt(ic1) *  132.2774
+         waroo(k)= flnrt(ic2) *  132.2774
+c  Note: coolant pressures are now passed directly into routine baxial.
+c
+c  Vapor void frations (no units).
+         voidi(k)= voidg(in1)
+         voido(k)= voidg(in2)
+c  Convert convective heat transfer coefficients using a conversion
+c  factor of 5.678263 [w/(m2*k)]/[btu/(h*ft2*f)]. Liquid and vapor
+c  phases are weighted according to area of wall in contact with
+c  each phase.
+         hwboxi(k)=max(htsht(ic1),1.0e-20) / 5.678263
+         hwboxo(k)=max(htsht(ic2),1.0e-20) / 5.678263
+         hwcb(k)=  max(htsht(ic2),1.0e-20) / 5.678263
+c  convert liquid and vapor phase temperatures into an effective fluid
+c  temperature using the conversion:  f = (k*1.8) - 459.67
+         if(htsht(ic1).ge.1.0e-20)then
+           tsinki(k)=(tcond3(14,k,icomp)-htsqst(ic1)/htsht(ic1))*
+     #     1.8-459.67
+         else
+           tsinki(k)=((1.0-voidg(in1))*tempf(in1)+voidg(in1)*tempg(in1))
+     #     *1.8-459.67
+         endif
+         if(htsht(ic2).ge.1.0e-20)then
+           tsinko(k)=(tcond3(1,k,icomp)-htsqst(ic2)/htsht(ic2))*
+     #     1.8-459.67
+         else
+           tsinko(k)=((1.0-voidg(in2))*tempf(in2)+voidg(in2)*tempg(in2))
+     #     *1.8-459.67
+         endif
+c  Convert radiative heat transfer rate using a conversion factor
+c  of 3.412141 (btu/h)/w. Make sure sign convention is correct.
+c  scdap is positive from surface to surroundings.  bwr blade/box
+c  subroutines are positive from surroundings to surface.
+         qrdrbx(k,1)= -1.0*scd22(k,icomp,1,1)%qrdsur*blawd(icomp)*
+     &   dzcond(ic1)*3.412141
+         qrdrbx(k,2)= -1.0*qrseg2(ic1)*(slbwd(icomp) - blawd(icomp))*
+     &   dzcond(ic1)*3.412141
+       enddo
+c
+c  Call bwr blade/box subroutines.
+c
+c*****boundary conditions required to drive the ornl bwr
+c     canister/control blade package
+c
+c-----fuel side of canister (for each axial node l):
+c
+c     variable      i/o   description                      units
+c
+c     wari(l)        i    argon flow rate                 lbm/min
+c     whi(l)         i    hydrogen flow rate              lbm/min
+c     wsi(l)         i    steam flow rate                 lbm/min
+c     tsinki(l)      i    nodal fluid temperature          deg f
+c     voidi(l)       i    nodal void fraction              ----
+c     hwboxi(l)      i    canister heat transfer coeff.   btu/(hr*ft2*f)
+c     qrdrbx(l,1)    i    radiant heat transfer to        btu/hr
+c                         canister segment no.1
+c     qrdrbx(l,2)    i    radiant heat transfer to        btu/hr
+c                         canister segment no.2
+c
+c-----control blade side of canister (for each axial node l):
+c
+c     variable      i/o   description                      units
+c
+c     waroo(l)       i    argon flow rate                 lbm/min
+c     whoo(l)        i    hydrogen flow rate              lbm/min
+c     wsoo(l)        i    steam flow rate                 lbm/min
+c     tsinko(l)      i    nodal fluid temperature          deg f
+c     voido(l)       i    nodal void fraction              ----
+c     hwboxo(l)      i    canister heat transfer coeff.   btu/(hr*ft2*f)
+c     hwcb(l)        i    cont.blade heat transfer coeff. btu/(hr*ft2*f)
+c
+c*****output variables (from the canister/control blade package)
+c     required by the scdap/relap5 hydraulic package
+c
+c-----fuel side of canister (for each axial node l):
+c
+c     variable    i/o  common  description                      units
+c
+c     dwh(l)       o   /bcs/   total hydrogen generated        lbm/min
+c     dwhbx(l,1)   o   /bcs/   hydrogen gen.from can.seg.no.1  lbm/min
+c     dwhbx(l,2)   o   /bcs/   hydrogen gen.from can.seg.no.2  lbm/min
+c     dws(l)       o   /bcs/   total steam consumed            lbm/min
+c     dwsbx(l,1)   o   /bcs/   steam consumed by can.seg.no.1  lbm/min
+c     dwsbx(l,2)   o   /bcs/   steam consumed by can.seg.no.2  lbm/min
+c
+c-----control blade side of canister (for each axial node l):
+c
+c     variable    i/o  common  description                      units
+c
+c     dwho(l)      o   /bcs/   total hydrogen generated        lbm/min
+c     dwhobx(l,1)  o   /bcs/   hydrogen gen.from can.seg.no.1  lbm/min
+c     dwhobx(l,2)  o   /bcs/   hydrogen gen.from can.seg.no.2  lbm/min
+c     dwhocb(l)    o   /bcs/   hydrogen gen.from control blade lbm/min
+c     dwso(l)      o   /bcs/   total steam consumed            lbm/min
+c     dwsobx(l,1)  o   /bcs/   steam consumed by can.seg.no.1  lbm/min
+c     dwsobx(l,2)  o   /bcs/   steam consumed by can.seg.no.2  lbm/min
+c
+c-----structural temperatures/space parameters/blockage parameters
+c
+c     variable    i/o  common  description                      units
+c
+c     tboxo(l,1,j) o  /axtrns/ temperature of can.seg.no.1      deg f
+c     tboxo(l,2,j) o  /axtrns/ temperature of can.seg.no.2      deg f
+c     tcb3o(l,j)   o  /blinit/ control blade sheath temperature deg f
+c     scn(l,1,j)   o  /blinit/ can.seg.no.1 space parameter     -----
+c     scn(l,2,j)   o  /blinit/ can.seg.no.2 space parameter     -----
+c     scb(l,j)     o  /blinit/ control blade space parameter    -----
+c     csafu(l,j)   o  /blinit/ fuel bundle blockage area         ft2
+c     csafuo(l,j)  o  /blinit/ fuel bundle blockage area (old)   ft2
+c     csacb(l,j)   o  /blinit/ interstitial blockage area        ft2
+c     csacbo(l,j)  o  /blinit/ interstitial blockage area (old)  ft2
+c     iblkc(l,1,j) o  /blinit/ can.seg.1 channel block.par.     -----
+c     iblkc(l,2,j) o  /blinit/ can.seg.2 channel block.par.     -----
+c    iblkcb(l,1,j) o  /blinit/ con.blade channel 1 block.par.   -----
+c    iblkcb(l,2,j) o  /blinit/ con.blade channel 2 block.par.   -----
+c
+c     where:
+c          for the space parameters (scn and scb)
+c                       =0.0 structure is gone
+c                       =1.0 structure is intact
+c          for the blockage parameters (iblkcb and iblkc)
+c                      .le.1 flow channel is open
+c                      .eq.2 flow channel is blocked
+c
+c------------- begin calculations for each time step --------------
+c
+c-----perform calculations for axial zones
+c
+      qcan(j)=0.0
+      qblad1(j)=0.0
+      qblad3(j)=0.0
+      sumzc1=0.0
+      sumzc2=0.0
+      sumzc3=0.0
+      sumzc4=0.0
+      sumzc5=0.0
+      sumzc6=0.0
+      sumzc7=0.0
+      sumb4c=0.0
+      sumss3=0.0
+      sumss2=0.0
+      smssbm=0.0
+      smssbb=0.0
+      smssb4=0.0
+c
+c-----call baxial for canister and control blade
+c     nodal heat balances (including all chemical energy input)
+c
+      call baxial(j)
+c
+c-----determine faction of clad, canister, control blade, and b4c
+c     reacted
+c
+      do 40 k=1,2
+         do 40 i=1,ndz(j)
+            if(scn(i,k,j).ge.0.999999.and.tboxo(i,k,j).lt.tmelbx)then
+               fbx(i,k,j)=wzcan(i,k,j,2)*(91.22/123.219)/
+     *                    wzcani(i,k,j)
+            end if
+            if(k.ne.2)then
+               if(scb(i,j).ge.0.999999 .and.
+     *            (tcb2o(i,j).lt.tmelcb.and.tcb3o(i,j).lt.tmelss))then
+                  wssi=wsscbi(i,j,1)+wsscbi(i,j,2)
+                  wsso=wsscb(i,j,1,1)+wsscb(i,j,2,1)+wsscb(i,j,3,1)+
+     *                 wsscb(i,j,1,2)+wsscb(i,j,2,2)+wsscb(i,j,3,2)+
+     *                 wfe3o(i,j)+wfe3i(i,j)+wfe2o(i,j)+wfe2i(i,j)
+                  fcb23(i,j)=max(0.0,1.0-wsso/wssi)
+               end if
+            end if
+            sumzc1=sumzc1+wzcan(i,k,j,1)
+            sumzc2=sumzc2+wzcan(i,k,j,2)
+            sumzc3=sumzc3+wzcan(i,k,j,3)
+            sumzc4=sumzc4+wzcan(i,k,j,4)
+            sumzc5=sumzc5+wzcan(i,k,j,5)
+            sumzc6=sumzc6+wzcan(i,k,j,6)
+            sumzc7=sumzc7+wzcan(i,k,j,7)
+   40    continue
+      tfbox2(j)=(sumzc2+sumzc6+sumzc7)*(91.22/123.219)/sumzci(j)
+      fbzm=(sumzc3+sumzc5)/sumzci(j)
+      do 50 i=1,ndz(j)
+         sumb4c=sumb4c+wb4c(i,j)
+         sumss3=sumss3+(wsscb(i,j,1,1)+wsscb(i,j,2,1)+
+     1          wsscb(i,j,3,1)+wfe3o(i,j)+
+     2          wfe3i(i,j))
+         sumss2=sumss2+(wsscb(i,j,1,2)+wsscb(i,j,2,2)+
+     1          wsscb(i,j,3,2)+wfe2o(i,j)+
+     2          wfe2i(i,j))
+   50    continue
+      do 70 i=1,ndz(j)
+         smssb4=smssb4+(wsscbb(i,j,8,1)+wsscbb(i,j,8,2))
+         smssbb=smssbb+(wsscbb(i,j,1,1)+wsscbb(i,j,1,2)+
+     1                  wsscbb(i,j,2,1)+wsscbb(i,j,2,2)+
+     2                  wsscbb(i,j,3,1)+wsscbb(i,j,3,2))
+         do 60 l=1,11
+            smssbm=smssbm+wsscbb(i,j,l,1)
+   60       continue
+   70    continue
+      tfb4cr(j)=max(0.0,1.0-(sumb4c+smssb4+gonb4c(j))/smb4ci(j))
+      tfcbr(j)=max(0.0,1.0-(sumss3+sumss2+smssbb+gonss(j))/sumssi(j))
+      fcbzm=smssbm/(smb4ci(j)+sumssi(j))
+c
+c-----increment accumulative variables for metal/water reaction ,etc.
+c
+      tmwbx(j)=tmwbx(j)+qcan(j)*dtm/60.0
+      tmwcb1(j)=tmwcb1(j)+qblad1(j)*dtm/60.0
+      tmwcb3(j)=tmwcb3(j)+qblad3(j)*dtm/60.0
+c
+c-----print control
+c
+      if (fbzm.ne.0.0 .and. mprt5(j).ne.1) mprt5(j)=1
+      if (fcbzm.ne.0.0 .and. mprt6(j).ne.1) mprt6(j)=1
+      mtot56(j)=mprt5(j)+mprt6(j)
+c
+c  interface calculations - bwr blade/box component to scdap/relap5
+c
+       ic1 = (icomp-1)*ndax
+       ic2 = (ndcomp+nsout(icomp)-1)*ndax
+       do 200 k=1,naz
+         ic1 = ic1 + 1
+         ic2 = ic2 + 1
+         in1 = nvad(ic1) + filndx(4)
+         in2 = nvad(ic2) + filndx(4)
+c  convert wall temperatures using the conversion:  k = (f + 459.67)/1.8
+         tcond3(2,k,icomp) =  (tblko(k,1,j,1)+459.67)/1.8
+         tcond3(3,k,icomp) =  (tblko(k,1,j,2)+459.67)/1.8
+         tcond3(4,k,icomp) =  (tblko(k,1,j,3)+459.67)/1.8
+         tcond3(5,k,icomp) =  (tblko(k,1,j,4)+459.67)/1.8
+         tcond3(6,k,icomp) =  (tblko(k,1,j,5)+459.67)/1.8
+         tcond3(7,k,icomp) =  (tblko(k,1,j,6)+459.67)/1.8
+         tcond3(8,k,icomp) =  (tblko(k,2,j,1)+459.67)/1.8
+         tcond3(9,k,icomp) =  (tblko(k,2,j,2)+459.67)/1.8
+         tcond3(10,k,icomp) = (tblko(k,2,j,3)+459.67)/1.8
+         tcond3(11,k,icomp) = (tblko(k,2,j,4)+459.67)/1.8
+         tcond3(12,k,icomp) = (tblko(k,2,j,5)+459.67)/1.8
+         tcond3(13,k,icomp) = (tblko(k,2,j,6)+459.67)/1.8
+c  calculate wetted perimeters of surfaces exposed to coolant volumes
+c  and convert wall temperatures into average wall temperatures
+c  using the conversion:  k = (f + 459.67)/1.8
+         wpsur2(ic1)=0.0
+         tempwp=0.0
+         if(scb(k,j).ge.0.999999 .and. iblkcb(k,1,j).le.1) then
+c  control blade is intact and interstitial volume segment
+c  no. 1 is open
+           wpsur2(ic1)=wpsur2(ic1)+blawd(icomp)
+           tempwp=tempwp+tblko(k,1,j,3)*blawd(icomp)
+         endif
+         if(scn(k,1,j).ge.0.999999 .and. iblkcb(k,1,j).le.1) then
+c  channel box segment no. 1 is intact and interstitial volume segment
+c  no. 1 is open
+           wpsur2(ic1)=wpsur2(ic1)+blawd(icomp)
+           tempwp=tempwp+tblko(k,1,j,6)*blawd(icomp)
+         endif
+         if(scn(k,2,j).ge.0.999999 .and. iblkcb(k,2,j).le.1) then
+c  channel box segment no. 2 is intact and interstitial volume segment
+c  no. 2 is open
+           wpsur2(ic1)=wpsur2(ic1)+slbwd(icomp)-blawd(icomp)
+           tempwp=tempwp+tblko(k,2,j,6)*(slbwd(icomp)-blawd(icomp))
+         endif
+         if(wpsur2(ic1).ne.0.0) then
+           tcond3(1,k,icomp)=( tempwp/wpsur2(ic1)+459.67 )/1.8
+           afrmin=avol(in2)/min((celcba(1,j)+celcba(2,j))*0.09290304*
+     &     nsigl(icomp),aflwto(ncmpgs(icomp)))
+           if(afrmin.lt.0.25) wpsur2(ic1)=4.0*afrmin*wpsur2(ic1)
+         else
+           wpsur2(ic1)=slbwd(icomp)*1.0e-10
+           tcond3(1,k,icomp)=( tsinko(k)+459.67 )/1.8
+           tcond3(1,k,icomp)=max(tcond3(1,k,icomp),300.0)
+           tcond3(1,k,icomp)=min(tcond3(1,k,icomp),3500.0)
+         endif
+         wpsur1(ic1)=0.0
+         tempwp=0.0
+         if(scn(k,1,j).ge.0.999999 .or. iblkcb(k,1,j).eq.2) then
+c  channel box segment no. 1 is intact
+           wpsur1(ic1)=wpsur1(ic1)+blawd(icomp)
+           tempwp=tempwp+tblko(k,1,j,6)*blawd(icomp)
+         endif
+         if(scn(k,2,j).ge.0.999999 .or. iblkcb(k,2,j).eq.2) then
+c  channel box segment no. 2 is intact
+           wpsur1(ic1)=wpsur1(ic1)+slbwd(icomp)-blawd(icomp)
+           tempwp=tempwp+tblko(k,2,j,6)*(slbwd(icomp)-blawd(icomp))
+         endif
+         if(wpsur1(ic1).ne.0.0) then
+           tcond3(14,k,icomp)=( tempwp/wpsur1(ic1)+459.67 )/1.8
+         else
+           wpsur1(ic1)=slbwd(icomp)*1.0e-10
+           tcond3(14,k,icomp)=( tsinki(k)+459.67 )/1.8
+           tcond3(14,k,icomp)=max(tcond3(14,k,icomp),300.0)
+           tcond3(14,k,icomp)=min(tcond3(14,k,icomp),3500.0)
+         endif
+c  calculations for hydrogen generation rates
+         if(.not.scntrl(8))then
+           do 210 il = 1,noncn
+             if (il .ne. nonhy) go to 210
+             inl1 = in1 + il - 1
+             inl2 = in2 + il - 1
+c  convert hydrogen generation rates per individual structure using
+c  a conversion factor of 132.2774 (lbm/min)/(kg/s)
+             gaman(inl1) = gaman(inl1) + nsigl(icomp)*recipv(in1)*
+     #         min(0.1111*wsi(k),dwhbx(k,1)+dwhbx(k,2))/132.2774
+             gaman(inl2) = gaman(inl2) + nsigl(icomp)*recipv(in2)*
+     #         min(0.1111*wsoo(k),dwhobx(k,1)+dwhobx(k,2)+
+     #         dwhocb(k))/132.2774
+             enthn(inl1) = uo + co*tcond3(14,k,icomp) +
+     #         do/2.0*(tcond3(14,k,icomp)-tao)**2
+             enthn(inl2) = uo + co*tcond3(1,k,icomp) +
+     #         do/2.0*(tcond3(1,k,icomp)-tao)**2
+  210      continue
+         endif
+         h2oxd(ic1)=(dwhbx(k,1)+dwhbx(k,2)+dwhobx(k,1)+
+     #     dwhobx(k,2)+dwhocb(k))/132.2774
+c  convert changes in RELAP5 flow areas per individual structure using
+c  a conversion factor of 0.09290304 m2/ft2
+         dfasr1(ic1)=(csafu(k,j)-csafuo(k,j))*0.09290304
+         dfasr2(ic1)=(csacb(k,j)-csacbo(k,j))*0.09290304
+c  calculate mass per individual fuel/simulator rod and temperature of
+c  molten material received by fuel/simulator rods.  a fuel/simulator
+c  rod that is blocked by cohesive, rubble, or molten debris can not
+c  receive molten material.  variables mzrfs, mssfs, mcfs, and mctfs
+c  are initialized to 0.0 in subroutine sbntac and are used to store
+c  values temporarily during a timestep.  apply conversion factors of
+c  0.4535924 kg/lbm and k = (f + 459.67)/1.8.
+         do 220 iseg=1,2
+           if(numfs(iseg,icomp).ge.1) then
+             fsum9=0.0
+             do 225 ifs=1,numfs(iseg,icomp)
+               if(dzfrcq( k , cmpfs(iseg,ifs,icomp) ).lt.0.99 .and.
+     #         irubpp( k , cmpfs(iseg,ifs,icomp) ).eq.0 .and.
+     #         lcrucb( k , cmpfs(iseg,ifs,icomp) ).eq.0) then
+                 fbxfs9(ifs)=fboxfs(iseg,ifs,icomp)
+               else
+                 fbxfs9(ifs)=0.0
+               endif
+               fsum9=fsum9+fbxfs9(ifs)
+  225        continue
+             if(fsum9.gt.0.5e-6) then
+               tml9=(tmlbun(k,iseg,j)+459.67)/1.8
+               if(wzrbun(k,iseg,j).gt.0.0) then
+                 do 230 ifs=1,numfs(iseg,icomp)
+                   if(fbxfs9(ifs).gt.0.5e-6) then
+                     iblfs(cmpfs(iseg,ifs,icomp))=k
+                     mzr9=wzrbun(k,iseg,j)*0.4535924*nsigl(icomp)/
+     #               nsigl(cmpfs(iseg,ifs,icomp))*fbxfs9(ifs)/fsum9
+                     mzrfs(k,cmpfs(iseg,ifs,icomp))=
+     #               mzrfs(k,cmpfs(iseg,ifs,icomp))+mzr9
+                     mcfs(k,cmpfs(iseg,ifs,icomp))=
+     #               mcfs(k,cmpfs(iseg,ifs,icomp))+mzr9*cpzmel
+                     mctfs(k,cmpfs(iseg,ifs,icomp))=
+     #               mctfs(k,cmpfs(iseg,ifs,icomp))+mzr9*cpzmel*tml9
+                   endif
+  230            continue
+               endif
+               if(wssbun(k,iseg,j).gt.0.0) then
+                 do 235 ifs=1,numfs(iseg,icomp)
+                   if(fbxfs9(ifs).gt.0.5e-6) then
+                     iblfs(cmpfs(iseg,ifs,icomp))=k
+                     mss9=wssbun(k,iseg,j)*0.4535924*nsigl(icomp)/
+     #               nsigl(cmpfs(iseg,ifs,icomp))*fbxfs9(ifs)/fsum9
+                     mssfs(k,cmpfs(iseg,ifs,icomp))=
+     #               mssfs(k,cmpfs(iseg,ifs,icomp))+mss9
+                     mcfs(k,cmpfs(iseg,ifs,icomp))=
+     #               mcfs(k,cmpfs(iseg,ifs,icomp))+mss9*cpsmel
+                     mctfs(k,cmpfs(iseg,ifs,icomp))=
+     #               mctfs(k,cmpfs(iseg,ifs,icomp))+mss9*cpsmel*tml9
+                   endif
+  235            continue
+               endif
+             endif
+           endif
+  220    continue
+c  assign values to damlev plot variable
+         if(iblkc(k,1,j).eq.0 .and. iblkcb(k,1,j).le.1) then
+           if(iblkc(k,2,j).eq.0 .and. iblkcb(k,2,j).le.1) then
+             damlev(k,icomp)=0.3
+           else
+             damlev(k,icomp)=0.1
+           endif
+         else
+           if(iblkc(k,2,j).eq.0 .and. iblkcb(k,2,j).le.1) then
+             damlev(k,icomp)=0.2
+           else
+             damlev(k,icomp)=0.0
+           endif
+         endif
+c        if(iblkc(k,1,j).eq.1)  damlev(k,icomp)=damlev(k,icomp)+0.01
+c        if(iblkc(k,1,j).eq.2)  damlev(k,icomp)=damlev(k,icomp)+0.02
+c        if(iblkc(k,2,j).eq.1)  damlev(k,icomp)=damlev(k,icomp)+0.001
+c        if(iblkc(k,2,j).eq.2)  damlev(k,icomp)=damlev(k,icomp)+0.002
+c        if(iblkcb(k,1,j).eq.1) damlev(k,icomp)=damlev(k,icomp)+0.0001
+c        if(iblkcb(k,1,j).eq.2) damlev(k,icomp)=damlev(k,icomp)+0.0002
+c        if(iblkcb(k,2,j).eq.1) damlev(k,icomp)=damlev(k,icomp)+0.00001
+c        if(iblkcb(k,2,j).eq.2) damlev(k,icomp)=damlev(k,icomp)+0.00002
+c
+c  assign values to intact structure and crust thickness plot
+c  variables using a conversion factor of 0.3048 m/ft
+c
+c  intact absorber tube (b4c and ss)
+         mss1=0.0
+         do 300 l=1,7
+  300      mss1=mss1+wsscb(k,j,l,2)
+         mss1=mss1+wfe2o(k,j)+wfe2i(k,j)
+         mb41=wb4c(k,j)+wb2o3(k,j)+wb(k,j)+wc(k,j)
+         ruliq(ic1)=(mss1/rhoss+mb41/rhob4c)/hdz(k,j)/boxl(1,j)*0.3048
+c  intact ss blade sheath
+         mss1=0.0
+         do 302 l=1,7
+  302      mss1=mss1+wsscb(k,j,l,1)
+         mss1=mss1+wfe3o(k,j)+wfe3i(k,j)
+         rci(ic1)=mss1/rhoss/hdz(k,j)/boxl(1,j)*0.3048
+c  intact channel box segments 1 and 2
+         mzr1=0.0
+         mzr2=0.0
+         do 304 l=1,3
+           mzr1=mzr1+wzcan(k,1,j,l)
+  304      mzr2=mzr2+wzcan(k,2,j,l)
+         rocrst(ic1)=mzr1/rhocld/hdz(k,j)/boxl(1,j)*0.3048
+         rpel(ic1)=mzr2/rhocld/hdz(k,j)/boxl(2,j)*0.3048
+c  control blade crust segments 1 and 2
+         mss1=0.0
+         mss2=0.0
+         do 306 l=1,11
+           mss1=mss1+wsscbb(k,j,l,1)+wsscbb(k,j,l,2)
+  306      mss2=mss2+wsscno(k,j,l,1)+wsscno(k,j,l,2)
+         rco(ic1)=mss1/rhossl/hdz(k,j)/boxl(1,j)*0.3048
+         oxdeo(ic1)=mss2/rhossl/hdz(k,j)/boxl(2,j)*0.3048
+c  channel box crust segments 1 and 2
+         mzr1=0.0
+         mzr2=0.0
+         mss1=0.0
+         mss2=0.0
+         do 308 l=4,7
+           mzr1=mzr1+wzcan(k,1,j,l)
+  308      mzr2=mzr2+wzcan(k,2,j,l)
+         do 310 l=1,11
+           mss1=mss1+wsscan(k,1,j,l,1)+wsscan(k,1,j,l,2)
+  310      mss2=mss2+wsscan(k,2,j,l,1)+wsscan(k,2,j,l,2)
+         wremzr(ic1)=(mzr1/rocldl+mss1/rhossl)/hdz(k,j)/boxl(1,j)*0.3048
+         wremuo(ic1)=(mzr2/rocldl+mss2/rhossl)/hdz(k,j)/boxl(2,j)*0.3048
+  200  continue
+c  calculate mass and energy of molten material that slumps into lower
+c  plenum couple mesh.  material is accumulated over several timesteps
+c  and released to the couple mesh at 2 sec intervals.  unit conversions
+c  are performed in subroutine reloc
+       if(nslph0.gt.0) then
+         itime1 = timehy*0.5
+         mb41=wcrdbc(j)+wplabc(j)+wnosbc(j)
+         mss1=wcrdss(j)+wcrdso(j)+wplass(j)+wplaso(j)+
+     &        wnosss(j)+wnosso(j)
+         mzr1=mb41+mss1+wnoszr(j)+wnoszo(j)
+         if (itime1.gt.itimec(j) .and. mzr1.gt.1.0e-5) then
+           itimec(j)=itime1
+           wbotab(icomp)=mb41
+           wbotsr(icomp)=mss1
+           wbotzr(icomp)=wnoszr(j)
+           wbotox(icomp)=wnoszo(j)
+           wdtqlp(icomp)=(enrcrd(j)+enrpla(j)+enrnos(j))*nsigl(icomp)
+           wcrdbc(j)=0.0
+           wcrdss(j)=0.0
+           wcrdso(j)=0.0
+           wplabc(j)=0.0
+           wplass(j)=0.0
+           wplaso(j)=0.0
+           wnosbc(j)=0.0
+           wnosss(j)=0.0
+           wnosso(j)=0.0
+           wnoszr(j)=0.0
+           wnoszo(j)=0.0
+           enrcrd(j)=0.0
+           enrpla(j)=0.0
+           enrnos(j)=0.0
+         else
+           wbotab(icomp)=0.0
+           wbotsr(icomp)=0.0
+           wbotzr(icomp)=0.0
+           wbotox(icomp)=0.0
+           wdtqlp(icomp)=0.0
+         endif
+       endif
+c
+       return
+       end
+*endif

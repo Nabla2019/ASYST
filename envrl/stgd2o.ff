@@ -1,0 +1,1885 @@
+       program  stgd2o
+c
+c
+c      stgd2o  - generate tables of selected thermodynamic properties
+c                (temperatures, pressures, specific volumes, internal
+c                energies, thermal expansion coefficients, isothermal
+c                compressibilities, specific heats, and entropies for
+c                both saturation and single phase conditions, liquid
+c                and/or vapor states) for heavy water
+c
+c
+c      Author:   J. E. Tolli, EG&G Idaho, Inc.
+c      Date:     4/88
+c      Language: FORTRAN 77
+c      Modified: 9/89 (G. A. Mortensen), 7/91 (J. E. Tolli)
+c      Refs:     (1) P. G. Hill et. al., "TABLES OF THERMODYNAMIC
+c                    PROPERTIES OF HEAVY WATER IN S.I. UNITS", Atomic
+c                    Energy of Canada Limited (December 1981)
+c                (2) R. C. Hendricks et. al., "WASP - A FLEXIBLE
+c                    FORTRAN 1V COMPUTER CODE FOR CALCULATING WATER
+c                    AND STEAM PROPERTIES", NASA TN D-7391 (Technical
+c                    Note), National Aeronautics and Space
+c                    Administration (November 1973)
+c                (3) R. J. Wagner, "STH2O, A SUBROUTINE PACKAGE TO
+c                    COMPUTE THE THERMODYNAMIC PROPERTIES OF WATER",
+c                    Idaho National Engineering Laboratory (Aerojet
+c                    Nuclear) internal report (1973)
+c                (4) R. J. Wagner, "STH2X WATER PROPERTY SUBROUTINES",
+c                    attachment to ref. (3) (February 25, 1977)
+c
+c
+c      Calling sequence:
+c
+c                stgd2o
+c
+c      Parameters:
+c
+c                none
+c
+c      Files:
+c
+c                * (default input file);  contains user supplied data;
+c                first data record contains the title to be given to the
+c                thermodynamic properties file;  next active data record
+c                contains the number of temperatures to be used,
+c                followed by at least one blank, comma, or slash,
+c                followed by any other characters the user wishes;  next
+c                active data record(s) contain temperature values in
+c                ascending order, delimited by at least one blank,
+c                comma, or end-of-record;  next active data record
+c                contains the number of pressures to be used, followed
+c                by at least one blank, comma, or slash, followed by any
+c                other characters the user wishes;  next active data
+c                record(s) contain pressure values in ascending order,
+c                delimited by at least one blank, comma, or
+c                end-of-record;  last input records, if any, may contain
+c                any characters the user wishes;  an active data record
+c                is any non-blank record from the first (title) record
+c                to the last pressure value record;
+c                temperatures and pressures must be in S. I. units
+c
+c                * (default output file);  tabular list of thermodynamic
+c                properties in S. I. units
+c
+c                tpfd2o (FORTRAN unit 1);  thermodynamic properties in
+c                unformatted (binary) tables (output)
+c
+c                FORTRAN unit 2;  contains data as copied from
+c                default input for subsequent list directed reading,
+c                with blank lines omitted (scratch output, input)
+c
+c       stgd2o is based on the WASP program of Ref.(2), modified by
+c       J. E. Tolli for heavy water
+c
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+c
+       parameter (maxlen=20000)
+       parameter (nprops=6)
+c
+       common /propty/ c,cl,cp,cpl,cpv,cv,cvl,cvp,cvv,dl,dv,excesk,
+     * excl,excv,gamma,gammal,gammav,hl,hv,k,kl,kv,mu,mul,muv,s,sigma,
+     * sl,sv,ku
+       real k,kl,kv,mu,mul,muv
+c
+       common  /crit/ rhocrt,pcrt,tcrt
+c
+      common/deriv/pdt,ptv,pdtl,pdtv,ptvl,ptvv
+c
+c     pdt,pdtl,pdtv = derivative of pressure with respect to density
+c                     at constant temperature
+c     ptv,ptvl,ptvv = derivative of pressure with respect to
+c                     temperature at constant volume
+c
+       common /minmax/ tmin,pmin,tmax,pmax
+c
+c      tmin,pmin = minimum allowed temperature and pressure
+c      tmax,pmax = maximum allowed temperature and pressure
+c
+       common /trip/ ttrip,ptrip,vtrip
+c
+c      ttrip,ptrip,vtrip = triple point temperature, pressure, and volum
+c
+c
+       real  a(maxlen)
+c
+       character*80  blnkln,record
+       character*26  versn
+       character*11  p,state
+       character*10  day
+       character* 8  timeod
+       character* 1  blanks(80)
+c
+c
+       equivalence  (blanks,blnkln)
+c
+c
+       data  versn /'stgd2o 1.0 (07/22/91)'/
+c
+       data  blanks /80*' '/
+c
+       data  next /1/, maxlpp /55/
+$if def,hp
+      on real*4 underflow call trap4
+      on real*8 underflow call trap8
+      on external error ignore
+$endif
+c
+c
+c--open binary file for tables
+       open (1,file='tpfd2o',form='unformatted',status='unknown')
+c
+c--open auxilliary input file
+       open (2,status='scratch')
+c
+c--get day and time
+       call  edate (day)
+       call  eclock (timeod)
+c
+c--read title for tables;  ignore first card if it starts with '*'
+       read (*,1000) record
+       if ( record(1:1) .eq. '*' )  read (*,1000) record
+c
+c--display table heading and write information to binary file
+c
+       write (*,1100) record,day,timeod,versn,record
+       write (1) record
+       record = 'generated on ' // day // ' at ' // timeod
+     &                                 // ' by ' // versn
+       write (1) record
+c
+c--display rest of input and copy to auxilliary input file
+c
+       do 10 i=1,10000
+         read (*,1000,end=20) record
+         write (*,1000) ' ',record
+         if (record.ne.blnkln)  write (2,1000) record
+   10  continue
+c
+c--rewind auxilliary input file
+c
+   20  rewind 2
+c
+c--read number of temperatures
+c
+       read (2,*) nt
+c
+c--read temperature values
+c
+       read (2,*) (a(i),i=1,nt)
+       next = next + nt
+c
+c--read number of pressures
+c
+       read (2,*) np
+c
+c--read pressure values
+c
+       read (2,*) (a(i),i=next,next+np-1)
+       next = next + np
+c
+c--delete auxilliary input file
+c
+       close (2)
+c
+c--set up critical values
+c
+       tcrit = tcrt
+       pcrit = pcrt * 1.0e+6
+       vcrit = 1.0e-3 / rhocrt
+c
+c--display data limits
+c
+       write (*,1200) tmin,pmin,tmax,pmax,ttrip,ptrip,vtrip,tcrit,pcrit,
+     *                vcrit
+c
+c--get number of saturation temperatures
+c
+       do 30 i=1,nt
+         if (a(i).gt.tcrit)  go to 40
+   30  continue
+   40  nst = i - 1
+c
+c--get number of saturation pressures
+c
+       do 50 i=nt+1,nt+np
+         if (a(i).gt.pcrit)  go to 60
+   50  continue
+   60  nsp = i - 1 - nt
+c
+c--calculate base table pointers
+c
+       it3p0 = nt + np
+       it3bp = it3p0 - 2*nprops
+       it4p0 = it3p0 + ( 2*nprops + 1 ) * nst
+       it4bp = it4p0 - 2*nprops
+       it5p0 = it4p0 + ( 2*nprops + 1 ) * nsp
+       nprpnt = nprops*nt
+       it5bp = it5p0 - nprpnt - nprops + 1
+c
+c--calculate number of words in binary table
+c
+       ntot = nt + np + ( 1 + 2*nprops ) * nst + ( 1 + 2*nprops ) * nsp
+     *           + nprops * nt * np
+       if (ntot.gt.maxlen) then
+         write (*,1300) ntot,maxlen
+         stop
+       endif
+c
+c--display table statistics
+c
+       write (*,1400) nt,np,nst,nsp,ntot
+c
+c--write data limits, table statistics, and pointers to binary file
+c
+       write (1) ttrip,ptrip,vtrip,tcrit,pcrit,vcrit,
+     *           tmin,pmin,tmax,pmax,
+     *           nt,np,nst,nsp,
+     *           it3bp,it4bp,it5bp,nprpnt,it3p0
+       write (1) ntot
+c
+c--generate tables of thermodynamic properties of heavy water
+c
+c--set units flag
+c
+       ku = 4
+c--get saturation properties for t v. p table
+       write (*,1500) '(temperature v. pressure)','temperature',
+     *                ' pressure  '
+       ks = 1
+       kp = 7
+       do 70 i=1,nst
+         kr = 1
+         temp = a(i)
+         pres = 0.0
+         call  hwasp (ks,kp,temp,pres,d,h,kr)
+         if (kr.ne.1) then
+           write (*,1600) kr,'temperature =',temp
+           stop
+         endif
+c--place values in binary table
+c--store saturation pressure
+         a(next) = pres
+c--compute and store specific volume
+         a(next+1) = 1. / dl
+         a(next+1+nprops) = 1. / dv
+c--compute and store internal energy
+         a(next+2) = hl - a(next)*a(next+1)
+         a(next+2+nprops) = hv - a(next)*a(next+1+nprops)
+c--compute and store thermal expansion coefficient
+         a(next+3) = a(next+1) * ptvl / pdtl
+         a(next+3+nprops) = a(next+1+nprops) * ptvv / pdtv
+c--compute and store isothermal compressibility
+         a(next+4) = a(next+1) / pdtl
+         a(next+4+nprops) = a(next+1+nprops) / pdtv
+c--store specific heat
+         a(next+5) = cpl
+         a(next+5+nprops) = cpv
+c--store entropy
+         a(next+6) = sl
+         a(next+6+nprops) = sv
+c--display values
+         last = next + 2*nprops
+         write (*,1700) a(i),(a(j),j=next,last)
+         next = last + 1
+   70  continue
+c--get saturation properties for p v. t table
+       write (*,1500) '(pressure v. temperature)',' pressure  ',
+     *                'temperature'
+       ks = 1
+       kp = 7
+       do 80 i=nt+1,nt+nsp
+         kr = 1
+         temp = 0.0
+         pres = a(i)
+         call  hwasp (ks,kp,temp,pres,d,h,kr)
+         if (kr.ne.1) then
+           write (*,1600) kr,'pressure =',pres
+           stop
+         endif
+c--place values in binary table
+c--store saturation temperature
+         a(next) = temp
+c--compute and store specific volume
+         a(next+1) = 1. / dl
+         a(next+1+nprops) = 1. / dv
+c--compute and store internal energy
+         a(next+2) = hl - a(i)*a(next+1)
+         a(next+2+nprops) = hv - a(i)*a(next+1+nprops)
+c--compute and store thermal expansion coefficient
+         a(next+3) = a(next+1) * ptvl / pdtl
+         a(next+3+nprops) = a(next+1+nprops) * ptvv / pdtv
+c--compute and store isothermal compressibility
+         a(next+4) = a(next+1) / pdtl
+         a(next+4+nprops) = a(next+1+nprops) / pdtv
+c--store specific heat
+         a(next+5) = cpl
+         a(next+5+nprops) = cpv
+c--store entropy
+         a(next+6) = sl
+         a(next+6+nprops) = sv
+c--display values
+         last = next + 2*nprops
+         write (*,1700) a(i),(a(j),j=next,last)
+         next = last + 1
+   80  continue
+c--get thermodynamic properties for single phase states
+       ks = 1
+       kp = 7
+       do 100 i=nt+1,nt+np
+c--display page heading
+         write (*,1800)
+         nline = 0
+         pres = a(i)
+         do 90 j=1,nt
+           kr = 0
+           temp = a(j)
+           call  hwasp (ks,kp,temp,pres,d,h,kr)
+c--place converted values in binary table
+c--compute and store specific volume
+           a(next) = 1. / d
+c--compute and store internal energy
+           a(next+1) = h - a(i)*a(next)
+c--compute and store thermal expansion coefficient
+           a(next+2) = a(next) * ptv / pdt
+c--compute and store isothermal compressibility
+           a(next+3) = a(next) / pdt
+c--store specific heat
+           a(next+4) = cp
+c--store entropy
+           a(next+5) = s
+c--display values
+           last = next + nprops - 1
+           nline = nline + 1
+           if (nline.gt.maxlpp) then
+             write (*,1800)
+             nline = 1
+           endif
+           if (nline.eq.1) then
+             write (p,'(1p,e11.5)') a(i)
+           else
+             p = '          '
+           endif
+           if (kr.eq.1) then
+             state = 'saturation '
+           else  if (kr.eq.2) then
+             state = '  liquid   '
+           else
+             state = '   vapor   '
+           endif
+           write (*,1900) p,a(j),state,(a(ij),ij=next,last)
+           next = last + 1
+   90    continue
+  100  continue
+c
+c--check number of words stored in binary tables
+c
+       if (next-1.ne.ntot) then
+         write (*,2000) next-1,ntot
+         stop
+       endif
+c
+c--write out binary tables
+c
+       write (1) (a(iwtxx),iwtxx=1,ntot)
+c
+c
+ 1000  format (a,a,a,a)
+ 1100  format ('1'/' ',a//' generated on ',a,' at ',a,' by '//
+     *         1x,a,', program to generate heavy water thermodynamic',
+     *           ' properties tables in s.i. units'//////
+     *         ////
+     *         ' input data:'//1x,a)
+ 1200  format ('1'/' data limits:'//
+     *         37x,'temperature',5x,' pressure  ',5x,'  volume   '/
+     *         37x,'-----------',5x,'-----------',5x,'-----------'/
+     *         '   minimum allowed input value =',1p,2e16.5,5x,
+     *           '    n/a    '/
+     *         '   maximum allowed input value =',1p,2e16.5,5x,
+     *           '    n/a    '/
+     *         '   triple point value          =',1p,3e16.5/
+     *         '   critical point value        =',1p,3e16.5)
+ 1300  format ('0*****error - number of words required for binary ',
+     *           'tables =',i6/
+     *         '              maximum allowed =',i6/
+     *         '0*****execution stopped')
+ 1400  format (//////////' table statistics:'//
+     *         '   number of temperatures            =',i6/
+     *         '   number of pressures               =',i6/
+     *         '   number of saturation temperatures =',i6/
+     *         '   number of saturation pressures    =',i6/
+     *         '   number of words in binary tables  =',i6)
+ 1500  format ('1table of saturation properties for heavy water ',a,
+     *           ':'//
+     *         1x,a,3x,a,'      state       specific  ',
+     *           '    internal       thermal     isothermal ',
+     *           '    specific       entropy'/
+     *         '                                             volume   ',
+     *           '     energy       expansion     compress.       heat'/
+     *         ' -----------   -----------   -----------   -----------',
+     *           '   -----------   -----------   -----------',
+     *           '   -----------   -----------'/)
+ 1600  format (' kr =',i2,' not valid for saturation properties at',
+     *           a,f12.6,' k')
+ 1700  format (1p,1x,2(e11.5,3x),2x,'liquid',5x,6(e12.5,2x)/32x,'vapor',
+     *         5x,6(e12.5,2x))
+ 1800  format ('1thermodynamic properties of heavy water:'//
+     *         '  pressure     temperature      state       specific  ',
+     *           '    internal       thermal     isothermal ',
+     *           '    specific       entropy'/
+     *         '                                             volume   ',
+     *           '     energy       expansion     compress.       heat'/
+     *         ' -----------   -----------   -----------   -----------',
+     *           '   -----------   -----------   -----------',
+     *           '   -----------   -----------'/)
+ 1900  format (1p,1x,a,3x,e11.5,3x,a,2x,6(e12.5,2x))
+ 2000  format ('1*****error - number of words stored in binary ',
+     * 'tables =',i6/'              number of words expected =',i6)
+       end
+      function   check(ku,kr,t)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common/conv1/dconv(5)
+      common/conv2/tconv(5)
+      common/conv3/pconv(5)
+      common/ierror/ irout
+      common/checks/dch1,dch2,pch1,pch2,pch3,tch1,tch2,tch3,dst,tst,
+     1hsch1,hsch2
+c     dimension   fm1(9), fm2(9), fm3(9), fmt(9), rout(11)
+c     data fm1/'('' '',g12.4 ,''is out of range for t  in sub.-'',a6)'
+c     data fm2/'('' '',g12.4 ,''is out of range for p  in sub.-'',a6)'
+c     data fm3/'('' '',g12.4 ,''is out of range for d  in sub.-'',a6)'
+      integer iflag
+      character   rout(11)*8
+      data  rout /'dens  ','press','temp','enth ','ent ','tempph',
+     *            'tempps','cpprl','visc','therm','surf'/
+c
+c        convert temperature t to degrees kelvin and check
+c        for out of range.  units are specified by ku.  if kr
+c        is specified as 1, t is checked for out of saturation
+c        range.
+c
+      entry   tcheck (ku,kr,t)
+      check=1000.*tconv(ku)/t
+      ch1=1000./tch3
+      ch2=1000./tch2
+      ch3=1000./tch1
+      kode=1
+    1 iflag=1
+      go to 10
+c
+c         convert pressure to mn/m**2 and check
+c        for out of range.  units are specified by ku. if kr is
+c        specified as 1, p is checked for out of saturation
+      entry  pcheck(ku,kr,p)
+      check=p/pconv(ku)
+      ch1= pch1
+      ch2= pch2
+      ch3= pch3
+      kode=0
+    2 iflag=2
+      go to 10
+c
+c         convert density to g/cc and check
+c        for out of range.  units are specified by ku.
+c
+      entry dcheck(ku,d)
+      check =d/dconv(ku)
+      ch1=dch1
+      ch3=dch2
+      kode=0
+    3 iflag=3
+      go to 20
+   10 if(kr.eq.1) go to 30
+   20 if(check.lt.ch1) go to 40
+      if(check.gt.ch3) go to 40
+   25 if (kode.eq.1) check=t/tconv(ku)
+      return
+   30 if(check.lt.ch1) go to 40
+      if(check.le.ch2) go to 25
+   40 continue
+	if (iflag .eq. 1) then
+        write(*,800) check,'t',rout(irout)
+      elseif (iflag .eq. 2) then
+        write(*,800) check,'p',rout(irout)
+      elseif (iflag .eq. 3) then
+        write(*,800) check,'d',rout(irout)
+      endif
+  800 format(' ',g12.4,' is out of range for ',a,' in sub.-',a6)
+      go to 25
+      end
+       subroutine cpprl(ku,t,d,cp,cv,gamma,c)
+c       -------------------------version march 1,1972-------------------
+c    this subroutine returns the following to wasp in users units.
+c         specific heat at constant pressure  =cp
+c         specific heat at constant volume    =cv
+c         specific heat ratio                 =gamma
+c         sonic velocity                      = c
+c       the partials ptv and pdt explained below are returned in common.
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common/cocpo/     coc1,coc2,coc3
+      common/sicof/  c1,c2,c3,c4,c5
+      common /partls/ ptv,pdt
+      common/consts/ tauc,rhoa,rhob,taua,e,r
+      common/conv4/sconv(5)
+      common/conv5/cconv(5)
+      common/ierror/irout
+      irout=8
+      ts=tcheck(ku,kr,t)
+      tt=1000./ts
+      ds= dcheck(ku,d)
+      call qmust(ds)
+      call qmust2(ts)
+      cq2t2d=q2t2d(ts)
+      cqcalc=qcalc(ts)
+      cqdt=qdt(ds,ts)
+      cqtd=qtd(ts)
+      cq2dt=q2dt(ds,ts)
+      cq2d2t=q2d2t(ds,ts)
+      cv    = -2.*c3*tt+c4/tt-c5-     r*ds*ts*ts*cq2t2d
+c--- ptv is partial of p by t (not tau)
+c--- pdt is partial of p by rho
+      ptv=r*ds*(1.+ds*(cqcalc+ds*cqdt-ts*(cqtd+ds*cq2dt)))
+      pdt=r*tt*(1.+ds*(2.*cqcalc+ds*(4.*cqdt+ds*cq2d2t)))
+      dhdt=-2.*c3*tt+c4/tt-c5+r*(1.+ds*(cqcalc+ds*cqdt-ts*(ds*cq2dt+
+     1cqtd+ts*cq2t2d)))
+      dhdd=r*(tt*cqcalc+1000.*cqtd+ds*(tt*(3.*cqdt+ds*cq2d2t)+1000.*
+     1cq2dt))
+      cp    = dhdt-dhdd*(ptv/pdt)
+      gamma=cp/cv
+      cp=cp*sconv(ku)
+      cv=cv*sconv(ku)
+      gammap=gamma * 10.* pdt
+      cs=0.0
+      if ( gammap.gt. 0.0) cs=1000.*sqrt(gammap)
+      c= cs*cconv(ku)
+      return
+      end
+       subroutine dens (ku,t,p,d,dl,dv,kr)
+c       -------------------------version march 1,1972-------------------
+c    change   28 april 1975        rch
+c        compute density d given temperature t and pressure p.
+c        units are specified by ku.  if kr is returned or
+c        specified as 1, the saturated liquid and vapor densities,
+c        dl and dv respectively, are computed as a function
+c        of t or p.  the other value must be input as 0.0 .
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /check1/ni
+      common /conv1/dconv(5)
+      common/conv2/tconv(5)
+      common/conv3 /pconv(5)
+      common/ierror/irout
+      common /crit/ rhocrt,pcrt,tcrt
+      common/ psicon/ sic1,sic2,sic3,sic4,sic5
+      common /consts/ tauc,rhoa,rhob,taua,e ,r
+      common/checks/dch1,dch2,pch1,pch2,pch3,tch1,tch2,tch3,dst,tst,
+     1hsch1,hsch2
+      common/tparam/ts
+      common /prhot/ps,ds,tt
+      external dsf,ddsf
+      irout=1
+      if (kr.eq.1) go to 70
+      ts=tcheck(ku,kr,t)
+      tt = ts
+      call qmust2(ts)
+      go to 5
+   70 if (t.gt.0.0) go to 75
+      ps=pcheck(ku,kr,p)
+      ts=tss(ps)
+       tt = ts
+      if (t.le.0.) t=ts *tconv(ku)
+      call qmust2(ts)
+      go to  5
+   75 ts = tcheck (ku,kr,t)
+      tt = ts
+      call qmust2(ts)
+      call psss(ps)
+      if (p.le.0.) p=ps *pconv(ku)
+c
+c        determine region
+c
+    5 if (kr-1) 10,80,10
+   10 ps=pcheck(ku,kr,p)
+      if (ps-pch2)110,110,100
+  100 if (ts-tch2)130,130,120
+  120 kr=2
+      est1= dch2
+      est2 = rhocrt
+      test = 1000./ts - 273.15
+      if (test.gt.101.)  est1 = 1.122
+      if ( test .gt. 180.0) go to 121
+      if (test.lt.40.) test=40.
+      est2=(test*(test*(test*(test*.12476711e-09-.52277795e-07)
+     1 +.54790571e-05)-.69617325e-03)+1.0220277 )
+  121 call root (est1,est2,0.00,dsf,ds)
+      go to 150
+  130 kr=3
+      est=rhocrt*3.
+      call root(est,dch1,0.00,dsf,ds)
+      go to 150
+  110 if (ts-tch2) 50,50,20
+   20 call psss(pss)
+      if ( abs((pss-ps)/pss)-1.e-4) 60,30,30
+   30 if (ps-pss) 50,60,40
+   40 kr=2
+   41  dsincr = 0.1
+       ds = dch2 + dsincr
+       go to 81
+   50 kr=3
+      ds = ps*ts/(1000.*r)
+      go to 90
+c
+c        region 1
+c
+   60 kr=1
+   80 continue
+      go to 41
+   81 continue
+       ds = ds - dsincr
+       dsl=solve(ds,dsf,ddsf)
+       if (dsl.gt.dch2)  go to 81
+       if (dsl.lt.dch1) then
+         ds = ds + dsincr
+         dsincr = 0.5*dsincr
+         go to 81
+       endif
+       if (kr.eq.2)  go to 90
+c      if(dsl.lt.rhocrt.and.1000./ts.ge.647.08)dsl=.118* sqrt(
+c     1abs((647.36-1000./ts)**2-.0041))+.317 +2.64e-4
+      ds = ps*ts/(1000.*r)
+      if (tch2/ts.gt..985)ds=.65*rhocrt
+      if (tch2/ts.gt..995) ds=.75*rhocrt
+      if (tch2/ts.gt..999) ds=.85*rhocrt
+      if (tch2/ts.gt..9995) ds=.90*rhocrt
+      dsv=solve(ds,dsf,ddsf)
+c   the correction added to dsl can be added to dsv; however
+c   the vapor locus displays a small cusp which matches current
+c   theory  and so the change will not be added at this time
+c     previous coefficients for dl  and dv  were -.0036 instead of
+c     .0041  and  -.098 and .0225 instead of -.098 and .0269
+c     the former were based on 647.3=tc and now on 647.286=tc
+c     the additions to dsl and dsv  (2.64e-4and1.2e-3) to match wasp
+c additions of dsl and dsv (2.64e-4&1.2e-3) to match wasp;.098 to .11 al
+      if((1000./ts).gt.647.15)dsv=-.11* sqrt( abs((647.45-1000./ts)
+     1**2-.0269))+.317   +1.2e-3
+c
+      dl=dsl*dconv(ku)
+      dv=dsv*dconv(ku)
+      rrr=.9*rhocrt
+      if(dsv .lt. 0.) call root(rrr,.0100,0.00,dsf,dsv)
+      return
+c
+c        regions 2 and 3
+c
+   90  if (kr.eq.2) then
+         ds = dsl
+       else
+         ds=solve(ds,dsf,ddsf)
+       endif
+  150 d=ds*dconv(ku)
+      return
+      end
+      function dsf(d )
+c        function used to solve for density d  given temperature
+c        and pressure
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /consts/ tauc,rhoa,rhob,taua,e ,r
+      common /prhot/ ps,ds,ts
+      call qmust(d )
+      pstate=1000.*r*d /ts*(1.+d *(qcalc(ts)+d *qdt(d ,ts)))
+      dsf=pstate-ps
+      return
+c
+      entry ddsf(d  )
+      call qmust(d)
+       dsf=1000.*r/ts*(1.+d*(2.0*qcalc(ts)+4.0*d*qdt(d,ts)+d*d*q2d2t(d,
+     1ts)))
+      return
+      end
+      function dtherm(xlm)
+c   function used to solve eq.(b52) for thermal conductivity
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common/iterat/tr,t0,t1,t2,t3,t4,t5,t6,t7,t8
+      double precision t0,t1,t2,t3,t4,t5,t6,t7,t8
+      tcalc=(xlm*(xlm*(xlm*(xlm*(xlm*(xlm*(xlm*t8+t7)+t6)+t5)+t4)+t3)+
+     1t2)+t1)*xlm+t0
+      dtherm=tcalc-tr
+      return
+      entry ddth(xlm)
+c
+c    derivative used to solve eq.(b52) in newton raphson iteration
+c
+       dth=(xlm*(xlm*(xlm*(xlm*(xlm*(xlm*8.*t8+7.*t7)+6.*t6)+5.*t5)+
+     14.*t4)+3.*t3)+2.*t2)*xlm+t1
+      dtherm= dth
+      return
+      end
+       subroutine ent (ku,tt,d,s)
+c       -------------------------version march 1,1972-------------------
+c      this routine computes entropy  given the temperature parameter tt
+c      and the density d.   i/o units are specified by ku.
+c   if saturation values are needed,this routine must be called twice
+c      with dl and dv input as d.
+c              entropy is returned in s.
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common/sicof / psi1,psi2,psi3,psi4,psi5
+      common /consts/ tauc,rhoa,rhob,taua,e ,r
+      common/ierror/irout
+      common/conv4/sconv(5)
+      irout=5
+      ts=tcheck(ku,kr,tt)
+      ds=dcheck(ku,d)
+      call qmust(ds)
+      call qmust2(ts)
+      t=1000./ts
+      psit=2.*psi3*t +psi2+psi4/t +psi5*(1.+log(t ))
+      sss=-r*(log(ds)+ds*(qcalc(ts)-ts*qtd(ts)))-psit
+      s=sss*sconv(ku)
+      return
+      end
+       subroutine enth(ku,tt,d,h)
+c       -------------------------version march 1,1972-------------------
+c      this routine computes enthalpy given the temperature parameter tt
+c      and the density d.   i/o units are specified by ku.
+c   if saturation values are needed,this routine must be called twice
+c      with dl and dv input as d.
+c              enthalpy is returned in h.
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common/ierror/irout
+      common/conv6/hconv(5)
+      common/sicof / psi1,psi2,psi3,psi4,psi5
+      common /consts/ tauc,rhoa,rhob,taua,e ,r
+      irout=4
+      ts=tcheck(ku,kr,tt)
+      ds=dcheck(ku,d)
+      call qmust(ds)
+      call qmust2(ts)
+      t=1000./ts
+       psio= (psi3*t+psi2)*t+psi1+(psi4+psi5*t)*log(t)
+      psit=2.*psi3*t +psi2+psi4/t +psi5*(1.+log(t ))
+      h1= psio-t*psit
+      h2=1000.*r/ts*(1.+ds*(qcalc(ts)+ts*qtd(ts)+ds*qdt(ds,ts)))
+      h=(h1+h2)*hconv(ku)
+      return
+      end
+      subroutine hwasp (ks,kp,tt,p,d,h,kr)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+c keyes  kennan   hill   moore   equation  of state for water
+c     -------------------------march 1, 1974 version--------------------
+c        change      10 may 1975     rch
+c        changed to hwasp   april 1988   j. e. tolli, eg&g idaho
+c        in accordance with hill-macmillan-lee fundamental equation for
+c        heavy water (same as keyes, et.al. equation of state cited
+c        above, except for constant coefficients);  changes to original
+c        wasp routines are as follows:
+c
+c        psss,tss,tssf -
+c
+c          replace saturation equation with equation recommended by
+c          hill, et.al. for heavy water
+c
+c        blckdata -
+c
+c          change fundamental equation coefficients, replace
+c          saturation equation coefficients with values required for
+c          new saturation equation, change other values (maximum and
+c          minimium values, critical point values, etc.) as required
+c
+c        dens -
+c
+c          modify logic somewhat for solving liquid state density
+c
+c
+c        compute the state relations and thermodynamic and transport
+c        properties of water  given temperature tt, pressure p,
+c        density d, or enthalpy h, or entropy s.  state relations are
+c        specified by ks.  thermodynamic and transport properties
+c        are specified by kp.  if kr is returned or specified as 1,
+c        properties are computed at saturation.
+c   tau is the temperature parameter used in the equation of state
+c           tau is equivalent to t in this subroutine
+c
+       common /propty/ c,cl,cp,cpl,cpv,cv,cvl,cvp,cvv,dl,dv,excesk,
+     * excl,excv,gamma,gammal,gammav,hl,hv,k,kl,kv,mu,mul,muv,s,sigma,
+     * sl,sv,ku
+       real k,kl,kv,mu,mul,muv
+c
+      common/checks/dch1,   dch2,pch1,pch2,pch3,tch1,tch2,tch3,dst,tst,h
+     1sch1,hsch2
+      common/partls/  ptv1,pdt1
+      common/deriv/pdt,ptv,pdtl,pdtv,ptvl,ptvv
+      common /conv1/dconv(5)
+      common /conv3/pconv(5)
+      common/tdeg  /tdegf,tdegc
+      dimension tcon(5)
+c
+      data  tdegf /0./, tdegc /0./
+      data tcon/1.,1.,1.8,1.,1./
+      ktr=0
+      tcons=0.0
+      if (tdegf.gt..9) tcons=459.67
+      if(tdegc.gt..9) tcons=273.15
+      t=tt
+       if (tt.gt.0.)  t=1000./tt
+      if ( tcons.gt.0.0 .and. tt.ne.0.0 )  t=1000./(tt+tcons)
+      go to (10,20,30,40,45),ks
+c
+c        compute density
+   10 call dens(ku,t,p,d,dl,dv,kr)
+      if ( tt .eq. 0.0) tt=1000./t - tcons
+      go to 50
+c
+c        compute pressure
+   20 call press(ku,t,d,p,kr)
+      go to 50
+c
+c        compute temperature
+   30 call temp(ku,p,d,t,kr)
+      tt=1000./t -tcons
+      go to 50
+c
+c        compute temperature and density given pressure and enthalpy
+   40 call tempph(ku,p,h,t,d,dl,dv,kr)
+      tt=1000./t -tcons
+      go to 50
+   45 call tempps ( ku,p,s,t,d,dl,dv,kr )
+      tt=1000./t -tcons
+c
+   50 if (kr.ne.1.or.(ks.eq.1.or.ks.gt.3)) go to 55
+c
+c  obtain saturation densities dl and dv for ks=2 and ks=3 calls when
+c    kr=1
+      call dens(ku,t,p,d,dl,dv,1)
+c
+ 55   continue
+      ktra=kp/2**ktr
+      if(ktra.eq.0) return
+      ktr=ktr+1
+      if(mod(ktra,2).eq.0) goto 55
+      goto (60,100,130,160,180,240),ktr
+c
+c
+c        compute enthalpy
+   60 if (kr.eq.1) go to 65
+      call enth(ku,t,d,h)
+      go to 70
+   65 call enth(ku,t,dl,hl)
+      call enth (ku,t,dv,hv)
+ 70   goto 55
+c
+c        compute entropy
+  100 if (kr.eq.1) go to 105
+      call ent(ku,t,d,s)
+      go to 110
+  105 call ent (ku,t,dl,sl)
+      call ent(ku,t,dv,sv)
+ 110  goto 55
+c
+c        compute specific heats and gamma and sonic velocity
+  130 if (kr.ne.1) go to 135
+      call cpprl(ku,t,dl,cpl,cvl,gammal,cl)
+      ptvl=ptv1*pconv(ku)/tcon (ku)
+      pdtl=pdt1*pconv(ku)/dconv(ku)
+      call cpprl(ku,t,dv,cpv,cvv,gammav,cvp)
+      pdtv=pdt1*pconv(ku)/dconv(ku)
+      ptvv=ptv1*pconv(ku)/tcon (ku)
+      go to 140
+  135 call cpprl(ku,t,d,cp,cv,gamma,c)
+      ptv =ptv1*pconv(ku)/tcon (ku)
+      pdt =pdt1*pconv(ku)/dconv(ku)
+ 140  goto 55
+c
+c        compute viscosity
+  160 if (kr.ne.1) go to 165
+      call visc(ku,kr,t,p,dl,mul)
+      call visc(ku,kr,t,p,dv,muv)
+      go to 170
+  165 call visc(ku,kr,t,p,d,mu)
+ 170  goto 55
+c
+c        compute thermal conductivity
+  180 if (kr.ne.1) go to 220
+      call therm (ku,kr,p,t,dl,excl,kl)
+      call therm (ku,kr,p,t,dv,excv,kv)
+       go to 190
+  220 call therm (ku,kr,p,t,d,excesk,k)
+ 190  goto 55
+c          compute surface tension
+  240 call surf (ku,kr,t,sigma)
+      return
+      end
+       subroutine press (ku,t,d,p,kr)
+c       -------------------------version march 1,1972-------------------
+c        compute pressure p given temperature t and density d.
+c        units are specified by ku.  if kr is returned or
+c        specified as 1, p is computed at saturation as a
+c        function of t only.
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /conv3/pconv(5)
+      common/tparam/ts
+      common /consts/ tauc,rhoa,rhob,taua,e ,r
+      common/checks/dch1,dch2,pch1,pch2,pch3,tch1,tch2,tch3,dst,tst,
+     1hsch1,hsch2
+      common/ierror/irout
+      irout=2
+      ts=tcheck(ku,kr,t)
+c
+c        determine region
+c
+      if (kr-1) 10,70,10
+   10 ds=dcheck(ku,d)
+      if ( kr .gt. 1) go to 80
+      if (ts-tch2) 50,50,20
+   20 call dens(1,ts,ze,ze,dsl,dsv,1)
+      if (ds-dsl) 30,60,40
+   30 if (ds-dsv) 50,60,60
+   40 kr=2
+      go to 80
+   50 kr=3
+      go to 80
+c
+c        region 1
+c
+   60 kr=1
+   70 call psss(ps)
+      go to 90
+c
+c        regions 2 and 3
+c
+   80 call qmust(ds)
+      call qmust2(ts)
+      ps=1000.*r*ds/ts*(1.+ds*(qcalc(ts)+ds*qdt(ds,ts)))
+   90 p=ps*pconv(ku)
+      return
+      end
+      subroutine psss(pss)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+c
+c--compute saturation pressure pss in mn/m**2 as a function of
+c--temperature in kelvin degrees
+c
+c--j. e. tolli, eg&g idaho inc., 4/88
+c
+      common/cosat/ cps1   ,cps2,cps3,cps4,cps5
+c
+c--- the t in the common tparam is really tau
+      common/tparam/t
+c
+      common /crit/ rhocrt,pcrt,tcrt
+c
+c--get temperature and adjusted tau value
+c
+       tmp = 1000./t
+       atval = 1. - tmp/tcrt
+c
+c--calculate logarithm of psat/pcrt
+       if ( abs (atval) .gt. 0.00001 ) then
+         psrlog = tcrt/tmp * ( cps1*atval + cps2*atval**1.9 +
+     *                         cps3*atval**2 + cps4*atval**5.5 +
+     *                         cps5*atval**10 )
+       else
+         psrlog = 0.0
+       endif
+c
+c--place saturation pressure in pss
+       pss = pcrt * exp (psrlog)
+      return
+      end
+      function q2d2ta(tau)
+c--- partial der of q --- p2q/prho2
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /qaux/ rbdif(8),radif(8),er,ed,tadif(7)
+      common /cof/ a(10,7)
+      common /consts/ tauc, rhoa, rhob, taua, e, r
+      common/qs4/sumi(7)
+      common/xminus/xm1(7)
+    1 tsum=0.0
+      do 5 j=2,7
+    5 tsum=tsum+tadif(j)*sumi(j)
+      q2d2ta=sumi(1)+(tau-tauc)*tsum
+      return
+      entry q2d2t(d,tau)
+      sumi(1)=0.0
+      do 3 i=3,8
+    3 sumi(1)=sumi(1)+xm1(i-1)*xm1(i-2)*a(i,1)*radif(i-2)
+      sumi(1)=sumi(1)+er*(-e*a(10,1)*(2.0-ed)+e*e*a(9,1))
+      do 10 j=2,7
+      sumi(j)=0.0
+      do 8 i=3,8
+    8 sumi(j)=sumi(j)+xm1(i-1)*xm1(i-2)*a(i,j)*rbdif(i-2)
+      sumi(j)=sumi(j)+er*(-e* a(10,j)*(2.0-ed)+e*e*a(9,j))
+   10 continue
+      go to 1
+      end
+      function q2dta(tau)
+c--- partial der of q --- p2q/prho-ptau
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /qaux/  rbdif(8),radif(8),er,ed,tadif(7)
+      common /cof/ a(10,7)
+      common /consts/ tauc,rhoa,rhob,taua,e ,r
+      common/qs3/sum(6)
+      common/xminus/xm1(7)
+    1 tsum1=0.0
+      tsum2=0.0
+      do 10 j=3,7
+      tsum1=tsum1+xm1(j-2)*tadif(j-1)*sum(j-1)
+   10 tsum2=tsum2+tadif(j)*sum(j-1)
+      tsum2=tsum2+sum(1)
+      tsum1=tsum1*(tau-tauc)
+      q2dta=tsum1+tsum2
+      return
+      entry q2dt(d,tau)
+      do 20 j=2,7
+      sum(j-1)=0.
+      do 15 i=2,8
+   15 sum(j-1)=sum(j-1)+xm1(i-1)*a(i,j)*rbdif(i-1)
+      sum(j-1)=sum(j-1)+er*(a(10,j)-e*(a(9,j)+a(10,j)*d))
+   20 continue
+      go to 1
+      end
+      function q2t2d(tau)
+c---partial der of q --- p2q/ptau2
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /qaux/ rbdif(8),radif(8),er,ed,tadif(7)
+      common /cof / a(10,7)
+      common /consts/ tauc,rhoa,rhob,taua,e,r
+      common/qs1/sumi(7)
+      common/xminus/xm1(7)
+      tsum1 = 0.0
+      tsum2 = 0.0
+      do 2 j=3,7
+      tsum1=tsum1+xm1(j-2)*tadif(j-1)*sumi(j)
+      if (j.eq.3) go to 2
+      tsum2=tsum2+xm1(j-2)* xm1(j-3)*tadif(j-2)*sumi(j)
+    2 continue
+      q2t2d=2.0*tsum1+(tau-tauc)*tsum2
+      return
+      end
+      function qcalc(tau)
+c--- the function q(rho,tau)
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common/checks/dch1,dch2,pch1,pch2,pch3,tch1,tch2,tch3,dst,tst,
+     1hsch1,hsch2
+      common /qaux/ rbdif(8), radif(8),er,ed, tadif(7)
+      common  /cof / a(10,7)
+      common/qs1/sumi(7)
+      tsum = 0.0
+      do 4 j=2,7
+    4 tsum=tsum+tadif(j)*sumi(j)
+      qcalc=sumi(1)+(tau-tch2)*tsum
+      return
+      end
+      function qdta(tau)
+c--- partial der of q --- pq/prho
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /qaux/ rbdif(8),radif(8),er,ed,tadif(7)
+      common /cof/ a(10,7)
+      common /consts/ tauc,rhoa,rhob,taua,e,r
+      common/xminus/xm1(7)
+      common/qs2/sumi(7)
+      equivalence (sumi(1),sum)
+    1 tsum=0.0
+      do 2 j=2,7
+    2 tsum=tsum+tadif(j)*sumi(j)
+      qdta=sum+(tau-tauc)*tsum
+      return
+      entry qdt(d,tau)
+      sum=0.0
+      do 10 i=2,8
+   10 sum=sum+xm1(i-1)*a(i,1)*radif(i-1)
+      sum=sum+er*(a(10,1)-e*(a(9,1)+a(10,1)*d))
+      do 15 j=2,7
+      sumi(j)=0.0
+      do 12 i=2,8
+   12 sumi(j)=sumi(j)+xm1(i-1)*a(i,j)*rbdif(i-1)
+      sumi(j)=sumi(j)+er*(a(10,j)-e*(a(9,j)+a(10,j)*d))
+   15 continue
+      go to 1
+      end
+      subroutine qmust(d)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /consts/ tauc,rhoa,rhob,taua,e ,r
+      common /qaux /  rbdif(8),radif(8),er,ed,tadif(7)
+      common /cof/ a(10,7)
+      common/qs1/sumi(7)
+      radif (1)= 1.0
+      radif (2) = d- rhoa
+      rbdif (1) = 1.0
+      rbdif (2) = d- rhob
+      do   1   i= 3,8
+      rbdif (i) =  rbdif (i-1)* rbdif(2)
+    1  radif (i)=  radif (i-1) *radif(2)
+      ed =  e*d
+      er=  1.0/ exp(ed)
+      sumi(1)=0.0
+      do 4 i=1,8
+    4 sumi(1)=sumi(1)+a(i,1)*radif(i)
+      sumi(1)=sumi(1)+er*(a(9,1)+a(10,1)*d)
+      do 6 j=2,7
+      sumi(j)=0.0
+      do 5 i=1,8
+    5 sumi(j)=sumi(j)+a(i,j)*rbdif(i)
+      sumi(j)=sumi(j)+er*(a(9,j)+a(10,j)*d)
+    6 continue
+      return
+      entry qmust2(tau)
+      tadif (1) = 0.0
+      tadif  (2) = 1.0
+      tadif  (3) = tau-taua
+      do   2  i= 4,7
+    2  tadif  (i)= tadif(i-1)* tadif(3)
+      return
+      end
+      function qtd(tau)
+c--- partial der of q --- pq/ptau
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /qaux/rbdif(8),radif(8),er,ed,tadif(7)
+      common /cof/ a(10,7)
+      common /consts/tauc,rhoa,rhob,taua,e,r
+      common/qs1/sumi(7)
+      common/xminus/xm1(7)
+      tsum1 = 0.0
+      tsum2 = 0.0
+      do 18 j=3,7
+      tsum1=tsum1+xm1(j-2)*tadif(j-1)*sumi(j)
+   18 tsum2=tsum2+tadif(j)*sumi(j)
+      tsum2=tsum2+sumi(2)
+      qtd=tsum2+(tau-tauc)*tsum1
+      return
+      end
+       subroutine root (x0,x2,fofx,func,x1)
+c     ---------------------------version 2/1/72-------------------------
+c        same as rootx - needed  to  prevent  recursion
+c        solve for x1 such that func(x1) = fofx, where x1 lies
+c        between x0 and x2
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+       external func
+      common /check1/kount
+      tol=1.e-5
+      xx0 = x0
+      xx2 = x2
+      f0 = func(xx0)
+      f2 = func(xx2)
+      a=(fofx-f0)/(f2-f0)
+      if (a) 1007,120,120
+  120 if (a-1.) 130,130,1008
+  130 if (fofx-0.) 80,70,80
+   70 assign 100 to jump
+      go to 90
+   80 assign 110 to jump
+   90 x = (xx0+xx2)/2.
+      kount = 0
+  150 x1 = x
+      kount = kount + 1
+      a = fofx - f2
+      fx = func(x)
+      fxl=f0+(x-xx0)*(f2-f0)/(xx2-xx0)
+      b=abs((fx-fxl)/(f2-f0))
+      if (a*(fx-fofx) .lt. 0.) go to 1001
+      xx0 = x
+      f0=fx
+      if (b-.3) 10,20,20
+   20 x = (x+xx2)/2.
+      go to 40
+ 1001 xx2 = x
+      f2 = fx
+      if (b-.3) 10,30,30
+   30 x = (xx0+x)/2.
+      go to 40
+   10 x=xx0+(fofx-f0)*(xx2-xx0)/(f2-f0)
+   40 if (abs((x-x1)/x)-tol  ) 50,1000,1000
+   50 go to jump,(100,110)
+  100 if (abs(func(x))-tol*10. )60,1000,1000
+  110 if (abs((fofx-func(x))/fofx)-tol  ) 60,1000,1000
+ 1000 if (kount.gt.40) tol=tol*10.
+      if (kount.gt.60) tol=tol*10.
+      if (kount.gt.80) tol=tol*10.
+      if (kount.lt.100) go to 150
+  160 write (*,170) x1,x
+  170 format ('1an iteration has been terminated at 100 iterations.',
+     1 ' the last two values were  ',3g15.5)
+   60 x1=x
+      return
+ 1007 x1 = x0
+      go to 140
+ 1008 x1 = x2
+  140 write(*,141)
+  141 format('0 solution out of range')
+      return
+      end
+       subroutine rootx (x0,x2,fofx,func,x1)
+c     ---------------------------version 2/1/72-------------------------
+c        solve for x1 such that func(x1) = fofx, where x1 lies
+c        between x0 and x2
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+       external func
+      common /check2/kount
+      tol=1.e-5
+      xx0 = x0
+      xx2 = x2
+      f0 = func(xx0)
+      f2 = func(xx2)
+      a=(fofx-f0)/(f2-f0)
+      if (a) 1007,120,120
+  120 if (a-1.) 130,130,1008
+  130 if (fofx-0.) 80,70,80
+   70 assign 100 to jump
+      go to 90
+   80 assign 110 to jump
+   90 x = (xx0+xx2)/2.
+      kount = 0
+  150 x1 = x
+      kount = kount + 1
+      a = fofx - f2
+      fx = func(x)
+      fxl=f0+(x-xx0)*(f2-f0)/(xx2-xx0)
+      b=abs((fx-fxl)/(f2-f0))
+      if (a*(fx-fofx) .lt. 0.) go to 1001
+      xx0 = x
+      f0=fx
+      if (b-.3) 10,20,20
+   20 x = (x+xx2)/2.
+      go to 40
+ 1001 xx2 = x
+      f2 = fx
+      if (b-.3) 10,30,30
+   30 x = (xx0+x)/2.
+      go to 40
+   10 x=xx0+(fofx-f0)*(xx2-xx0)/(f2-f0)
+   40 if (abs((x-x1)/x)-tol  ) 50,1000,1000
+   50 go to jump,(100,110)
+  100 if (abs(func(x))-tol*10. )60,1000,1000
+  110 if (abs((fofx-func(x))/fofx)-tol  ) 60,1000,1000
+ 1000 if (kount.gt.40) tol=tol*10.
+      if (kount.gt.60) tol=tol*10.
+      if (kount.gt.80) tol=tol*10.
+      if (kount.lt.100) go to 150
+  160 write (*,170) x1,x
+  170 format ('1an iteration has been terminated at 100 iterations.',
+     1' the last two values were  ',3g15.5)
+   60 x1=x
+      return
+ 1007 x1 = x0
+      go to 140
+ 1008 x1 = x2
+  140 write(*,141)
+  141 format('0 solution out of range')
+      return
+      end
+      function solve(xi,f,df)
+c     modified for 1106    30 may 1975
+c        newton-raphson iteration given an initial estimate xi
+c        and the functions f and df
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+       external df,f
+      common /check1/ni
+      tol=1.e-5
+      ni=0
+      xo=xi
+      xn=xi
+   10 xoo=xo
+      xo=xn
+c     xn=xo-f(xo)/df(xo)
+      a=f(xo)
+      b=df(xo)
+      xn=xo-a/b
+      ni=ni+1
+      if (abs((xn-xo)/xn)-tol  ) 70,20,20
+   20 if (ni.gt.40) tol=tol*10.
+      if (ni.gt.60) tol=tol*10.
+      if (ni.gt.80) tol=tol*10.
+      if (ni-100) 30,50,50
+   30 if (abs((xn-xoo)/xn)-tol  ) 40,10,10
+   40 xn=(xo+xn)/2.
+      go to 10
+   50 write (*,60) xoo,xo,xn
+   60 format ('1an iteration has been terminated at 100 iterations.',
+     1 ' the last three values were  ',3g15.5)
+   70 solve=xn
+      return
+      end
+       subroutine surf (ku,kr,tin,surft)
+c     -------------------------august 1, 1973 version-------------------
+c    revised  oct  75  ,  may  76  rch
+c    this routine calculates the surface tension of liquid water and
+c       the laplace constant
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common/ierror/irout
+      common /conv1/dconv(5)
+      common/conv9/stconv(5)
+      common/conv10/alconv(5)
+      common /laplac/ alc
+c---units of  g - m/s**2
+       data g ,tk/9.80665,647.15/
+      irout=11
+c---t is deg k
+      tau=tcheck(ku,kr,tin)
+      t = 1000./tau
+      surft=0.0
+      alc=0.0
+      if (t.gt.tk) return
+c--- units of surft must be dyne/cm
+c--- units of alc is mm.
+      tr=t/tk
+      r=abs(1.-tr)
+      surft=235.8   *r**1.256*(1.-.625*r)
+      if (tr.gt. .998) go to 2
+      call dens(ku,tin,ze,ze,dl,dv,1)
+      alc  =  sqrt  (surft/  (g* abs(dl-dv) ))
+c---conversion factor for results to be in mm as in the tables
+    2 alc=alc*alconv(ku)*sqrt(dconv(ku))
+      surft=surft*stconv(ku)
+      return
+      end
+       subroutine temp (ku,p,d,t,kr)
+c       -------------------------version march 1,1972-------------------
+c  compute tau=1000./temperature in users units given pressure and den-
+c  sity. if kr is specified as 1 tau will be a function of pressure only
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /conv2/tconv(5)
+      common/checks/dch1,dch2,pch1,pch2,pch3,tch1,tch2,tch3,dst,tst,
+     1hsch1,hsch2
+      common/ierror/irout
+      common /prhott/ ps,ds,ts
+      external tsf,dtsf
+      irout=3
+      ps=pcheck(ku,kr,p)
+c
+c        determine region
+c
+      if (kr-1) 10,70,10
+   10 ds=dcheck(ku,d)
+      if (ps-pch2) 20,20,50
+   20 ts=tss(ps)
+      call dens(1,ts,ze,ze,dsl,dsv,1)
+      if (ds-dsl) 30,60,40
+   30 if (ds-dsv) 50,60,60
+   40 kr=2
+      ts = ts+.01
+      go to 80
+   50 kr=3
+      ts=1.2
+      go to 80
+c
+c        region 1
+c
+   60 kr=1
+      go to 110
+   70 ts=tss(ps)
+      go to 110
+c
+c        regions 2 and 3
+c
+   80 call qmust(ds)
+      call qdt(ds,ts)
+      call q2dt(ds,ts)
+      ts=solve(ts,tsf,dtsf)
+c
+c        verify region
+c
+      if (ps-pch2)110,110,90
+   90 if (ts-tch2) 110,100,100
+  100 kr=2
+  110 t=ts*tconv(ku)
+      return
+      end
+      subroutine tempph(ku,p,h,t,d,dl,dv,kr)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+c
+      common /conv1/dconv(5)
+      common /conv2/tconv(5)
+      common/conv6/hconv(5)
+      common/phcall/ps,hs ,ss
+      common/checks/dch1,dch2,pch1,pch2,pch3,tch1,tch2,tch3,dst,tst,
+     1hsch1,hsch2
+      common/ierror/irout
+      external tshf
+      ps=pcheck(ku,kr,p)
+      irout=6
+      hs=h/hconv(ku)
+      if (hs-hsch1) 20,10,10
+   10 if (hs-hsch2) 40,40,20
+c
+c        input h - out of range tag
+   20 write(*,301) hs,hsch1,hsch2
+  301 format ('0input h =  ',g14.6,'j/g  is out of range of hmin=',
+     1 f4.1, 'and hmax = ',f7.1,  'j/g')
+c
+   40 if (ps-pch2) 140,140,130
+  130 ts1=tch1
+      ts2=tch3
+      go to 110
+  140 ts=0.0
+      call dens(1,ts,ps,ze,dl,dv,1)
+      if (kr-1) 50,70,50
+   50 call enth(1,ts,dl,hsl)
+      call enth(1,ts,dv,hsv)
+      if (hs-hsl) 90,70,60
+   60 if (hs-hsv) 70,70,100
+c
+c        region 1
+c
+   70 kr=1
+   80 call dens(1,ts,ze,ze,dsl,dsv,1)
+      dl=dsl*dconv(ku)
+      dv=dsv*dconv(ku)
+      go to 120
+c
+c        region 2
+c
+   90 kr=2
+      ts1=tch3
+      ps=ps*1.00011
+      ts2=1000./(1000./ts-1.e-5)
+      go to 110
+c
+c        region 3
+c
+  100 kr=3
+      ts1=1000./(1000./ts+1.e-5)
+      ps= ps*.99988
+      ts2=tch1
+c
+c        regions 2 and 3
+c
+  110 call rootx(ts1,ts2,hs,tshf,ts)
+      call dens(1,ts,ps,ds,ze,ze,kr)
+      d=ds*dconv(ku)
+c
+c        verify region
+c
+      if (ps-pch2) 120,120,150
+  150 if ( ts-tch2) 170,170,160
+  160 kr=2
+      go to 120
+  170 kr=3
+  120 t=ts*tconv(ku)
+      return
+      end
+      subroutine tempps (ku,p,s,t,d,dl,dv,kr )
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /conv1/dconv(5)
+      common/conv4/ sconv(5)
+      common /conv2/tconv(5)
+      common/phcall/ps,hs ,ss
+      common/checks/dch1,dch2,pch1,pch2,pch3,tch1,tch2,tch3,dst,tst,
+     1hsch1,hsch2
+      common/ierror/irout
+      external tpsf
+      irout=7
+      smax=13.26
+      ps=pcheck(ku,kr,p)
+      ss = s/sconv(ku)
+      if (ss .lt. 0.0) go to 20
+      if ( ss.le.smax) go to 40
+c
+c      input s   -   out of range tag
+   20 write(*,301) ss,smax
+  301 format ('0input s = ',g14.6,'j/g-k is out of range of  smin=0.',
+     1'0 and smax=   ',f7.1,'j/g-k')
+   40 if (ps-pch2) 140,140,130
+  130 ts1=tch1
+      ts2=tch3
+      go to 110
+  140 ts=0.0
+      call dens(1,ts,ps,ze,dl,dv,1)
+      if (kr-1) 50,70,50
+   50 call ent(1,ts,dl,ssl)
+      call ent(1,ts,dv,ssv)
+      if ( ss-ssl )  90,70,60
+   60 if ( ss-ssv) 70,70,100
+c
+c        region 1
+c
+   70 kr=1
+   80 call dens(1,ts,ze,ze,dsl,dsv,1)
+      dl=dsl*dconv(ku)
+      dv=dsv*dconv(ku)
+      go to 120
+c
+c        region 2
+c
+   90 kr=2
+      ts1=tch3
+      ps=ps*1.00011
+      ts2=ts*1.00001
+      go to 110
+c
+c        region 3
+c
+  100 kr=3
+      ts1=ts*.99999
+      ps= ps*.99988
+      ts2=tch1
+c
+c        regions 2 and 3
+c
+  110 call rootx ( ts1,ts2,ss,tpsf,ts )
+      call dens(1,ts,ps,ds,ze,ze,kr)
+      d=ds*dconv(ku)
+c
+c        verify region
+c
+      if (ps-pch2) 120,120,150
+  150 if ( ts-tch2) 170,170,160
+  160 kr=2
+      go to 120
+  170 kr=3
+  120 t=ts*tconv(ku)
+      return
+      end
+       subroutine therm (ku,kr,pin,tin,din,excesk,tcond)
+c       -------------------------version march 1,1972-------------------
+c        change     10 may 1975        rch
+c   the yata  minamiyama  form for therm  cond  is  not necessairly
+c   the form  acceptqble to iaps   but  added here because of its
+c   the form  acceptable to iaps   but  added here because of its
+c    simplicity  and accuracy   rch    5  july   1977
+c         subroutine calculates the thermal conductivity  in internal
+c         units of w/cm-k and converts to users units
+c        equations are the internationally agreed upon ones in regions
+c        where same are available and are proposed equations in other
+c        regions.
+c       the near subcritical region is the authors fit
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common/conv8/kconv(5)
+      common/ierror/irout
+      common/iterat/tr,t0,t1,t2,t3,t4,t5,t6,t7,t8
+      real kconv
+      common /crit/ rhocrt,pcrt,tcrt
+      common/tparam/tau
+c
+       data a0,a1,a2,a3/1.02811e-2,2.99621e-2,1.56146e-2,-4.22464e-3/
+       data tc,dc/647.3,.3177/
+       data c1,c2,c3,c4,c5,c6/.642857,-4.11717,-6.17937,3.08976e-3,
+     * 8.22994e-2,10.0932/
+       data q1,q2,q3,q4/7.01309e-2,1.1852e-2,1.69937e-3,-1.02/
+c
+      irout=10
+      pmn=pcheck(ku,kr,pin)
+      tau=tcheck(ku,kr,tin)
+      ds=dcheck(ku,din)
+c        convert tau and pmn to various units
+      tk=1000./tau
+      tr = tk/tcrt
+      t = tk-273.15
+      pbar = pmn*10.
+      pr=pmn/pcrt
+c---out of range check on press and temp.
+      if (pbar.lt. .01 .or. pbar.gt.1000.) write(*,151) tin,pin
+      if (t.lt.0.0.or.t.gt.800.) write(*,151) tin,pin
+  151 format ('0  t =',f12.4,' or  p =',f12.4,' is out of range,',
+     *        ' returned thermal conductivity is extrapolated')
+      t=tk
+       tr=t/tc
+      d=ds
+       r=d/dc
+      sum1=sqrt(tr)*(((a3*tr+a2)*tr+a1)*tr+a0)
+      sum2=-.39707+.400302*r+1.06*exp(-.171587*(r+2.39219)**2)
+      delt2=abs(tr-1.)+c4
+      a=2.+c5/delt2**.6
+      b=1.+a
+      d2=1./delt2
+      if(tr.lt.1.) d2=c6/delt2**.6
+      sum4=(q1/tr**10+q2)*r**1.8*exp(c1*(1.-r**2.8))
+     1+q3*d2*r**a*exp(a*(1.-r**b)/b) + q4*exp(c2*tr**1.5+c3/r**5)
+      ans=sum1+sum2+sum4
+      tcond=ans*kconv(ku)
+      return
+      end
+      function tsf(ts)
+c        function used to solve for temperature ts given pressure
+c        and density
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /prhott/ ps,d ,t
+      common /consts/ tauc,rhoa,rhob,taua,e ,r
+      call qmust2(ts)
+      pstate=1000.*r*d /ts*(1.+d *(qcalc(ts)+d *qdta(ts)))
+      tsf=pstate-ps
+      return
+c
+      entry dtsf( ts   )
+      call qmust2(ts )
+      dtsf1=r*d*((1.0+d*d*qdta  (ts )+d*qcalc(ts ))-ts *d*(d*q2dta(ts )
+     1+qtd(ts )))
+       tsf=dtsf1*(-1000./(ts *ts ))
+      return
+      end
+      function tshf(ts)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common/phcall/ps,hs ,ss
+      kr=0
+      call dens(1,ts,ps,ds,ze,ze,kr)
+      call enth(1,ts,ds,hsc)
+      tshf=hsc
+      return
+c
+      entry tpsf( ts  )
+      kr = 0
+      call dens ( 1,ts,ps,ds,ze ,ze ,kr )
+      call ent(1,ts,ds,ssc)
+      tshf = ssc
+      return
+      end
+      function tss(ps)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+c
+c--compute saturation temperature (k) for given saturation
+c--pressure ps (mpa) and return tss as corresponding tau value (1/k)
+c
+c--j. e. tolli, eg&g idaho, inc., 4/88
+c
+      common/bend9/a1,a2,a3,a4,a5
+c
+      common /crit/ rhocrt,pcrt,tcrt
+c
+      external tssf,dtssf
+c
+c--check for critical pressure
+c
+       if ( abs (ps-pcrt) .le. 1.0e-5 ) then
+         tss = 0.0
+         go to 10
+       endif
+c
+c--calculate constant term for saturation equation
+       a1 = - log (ps/pcrt)
+c--get initial temperature estimate
+       tmpest = 278.
+       if (ps.gt.0.001)  tmpest = 323.
+       if (ps.gt.0.1)  tmpest = 423.
+       if (ps.gt.1.0)  tmpest = 473.
+c--calculate adjusted tau estimated value
+       atestm = 1. - (tmpest/tcrt)
+c--solve saturation equation
+       tss = solve (atestm,tssf,dtssf)
+c--calculate corresponding temperature
+   10  tss = (1. - tss) * tcrt
+c--calculate tau value
+       tss = 1000./tss
+      return
+      end
+       function tssf(tss)
+c        function used to solve for saturation temperature tss
+c        given pressure
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common/cosat/ cps1   ,cps2,cps3,cps4,cps5
+      common/bend9/a1,a2,a3,a4,a5
+       tssf = ( cps1*tss + cps2*tss**1.9 + cps3*tss**2 + cps4*tss**5.5
+     *                   + cps5*tss**10) / ( 1. - tss ) + a1
+      return
+      entry    dtssf(tss)
+c
+c        derivative of function used to solve for saturation
+c        temperature tss given pressure
+c
+       tssf = ( ( cps1 + 1.9*cps2*tss**0.9 + 2.0*cps3*tss +
+     *          5.5*cps4*tss**4.5 + 10.*cps5*tss**9 ) +
+     *        ( ( cps1*tss + cps2*tss**1.9 + cps3*tss**2 + cps4*tss**5.5
+     *                   + cps5*tss**10 ) / ( 1. - tss ) ) )
+     *        / ( 1. - tss )
+      return
+      end
+       subroutine visc (ku,kr,tin,pin,din,svisc)
+c     modified     rch     30 may 1975
+c      calculate the viscosity given tau,p,and d in user-s units ku.
+c                 answer returned in user-units in svisc.
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      dimension avo(4),dt(6),dd(5),bv(6,5)
+      dimension bv1(6),bv2(6),bv3(6),bv4(6),bv5(6)
+      equivalence (bv1(1),bv(1,1)),(bv2(1),bv(1,2)),(bv3(1),bv(1,3))
+     1,(bv4(1),bv(1,4)),(bv5(1),bv(1,5))
+      common/ierror/irout
+      common/crit/ rhocrt,pcrt,tcrt
+      common /tparam/ tin1
+      common/conv7/mconv(5)
+      common/testmu/unitmu
+       real mconv
+       data avo/1.81583e-2,1.77624e-2,1.05287e-2,-3.6744e-3/
+       data rhos,tstr/.317763,647.27/
+       databv1/0.501938,0.162888,-0.130356,0.907919,-0.551119,0.146543/
+       databv2/0.235622,0.789393, 0.673665,1.207552, 0.0670665,
+     & -0.0843370/
+       databv3/-0.274637,-0.743539,-0.959456,-0.687343,-0.497089,
+     & 0.195286/
+       databv4/0.145831,0.263129,0.347247,0.213486,0.100754,-0.032932/
+       databv5/-0.0270448,-0.0253093,-0.0267758,-0.0822904,0.0602253,
+     & -0.0 202595/
+c
+      irout=9
+      tin1=tin
+c---
+c---tk is deg k, t is deg c, tr is reduced temp
+      tk=1000./tcheck(ku,kr,tin)
+      t = tk- 273.15
+      tr=tk/tcrt
+c---p is bars,  pmn is mega newtons/m*m ,pr is reduced pressure
+      pmn=pcheck(ku,kr ,pin)
+      p = 10.0*pmn
+      pr=pmn/pcrt
+c---  ds is g/cc, spvr is reduced specific volume.
+      ds=dcheck(ku,din)
+      spvr= rhocrt/ds
+c
+c   check for out of range on p and t
+c
+      if ( p .lt. .99 .or. p .gt. 1000.01)  write(*,100) t,p
+      if ( t .gt. 900.0 .or. t .lt. 0.0 )   write(*,100)   t,p
+  100 format('  out of range. viscosity extrapolated  for t='
+     1,f12.4,' p= ',f12.4)
+c
+c     calculate viscosity for all regions to 900 cent and 1000 bar
+c
+      tst=tstr/tk-1.
+      dt(1)=1.
+      dt(2)=tst
+      dt(3)=tst*dt(2)
+      dt(4)=tst*dt(3)
+      dt(5)=tst*dt(4)
+      dt(6)=tst*dt(5)
+      dr=ds/rhos
+      deld=dr-1.
+      dd(1)=1.
+      dd(2)=deld
+      dd(3)=deld*dd(2)
+      dd(4)=deld*dd(3)
+      dd(5)=deld*dd(4)
+      sum=0.
+  101 do 103 i=1,6
+      do 103 j=1,5
+  103 sum=sum+bv(i,j)*dt(i)*dd(j)
+      delmu=exp(dr*sum)
+  102 tsr=tstr/tk
+      amuo=sqrt(tk/tstr)/(((tsr*avo(4)+avo(3))*tsr+avo(2))*tsr+avo(1))
+      svisc=delmu*amuo*1.e-5 *mconv(ku)
+      return
+      end
+c     -------------------------august 1, 1973 version-------------------
+c
+      block data
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      dimension a1(10),a2(10),a3(10),a4(10),a5(10),a6(10),a7(10)
+      character messag*128
+      common /code/ messag
+      common /cof/ a(10,7)
+       common /minmax/ tmin,pmin,tmax,pmax
+       common /trip/ ttrip,ptrip,vtrip
+      common /crit/ rhocrt,pcrt,tcrt
+      common /consts/ tauc,rhoa,rhob,taua,e ,r
+      common/checks/dch1,dch2,pch1,pch2,pch3,tch1,tch2,tch3,dst,tst,
+     1hsch1,hsch2
+      equivalence (a1(1),a(1,1)),(a2(1),a(1,2)),(a3(1),a(1,3)),(a4(1),a(
+     11,4)),(a5(1),a(1,5)),(a6(1),a(1,6)),(a7(1),a(1,7))
+c
+      common/cosat/cps1, cps2,cps3,cps4,cps5
+      common /sicof/ sic1,sic2,sic3,sic4,sic5
+      common /conv1/dconv(5)
+      common /conv2/tconv(5)
+      common /conv3/pconv(5)
+      common/conv4/sconv(5)
+      common/conv5/cconv(5)
+      common/conv6/hconv(5)
+      common/conv7/mconv(5)
+      common/conv8/kconv(5)
+      common/conv9/stconv(5)
+      common/conv10/alconv(5)
+      real mconv,kconv
+      common/xminus/xm1(7)
+      data a1 / 73.13848592, -285.20415917, 535.71659288, -649.81000614,
+     *        574.63280680,
+     *        -387.92157774, 206.34569512, -79.89428513, -996.36169097,
+     *        -766.272900006/
+      data a2 / 24.74108348, -105.57317181, 200.87302906, -235.18776440,
+     *         224.56976938,
+     *        -40.09924297, 128.77154771, -28.40907978, -1389.08003142,
+     *        -1672.09705556/
+      data a3 /11.64775625, -42.51820251, 72.45541064, -82.55391089, 0.,
+     *        0., 0., 0., -267.85482520, -998.64982710/
+      data a4 / 2.66566642, -9.19657655, 15.13096920, -7.24860975, 0.,
+     *        0., 0., 0., -46.83904320, -227.34793319/
+      data a5 / -6.73408249, 24.03602093, -41.08079830, 45.39111005, 0.,
+     *        0., 0., 0., 139.21659329, 566.02305152/
+      data a6 / -5.24802962, 18.52690633, -31.42397369, 26.43208802, 0.,
+     *        0., 0., 0., 96.31411481, 453.20280933/
+      data a7 / -1.17583447, 4.13816432, -6.55842224, 4.75774631, 0.,
+     *        0., 0., 0., 19.39184297, 103.56819758 /
+      data cps1,cps2,cps3,cps4,cps5/
+     * - 7.81583,  17.6012, -18.1747, - 3.92488,   4.19174/
+      data dch1,dch2,pch1,pch2,pch3,tch1,tch2,tch3,dst,tst,
+     1hsch1,hsch2/0.,1.16,.000611,21.66,100.,.33333333,1.553,
+     1 3.6108 ,.8,400.,0.,6052.2 /
+      data messag /' thermodynamic and transport properties for heavy wa
+     *ter pc=213.83atm,tc= 643.89 k,roc=.358 g/cc'/
+       data  tmin /2.7695e+02/, pmin /6.60114e+02/
+       data  tmax /5.0e+03/, pmax /1.0e+08/
+       data  ttrip /2.7695e+2/, ptrip /6.60114e+2/, vtrip /9.04592e-4/
+      data rhocrt,pcrt,tcrt/0.358, 21.66, 643.89   /
+      data sic1,sic2,sic3,sic4,sic5/1834.5669, 3.2661763,
+     1-0.0004359399, 15.4389, -0.9758409 /
+      data tauc,rhoa,rhob,taua,e,r/ 1.553, 0.7, 1.1, 2.53, 4.3, 0.41515/
+      data tconv/1.,1.,.55555555,1.,1./
+      data pconv/1.,9.8692327,145.038243,1.e6,1./
+      data dconv/2*1.,62.4283,1000.,1./
+      data sconv/2*1.,.238849,1000.,1./
+      data cconv/2*1.,.0328084,.01,1./
+      data hconv/2*1.,.429929,1000.,1./
+      data mconv/2*1.,.67196899e-1,.1 ,1./
+      data kconv/2*1.e-2,1.60644e-4,100.,1./
+      data stconv/2*1.,6.8521766e-5,.001,1./
+      data alconv/2*.1,.328084e-2,.001,1./
+      data xm1/1.,2.,3.,4.,5.,6.,7./
+      end

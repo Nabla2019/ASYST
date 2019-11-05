@@ -1,0 +1,472 @@
+       subroutine cvic (bcd,bin,icond,num,nch)
+c
+c  Convert display coded card information to binary.
+c
+c  Cognizant engineer: rjw.
+c
+c  Parameters in argument list.
+c    bcd    80-character field containing card to be converted; (input).
+c    bin    array containing (num) converted quantities; (input/output).
+c    icond  array containing code for converted quantities, (output).
+c             = 0 for 0 result in floating or integer conversion where
+c                 +0 and -0 where possible are allowed and stored as
+c                 such,
+c             = 1 for integer conversion,
+c             = 2 for floating conversion,
+c             = 3 for hex conversion,
+c             = 4 for octal conversion,
+c             = -(character count) for Hollerith conversion, if count
+c                 exceeds word capacity of 8 ch/word, conversion uses
+c                 additional words in bin with icond being increased
+c                 by 8 for each additional word used.
+c    nch    on entry if zero causes error comment if error found.
+c                    if nonzero, no error comment printed.
+c           on return if zero, no error.
+c                     if nonzero, value is character position of error.
+c
+c  cvirc is in a separate subroutine that calls cvic.
+c
+c  Local variable sw is a packed word containing the status of the
+c  parsing process on the card columns.
+c  Switches are stored as bits in sw.
+c  Definitions indicate initialized (0 bit) value.
+c  Number following sw is bit position (p) where
+c  p=0 is the rightmost bit and (=2**p) is the value used for
+c  clearing, testing, and setting the bit.
+c        bit
+c     sw  0  (=1)     end of number off,
+c     sw  1  (=2)     * or $ flag or end of card off,
+c     sw  3  (=8)     accum sw to integer,
+c     sw  4  (=16)    word sign sw to plus,
+c     sw  5  (=32)    exponent sign sw to plus,
+c     sw  6  (=64)    digit sw off,
+c     sw  7  (=128)   decimal pt. check off,
+c     sw  8  (=256)   float sw off,
+c     sw  9  (=512)   e type on,
+c     sw 10  (=1024)  exponent sign off,
+c     sw 11  (=2048)  octal-hex off,
+c     sw 12  (=4096)  blank for end,
+c     sw 13  (=8192)  first character on,
+c     sw 15  (=32768) octal off.
+c
+       implicit none
+       character bcd*80
+$if -def,in32,1
+       integer bin(40),icond(40),num,nch
+$if def,in32,1
+       integer bin(2,40),icond(2,40),num,nch
+       integer ncw
+       parameter (ncw=8)
+       character cfa*8
+       character bcw*1,fac*1
+       integer ch,col,cond,dc,ib,ibh,ic,inth,msk,nc,sw
+       real rxfa,txfa
+$if -def,in32,3
+       integer fa,fa1,int
+       real xfa,xint,power(30)
+       equivalence (fa,xfa),(int,xint)
+$if def,in32,3
+       integer fa(2),fa1(2),int(2)
+       real*8 xfa,power(30)
+       equivalence (xfa,fa(1))
+$if def,cdccra,2
+       integer itemp
+       real ffa,fint
+       logical ovr
+c
+       data power/1.e1,1.e2,1.e3,1.e4,1.e5,1.e6,1.e7,1.e8,1.e9,1.e10,
+     * 1.e11,1.e12,1.e13,1.e14,1.e15,1.e16,1.e17,1.e18,1.e19,1.e20,
+     * 1.e21,1.e22,1.e23,1.e24,1.e25,1.e26,1.e27,1.e28,1.e29,1.e30/
+c
+c  Set upd for entire card.
+       ic = 1
+       ib = 0
+       col = 80
+c  Start of loop for one field of conversion.
+   10  dc = 0
+$if -def,in32,1
+       fa = 0
+$if def,in32,1
+       xfa = 0.0
+       sw = 0
+c  Start of loop for each character.
+   11  bcw = bcd(ic:ic)
+       if (bcw.lt.'0' .or. bcw.gt.'9') go to 17
+       ch = ichar(bcw) - ichar('0')
+       if (iand(sw,2048) .ne. 0) go to 13
+       if (iand(sw,8) .ne. 0) go to 12
+c  Fractional conversion.
+$if -def,in32
+       fa = ishft(fa,1)
+       ovr = fa .lt. 0
+       fa1 = ishft(fa,1)
+       ovr = ovr .or. fa1 .lt. 0
+       fa1 = ishft(fa1,1)
+       ovr = ovr .or. fa1 .lt. 0
+       fa = fa + fa1
+       ovr = ovr .or. fa .lt. 0
+       fa = fa + ch
+       ovr = ovr .or. fa .lt. 0
+       if (ovr) go to 23
+$endif
+$if def,in32
+       fa(1) = ishft(fa(1),1)
+       ovr = fa(1) .lt. 0
+       fa1(1) = ishft(fa(1),1)
+       ovr = ovr .or. fa1(1) .lt. 0
+       fa1(1) = ishft(fa1(1),1)
+       ovr = ovr .or. fa1(1) .lt. 0
+       fa(1) = fa1(1) + fa(1)
+       ovr = ovr .or. fa(1) .lt. 0
+       fa1(1) = iand(ishft(fa(2),-24),255)
+       fa(2) = ieor(fa(2),ishft(fa1(1),24))
+       fa1(1) = ishft(fa1(1),1) + ishft(fa1(1),3)
+       fa(2) = ishft(fa(2),1) + ishft(fa(2),3) + ch
+       fa1(2) = iand(ishft(fa(2),-24),255)
+       fa1(1) = fa1(1) + fa1(2)
+       fa(2) = ieor(fa(2),ishft(fa1(2),24))
+       fa(2) = ior(fa(2),ishft(iand(fa1(1),255),24))
+       fa(1) = fa(1) + ishft(fa1(1),-8)
+       ovr = ovr .or. fa(1) .lt. 0
+$endif
+       dc = dc + 1
+       go to 55
+c  Exponent conversion.
+$if -def,in32,2
+   12  fa = ishft(fa,1) + ishft(fa,3) + ch
+       if (fa .ge. 1536) go to 23
+$if def,in32,2
+   12  fa(2) = ishft(fa(2),1) + ishft(fa(2),3) + ch
+       if (fa(2) .ge. 1536) go to 23
+       sw = iand(sw,not(4096))
+       go to 55
+c  Octal or hex conversion.
+   13  if (iand(sw,32768) .eq. 0) go to 15
+       if (ch .ge. 8) go to 23
+$if -def,in32,2
+       msk = 7
+       fa = ishft(fa,3)
+$if def,in32,3
+       if (iand(ishft(fa(1),-29),7) .ne. 0) go to 23
+       fa(1) = ior(ishft(fa(1),3),iand(ishft(fa(2),-29),7))
+       fa(2) = ishft(fa(2),3)
+       go to 16
+c  a - f part of hex conversion.
+   14  if (bcw.lt.'a' .or. bcw.gt.'f') go to 18
+       if (iand(sw,32768) .ne. 0) go to 23
+       ch = ichar(bcw) - ichar('a') + 10
+c  Common part of hex conversion.
+$if -def,in32,2
+   15  msk = 15
+       fa = ishft(fa,4)
+$if def,in32,3
+   15  if (iand(ishft(fa(1),-28),15) .ne. 0) go to 23
+       fa(1) = ior(ishft(fa(1),4),iand(ishft(fa(2),-28),15))
+       fa(2) = ishft(fa(2),4)
+c  Common part of octal-hex conversion.
+$if -def,in32,2
+   16  if (iand(fa,msk) .ne. 0) go to 23
+       fa = ior(fa,ch)
+$if def,in32,1
+   16  fa(2) = ior(fa(2),ch)
+       go to 55
+c  Non-digit tests.
+   17  if (iand(sw,2048) .ne. 0) go to 14
+   18  if (bcw .eq. ' ') go to 37
+       if (bcw .eq. '+') go to 24
+       if (bcw .eq. '-') go to 25
+       if (bcw .eq. '.') go to 30
+       if (bcw.eq.'e' .or. bcw.eq.'d' .or. bcw.eq.'E' .or. bcw.eq.'D')
+     & go to 31
+       if (bcw .eq. ',') go to 39
+       if (bcw .eq. '/') go to 33
+       if (bcw.eq.'"' .or. bcw.eq.'''') go to 60
+       if (bcw .eq. 'h') go to 74
+       if (bcw.eq.'*' .or. bcw.eq.'$') go to 32
+c  Hollerith field if none of above.
+       if (iand(sw,8192) .ne. 0) go to 23
+   19  inth = ncw
+       ibh = ib
+       cfa = ' '
+       msk = 1
+   20  cfa(msk:msk) = bcw
+       msk = msk + 1
+       inth = inth - 1
+       if (inth .ne. 0) go to 21
+       inth = ncw
+       ibh = ibh + 1
+$if -def,in32,1
+       read (cfa,'(a8)') bin(ibh)
+$if def,in32,1
+       read (cfa,'(2a4)') bin(:,ibh)
+       msk = 1
+       cfa = ' '
+   21  dc = dc + 1
+       col = col - 1
+       if (col .eq. 0) go to 65
+       ic = ic + 1
+       bcw = bcd(ic:ic)
+       if (bcw.eq.' ' .or. bcw.eq.',' .or. bcw.eq.'=') go to 69
+       go to 20
+c  Error processing.
+   23  nc = 81 - col
+       if (nch .ne. 0) go to 50
+       print 2001, nc,bcd
+ 2001  format ('0******** error in card below at col.',i3/' ',a)
+       go to 50
+c  Non-decimal character processing.
+c    + routine.
+   24  if (iand(sw,8192) .eq. 0) go to 56
+       go to 26
+c    - routine.
+   25  if (iand(sw,8192) .eq. 0) go to 29
+       sw = ior(sw,32)
+   26  if (iand(sw,1024) .ne. 0) go to 23
+       sw = ior(sw,1024)
+       if (iand(sw,512) .ne. 0) go to 28
+       if (iand(sw,64) .eq. 0) go to 23
+       sw = ior(iand(sw,not(64)),640)
+   27  sw = ior(sw,264)
+$if -def,in32,2
+       int = fa
+       fa = 0
+$if def,in32,2
+       int = fa
+       fa(2) = 0
+       go to 57
+   28  if (iand(sw,64) .ne. 0) go to 23
+       sw = iand(sw,not(4096))
+       go to 57
+c  Set word sign minus.
+   29  sw = ior(sw,16)
+       go to 56
+c    . routine.
+   30  if (iand(sw,128) .ne. 0) go to 23
+       sw = ior(sw,384)
+       dc = 0
+       go to 56
+c    e routine.
+   31  if (iand(sw,512) .ne. 0) go to 23
+       if (iand(sw,8192) .eq. 0) go to 19
+       sw = ior(sw,640)
+       if (iand(sw,64) .eq. 0) go to 23
+       sw = ior(iand(sw,not(64)),4096)
+       go to 27
+c    * routine.
+   32  if (iand(sw,8192) .eq. 0) go to 49
+       sw = ior(sw,2)
+       go to 40
+c    / routine.
+   33  if (iand(sw,8192) .ne. 0) go to 23
+       col = col - 1
+       if (col .eq. 0) go to 23
+       ic = ic + 1
+       bcw = bcd(ic:ic)
+       if (bcw .eq. 'o') go to 36
+       if (bcw .ne. 'x') go to 23
+c    x routine.
+c  Common part of octal and hex coding.
+   35  sw = ior(sw,3200)
+       go to 56
+c    o routine.
+   36  sw = ior(sw,32768)
+       go to 35
+c    Blank routine.
+   37  if (iand(sw,4096) .ne. 0) go to 38
+       if (iand(sw,8192) .eq. 0) go to 57
+       go to 40
+   38  sw = ior(iand(sw,not(4096)),1024)
+       go to 57
+c    , routine.
+   39  if (iand(sw,8192) .eq. 0) go to 23
+c  Finish up conversion, store result and condition code.
+   40  if (iand(sw,64) .eq. 0) go to 23
+       if (iand(sw,2048) .ne. 0) go to 53
+       if (iand(sw,256) .eq. 0) go to 52
+       if (iand(sw,8) .eq. 0) go to 42
+$if -def,in32,4
+       if (iand(sw,32) .eq. 0) fa = -fa
+       dc = fa + dc
+       fa = int
+   42  if (fa .eq. 0) go to 51
+$if def,in32,4
+       if (iand(sw,32) .eq. 0) fa(2) = -fa(2)
+       dc = fa(2) + dc
+       fa = int
+   42  if (fa(1).eq.0 .and. fa(2).eq.0) go to 51
+$if def,cdccra,5
+       int = mask(16) .and. fa
+       fint = float(int)*2.0**48
+       itemp = .not.mask(16) .and. fa
+       ffa = float(itemp)
+       xfa = ffa + fint
+$if def,in32,3
+       fa1(2) = iand(ishft(fa(2),-31),1)
+       fa(2) = ieor(fa(2),ishft(fa1(2),31))
+       xfa = dble(fa(2)) + dble(fa1(2))*2.0**31 + dble(fa(1))*2.0**32
+       cond = 2
+       if (dc .eq. 0) go to 47
+       if (dc .gt. 0) go to 45
+       dc = -dc
+   43  if (dc .lt. 30) go to 44
+       xfa = xfa*power(30)
+       dc = dc - 30
+       if (dc .ne. 0) go to 43
+       go to 47
+   44  xfa = xfa*power(dc)
+       go to 47
+   45  if (dc .lt. 30) go to 46
+       xfa = xfa/power(30)
+       dc = dc - 30
+       if (dc .ne. 0) go to 45
+       go to 47
+   46  xfa = xfa/power(dc)
+c  If result of divide is close to whole number, force to whole number.
+       rxfa = xfa*(1. + 8.e-15)
+       txfa = aint(rxfa)
+       if (abs(xfa - txfa) .le. 2.e-14*xfa) xfa = txfa
+   47  if (iand(sw,16) .ne. 0) xfa = -xfa
+   48  ib = ib + 1
+$if -def,in32,2
+       bin(ib) = fa
+       icond(ib) = cond
+$if def,in32,3
+       bin(:,ib) = fa(:)
+       icond(1,ib) = 0
+       icond(2,ib) = cond
+       sw = ior(sw,1)
+       if (iand(sw,2) .eq. 0) go to 57
+c  Set up return.
+   49  nc = 0
+   50  nch = nc
+       num = ib
+       return
+c  Zero value.
+   51  cond = 0
+       go to 48
+c  Integer conversion.
+$if -def,in32,1
+   52  if (fa .eq. 0) go to 51
+$if def,in32,2
+   52  if (fa(1).ne.0 .or. fa(2).lt.0) go to 23
+       if (fa(2) .eq. 0) go to 51
+       cond = 1
+$if -def,in32,2
+       if (iand(sw,16) .ne. 0) fa = -fa
+       go to 48
+$if def,in32,4
+       if (iand(sw,16) .eq. 0) go to 48
+       fa(1) = not(fa(1))
+       fa(2) = -fa(2)
+       go to 48
+c  Octal or hex conversion.
+   53  if (iand(sw,32768) .ne. 0) go to 54
+       cond = 4
+       go to 48
+   54  cond = 3
+       go to 48
+c  End of character processing.
+   55  sw = ior(sw,64)
+   56  sw = ior(sw,8192)
+   57  col = col - 1
+       if (col .ne. 0) go to 58
+       if (iand(sw,1) .ne. 0) go to 49
+       go to 32
+   58  ic = ic + 1
+       bcw = bcd(ic:ic)
+   59  if (iand(sw,1) .eq. 0) go to 11
+       go to 10
+c  Hollerith field using " or ' as delimiters.
+   60  if (iand(sw,8192) .ne. 0) go to 23
+       fac = bcw
+       inth = ncw
+       cfa = ' '
+       msk = 1
+       ibh = ib
+   61  col = col - 1
+       if (col .eq. 0) go to 23
+       ic = ic + 1
+       bcw = bcd(ic:ic)
+       if (bcw .eq. fac) go to 64
+   63  cfa(msk:msk) = bcw
+       dc = dc + 1
+       inth = inth - 1
+       msk = msk + 1
+       if (inth .ne. 0) go to 61
+       inth = ncw
+       ibh = ibh + 1
+$if -def,in32,1
+       read (cfa,'(a8)') bin(ibh)
+$if def,in32,1
+       read (cfa,'(2a4)') bin(:,ibh)
+       cfa = ' '
+       msk = 1
+       go to 61
+   64  col = col - 1
+       if (col .ne. 0) go to 66
+   65  sw = ior(sw,2)
+       go to 70
+   66  ic = ic + 1
+       bcw = bcd(ic:ic)
+       if (bcw .eq. fac) go to 63
+   68  if (bcw .eq. ' ') go to 69
+       if (bcw .ne. ',') go to 23
+   69  col = col - 1
+       if (col .eq. 0) go to 65
+       ic = ic + 1
+       bcw = bcd(ic:ic)
+   70  if (dc .eq. 0) go to 23
+       dc = -dc
+   71  ib = ib + 1
+$if -def,in32,1
+       icond(ib) = dc
+$if def,in32,2
+       icond(1,ib) = 0
+       icond(2,ib) = dc
+       dc = dc + ncw
+       if (dc .lt. 0) go to 71
+       if (dc .eq. 0) go to 73
+       ibh = ibh + 1
+$if -def,in32,1
+       read (cfa,'(a8)') bin(ibh)
+$if def,in32,1
+       read (cfa,'(2a4)') bin(:,ibh)
+   73  if (iand(sw,2) .eq. 0) go to 10
+       go to 49
+c  Hollerith field using h.
+   74  if (iand(sw,8192) .eq. 0) go to 19
+$if -def,in32,2
+       if (iand(sw,2320).ne.0 .or. fa.eq.0) go to 23
+       dc = fa
+$if def,in32,2
+       if (iand(sw,2320).ne.0 .or. fa(2).eq.0) go to 23
+       dc = fa(2)
+       inth = dc + 1
+       nc = inth
+       cfa = ' '
+       msk = 1
+       if (col .lt. inth) go to 23
+       col = col - inth
+       inth = ncw
+       ibh = ib
+   77  ic = ic + 1
+       bcw = bcd(ic:ic)
+       nc = nc - 1
+       if (nc .eq. 0) go to 78
+       cfa(msk:msk) = bcw
+       inth = inth - 1
+       msk = msk + 1
+       if (inth .ne. 0) go to 77
+       inth = ncw
+       ibh = ibh + 1
+$if -def,in32,1
+       read (cfa,'(a8)') bin(ibh)
+$if def,in32,1
+       read (cfa,'(2a4)') bin(:,ibh)
+       cfa = ' '
+       msk = 1
+       go to 77
+   78  if (col .ne. 0) go to 68
+       go to 65
+c
+       end

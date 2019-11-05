@@ -1,0 +1,169 @@
+*mlist
+       subroutine tran
+c
+c  Controls advancement of transient problems.
+c
+c  Cognizant engineer: rjw.
+c
+       use gentblc
+$if def,rk3d,3
+       use iss_rk3d_int
+       use rk3dcode, only: eigencalc,trn3d,fcallss
+       use rkinc
+       use lpdatc
+       use tdpptr
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'scrtch.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'scntl.h'
+c  Local variables.
+       real tx,ty
+       integer i,ix,m
+       logical heatst
+       include 'pvmvr5.h'
+c
+       lhtsol = 0
+       if (.not.skipt) go to 10
+    5  if (iand(imdctl(1),1).ne.0) call chklev
+c
+       if (succes.eq.0 .and. filid(18).ne.0.0) call trip
+c  Process time dependent volumes and junctions if needed.
+$if -def,pvmcoupl,1
+       if (ntdpvsn .ne. 0) call tstate
+$if def,pvmcoupl
+       if (ntdpvsn .ne. 0) then
+         call tstate
+         if (filid(31) .ne. 0.0) then
+c
+c  Pvmrcv and pvmsnd have been executed, therefore reset timeho.
+           timeho = timehy
+           call pvmput
+         endif
+       endif
+$endif
+c  Get heat transfer rates, possibly advance Relap5 heat structures.
+       i = filndx(4)
+       ix = ixvf
+       do m = 1,nvols(i)
+         q(i) = 0.0
+         qwg(i) = 0.0
+         gammaw(i) = 0.0
+         gammac(i) = 0.0
+         gammsw(ix) = 0.0
+         gammsc(ix) = 0.0
+         htcff(ix) = 0.0
+         htcfg(ix) = 0.0
+         htcft(ix) = 0.0
+         htcfp(ix) = 0.0
+         htcgf(ix) = 0.0
+         htcgg(ix) = 0.0
+         htcgt(ix) = 0.0
+         htcgp(ix) = 0.0
+         htgwff(ix) = 0.0
+         htgwfg(ix) = 0.0
+         htgwft(ix) = 0.0
+         htgwfp(ix) = 0.0
+         htgcgf(ix) = 0.0
+         htgcgg(ix) = 0.0
+         htgcgp(ix) = 0.0
+         htgcgt(ix) = 0.0
+         i = i + ivskp
+         ix = ix + scskp
+       enddo
+       heatst = .false.
+       if (filid(8) .ne. 0.0) then
+         call htadv
+         heatst = .true.
+       endif
+c  Call pre-hydro scdap routines.
+$if def,selap,5
+       if (scntrl(1)) then
+         call scdprh
+         if (succes.eq.8) go to 10
+         heatst = .true.
+       endif
+       if (heatst) then
+         ty = 0.2/dt
+         i = filndx(4)
+         ix = ixvf
+         do m = 1,nvols(i)
+           gammac(i) = max(gammac(i),-hyarg(i)*ty)
+           gammaw(i) = min(gammaw(i),hyarf(i)*ty)
+           gammsc(ix) = gammac(i)
+           gammsw(ix) = gammaw(i)
+           tx = dt*recipv(i)
+           htcff(ix) = htcff(ix)*tx
+           htcfg(ix) = htcfg(ix)*tx
+           htcft(ix) = htcft(ix)*tx
+           htcfp(ix) = htcfp(ix)*tx
+           htcgf(ix) = htcgf(ix)*tx
+           htcgg(ix) = htcgg(ix)*tx
+           htcgt(ix) = htcgt(ix)*tx
+           htcgp(ix) = htcgp(ix)*tx
+           htgwff(ix) = htgwff(ix)*dt
+           htgwfg(ix) = htgwfg(ix)*dt
+           htgwft(ix) = htgwft(ix)*dt
+           htgwfp(ix) = htgwfp(ix)*dt
+           htgcgf(ix) = htgcgf(ix)*dt
+           htgcgg(ix) = htgcgg(ix)*dt
+           htgcgp(ix) = htgcgp(ix)*dt
+           htgcgt(ix) = htgcgt(ix)*dt
+           i = i + ivskp
+           ix = ix + scskp
+         enddo
+       endif
+c  Solve hydraulic equations.
+       call hydro
+c  Check if repeat necessary.
+       if (cpurei(4) .lt. 0) then
+         if (cpurei(5) .le. ncount) then
+           if (cpurei(4) .le. -2) succes = max (succes,1)
+         endif
+       endif
+       if ((succes.ne.0 .and. (.not.nmechk.or.succes.gt.1))
+     & .or. help.eq.1 .or. help.eq.2) go to 10
+c  Call post-hydro scdap routines.
+$if def,selap,1
+       if (scntrl(1)) call scdpsh
+!  Advance reactor kinetics.
+$if -def,rk3d
+       if (filid(21) .ne. 0.0) call rkin
+$endif
+$if def,rk3d
+       if (filid(21) .ne. 0.0) then
+         if (.not.pt3dflag) then
+           call rkin 
+         else
+           call gencoupdata
+           if (fcallss) then
+             call eigencalc
+             fcallss  = .false.
+           else
+             if (.not.trnfsc) then
+               call eigencalc
+             else
+               call trn3d
+             endif
+           endif
+         endif
+       endif
+$if def,3dkin,1
+       if (succes .eq. 999) go to 10
+$endif
+!  Call to evaluate general tables.
+       if (ngtblf) call gntbl
+!  Call control system advancement.
+       if (filid(27) .ne. 0.0) call convar
+   10  call dtstep
+       if (done .ne. 0) then
+$if def,gui,1
+         if (iand(imdctl(1),12) .ne. 0) call hynodq
+       else
+         if (iand(imdctl(1),12) .eq. 0) go to 5
+       endif
+       return
+       end

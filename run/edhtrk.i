@@ -1,0 +1,184 @@
+=edward's pipe problem base case with extras
+*                    Configuration Control Problem
+*       This problem has the hydrodynamic components from the Edward's
+*  Pipe Blowdown plus heat structures coupled to the pipe, a heat
+*  structure with a simple analytic solution, control components with
+*  analytic solutions, reactor kinetics, and a few trips.  This
+*  artificial problem is used to check the coding of several models.
+*  The results of this problem still match the Edward"s Pipe data
+*  reasonably well.
+* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+0000100 new transnt
+301 p 3010000
+302 p 3050000
+303 p 3100000
+304 p 3150000
+305 p 3200000
+306 quals 3010000
+307 quals 3200000
+311 velfj 3010000
+312 velgj 3010000
+313 velfj 4000000
+314 hthtc 3001100
+315 htrnr 3001100
+316 httemp 3001101
+317  cntrlvar 12
+318  cntrlvar 13
+319  cntrlvar 14
+331  cntrlvar 301
+332  cntrlvar 302
+333  cntrlvar 303
+334  rktpow 0
+335  rkfipow 0
+336  rkgapow 0
+341  cntrlvar,403
+342  cntrlvar,404
+343  cntrlvar,405
+20800001 emass
+20800002 errmax
+* time step control card
+0000201 0.020,1.0-7,.001,7, 2,10,100
+0000202 0.100,1.0-7,.001,7,10,20,100
+0000203 0.500,1.0-7,.001,7,10,50,100
+501 time 0 gt null 0 0.099999  l
+502 p 3010000 lt p 3020000 0.0 n
+505 velfj 3010000 ge velgj 3010000 0.0 n
+601 505 and 501 l
+602 602 or 601 n
+603 -505 xor -501 l
+801 x 0.0
+802 xx 5.0
+805 xxx 10.0
+*
+0030000 edward's pipe
+0030001 20
+0030101 4.56037-3,20
+0030301 2.04801-1,20
+0030601 0,20
+0030801  1.177911-6,0,20
+0031001 0,20
+0031101 0,19
+0031201 0,7.0+6,9.78293+5,2.58184+6,0,0,20
+0031301 0,0,0,19
+*
+0040000 rhtbdy sngljun
+0040101 3010000 5000000 3.96752-3 0 0 000
+0040201 0 0 0 0
+*
+0050000 rhtbdy tmdpvol
+0050101  4.56037-3  2.04801-1  0  0  0  0  1.177911-6  0  0
+0050200 2  501
+* only one entry would be faster for a constant table.
+0050201 0.0,1.0+5,1.0  100.0,1.0+5,1.0
+* heat structure
+10030000 20 11 2 1 3.81-2
+10030100 0 1
+10030101 10,4.41-2
+10030201 1,10
+10030301 0.0,10
+10030400 0
+10030401 500.0,11
+10030501 3010000,010000,1,1,2.04801-1,20
+10030601 0 0 0 1 2.04801-1 20
+10030701 0 0 0 0 20
+10030801 0.0  3.0  3.0  0.0  0.0  0.0  0.0  1.0  20
+* general tables
+20200400 htc-t
+20200401 0,2000.
+*reactivity tables
+20201000 reac-t
+20201001  -1.0,0.0  0.0,0.0  0.0,1.5
+20201100 reac-t  501
+20201101 -1.0,0.0  0.0,0.0  0.1,-20.0
+* heat structure--cosine problem
+* not connected to hydrodynamics
+10200000 1 11 1 0 0.0
+10200100 0 1
+10200101 10,0.60-2
+10200201 4,5  5,10
+10200301 0.0,10
+10200400 0
+10200401 10.0000,1  9.8769,2  9.5106,3  8.9101,4  8.0902,5
+10200402  7.0711,6  5.8779,7  4.5399,8  3.0902,9  1.5643,10  0.,11
+10200501 0 0 0 0 0.1220 1
+10200601 0 0 1000 0 0.1220 1
+10200701 0 0 0 0 1
+* material thermal properties
+* not all are used.
+20100100 c-steel
+20100300 tbl/fctn 2 2
+20100301 0,5.0 46.05 1.-20 1.-20 1.-20 1.-20 1.-20 1.-20
+20100302 5.0,2000. 46.05 1.-20 1.-20 1.-20 1.-20 1.-20 1.-20
+20100351 0,2000. 3.8775e6 1.-20 1.-20 1.-20 1.-20 1.-20 1.-20
+20100400 tbl/fctn 1 -1
+20100401 0,46.05  1000.,46.05  2000.,46.05
+20100451 3.8775e6  3.8775e6  3.8775e6
+20100500 tbl/fctn 2 2
+20100501 0,5.0 46.05 0 0 0 0 0 0
+20100502 5.0 2000. 46.05 0 0 0 0 0 0
+20100551 0,2000. 3.8775e6 0 0 0 0 0 0
+20100600 gap
+20100700 s-steel
+20100800 uo2
+20100900 zr
+* reactor kinetics input
+30000000 point
+30000001 gamma-ac  1.0+6  0.0 200.0
+30000011 10  11
+30000401 1.0+6  200.0 wk
+30000501 0.0,-20.0  1.0,0.0
+30000601 300.0,20.0  400.0,1.0  500.0,0.0  600.0,-1.0
+30000701 003010000 010000  0.25,0  0.5,0  0.25,0
+30000801 0030001 1  0.3,0  0.4,0
+30000802 0030003 0  0.3,0
+20500100 ctl1 sum 0.5 0.0  1
+20500101 0.0  1.0,p,003010000  1.0,p,003020000
+20500400 ctl4 mult 0.5 0.0  1
+20500401 p,003200000
+20500500 ctl5 mult 1.0 0.0  1
+20500501 voidgj,4000000  rhogj,4000000  velgj,4000000
+20501000 ctl10 div 1.0 0.0  1
+20501001 p,003200000
+20501100 ctl10 div 1.0 0.0  1
+20501101 p,003200000  p,003190000
+20501200 ctl12 diffreni 1.0 1.0 0
+20501201 time,0
+20501300 ctl13 integral 1.0 0.0 0
+20501301 time,0
+20501400 ctl14  integral  1.0  0.0  0
+20501401 cntrlvar 12
+20501500 ctl15  diffreni  1.0  0.0  1
+20501501 cntrlvar 13
+20520100 ctl201 function 2.0 0.0 1
+20520101 time,0 10
+20520200 ctl202 stdfnctn 2.0 0.0 1
+20520201 sin time,0
+20520300 ctl203 tripunit 2.0 0.0 1
+20520301 501
+20520400 ctl204 tripdlay 2.0 0.0 1 0
+20520401 501
+20520500 ctl205 poweri 0.5 0.3 1 1 0.2
+20520501 time,0 2
+20520600 ctl206 powerr 0.5 0.2 1 2 0.3
+20520601 time,0 2.0
+20520700 ctl207 powerx 0.5 0.2 1 3 0.1 0.3
+20520701 time,0 time,0
+20530000 ctl300 delay 2.0 0.0 1
+20530001 cntrlvar,13  0.1  10
+20530100 ctl301  prop-int  10.0  0.0  1
+20530101 2.0  3.0  time,0
+20530200 ctl302  lag  10.0  0.0  1
+20530201 0.1  time,0
+20530300 ctl303  lead-lag  10.0  0.0  1
+20530301 0.05  0.1  time,0
+20530400 ctl304  constant  0.387
+20540100  con1 constant 0.0
+20540200  con2 constant 0.1
+20540300  pumpctl pumpctl 1.0 0.0 0
+20540301  cntrlvar,401  time,0  1.0  0.0 0.0
+20540400  steamctl steamctl 5.0 2.0 0
+20540401  cntrlvar,402  time,0  2.0 0.0 0.0
+20540500  feedctl feedctl 1.0 0.0 0
+20540501  cntrlvar,401  time,0 0.4
+20540502  cntrlvar,402  time,0  0.5 0.0 0.0
+.  end of case

@@ -1,0 +1,341 @@
+*mlist
+       subroutine hloss
+c
+c  Calculates void fractions at the throat and downstream of an
+c  abrupt area change.
+c
+c  Cognizant engineer: rjw.
+c
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer i,i1,ik,il,irroot,it,ix,jx,k,kk,kx,ky,l,ll,lx,ly,m
+       logical lg1
+       real a0,aa1,aa2,ac,adown,adownf,adowng,alossl,at,atf,atg,aup,
+     & aupf,
+     & aupg,cvfg,cvfgt,cvft,cvgt,dcubic,diaf,dlfi,drivw,et,factf,factg,
+     & fijvv,formls,fxsol,qcubic,rcubic,rf,rg,s1,s2,scrabf,
+     & scrabg,scrah,scrahf,scrahg,theta,threei,vdf,vdfm,vdg,vdgm,vf,vg,
+     & x,xinter,xnegt,xpost,xsol,zsol(3)
+       equivalence (zsol(1),aupg),(zsol(2),atg),(zsol(3),adowng),
+     & (xsol,aupf),(xpost,atf),(xnegt,adownf)
+c
+c  Data statements.
+       data threei/0.33333333333333/
+c
+c  Define statement functions.
+       formls(x) = 0.62 + 0.38*x**3
+c
+       i1 = lvabrp(lpdat(issys)%llvect)
+       do 2000 m = 1,lvptr(i1)
+         i1 = i1 + 1
+         i = lvptr(i1)
+         ix = jcnxs(i)
+         formfj(i) = 0.0
+         formgj(i) = 0.0
+         if (iand(jc(i),2) .eq. 0) then
+           k = ij1nx(i)
+           kx = k + iand(ishft(jcex(i),-13),3)
+           l = ij2nx(i)
+           lx = l + iand(ishft(jcex(i),-10),3)
+           vdf = voidfj(i)
+           vdg = voidgj(i)
+c  Check flow direction to orientate up-downstream with volume indices.
+           vf = velgjo(i)
+           if (vf .eq. 0.0) vf = velfjo(i)
+           if (vf .lt. 0.0) then
+             kk = l
+             ky = lx
+             ll = k
+             ly = kx
+             ik = i + 1
+             il = i
+           else
+             kk = k
+             ky = kx
+             ll = l
+             ly = lx
+             ik = i
+             il = i + 1
+           endif
+c  Set junction and up-downstream volume variables not dependent on
+c  area.
+           at = athrot(i)*ajun(i)
+           rf = rhofj(i)
+           rg = rhogj(i)
+c  Set variables that depend on area ratios.
+           aup = max(avol(ky)*arat(ik),ajun(i))
+           adown = max(avol(ly)*arat(il),ajun(i))
+c  Special losses for jetpump-zero losses for drive or suction
+c  junctions when flow is positive independent of area ratios.
+           lg1 = .true.
+           jx = iand(ishft(jc(i),-19),3)
+           if (jx.ne.0 .and. jx.ne.3) then
+             if (jx.eq.1) drivw=voidfj(i)*rhofj(i)*velfjo(i) +
+     &       voidgj(i)*rhogj(i)*velgjo(i)
+             if (drivw .gt. 0.0) then
+               if (voidfj(i)*rhofj(i)*velfjo(i)+voidgj(i)*rhogj(i)*
+     &         velgjo(i) .ge. 0.0) then
+                 lg1 = .false.
+               else
+                 aup = at
+               endif
+             endif
+           endif
+           if (lg1 .and. (at.ne.aup .or. aup.ne.adown)) then
+c  Extra interphase drag term for abrupt area change.
+             et = ajun(i)/at
+             qcubic = fij(i)
+             xsol = abs(velgjo(i))
+             xpost = abs(velfjo(i))
+             vdfm = xsol*vdg+xpost*vdf
+             vdgm = 1.0e-4*max(0.1,vdfm/max(xsol,vdfm*0.0001,1.0e-60))
+             vdfm = 1.0e-4*max(0.1,vdfm/max(xpost,vdfm*0.0001,1.0e-60))
+             if (iand(jc(i),2048) .ne. 0 .or. floreg(kk) .eq. 12.0) then
+               scrah = 1.0 - abs(velgjo(i) - velfjo(i))/
+     &         max(1.e-30,abs(velgjo(i) + velfjo(i)))
+               if (scrah .gt. 0.0) then
+                 cvft = max(fij(i),0.8e6*(exp(-14.0*(1.0 - 2.0*
+     &           voidfj(i))**2)+2.5*(max(0.0,voidfj(i) -
+     &           voidf(ll)))**0.33))
+                 qcubic = qcubic*(cvft/qcubic)**scrah
+               endif
+             endif
+             diaf = diamv(ky)
+             if (velfjo(i)*velgjo(i) .lt. 0.0) diaf = diaf + (diamv(ly)
+     &       - diaf)*abs(velfjo(i)/(velfjo(i) - velgjo(i)))
+             fidxup(ix) = qcubic*(abs(velfjo(i) - velgjo(i))*et + 0.01)*
+     &       et*exp(-10.0*at/max(aup,adown))*10.0*diaf
+c
+c      bypass loss coefficient computation if jcex bit 30 set
+c
+             if( iand(jcex(i),ishft(1,29)).ne.0 ) go to 1990
+             fijvv = qcubic*(abs(velgjo(i)-velfjo(i))+0.01/et)
+             if (at .eq. aup) then
+               alossl = (1.0 - aup/adown)**2
+             else
+               a0 = at*formls(at/aup)
+               alossl = ((1.0 - a0/adown)*ajun(i)/a0)**2
+             endif
+             if (vdf.gt.0.99999 .or. vdg.gt..99999) go to 18
+             if (velfjo(i)*velgjo(i)) 24,18,19
+c  Prepare for interpolation between 2-phase and 1-phase over low and
+c  high void range.
+   19        xinter = min((vdg - vdgm)/(100.*vdgm),(vdf - vdfm)/
+     &       (100.*vdfm))
+             if (xinter .gt. 0.0) go to 110
+c  Single phase.
+   18        formfj(i) = alossl
+             formgj(i) = formfj(i)
+             go to 1990
+c  Counter current flow.
+   24        aupg = vdg*aup
+             atg = vdg*at
+             aupf = vdf*adown
+             atf = vdf*at
+             adowng = adown - aupf
+             adownf = aup - aupg
+             if (vdf + vdg .gt. 1.0) then
+               scrah = min(0.9999,abs(velgjo(i)/(velgjo(i) -
+     &         velfjo(i))))
+               cvgt = min(1.0,max(0.0,scrah*vdg+(1.0 - scrah)*
+     &         (1.0 - vdf)))
+               cvft = max(0.0,1.0 - cvgt)
+               atg = at*cvgt
+               atf = at*cvft
+               aupg = max(aupg,atg)
+               aupf = max(aupf,atf)
+             endif
+             adowng = max(adowng,atg)
+             adownf = max(adownf,atf)
+             if (atg .eq. aupg) then
+               if (atg .lt. adowng) formgj(i) = ((1.0 - aupg/adowng)*
+     &         ajun(i)/aup)**2
+             else
+               a0 = atg*formls(atg/aupg)
+               formgj(i) = ((1.0 - a0/adowng)*vdg*ajun(i)/a0)**2
+             endif
+             if (atf .eq. aupf) then
+               if (atf .ge. adownf) formfj(i) = ((1.0 - aupf/adownf)*
+     &         ajun(i)/adown)**2
+             else
+               a0=atf*formls(atf/aupf)
+               formfj(i)=((1.0-a0/adownf)*vdf*ajun(i)/a0)**2
+             endif
+             xinter = abs(velgjo(i)/(velgjo(i)-velfjo(i)))
+             formgj(i) = alossl+(1.0-xinter)*(formgj(i)-alossl)
+             if (at .eq. adown) then
+               alossl = (1.0-adown/aup)**2
+             else
+               a0 = at*formls(at/adown)
+               alossl = ((1.0-a0/aup)*ajun(i)/a0)**2
+             endif
+             formfj(i) = alossl + xinter*(formfj(i) - alossl)
+             go to 1990
+c  Co-current flow.
+  110        et = ajun(i)/aup
+             vf = abs(velfjo(i))*et
+             vg = abs(velgjo(i))*et
+             if (aup .le. adown) then
+               if (abs(aup - at) .le. at*1.0e-4) then
+c  Pure expansion.
+                 factf = 1.0
+                 factg = 1.0
+                 ac = at
+                 go to 180
+               endif
+             endif
+c  Contraction.
+             et = at/aup
+             dlfi = 2.0*(diamv(ky) + 2.*diamv(ly))*fijvv*ajun(i)/aup
+c  Iteration solution for liquid fraction xsol at throat.
+             scrahf = rf*vf**2
+             scrahg = rg*vg**2
+             cvgt = scrahf*vdf**2
+             cvft = scrahg*vdg**2
+             cvfgt = et**2*(scrahf - scrahg)
+             scrabf = dlfi*vdf*vf
+             scrabg = dlfi*vdg*vg
+             cvfg = scrabg - scrabf+et**2*dlfi*(vf - vg)
+             cvgt = cvgt + scrabf
+             cvft = cvft + scrabg
+             xpost = 0.
+             xnegt = 1.0
+             do 144 it = 1,28
+               xsol = (xpost + xnegt)*0.5
+               scrahf = xsol**2
+               scrahg = (1.0 - xsol)**2
+               fxsol = cvgt*scrahg - cvft*scrahf - xsol*(1.0 - xsol)*
+     &         cvfg - cvfgt*scrahg*scrahf
+               if (fxsol) 140,148,136
+  136          xpost = xsol
+               go to 144
+  140          xnegt=xsol
+  144        continue
+             xsol = (xpost + xnegt)*0.5
+  148        cvft = vdf*aup
+             cvgt = vdg*aup
+             xsol = max(vdfm,min(1.0 - vdgm,xsol))
+             xpost = 1.0 - xsol
+             scrahf = xsol*at
+             scrahg = xpost*at
+             if (scrahf .gt. cvft) then
+               scrahf = cvft
+               xsol = scrahf/at
+               xpost = 1.0 - xsol
+               scrahg = xpost*at
+             else if (scrahg .gt. cvgt) then
+               scrahg = cvgt
+               xpost = scrahg/at
+               xsol = 1.0 - xpost
+               scrahf = xsol*at
+             endif
+             aa1 = formls(scrahf/cvft)*scrahf
+             aa2 = formls(scrahg/cvgt)*scrahg
+             s1 = 1.0/aa1
+             s2 = 1.0/aa2
+             factf = vdf*ajun(i)*s1
+             factg = vdg*ajun(i)*s2
+             ac = aa1 + aa2
+             vf = vf*vdf*aup*s1
+             vg = vg*vdg*aup*s2
+             vdf = aa1/ac
+             vdg = 1.0 - vdf
+  180        et = adown/ac
+c  Solution of a cubic equation for liquid fraction.
+             scrahf = vdf*rf*vf**2
+             scrahg = vdg*rg*vg**2
+             scrah = 1.0/(et*(scrahf + scrahg))
+             cvfg = fijvv*ajun(i)*(6.*diamv(ly) + min(diamv(ky),
+     &       diamv(ly))*(adown/at)**2)/ac
+             cvft = cvfg*vdf*vf
+             cvgt = cvfg*vdg*vg
+             cvfg = cvfg*(vf - vg)
+             aa2 = -(scrahf*(et*2. + vdf) + scrahg*(et - vdg) + cvfg)*
+     &       scrah
+             aa1 = (scrahf*(vdf*2. + et) + cvfg + cvft + cvgt)*scrah
+             a0 = -(scrahf*vdf + cvft)*scrah
+             scrah = (aa2**2)*0.11111111111111
+             qcubic = aa1*threei - scrah
+             rcubic = (aa1*aa2-a0*3.0)*0.16666666666667
+     &              - aa2*scrah*threei
+             dcubic = qcubic**3 + rcubic**2
+             if (dcubic.lt. -1.0e-10) go to 204
+             theta = sqrt(max(0.0,dcubic))
+             scrah = rcubic+theta
+             s1 = sign(1.0,scrah)*(abs(scrah))**threei
+             scrah = rcubic - theta
+             s2 = sign(1.0,scrah)*(abs(scrah))**threei
+c  One real root.
+             zsol(1) = s1 + s2 - aa2*threei
+             if (theta .gt. abs(rcubic)*1.e-7) go to 220
+c  Three real solutions, two are identical.
+             xsol = -(s1 + aa2*threei)
+             if (xsol.lt.-0.0001 .or. xsol.gt.1.0001) go to 220
+             irroot = 2
+             zsol(2) = xsol
+             go to 208
+  204        scrah = sqrt(rcubic**2 - dcubic)
+             theta = acos(max(-1.0,min(1.0,rcubic/scrah)))*threei
+             scrah = scrah**threei
+             rcubic = scrah*cos(theta)
+             qcubic = scrah*sin(theta)*1.732050808
+             scrah = aa2*threei
+c  Three real solutions.
+             zsol(1) = rcubic*2.0 - scrah
+             zsol(2) = -(rcubic + scrah + qcubic)
+             zsol(3) = qcubic + rcubic - scrah
+             irroot = 0
+             do 206 it = 1,3
+               if (zsol(it).ge.-0.0001 .and. zsol(it).le.1.0001) then
+                 irroot = irroot + 1
+                 zsol(irroot) = zsol(it)
+               endif
+  206        continue
+             if (irroot - 1) 226,220,208
+  208        xsol = 10.0
+             do 216 it = 1,irroot
+               xpost = abs(zsol(it)-vdf)
+               if (xpost .le. xsol) then
+                 zsol(1) = zsol(it)
+                 xsol = xpost
+               endif
+  216        continue
+  220        xsol = max(vdfm,min(1.0 - vdgm,zsol(1)))
+             xpost = 1.0 - xsol
+             scrahf = xsol*et
+             scrahg = xpost*et
+             if (vdf.le.scrahf .and. vdg.le. scrahg) go to 228
+             if (vdg .gt. scrahg) xpost = vdg/et
+             if (vdf .gt. scrahf) xpost = 1.0 - vdf/et
+             xpost = max(vdgm,min(1.0-vdfm,xpost))
+             xsol = 1.0 - xpost
+             scrahg = xpost*et
+             scrahf = xsol*et
+             go to 228
+  226        scrahf = vdf*et
+             scrahg=vdg*et
+  228        factf = (factf*(1.0 - vdf/scrahf))**2
+             factg = (factg*(1.0 - vdg/scrahg))**2
+             if (xinter .lt. 1.0) then
+               factf = alossl+(factf-alossl)*xinter
+               factg = alossl+(factg-alossl)*xinter
+             endif
+             formfj(i) = factf
+             formgj(i) = factg
+           endif
+         endif
+ 1990    continue
+ 2000  continue
+       return
+       end

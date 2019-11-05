@@ -1,0 +1,1234 @@
+*mlist
+       subroutine jchoke
+c
+c  Evaluates choking conditions and if choked conditions exist, modifies
+c  momentum equation to compute choked conditions.
+c
+c  Cognizant engineer: wlv.
+c
+*in32 iprop
+*in32 lprop
+*in32end
+c
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local Common for Henry-Fauske Model.
+c
+       common /upstrm/ cpgas, cppf0, cppg0, cvao, dcva, gamma,
+     & ploss, pvzero, pzero, rgas, rnc, sgas, sliq, svap, tzero,
+     & vsubf0, vsubg0, xnc, xzero
+c
+c  Local variables for Henry-Fauske model.
+c
+       real cpgas, cppf0, cppg0, cpmix, cvgas, cvmix, cvvap,
+     & delt, dgcdp, dvcdp, expn, gamma, gcrit,
+     & gmom, hgas, hfact, hmix,  pbar, pgas, ploss,
+     & pvzero, pzero, rgas, rnc, sgas,
+     & sliq, svap, treff, tzero, ugas, vcritt, vsubf0,
+     & vsubg0, xnc, xncx0, xzero
+c
+cjmk-1
+c
+c  Local variables.
+       real a01,a02,c11,c12,c21,c22,ahe,aj,arfg,argf,arsm,at,atin,
+     & avk,avolkk,avrff,avrgg,avrho,betaa,betf,betg,betgs,convff,
+     & convfi,convgg,convgi,cpp,cppf,cppg,cvao,cvaq,dcva,delpfi,delpzz,
+     & deltap,det,df1dps,df1dtg,df1dtt,df2dps,df2dtg,difff,difgg,difld,
+     & dpdt,dpfioc,dprcon,dps,dsondp,dtg,dtt,dufdpt,dufdtt,dusdtt,ddx,
+     & f1,
+     & ff2,ficons,fjfg,frcfj,frcgj,frwall,hbarr,hsubf,hsubg,kpa,kpaf,
+     & kpag,kpags,pa,pjun,pll,press,prop(36),psatt,psldd,psmff,psmgg,
+     & qa,qair1,qara,qf,qs,quall,ra,ratios,rdet,rhofg,rhofin,rhoinv,
+     & s(26),scrach,signik,signvc,sonic,sonic1,sonic2,sonica,sonics,
+     & sumff,sumgg,sumld,term,termz,toler,ttt,tg,tmaxl,vbarr,vc,vf,vff,
+     & vg,virmas,vpgenn,vpgnxx,vss,vsubff,vsubgg,ua,ua1,uao,ubarr,uff,
+     & ujun,uss,usubff,usubgg,xe,zip,zipcon,c0,c1,figjj,fifjj,dummy,
+     & xintrp,relax,jcatsc,jcattp,vgtpmn,vgtpmx,vgshmn,vgscmx,voidjc,
+     & xisctp,xitpsh,jcatsf,checkj,checkv,vfsave,vgsave,jcsave,qualty
+       integer i,idg,ik,implt,in,ink,iq,is,isf,iskip,it,ix,
+     & k,kk,kl,kx,kx2,ky,ky2,l,ll,lx,lx2,m,nredo
+       logical err,choke,redo
+c
+c  State properties
+       equivalence          ( prop( 1), ttt   ), ( prop( 2), press ),
+     & ( prop( 3), vbarr ), ( prop( 4), ubarr ), ( prop( 5), hbarr ),
+     & ( prop( 6), betaa ), ( prop( 7), kpa   ), ( prop( 8), cpp   ),
+     & ( prop( 9), quall ), ( prop(10), psatt ), ( prop(11), vsubff),
+     & ( prop(12), vsubgg), ( prop(13), usubff), ( prop(14), usubgg),
+     & ( prop(15), hsubf ), ( prop(16), hsubg ), ( prop(17), betf  ),
+     & ( prop(18), betg  ), ( prop(19), kpaf  ), ( prop(20), kpag  ),
+     & ( prop(21), cppf  ), ( prop(22), cppg  )
+c
+       equivalence (rhofin,rhoinv),(ficons,fjfg),(ahe,aj)
+       equivalence (frwall,vf),(pjun,vg)
+       equivalence (deltap,sonic2,virmas),(zip,vpgenn)
+       equivalence (xe,rhofg),(sonic1,dsondp)
+       equivalence (avolkk,det,rdet,s(11)),(vff,vf,s(12)),
+     & (delpfi,sumff,uff,s(13)),(dpfioc,sumgg,uss,s(14)),
+     & (dprcon,sumld,vss,s(15)),(betgs,vpgnxx,zipcon,s(16)),
+     & (difff,c11,df1dps,s(17)),(difgg,c12,df1dtg,s(18)), (term,scrach),
+     & (difld,c21,df2dps,s(19)),(c22,df2dtg,s(20)),(a01,f1,s(21)),
+     & (a02,ff2,s(22)),(dtg,s(25)),(dps,dtt,s(26)),(qs,s(7)),(qf,s(8))
+c
+       logical jstop,transr
+cjmk-2
+c
+c  Parameter statements for Henry-Fauske model.
+c
+       parameter (pbar=1.0e5)
+       parameter (treff=273.15)
+cjmk-2
+c
+c  Data statements.
+       data iq/0/, toler/0.0025/
+c
+czf
+       prop(:) = 0.0
+czf end
+c  Set flag for standard semi-implicit or 2-step implicit.
+       implt = 0
+       if (iand(print,128) .ne. 0) implt = 1
+       iskip  = 0
+       ix = ixjff
+       is = 1
+c  Junction loop.
+       i = lpdat(issys)%lij
+       do 2000 m = 1,lpdat(issys)%lijn
+         chokef(i) = 0.
+         if (chngno(52)) then
+           jc(i) = iand(jc(i),not(1))
+           go to 1990
+         endif
+         if (iand(jc(i),80) .ne. 0) go to 1990
+         redo = .false.
+ 100     transr = .false.
+         sonicj(i) = 0.0
+         relax = 0.0
+         choke = iand(jc(i),1).ne.0 .and. velgj(i)*velgjo(i).gt.0.0
+         jc(i) = iand(jc(i),not(1))
+         if (iand(jc(i),2).ne.0 .or. velfj(i)*velgj(i).le.0.0)
+     &   go to 1990
+         k = ij1nx(i)
+         kx = iand(ishft(jcex(i),-12),7)
+         kx2 = k + kx
+         kx = k + ishft(kx,-1)
+         l = ij2nx(i)
+         lx = iand(ishft(jcex(i),-9),7)
+         lx2 = l + lx
+         lx = l + ishft(lx,-1)
+c  Define flow direction.
+         if (velfj(i) .ge. 0.0) then
+           kk = k
+           ky = kx
+           ky2 = kx2
+           ll = l
+           ik = 1
+           iq = 8192
+           kl = 0
+           if (p(kk) .le. p(ll)) go to 1990
+           avk = avkx(ix)
+           ddx = dxkx(ix)*avk*0.5
+         else
+           kk = l
+           ky = lx
+           ky2 = lx2
+           ll = k
+           ik = 2
+           iq = 4096
+           kl = 2
+           if (p(ll) .le. p(kk)) go to 1990
+           avk = avlx(ix)
+           ddx = dxlx(ix)*avk*0.5
+         endif
+         signik = 1.0
+         if (iand(jc(i),ik*4) .ne. 0) signik = -signik
+         if (iand(imap(ky),ishft(1,29)) .ne. 0) go to 1990
+c
+c  If current donor volume contains a different fluid from the last one,
+c  call stcset.
+         if (volmat(kk) .ne. nfluid) call stcset (volmat(kk))
+cjmk-3
+c
+c - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+c
+c  Use Henry-Fauske Critical Flow Model ?
+         if (chngno(53)) then
+           signvc = sign(1.0,velfj(i))
+c
+c  Define mixture density & alfa*rho.
+           avrff = voidfj(i)*rhofj(i)
+           avrgg = voidgj(i)*rhogj(i)
+           avrho = avrff + avrgg
+c
+c  Set Stagnation Pressure to Cell-Center Value.
+           pzero = p(kk)
+c
+c  Calculate "Pressure Losses" to Cell-Edge.
+           if (iand(jc(i),iq) .gt. 0) then
+             ploss = 0.0
+           else
+c  Add (or subtract) cell center momentum flux.
+             ploss = 0.5*signvc*(avrff*abs(velf(ky))*velf(ky) +
+     &       avrgg*abs(velg(ky))*velg(ky))
+           endif
+c  Subtract pressure drop due to wall friction.
+           ploss = ploss - signvc*ddx*(fwalf(ky)*velfjo(i) +
+     &     fwalg(ky)*velgjo(i))
+c  Subtract gravitational head for 1/2 cell.
+           ploss = ploss - signik*gravcn*hydzc(ky2)*avrho
+c  Is choking possible?
+           if ((pzero + min(0.0,ploss)) .lt. 1.01*p(ll)) go to 1990
+c
+c  Saturation Properties at Vapor Partial Pressure corresponding to
+c  PZERO.
+           pvzero = pps(kk)
+           prop(2) = max(612.,pvzero)
+           prop(9) = 0.0
+           call sth2x2(fa(ndxstd),prop,err)
+           if (err) then
+c            write (12,"('jchoke01',2i10,es13.5)") ncount,junno(i),
+c    &       prop(2)
+           endif
+           cppf0 = cppf
+           cppg0 = cppg
+           sliq = prop(25)
+           svap = prop(26)
+           vsubf0 = vsubff
+           vsubg0 = vsubgg
+           if (avrho .lt. 1.0e-10) go to 1990
+           hmix = (avrgg*ug(kk) + avrff*uf(kk) + pzero)/avrho
+c  Define Property Info With & Without NC Gas.
+           if (quala(kk) .lt. 1.0e-6) then
+c  Gas Phase is Pure Steam.
+             xnc = 0.0
+             gamma = 1.3
+c  Dummy values for NC property constants.
+             cvao = 715.0
+             dcva = 0.10
+             rnc = 287.
+             cpgas = cppg0
+             rgas = 0.0
+             sgas = svap
+c
+c  Define "stagnation" Quality:
+             xzero = (hmix - hsubf)/(hsubg - hsubf)
+             xzero = max(0.0,min(1.0,xzero))
+           else
+c  Gas Phase is Mixture of Steam and NC Gas.
+c  Set NC gas property constants.
+c
+c  Is this an air appearance step?
+             if (iand(imap(kk),64).ne.0) then
+c  Assume there is only one NC gas and qualan(kk)=1.
+               cvao = cvaox(1)
+               dcva = dcvax(1)
+               uao  = uaox(1)
+               rnc  = rax(1)
+             else
+               cvao = 0.0
+               dcva = 0.0
+               uao = 0.0
+               rnc = 0.0
+               ink = kk
+               do in = 1,lpdat(issys)%lnoncn
+                 cvao = cvao + cvaox(in)*qualan(ink)
+                 dcva = dcva + dcvax(in)*qualan(ink)
+                 uao  = uao  + uaox(in)*qualan(ink)
+                 rnc  = rnc  + rax(in)*qualan(ink)
+                 ink  = ink  + 1
+               enddo
+             endif
+c
+c  NC Gas Properties at Tsat(PVZERO).
+             delt = max(0.0,ttt-250.)
+             ugas = cvao*ttt + 0.5*dcva*delt**2 + uao
+             pgas = max(612.,pzero - pvzero)
+             rgas = pgas/(rnc*ttt)
+             hgas = ugas + pgas/rgas
+             cvgas = cvao + dcva*delt
+             cpgas = cvgas + rnc
+             sgas = cpgas*log(ttt/treff) - rgas*log(pgas/pbar)
+c
+c  Define "stagnation" quality: use isenthalpic process.
+c  - NC Mass Fraction remains constant.
+             xncx0 = quals(kk) * quala(kk)
+c
+c  Compute vapor mass fraction (store in XZERO for now).
+             xzero = (hmix - xncx0*hgas - (1.0 - xncx0)*hsubf)/
+     &       (hsubg - hsubf)
+             xzero = max(0.0,xzero)
+c  Correct Quality by adding NC mass fraction.
+             xzero = xzero + xncx0
+             xzero = min(1.0,xzero)
+c  Backout NC Quality.
+             xnc = xncx0/max(1.0e-6,xzero)
+c  Set Isentropic Expansion Coefficient.
+             cvvap = cppg/1.3
+             cvmix = quala(kk)*cvgas + (1.0 - quala(kk))*cvvap
+             cpmix = quala(kk)*cpgas + (1.0 - quala(kk))*cppg
+             gamma = cpmix / cvmix
+           endif
+c
+c  Set Non-Equilibrium Parameter.
+           hfact = jdistp(i)
+           if (xzero .lt. 1.0e-6) then
+c
+c  ---------------------------------
+c  Subcooled Liquid Critical Flow:
+c  ---------------------------------
+c  Limit TZERO to tsat(PVZERO).
+             tzero = min(tempf(kk),ttt-0.001)
+             call gcsub(gcrit,dgcdp,hfact,err)
+c  If GCSUB did not converge, default values for GCRIT & DGCDP were set
+c  in GCSUB.
+           elseif (xzero .lt. 0.998) then
+c
+c  --------------------------
+c  Two-Phase Critical Flow:
+c  --------------------------
+             call gctpm(gcrit,dgcdp,hfact,err)
+             if (err) then
+c  GCTPM did not converge, use default.
+               gcrit = avrho * sounde(kk)
+               dgcdp = avrho * 0.15/(sounde(kk)*rho(kk))
+             endif
+           else
+c
+c  ---------------------
+c  Single-Phase Vapor:
+c  ---------------------
+             expn = (gamma + 1.0)/(gamma - 1.0)
+             gcrit = sqrt(gamma*rhogj(i)*(pzero + ploss)
+     &       *(2.0/(gamma+1.0))**expn)
+             dgcdp = gcrit/pzero
+           endif
+           sonicj(i) = gcrit/avrho
+c  Apply discharge coefficient.
+           gcrit = jdissc(i)*gcrit
+           dgcdp = jdissc(i)*dgcdp
+c  Use throat area ratio to modify GCRIT.
+           gcrit = gcrit*athrot(i)
+           dgcdp = dgcdp*athrot(i)
+c  Mass Flux from Momentum Solution.
+           gmom = abs(avrgg*velgj(i) + avrff*velfj(i))
+c  Choking Test.
+           if (gmom .gt. gcrit) then
+c  Junction is choked, use single velocity and limit mass flux.
+             choke = .true.
+             jc(i) = ior(jc(i),1)
+             chokef(i) = 1.0
+             vcritt = gcrit/avrho
+             dvcdp = dgcdp/avrho
+             velfj(i) = signvc*vcritt
+             velgj(i) = velfj(i)
+c
+c  Under-Relax Choked Velocity.
+c  Damping factor is larger for liquid velocity.
+c  Decrease so "water hammer" problems avoided.
+             if (velfj(i) .lt. velfjo(i)) then
+               relax = 0.1
+             else
+               relax = 0.3
+             endif
+             velfj(i) = relax*velfj(i) + (1.0 - relax)*velfjo(i)
+             velgj(i) = relax*velgj(i) + (1.0 - relax)*velgjo(i)
+             vfdpk(ix+kl) = signvc*dvcdp
+             vgdpk(ix+kl) = signvc*dvcdp
+             vfdpl(ix-kl) = 0.0
+             vgdpl(ix-kl) = 0.0
+             go to 1990
+           else
+c  Junction is unchoked, use normal momentum solution.
+             choke = .false.
+             go to 1990
+           endif
+c
+         endif
+c
+c - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+cjmk-3
+c
+c  Set-up junction velocities for choke test.
+         arfg = voidfj(i)*rhogj(i)
+         argf = voidgj(i)*rhofj(i)
+         arsm = arfg + argf
+         if (arsm .lt. 1.0e-10) go to 1990
+         vc = (arfg*velfj(i) + argf*velgj(i))/arsm
+         signvc = sign(1.0,vc)
+         vc = abs(vc)
+c  Discharge coefficient.
+c  Define upper and lower bounds of transition region in void.
+         vgscmx = 1.0e-05
+         vgtpmn = 0.10
+         xisctp = (voidgj(i) - vgscmx)/(vgtpmn - vgscmx)
+         xisctp = max(0.0,min( 1.0,xisctp))
+         xisctp = xisctp*xisctp*(3.0 - 2.0*xisctp)
+         at = jdissc(i) + xisctp*(jdistp(i) - jdissc(i))
+         vgtpmx = 0.90
+         vgshmn = 0.99
+         xitpsh = (voidgj(i) - vgtpmx)/(vgshmn - vgtpmx)
+         xitpsh = max(0.0,min(1.0,xitpsh))
+         xitpsh = xitpsh*xitpsh*(3.0 - 2.0*xitpsh)
+         at = at + xitpsh*(jdissh(i) - jdistp(i))
+         at = at*athrot(i)
+c  General values needed in the calculation.
+         avolkk = ajun(i)/avk
+         avrff = voidfj(i)*rhofj(i)
+         avrgg = voidgj(i)*rhogj(i)
+         avrho = avrff+avrgg
+         term = 1.0
+         if (iand(jc(i),iq) .ne. 0) term = 0.0
+         termz = term
+c  Wall frictions.
+         frcfj = ddx*fwalf(ky)/(max(1.0e-5,voidfj(i))*rhofj(i))
+         frcgj = ddx*fwalg(ky)/(max(1.0e-5,voidgj(i))*rhogj(i))
+c  Convective terms.
+         if (redo) then
+           atin = signvc*jcatn(i)/at**2
+           convfi = atin*velfj(i)**2
+           convgi = atin*velgj(i)**2
+         else
+           atin = signvc*jcato(i)/at**2
+           convfi = atin*velfjo(i)**2
+           convgi = atin*velgjo(i)**2
+         endif
+         convff = 0.5*(convfi - term*signvc*velf(ky)**2)
+         convgg = 0.5*(convgi - term*signvc*velg(ky)**2)
+         psmff = frcfj*avrff
+         psmgg = frcgj*avrgg
+c  Gravitational force.
+         delpzz = gravcn*hydzc(ky2)*signik
+         psldd = -(delpzz*avrho + avrff*convff + avrgg*convgg -
+     &   pmpph(ix))
+         if (redo) then
+           pjun = po(kk) + (psldd - psmff*velfj(i) -
+     &     psmgg*velgj(i))*signvc
+         else
+           pjun = po(kk) + (psldd - psmff*velfjo(i) -
+     &     psmgg*velgjo(i))*signvc
+         endif
+         if (choke) then
+c  Unchoking test.
+           scrach = max(pjun,scvjck(ix))
+           pll = po(kk) + scvtur(ix)*(po(ll) - po(kk))
+           if (chngno(42)) then
+             if (pjun.gt.po(kk) .or. scvjck(ix).lt.pll) choke = .false.
+           else
+             if (scrach.lt.pll .or. pjun.gt.po(kk)) choke = .false.
+           endif
+         endif
+c
+         voidjc = min(vgscmx,voidgj(i))
+         quall = voidjc*rhogj(i)
+         quall = quall/(quall + (1.0 - voidjc)*rhofj(i))
+         qualty = quall
+         if (voidgj(i) .gt. vgtpmn) go to 228
+         jcatsc = 1.0
+c  Subcooled choking criterion.
+         ttt =  tempf(kk)
+         rhofin = 2.0/rhof(kk)
+         zip = (po(kk) + pmpph(ix)*signvc)*rhofin +
+     &   termz*velf(ky)**2 - delpzz*signvc*2.0
+         if (.not.choke) then
+c  First test of choking.
+           if (nfluid .eq. 1) then
+             call sth2x0 (ttt,psatt,err)
+           elseif (nfluid .eq. 2) then
+             call std2x0 (ttt,psatt,err)
+           else
+             call strsat (fa(ndxstd),1,ttt,psatt,dummy,err)
+           endif
+           if (err) then
+c            write (12,"('jchoke02',2i10,2es13.5)") ncount,junno(i),
+c    &       ttt,psatt
+             go to 228
+           endif
+           sonic = sqrt(max(0.0,zip - psatt*rhofin))
+           if (quale(kk) .gt .0.0) sonic = max(sonic,sounde(kk))
+           if (vc .lt. 0.5*at*sonic) go to 1990
+         endif
+c  Second test of choking.
+         if (nfluid .eq. 1) then
+           call sth2x1 (fa(ndxstd),prop,err)
+         elseif (nfluid .eq. 2) then
+           call std2x1 (fa(ndxstd),prop,err)
+         else
+           call  strtx (fa(ndxstd),prop,err)
+         endif
+         if (err) then
+c          write (12,"('jchoke03',2i10,es13.5)") ncount,junno(i),
+c    &     prop(1)
+           go to 1990
+         endif
+         frwall = frcfj*at
+         zipcon = zip + frwall**2 - psatt*rhofin
+         aj = ajun(i)*athrot(i)
+         scrach = max(0.0,zipcon)
+         sonic1 = max(0.0,sqrt(scrach) - frwall)
+         if (iand(vctrl(kk),1).ne.0 .or. sonic1.le.0.0) then
+c  Time-dependent donor volume or negative Bernoulli extrapolated
+c   velocity
+           dpdt = (hsubg - hsubf)/(ttt*(vsubgg - vsubff))
+           if (sonic1 .eq. 0.0) sonic1 = vsubff*dpdt
+     &     *sqrt(ttt/(cppf - ttt*
+     &     vsubff*dpdt*(2.0*betf - kpaf*dpdt)))
+           sonic = sonic1
+           delpfi = 0.0
+           go to 219
+         endif
+c  Get saturated liquid properties.
+         press = pjun
+         quall = qualty
+         if (nfluid .eq. 1) then
+           call sth2x2 (fa(ndxstd),prop,err)
+         elseif (nfluid .eq. 2) then
+           call std2x2 (fa(ndxstd),prop,err)
+         else
+          call strpx (fa(ndxstd),prop,err)
+         endif
+         if (err) then
+c          write (12,"('jchoke04',2i10,es13.5)") ncount,junno(i),
+c    &     prop(2)
+           go to 1990
+         endif
+c  Constants for Jones-Alamgir-Lienhard correlation.
+         dpfioc = (2.72958e9*(ttt*1.5448787e-3)**13.76)*sigma(kk)*
+     &   sqrt(sigma(kk))*vsubgg/(max((vsubgg - vsubff),1.e-6))
+         avolkk = min(aj*50.0,avolkk)
+         scrach = avolkk - aj
+         if (iand(jc(i),256) .eq. 0) then
+c  Smooth junction.
+           scrach = 2.0*scrach/(dl(ky)*aj)
+         else
+c  Abrupt junction.
+           scrach = 0.1*scrach/(diamv(ky)*aj)
+         endif
+         dprcon = ((rhof(kk)*max(0.0,scrach))**0.8)*2.078e-8
+         ficons =  (rhof(kk)*(aj/avolkk)**2)*6.9984e-2
+c  Iteration solution for jones-alamgir-lienhard correlation.
+         sonic2 = sqrt(zip + frwall**2) - frwall
+         sonic2 = min(sonic2,sqrt(zipcon + dpfioc*rhofin*4.9) -
+     &   frwall)
+         do it = 1,24
+           sonic = (sonic1 + sonic2)*0.5
+           scrach = sqrt(1.0 + dprcon*sonic**2.4)
+           delpfi = dpfioc*scrach - ficons*sonic**2
+           zip = zipcon
+           if (delpfi.gt.0.0) zip = zip + delpfi*rhofin
+           zip = sqrt(max(zip,0.0))
+           sonica = sonic - max(0.0,zip - frwall)
+           if (sonica  .eq. 0.0) exit
+           if (sonica  .lt. 0.0) then
+             sonic1 = sonic
+           else
+             sonic2 = sonic
+           endif
+           sonic = (sonic1 + sonic2)*0.5
+         enddo
+  219    if (voidgj(i).gt.vgscmx .or. qualaj(i).gt.1.0e-9) go to 226
+         jcatsf = avrho*(quall*vsubgg + (1.0 - quall)*vsubff)
+         sonic2 = 0.0
+         if (ttt .le. tcrit-7.0) then
+c  Get saturated liquid-vapor properties of two-phase mixture.
+           press = pjun
+           quall = qualty
+           ubarr = quall*ugj(i) + (1.0 - quall)*ufj(i)
+           ubarr = ubarr + po(kk)*(quall*rhofj(i) +
+     &     (1.0 - quall)*rhogj(i))/
+     &     (rhogj(i)*rhofj(i)) - press*(quall*vsubgg +
+     &     (1.0 - quall)*vsubff) -
+     &     (delpzz+quall*(convgg - convff) + convff)*signvc
+           if (nfluid .eq. 1) then
+             call sth2x6 (fa(ndxstd),prop,iq,err)
+           elseif (nfluid .eq. 2) then
+             call std2x6 (fa(ndxstd),prop,iq,err)
+           else
+             call strpu1 (fa(ndxstd),prop,iq,err)
+           endif
+           if (err) then
+c            write (12,"('jchoke05',2i10,2es13.5)") ncount,junno(i),
+c    &       prop(2),prop(4)
+             press = pjun
+             quall = qualty
+             if (nfluid .eq. 1) then
+               call sth2x2 (fa(ndxstd),prop,err)
+             elseif (nfluid .eq. 2) then
+               call std2x2 (fa(ndxstd),prop,err)
+             else
+               call strpx (fa(ndxstd),prop,err)
+             endif
+             if (err) then
+c              write (12,"('jchoke06',2i10,es13.5)") ncount,junno(i),
+c    &         prop(2)
+               go to 1990
+             endif
+             dpdt = (hsubg - hsubf)/(ttt*(vsubgg - vsubff))
+             sonic1 = vsubff*dpdt*sqrt(ttt/(cppf - ttt*vsubff*dpdt*
+     &       (2.0*betf - kpaf*dpdt)))
+           elseif (iq.eq.2) then
+             dpdt = (hsubg - hsubf)/(ttt*(vsubgg - vsubff))
+             ahe =  ttt/(quall*(cppg - ttt*vsubgg*dpdt*
+     &       (2.0*betg - kpag*dpdt))
+     &       + (1.0 - quall)*(cppf - ttt*vsubff*dpdt*
+     &       (2.0*betf - kpaf*dpdt)))
+             if (ahe .ge. 0.0) then
+               sonic1 = vsubff*dpdt*sqrt(ahe)
+             else
+               press = pjun
+               quall = qualty
+               if (nfluid .eq. 1) then
+                 call sth2x2 (fa(ndxstd),prop,err)
+               elseif (nfluid .eq. 2) then
+                 call std2x2 (fa(ndxstd),prop,err)
+               else
+                 call strpx (fa(ndxstd),prop,err)
+               endif
+               if (err) then
+c                write (12,"('jchoke07',2i10,es13.5)") ncount,junno(i),
+c    &           prop(2)
+                 go to 1990
+               endif
+               dpdt = (hsubg - hsubf)/(ttt*(vsubgg - vsubff))
+               sonic1 = vsubff*dpdt*sqrt(ttt/(cppf - ttt*vsubff*dpdt*
+     &         (2.0*betf - kpaf*dpdt)))
+             endif
+           elseif (iq.eq.1) then
+             press = pjun
+             quall = qualty
+             if (nfluid .eq. 1) then
+               call sth2x2 (fa(ndxstd),prop,err)
+             elseif (nfluid .eq. 2) then
+               call std2x2 (fa(ndxstd),prop,err)
+             else
+               call strpx (fa(ndxstd),prop,err)
+             endif
+             if (err) then
+c              write (12,"('jchoke08',2i10,es13.5)") ncount,junno(i),
+c    &         prop(2)
+               go to 1990
+             endif
+             dpdt = (hsubg - hsubf)/(ttt*(vsubgg - vsubff))
+             sonic1 = vsubff*dpdt*sqrt(ttt/(cppf - ttt*vsubff*dpdt*
+     &       (2.0*betf - kpaf*dpdt)))
+           elseif (iq.eq.3) then
+             press = pjun
+             quall = qualty
+             if (nfluid .eq. 1) then
+               call sth2x2 (fa(ndxstd),prop,err)
+             elseif (nfluid .eq. 2) then
+               call std2x2 (fa(ndxstd),prop,err)
+             else
+               call strpx (fa(ndxstd),prop,err)
+             endif
+             if (err) then
+c              write (12,"('jchoke09',2i10,es13.5)") ncount,junno(i),
+c    &         prop(2)
+               go to 1990
+             endif
+             dpdt = (hsubg - hsubf)/(ttt*(vsubgg - vsubff))
+             sonic1 = vsubff*dpdt*sqrt(ttt/(cppg - ttt*vsubgg*dpdt*
+     &       (2.0*betg - kpag*dpdt)))
+           endif
+c  Set sonic velocity to maximum of equilibrium sound speed
+c  and velocity needed to obtain required pressure drop.
+           if (sonic .lt. sonic1/jcatsf) then
+             jcatsc = jcatsf
+             sonic = sonic1
+           else
+             if (delpfi .gt. 0.0) sonic2 = dpfioc*1.2*dprcon*
+     &       sonic**1.4/scrach - 2.0*ficons*sonic
+           endif
+         endif
+         dsondp = at/(sonic*rhof(kk) - sonic2)
+         xej(i) = 0.
+         sonicj(i) = sonic/jcatsc
+         jcatn(i) = jcato(i) + 0.1*(jcatsc - jcato(i))
+         sonic = sonic/jcatsc
+         dsondp = dsondp/jcatsc
+         sonic = at*sonic
+$if def,dbgprnt
+         if (help.ne.0 .and. iand(ihlppr(1),ishft(1,16)).ne.0) then
+           if( iand(jcex(i),ishft(1,20)).ne.0 ) then
+             if (iskip .eq. 0) then
+               iskip = 1
+               call helphd ('jchoke',7)
+             endif
+             write (output,1909) junno(i),ncount,timehy
+ 1909  format ('0From jchoke ',2i10,es13.5)
+             write (output,1910) voidgj(i),signvc
+ 1910  format (' Junction void fraction',2x,es13.5,' flow direction',
+     & 3x,es13.5)
+             write (output,1908) psmff,psmgg,psldd,pjun,choke,press,
+     &       psatt,po(kk),po(ll)
+ 1908  format ('   psmff',9x,'psmgg',9x,'psldd',9x,'pjun',9x,'choke',
+     & 8x,'press',8x,'psatt',8x,'po-up',8x,'po-dn'/' ',
+     & 4es13.5,l13,4es13.5)
+             write (output,1911) sounde(kk),sonic,dsondp,quale(kk),
+     &       quals(kk),velfj(i),velgj(i),vc
+ 1911  format ('   sounde-up',4x,'sonic',8x,'dsondp',7x,'quale-up',
+     & 5x,'qualso-up'   ,4x,'velfj(i)',5x,'velgj(i)',5x,'vc'/8es13.5)
+           endif
+         endif
+$endif
+c
+         if (choke .or. vc.ge.sonic) go to 820
+         go to 1990
+  226    transr = .true.
+         sonics = sonic
+         go to 232
+c
+c  Two-phase sonic velocity check.
+  228    if (.not.choke) then
+           if (vc .lt. 0.5*at*sounde(kk)) go to 1990
+         endif
+  232    press = pjun
+         if (redo) then
+           deltap = po(kk) - press*jcatn(i)
+         else
+           deltap = po(kk) - press*jcato(i)
+         endif
+         voidjc = max(voidgj(i),vgtpmn)
+         scrach = voidjc*rhogj(i)
+         zip = scrach/(scrach+(1.0 - voidjc)*rhofj(i))
+         ubarr = zip*ugj(i) + (1.0 - zip)*ufj(i)
+         ubarr = ubarr + deltap*(zip*rhofj(i) + (1.0 - zip)*rhogj(i))/
+     &   (rhogj(i)*rhofj(i)) - (delpzz+zip*(convgg - convff)+convff)*
+     &   signvc
+         ratios = 1.0
+         if (choke) then
+           if (redo) then
+             ratios = sqrt(1.0 + max(zip*(velgj(i)/velfj(i) - 1.0),0.0))
+           else
+             ratios = sqrt(1.0 + max(zip*(velgjo(i)/velfjo(i) - 1.0),
+     &       0.0))
+           endif
+         endif
+         jcattp = 1.0
+         if (qualaj(i).lt.1.0e-6) go to 236
+c  Junction equilibrium sound speed calculation when air is present.
+c  See subroutine state for details.
+c
+c  Is this an air appearance step?
+         if (iand(imap(kk),64).ne.0) then
+c  Assume there is only one NC gas and qualan(kk)=1
+           cvao = cvaox(1)
+           dcva = dcvax(1)
+           uao  = uaox(1)
+           ra   = rax(1)
+         else
+           cvao = 0.0
+           dcva = 0.0
+           uao = 0.0
+           ra  = 0.0
+           ink = kk
+           do in = 1,lpdat(issys)%lnoncn
+             cvao = cvao + cvaox(in)*qualan(ink)
+             dcva = dcva + dcvax(in)*qualan(ink)
+             uao  = uao  + uaox(in)*qualan(ink)
+             ra   = ra   + rax(in)*qualan(ink)
+             ink  = ink  + 1
+           enddo
+         endif
+c
+         ujun = ubarr
+         qa = qualaj(i)*zip
+         if (qa .lt. 1.0e-5) go to 236
+         qair1 = 1.0 - qa
+         qara = qa*ra
+         if (qa. ge. 0.998) then
+c  Pure air.
+           ua1 = ujun - cvao*tao - uao
+           if (ua1 .le. 0.0) then
+             tg = (ujun - uao)/cvao
+           else
+             tg = tao + (sqrt(cvao**2 + 2.0*ua1*dcva) - cvao)/dcva
+           endif
+           vbarr = ra*tg/pjun
+c  Specific heat of air.
+           cvaq = cvao+dcva*max(tg - tao,0.0)
+c  Sonic velocity.
+           sonic = sqrt(vbarr*pjun*(cvaq + ra)/cvaq)
+           jcattp = rhogj(i)*vbarr
+           go to 251
+         endif
+c  Calculation of equilibrium state.
+c  Find saturation temperature of pjun to set up the upper limit.
+         if (nfluid .eq. 1) then
+           call psatpd (tmaxl,pjun,dpdt,2,err)
+         elseif (nfluid .eq. 2) then
+           call pstpd2 (tmaxl,pjun,dpdt,2,err)
+         else
+           call strsat(fa(ndxstd),2,pjun,tmaxl,dpdt,err)
+         endif
+         if (err) then
+           tmaxl = tcrit
+c          write (12,"('jchoke00',2i10,2es13.5)") ncount,junno(i),
+c    &     tmaxl,pjun
+         endif
+         tmaxl = tmaxl*0.9999
+c  Initialize equilibrium temperature, ttt -- te.
+         ttt = min(satt(kk),tmaxl)
+         jstop = .false.
+         do it = 1,16
+c  Get saturation vapor properties.
+           if (nfluid .eq. 1) then
+             call sth2x1 (fa(ndxstd),prop,err)
+           elseif (nfluid .eq. 2) then
+             call std2x1 (fa(ndxstd),prop,err)
+           else
+             call strtx (fa(ndxstd),prop,err)
+           endif
+           if (err) then
+c            write (12,"('jchoke10',2i10,es13.5)") ncount,junno(i),
+c    &       prop(1)
+             go to 252
+           endif
+           dpdt = (hsubg - hsubf)/(ttt*(vsubgg - vsubff))
+           dusdtt = cppg - vsubgg*(betg*press - (press*kpag -
+     &     ttt*betg)*dpdt)
+           uss = usubgg
+           vss = vsubgg
+           kpags = kpag
+           betgs = betg
+           pa = pjun-press
+c  Call steam tables interpolation routine to get liquid properties from
+c  temperature and pressure.
+c  Note-liquid is subcooled.
+           press = pjun
+           if (nfluid .eq. 1) then
+             call sth2x3 (fa(ndxstd),prop,iq,err)
+           elseif (nfluid .eq. 2) then
+             call std2x3 (fa(ndxstd),prop,iq,err)
+           else
+             call  strtp (fa(ndxstd),prop,iq,err)
+           endif
+           if (err .or. iq.ne.1) then
+c            write (12,"('jchoke11',2i10,2es13.5)") ncount,junno(i),
+c    &       prop(1),prop(2)
+             go to 252
+           endif
+           dufdtt = cpp - betaa*pjun*vbarr
+c  Internal energy and specific heat*quala of air.
+           term = max(ttt - tao,0.0)
+           ua = cvao*ttt + 0.5*dcva*term**2+uao
+           cvaq = (cvao + dcva*term)*qa
+c  Values needed for newton iteration.
+           term = vss*(ujun - qa*ua - qair1*ubarr)
+           f1 = pa*term - qara*(uss - ubarr)*ttt
+           df1dtt = term*(pa*(betgs - kpags*dpdt) - dpdt)- pa*vss*
+     &     (cvaq + qair1*dufdtt) - qara*((uss - ubarr) + ttt*
+     &     (dusdtt - dufdtt))
+           if (jstop) go to 262
+           dtt = f1/df1dtt
+           ttt = max(min(ttt - dtt,tmaxl),ttrip)
+           if (abs(dtt) .lt. toler*ttt) jstop = .true.
+         enddo
+c  No solution after 15 iterations.
+         go to 252
+c  End of iteration.
+  262    vff = vbarr
+         dufdpt = vff*(pjun*kpa - ttt*betaa)
+c  Calculation of equilibrium quality,xe.
+         xe = (ujun - ubarr - qa*(ua - uss))/(uss - ubarr)
+         if(xe .lt. qa) go to 252
+         if (xe .gt. 1.005) go to 263
+c  Calculation of equilibrium sound speed.
+         qs = xe - qa
+         qf = 1.0 - xe
+         term = vss*(betgs - kpags*dpdt)
+c  Set up the equation: a* (ddx/dp)s,(dt/dp)s =a0.
+         c11 = uss-ubarr + pjun*(vss - vff)
+         c12 = qf*(dufdtt + pjun*betaa*vff) + cvaq + qs*(dusdtt +
+     &   pjun*term)
+         c21 = pa*vss
+         c22 = qs*(pa*term - dpdt*vss) - qara
+         a01 = -qf*(dufdpt - kpa*vff*pjun)
+         a02 = -qs*vss
+c  Solution for (ddx/dp)s --dtt/det, (dt/dp)s -- dtg/det.
+c  det = c11*c22-c12*c21
+         dtt = a01*c22 - a02*c12
+         dtg = a02*c11 - a01*c21
+         vbarr = qf*vff + qs*vss
+         jcattp = avrho*vbarr*ratios
+c  ahe=-(dv/dp)s
+         ahe = kpa*vff*qf - ((qf*vff*betaa + qs*term)*dtg +
+     &   (vss - vff)*dtt)/(c11*c22 - c12*c21)
+         if (ahe .le. 0.0) go to 252
+         sonic = vbarr/sqrt(ahe)
+         go to 251
+c  Single phase vapor.
+c  Initialize press and tg.
+  263    tg = ttt
+         press = pjun - pa
+c  Newton iteration to find press,tg.
+         jstop = .false.
+         do it = 1,16
+c  Find psatt of tg.
+           if (nfluid .eq. 1) then
+             call sth2x0 (tg,psatt,err)
+           else  if (nfluid .eq. 2 ) then
+             call std2x0 (tg,psatt,err)
+           else
+             call  strsat (fa(ndxstd),1,tg,psatt,dummy,err)
+           endif
+           if (.not.err) then
+c            write (12,"('jchoke12',2i10,2es13.5)") ncount,junno(i),
+c    &       tg,psatt
+             if (press .ge. psatt) go to 268
+           endif
+c  Superheated vapor.
+           ttt = tg
+           if (nfluid .eq. 1) then
+             call sth2x3 (fa(ndxstd),prop,iq,err)
+           elseif (nfluid .eq. 2) then
+             call std2x3 (fa(ndxstd),prop,iq,err)
+           else
+             call strtp (fa(ndxstd),prop,iq,err)
+           endif
+           if (err) then
+c            write (12,"('jchoke13',2i10,2es13.5)") ncount,junno(i),
+c    &       prop(1),prop(2)
+             go to 252
+           endif
+           if (iq .eq. 3) then
+             usubgg = ubarr
+             vsubgg = vbarr
+             cppg = cpp
+             kpag = kpa
+             betg = betaa
+             go to 270
+           endif
+c  Subcooled steam.
+c  Extrapolation of vapor properties.
+  268      if (nfluid .eq. 1) then
+             call sth2x2 (fa(ndxstd),prop,err)
+           elseif (nfluid .eq. 2) then
+             call std2x2 (fa(ndxstd),prop,err)
+           else
+             call strpx (fa(ndxstd),prop,err)
+           endif
+           if (err) then
+c            write (12,"('jchoke14',2i10,es13.5)") ncount,junno(i),
+c    &       prop(2)
+             go to 252
+           endif
+           term = vsubgg
+           vsubgg = term*(1.0 + betg*(tg - ttt))
+           if (vsubgg .le. 0.0) go to 252
+           usubgg = usubgg + (cppg - term*betg*press)*(tg - ttt)
+           betg = betg*term/vsubgg
+c  Internal energy and specific heat*quala of ideal gas.
+  270      term = max(tg - tao,0.0)
+           ua1 = cvao*tg + 0.5*dcva*term**2+uao
+           cvaq = (cvao + dcva*term)*qa
+c  Iteration parameters.
+           pa = pjun - press
+           f1 = pa *qair1*vsubgg - qara*tg
+           ff2 = ujun - qa*ua1 - qair1*usubgg
+           df1dps = -qair1*vsubgg*(1.0 +pa*kpag)
+           df1dtg = pa*qair1*vsubgg*betg - qara
+           df2dps = -qair1*vsubgg*(press*kpag - tg*betg)
+           df2dtg = -cvaq - qair1*(cppg - press*vsubgg*betg)
+           rdet = 1.0/(df1dps*df2dtg - df2dps*df1dtg)
+           if (jstop) go to 286
+           dps = rdet*(df2dtg*f1 - df1dtg*ff2)
+           dtg = rdet*(df1dps*ff2 - df2dps*f1)
+           press = max(min(press - dps,pjun),pmin)
+           tg =   min(max(tg - dtg,ttrip),tcrit)
+           if (max(abs(dps/press),abs(dtg/tg)) .lt. toler)
+     &     jstop=.true.
+         enddo
+c  No solution after 15 iterations.
+         go to 252
+  286    vbarr = qair1*vsubgg
+         jcattp = rhogj(i)*vbarr
+c  Calculation of single phase sound speed.
+c  Set up the equation: a* (dps/dp)s,(dtg/dp)s =a0.
+c  Note -- c11 and c12 are defined through equivalence to.
+c    df1dps and df1dtg
+c  a01 = -vbarr
+         c21 = -vbarr*(tg*betg + pa*kpag)
+         c22 = cvaq + qair1*cppg + pa*vbarr*betg
+c  a02 = 0.0
+c  Solution for (dps/dp)s -- dps/det, (dtg/dp)s -- dtg/det.
+c*    det = c11*c22-c12*c21
+c*    dps = a01*c22
+c*    dtg = -a01*c21
+c
+c  ahe = a01/-(dv/dp)s
+         ahe = (c12*c21 - c11*c22)/(betg*c21 + kpag*c22)
+         if (ahe.le.0.0) go to 252
+         sonic = sqrt(ahe)
+         go to 251
+c
+  236    if (nfluid .eq. 1) then
+           call sth2x6 (fa(ndxstd),prop,iq,err)
+         elseif (nfluid .eq. 2) then
+           call std2x6 (fa(ndxstd),prop,iq,err)
+         else
+           call strpu1 (fa(ndxstd),prop,iq,err)
+         endif
+         if (err .or. iq.eq.4) then
+c          write (12,"('jchoke15',2i10,2es13.5)") ncount,junno(i),
+c    &     prop(2),prop(4)
+           go to 252
+         endif
+         if (iq - 2) 244,248,240
+  240    dpdt = cpp/(ttt*vbarr*betaa)
+         ahe = dpdt/(vbarr*(kpa*dpdt - betaa))
+         jcattp = rhogj(i)*vbarr
+         if (ahe .lt. 0.0) go to 252
+         sonic = vbarr*sqrt(ahe)
+         go to 251
+  244    if (nfluid .eq. 1) then
+           call sth2x1 (fa(ndxstd),prop,err)
+         elseif (nfluid .eq. 2) then
+           call std2x1 (fa(ndxstd),prop,err)
+         else
+           call strtx (fa(ndxstd),prop,err)
+         endif
+         if (err) then
+c          write (12,"('jchoke16',2i10,es13.5)") ncount,junno(i),
+c    &     prop(1)
+           go to 252
+         endif
+  248    dpdt = (hsubg - hsubf)/(ttt*(vsubgg - vsubff))
+         ahe = ttt/(quall*(cppg - ttt*vsubgg*dpdt*(2.0*betg -
+     &   kpag*dpdt)) + (1.0 - quall)*(cppf - ttt*vsubff*dpdt*(2.0*betf -
+     &   kpaf*dpdt)))
+         jcattp = avrho*vbarr*ratios
+         if (ahe .ge. 0.0) then
+           sonic = (quall*vsubgg + (1.0 - quall)*vsubff)*dpdt*sqrt(ahe)
+           if (iq .eq. 1) sounde(kk) = sonic
+           go to 251
+         endif
+c
+  252    sonic = sounde(kk)
+         if (transr) go to 258
+         go to 257
+c
+  251    if (.not.transr) go to 257
+  258    xintrp = xisctp
+         sonic = sonics/jcatsc + xintrp*(sonic/jcattp - sonics/
+     &   jcatsc)
+         dsondp = xintrp*0.15/(sounde(kk)*rho(kk)*jcattp) +
+     &   (1.0 - xintrp)/(sonics*rhof(kk)*jcatsc)
+         jcatn(i) = jcatsc + xintrp*(jcattp - jcatsc)
+         if (.not.redo) then
+           jcatn(i) = jcato(i) + 0.1*(jcatn(i) - jcato(i))
+         endif
+         go to 256
+c
+  257    if (redo) then
+           jcatn(i) = jcatn(i) + 0.1*(jcattp - jcatn(i))
+         else
+           jcatn(i) = jcato(i) + 0.1*(jcattp - jcato(i))
+         endif
+c  In the two-phase region relax jcat.
+c  ramp the old time weighting factor to ninety percent at a void
+c  fraction fifty percent greater than the upper bound of the
+c  transition region between the subcooled and two-phase regions.
+         xitpsh = (voidgj(i) - vgtpmn)/(0.5*vgtpmn)
+         xitpsh = max(0.0,min(1.0,xitpsh))
+         xitpsh = xitpsh*xitpsh*(3.0 - 2.0*xitpsh)
+         relax = 0.9*xitpsh
+         if (redo) then
+           jcattp = jcattp + relax*(jcatn(i) - jcattp)
+         else
+           jcattp = jcattp + relax*(jcato(i) - jcattp)
+         endif
+         dsondp = 0.15/(sounde(kk)*rho(kk)*jcattp)
+         sonic = sonic/jcattp
+c  In the transition region relax sonic
+c  Ramp the old time weighting factor to ten percent at a void fraction
+c  fifty percent greater than the upper bound of the
+c  transition region between the subcooled and two-phase regions.
+  256    xisctp = (voidgj(i) - vgtpmn)/(0.5*vgtpmn)
+         xisctp = max(0.0,min(1.0,xisctp))
+         xisctp = xisctp*xisctp*(3.0 - 2.0*xisctp)
+         relax = 0.8*(1.e0 - xisctp) + 0.10
+         if (soncjo(i).ne.0.0e0) sonic = sonic + relax*(soncjo(i) -
+     &   sonic)
+         sonicj(i) = sonic
+         xej(i) = quall
+         sonic = at*sonic
+         dsondp = at*dsondp
+c
+$if def,dbgprnt
+         if (help.ne.0 .and. iand(ihlppr(1),ishft(1,16)).ne.0) then
+           if (iand(jcex(i),ishft(1,20)).ne.0) then
+             if (iskip .eq. 0) then
+               iskip = 1
+               call helphd ('jchoke',7)
+             endif
+             write (output,1909) junno(i),ncount,timehy
+             write (output,1910) voidgj(i),signvc
+             write (output,1908) psmff,psmgg,psldd,pjun,choke,press,
+     &       psatt,po(kk),po(ll)
+             write (output,1912) iq,sounde(kk),sonic,quale(kk),
+     &       quals(kk),velfj(i),velgj(i),vc
+ 1912  format ('    iq',2x,'sounde-up',4x,'sonic',8x,'quale-up',5x,
+     & 'qualso-up',4x,'velfj(i)',5x,'velgj(i)',5x,'vc'/i6,7es13.5)
+           endif
+         endif
+$endif
+  953    if (.not.choke .and. vc.lt.sonic) go to 1990
+c  Use regular momentum solution in the single phase limit unless the
+c  donor volume is a time dependent volume.
+  820    if (iand(vctrl(kk),1) .ne. 0) then
+           difff = 1.0
+           difgg = -difff
+           difld = 0.0
+           go to 839
+         endif
+c
+c  By eliminating pressure from two momentum equations,
+c  a velocity equation of the form
+c  difff*(liquid vel.)+difgg*(vapor vel.)=difld
+c  is obtained.
+         vpgenn = vapgno(kk)*ddx
+         if (vpgenn .ge. 0.0) then
+           vpgnxx = -vpgenn/max(1.0e-15,voidg(kk))
+         else
+           vpgnxx = vpgenn/max(1.0e-15,voidf(kk))
+         endif
+         term = atin*(1.0 + jcatn(i)/jcato(i))*0.5
+         f1 = term*velfjo(i)
+         ff2 = term*velgjo(i)
+         virmas = faaj(i)*avrho
+         sumgg = (rhog(kk) + virmas)*ddx
+         sumff = (rhof(kk) + virmas)*ddx
+c  Incorporate fij(i), fxj(i) and c0j(i) into interphase
+c  friction terms of momentum difference equation.
+c  (figjj and fifjj now replace fjfg).
+         c0 = c0j(i)
+         c0 = min(1.33,max(1.0,c0))
+         if (voidg(kk) .gt. 0.0) c0 = min(c0,1.0/voidg(kk))
+         if (voidg(kk) .lt. 0.99999) then
+           c1 = (1.0 - c0*voidg(kk))/(1.0 - voidg(kk))
+         else
+           c1 = ((voidg(kk) - 0.99999)+(1.0 - voidg(kk))*(1.0 -
+     &     0.99999*c0)*1.0e5)*1.0e5
+         endif
+         figjj = (dl(ky)*(fij(i)*(abs(c1*velgjo(i) - c0*velfjo(i))*
+     &   c1 + 0.01))*0.5 + fidxup(ix))/max(1.0e-20,voidgj(i)*
+     &   voidfj(i))
+         fifjj = (dl(ky)*(fij(i)*(abs(c1*velgjo(i) - c0*velfjo(i))*
+     &   c0 + 0.01))*0.5 + fidxup(ix))/max(1.0e-20,voidgj(i)*
+     &   voidfj(i))
+         frcgj = frcgj*(1.0 - fxj(i))
+         frcfj = frcfj*(1.0 - fxj(i))
+c  Incorporate interphase friction terms fifjj and figjj into difff and
+c  difgg.
+         difgg = sumgg + (rhog(kk)*(frcgj + ff2) + figjj - vpgnxx)*dt
+         difff = -sumff - (rhof(kk)*(frcfj + f1) + fifjj - vpgnxx)*dt
+         difld = sumgg*velgjo(i) - sumff*velfjo(i) - ((rhog(kk) -
+     &   rhof(kk))*delpzz + rhog(kk)*(convgg - convgi) - rhof(kk)*
+     &   (convff - convfi))*dt
+c  Velocity solution.
+  839    sumld = arsm*sonic*signvc
+         det = 1.0/(difff*argf - difgg*arfg)
+         vf = (difld*argf - difgg*sumld)*det
+         vg = (difff*sumld - difld*arfg)*det
+         if (err) relax = 0.9
+         if (vg*vf .le. 0.0) then
+           det = 1.0/(argf + arfg)
+           vf = sumld*det
+           vg = vf
+           difff = 1.0
+           difgg = -difff
+           difld = 0.0
+         endif
+         if (implt .eq. 0) then
+           velfj(i) = vf
+           velgj(i) = vg
+           scrach = dsondp*arsm*det
+           vfdpk(ix+kl) = -difgg*scrach
+           vgdpk(ix+kl) = difff*scrach
+           vfdpl(ix-kl) = 0.0
+           vgdpl(ix-kl) = 0.0
+         else
+           isf = jcnxd(i)
+           idg = jcnxd(i+1)
+           coefp(isf) = arfg
+           coefp(isf+1) = argf
+           sourcp(is) = sumld
+           coefp(idg-1) = difff
+           coefp(idg) = difgg
+           sourcp(is+1) = difld
+           sourcp(is) = relax*(arfg*velfjo(i) + argf*velgjo(i)) +
+     &     (1.0 - relax)*sumld
+           sourcp(is+1) = relax*(difff*velfjo(i) + difgg*velgjo(i)) +
+     &     (1.0 - relax)*difld
+           sumdpk(ix+kl) = dsondp*arsm
+           difdpk(ix+kl) = 0.0
+           sumdpl(ix-kl) = 0.0
+           difdpl(ix-kl) = 0.0
+         endif
+         jc(i) = ior(jc(i),1)
+         if (help.ne.0 .and. iand(ihlppr(1),ishft(1,16)).ne.0) then
+           if (iand(jcex(i),ishft(1,20)).ne.0) then
+             write (output,1914) junno(i),ncount,timehy,
+     &       velfjo(i),velfj(i),velgjo(i),velgj(i)
+ 1914  format (' Final vel',2i10,5es13.5)
+           endif
+         endif
+c  Do calculations again if velocity or density ratio have changed too
+c  much.
+         if (chngno(43)) then
+           if (redo) then
+             checkj = abs((jcatn(i) - jcsave)/jcatn(i))
+             checkv = voidfj(i)*abs((velfj(i) - vfsave)/velfj(i))
+     &       + voidgj(i)*abs((velgj(i) - vgsave)/velgj(i))
+           else
+             checkj = abs((jcatn(i) - jcato(i))/jcatn(i))
+             checkv = voidfj(i)*abs((velfj(i) - velfjo(i))/velfj(i))
+     &       + voidgj(i)*abs((velgj(i) - velgjo(i))/velgj(i))
+           endif
+           if (checkj.gt.0.01 .or. checkv.gt.0.01) then
+             vfsave = velfj(i)
+             vgsave = velgj(i)
+             jcsave = jcatn(i)
+             if (redo) then
+               nredo = nredo - 1
+               if (nredo.gt.0) go to 100
+             else
+               redo = .true.
+               nredo = 10
+               go to 100
+             endif
+           endif
+         endif
+c Set flag to indicate choked flow.
+         chokef(i) = 1.
+c  Under-relaxation treatment for choking.
+         if (implt .eq. 0) then
+           velfj(i) = velfjo(i) + (1.0 - relax)*(velfj(i) -
+     &     velfjo(i))
+           velgj(i) = velgjo(i) + (1.0 - relax)*(velgj(i) -
+     &     velgjo(i))
+c
+           if (help.ne.0 .and. iand(ihlppr(1),ishft(1,16)).ne.0) then
+             if (iand(jcex(i),ishft(1,20)).ne.0) then
+               write (output,"(' Under relax vel',2i10,4es13.5)")
+     &         junno(i),ncount,timehy,relax,velfj(i),velgj(i)
+             endif
+           endif
+         endif
+ 1990    ix = ix + scskp
+         is = is + 2
+         i = i + ijskp
+ 2000  continue
+       return
+       end

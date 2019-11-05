@@ -1,0 +1,181 @@
+*mlist
+*if def,selap
+      subroutine icylin
+c
+c  Perform all variable initilization for the control rod component
+*in32 idat 
+*in32 nhydv
+*in32 igeom
+*in32end
+       implicit none
+       include 'cmatp.h'
+       include 'scddat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'debout.h'
+       include 'ndxara.h'
+       include 'scdout.h'
+       include 'scdcom.h'
+       include 'tblsp.h'
+       include 'ufiles.h'
+       include 'trnot2.h'
+       include 'cons.h'
+       include 'fpnonv.h'
+       include 'conele.h'
+       include 'miscon.h'
+       include 'scntl.h'
+      integer knt,knt2,unt,i,k
+      real sum1,sum2,sum3,sum4,mconv,vconv
+      character vunit(2)*3,munit(2)*2
+      real snmass,agmass
+      external rnodes
+      data munit/ 'kg','lb' /
+      data vunit / 'm3 ' , 'ft3' /
+c calculate total rod length
+      rl(icomp) = 0.0
+      do 10 knt=1,naz
+   10 rl(icomp)=rl(icomp)+dzcnd2(knt,icomp)
+c
+c variable initialization
+      if(unito)then
+        unt=1
+      else
+        unt=2
+      endif
+      vfvodi2(1,icomp) = 0.0
+      vfueli(icomp) = 0.0
+c  Recalculate the values for fpstt
+        snmass=fpstt(icomp,1,1)
+        agmass=fpstt(icomp,1,2)
+        fpstt(icomp,1,1)=0.0
+c fpstt(icomp,naz,1)=snmass, fpstt(,,2)=agmass, fpstt(,,3)=cdmass
+        do 110 knt=1,naz
+         fpstt(icomp,knt,1)=snmass*dzcnd2(knt,icomp)/rl(icomp)
+         fpstt(icomp,knt,2)=agmass*dzcnd2(knt,icomp)/rl(icomp)
+  110    fpstt(icomp,knt,3)=agmass/16.*dzcnd2(knt,icomp)/rl(icomp)
+c Assume material layout is constant along length of rod
+      do 20 knt=2,naz
+        nmater2( knt,icomp ) = nmater2( 1,icomp )
+        do 20 knt2=1,nmater2( 1,icomp )
+   20     imatr3( knt2,knt,icomp ) = imatr3( knt2,1,icomp )
+c Loop through all Axial nodes
+      do 100 knt=1,naz
+        qclad(knt)=0.0
+        qout2(knt,icomp,1) = 0.0
+c
+c set initial t effective and outer & inner cladding radii
+      teff2(knt,icomp)  = rci2(knt,icomp) - rpel2(knt,icomp)
+      rissi(icomp)    = riss2(knt,icomp)
+      rossi(icomp)    = rpel2(knt,icomp)
+      rcos(icomp)     = rco2(knt,icomp)
+      rcoi2(knt,icomp)  = rcos(icomp)
+      rcii(icomp)     = rci2(knt,icomp)
+c
+c Curently for a control rod number and material layers are fixed
+       nmater2( knt,icomp ) = 4
+       imatr3( 1,knt,icomp ) = 20
+       imatr3( 2,knt,icomp ) = 18
+       imatr3( 3,knt,icomp ) = 9
+       imatr3( 4,knt,icomp ) = 1
+c
+c set material layer radii
+      radmt3( 1,knt,icomp ) = 0.0
+      radmt3( 2,knt,icomp ) = riss2( knt,icomp )
+      radmt3( 3,knt,icomp ) = rpel2( knt,icomp )
+      radmt3( 4,knt,icomp ) = rci2( knt,icomp )
+      radmt3( 5,knt,icomp ) = rco2( knt,icomp )
+c set an initial surface temperature for timestep control
+      tsur2(knt,icomp)=tcond3(nrods2(knt,icomp),knt,icomp)
+c set initial number of radial elements
+      numelm2(knt,icomp)=nrods2(knt,icomp)-1
+c rod volume, void volume, and masses
+      vfvod2(knt,icomp)=(rci2(knt,icomp)**2-rpel2(knt,icomp)**2)*pi*
+     # dzcnd2(knt,icomp)
+      vfvodi2(1,icomp) = vfvodi2(1,icomp) + vfvod2(knt,icomp)
+      afuel2(knt,icomp) = pi * rco2(knt,icomp) ** 2
+      vfuel2(knt,icomp)  = afuel2 (knt,icomp) * dzcnd2(knt,icomp)
+      vfueli(icomp) = vfueli(icomp) + vfuel2(knt,icomp)
+      if (crm(icomp) .eq. 0) then      
+          wabbng(knt,icomp)=riss2(knt,icomp) ** 2 * pi * absden(1)
+     +                * dzcnd2(knt,icomp)
+      elseif (crm(icomp) .eq. 1) then
+c   70% of theoritical weight in Phebus FPT-3
+c   defalut 100% of theoritical weight        
+          wabbng(knt,icomp)=riss2(knt,icomp) ** 2 * pi * absden(2)
+     +                * dzcnd2(knt,icomp)
+      else
+        write (output,"('0******** icylin: crm =',i9,' is not valid. Thi
+     &s should not happen.')") crm(icomp)
+        fail = .true.
+      endif
+      wsrbng2(knt,icomp) = ( rpel2(knt,icomp) ** 2 -
+     #      riss2(knt,icomp) ** 2 ) * pi * ssden  * dzcnd2(knt,icomp)
+      wzrbng2(knt,icomp) =(rco2(knt,icomp)**2-rci2(knt,icomp) ** 2 )
+     +           * pi * zrden  * dzcnd2( knt,icomp )
+      wzobng2(knt,icomp) = 0.0
+  100 continue
+      vfvodi2(1,  icomp) = vfvodi2(1,icomp)/rl(icomp)
+      write(output,4030)vunit(unt),munit(unt),munit(unt),munit(unt)
+ 4030 format(6x,8hAbsorber,3x,8hAbsorber,3x,5hSteel,6x,2hZr/
+     #       6x,6hVolume  ,5x,4hMass    ,7x,4hMass,7x, 4hMass/
+     # 1x,4hNode,3x,a3,4h/rod,4x,a3,4h/rod,4x,a2,4h/rod,4x,
+     # a2,4h/rod)
+      sum1=0.
+      sum2=0.
+      sum3=0.
+      sum4=0.
+      if(unito)then
+        vconv=1.
+        mconv=1.
+      else
+        vconv=0.3048*0.3048*0.3048
+        mconv=0.45359237
+      endif
+      do 610 knt=1,naz
+        write(output,4040)knt,
+     #                    riss2(knt,icomp)**2*pi/vconv,
+     #                    wabbng(knt,icomp)/mconv,
+     #                    wsrbng2(knt,icomp)/mconv,
+     #                    wzrbng2(knt,icomp)/mconv
+      sum1=sum1+riss2(knt,icomp)**2*pi/vconv
+      sum2=sum2+wabbng(knt,icomp)/mconv
+      sum3=sum3+wsrbng2(knt,icomp)/mconv
+  610 sum4=sum4+ wzrbng2(knt,icomp)/mconv
+ 4040 format(2x,i2,2x,1p,4(e10.4,1x))
+      write(output,4050)
+ 4050 format(6x,4(10h----------,1x))
+      write(output,4060)sum1,sum2,sum3,sum4
+ 4060 format(1x,3hSum,2x,1p,4(e10.4,1x))
+       if(.not.scntrl(7))then
+          if(crm(icomp) .eq. 1)then
+          do i =1, naz
+             do k = 1,8
+                wsscon(i,icomp,k) =0.0
+             enddo
+             do k = 1,12
+                wrbszi(i,icomp,k) =0.0
+                wrbszo(i,icomp,k) =0.0
+             enddo
+             do k =1,5
+                b4cgs(i,icomp,k) =0.0
+             enddo
+             wsscon(i,icomp,1) = wsrbng2(i,icomp) * 0.74
+             wsscon(i,icomp,2) = wsrbng2(i,icomp) * 0.18
+             wsscon(i,icomp,3) = wsrbng2(i,icomp) * 0.08
+             cwb4c(i,icomp)= wabbng(i,icomp)
+             cwb2o3(i,icomp)=0.0
+             b4cox(i,icomp)=0
+             gtox(i,icomp)=0
+             reazs(i,icomp)=0
+             oxdso((icomp-1)*ndax+i)=0.0
+          enddo       
+          cumco(icomp)=0.0
+          cumco2(icomp)=0.0
+          cumch4(icomp)=0.0
+          wh2b4c(icomp)=0.0
+         endif
+       endif
+c
+      return
+      end
+*endif

@@ -1,0 +1,410 @@
+*mlist
+*if def,selap
+       subroutine gaphtc2(hgap,hgapi,keffgp,keffgpi,thkgp1,thkgpi1,
+     & mshmat,inaz)      
+c
+c  Subroutine calculates gap conductance of fuel rods and    
+c  simulator rods.
+c
+c  Cognizant engineer: ljs.
+c
+c  Calling subroutines:  effht  
+c subroutines called:  fthexp, cthexp                   
+c
+c  hgap      = gap conductance (W/m2.K) (output)
+c  keffgp    = effective conductance of gap accounting for radiation
+c              heat transfer (W/m.K) (output)
+c  mshmat(m) = ID of material in mesh m for component icomp at
+c              axial node inaz (input)
+c  inaz      = axial node number (input)
+c	
+c  Modified by H.Madokoro. 	
+c  Added calculation effective heat conductivity in the gap between  
+c  annular pellet and heater material	
+c  
+c
+       use scdmod
+       implicit none
+       include 'contrl.h'
+       include 'ufiles.h'
+       include 'scddat.h'
+       include 'scdcom.h'
+       include 'scdout.h'
+       include 'ndxara.h'
+       include 'intcom.h'
+       include 'cora.h'
+       real gmix(10)
+       real hgap,totexp,radout,tmpout,exploc,dltrlc,tmpmid,dltmsh,
+     & thkgp1,gas1,gas3,gas4,gassum,tmpgap,congap,roughf1,roughc,djump
+       real hgapi,totexpi,totexpj,radouti,radoutj,thkgpi1,tmpgapi,
+     &      congapi,roughh,djumpi,roughe,roughf2,
+     &      dltrlci,dltrlcj,explocj,tmpmidj 
+       real keffgp,sigbsr,rdum1,tgap1,tgap2,fgems1,hgprad,kgprd1
+       real keffgpi,tgap3,tgap4,fgems3,fgems4,hgpradi,kgprdi1
+       real thkgpd
+       real thkgpdi
+       real gascns,gjump,fgems2,femgen
+       real femgeni
+       real fthexp
+       external gascns,gjump,zoemis,femiss,fthexp
+       real femiss,tmpref
+       real fnexp,zotexp
+       real fneps
+       real tgpfab
+       real tgpfabi
+       real dum1
+       real kheat,kfuel,kmean,hsld,fnk
+       integer mshmat(ndrd),inaz,mmm,imm,mz,isurf
+       integer imat
+       integer ndbg
+       data sigbsr /5.6680e-8/
+c  calculate thermal expansion of mesh
+c  if radial cracks, accumulate the thermal expansion of each mesh
+c  totexp = sum of thermal expansions of material with radial cracks
+	ndbg = 0
+        totexpi = 0.0
+        totexpj = 0.0
+        totexp  = 0.0
+c  radout = undeformed sum of mesh thicknesses in meshes from one
+c           to nrcond2
+        radouti = 0.0
+        radoutj = 0.0
+        radout  = 0.0
+        do mmm = 2,nrcond2(inaz,icomp)
+	   imm = mshmat(mmm-1)
+c  calculate thermal expansion of outer radius of mesh assuming no
+c  radial cracking and no restraint from material adjacent to outer
+c  surface of mesh.
+           tmpref = 300.0
+           tmpout = tcond3(mmm,inaz,icomp)
+           if(imm .eq. 5)then
+cljs  ZrO2
+            exploc = zotexp(tmpout,tmpref)
+           elseif(imm.ge.6 .and. imm.le.8)then
+cljs  UO2
+            dum1 = 0.0
+            exploc = fthexp(tmpout,dum1)
+           elseif(imm.eq.9)then
+            exploc =0.0	   
+            if((rpel2(inaz,icomp).gt.rpeli2(inaz,icomp)).and.
+     &         mshmat(mmm).eq.5)then
+             explocj = zotexp(tmpout,tmpref)
+            end if
+           else
+cljs simulator element material
+            exploc = fnexp(imm,tmpout)
+           end if
+           if(mmm.le.nrheat2(inaz,icomp))then
+c   dltrlc = thermal expansion of outer radius assuming no radial
+c            cracking
+            dltrlci = (xcond3(mmm,inaz,icomp))*exploc
+           endif
+           if(mmm.le.nrcondi2(inaz,icomp))then
+            dltrlcj = (xcond3(mmm,inaz,icomp))*explocj	   
+           endif
+           if(mmm.le.nrcond2(inaz,icomp))then 
+c*            dltrlc = (xcond3(mmm,inaz,icomp)-
+c*     &                 xcond3(nrcondi2(inaz,icomp),inaz,icomp))*exploc
+	    dltrlc = (xcond3(mmm,inaz,icomp))*exploc
+           end if
+           tmpmid = 0.5*(tcond3(mmm-1,inaz,icomp) + 
+     &               tcond3(mmm,inaz,icomp))
+           tmpmidj= 0.5*(tcond3(mmm+1,inaz,icomp) + 
+     &               tcond3(mmm,inaz,icomp))
+           if(imm .eq.5)then
+cljs ZrO2
+            exploc = zotexp(tmpmid,tmpref)
+           elseif(imm.ge.6 .and. imm.le.8)then
+cljs UO2  
+            dum1 = 0.0
+            exploc = fthexp(tmpmid,dum1)
+           elseif(imm.eq.9)then
+            exploc =0.0
+            if(mshmat(mmm).eq.5)then
+             explocj = zotexp(tmpmidj,tmpref)
+            end if            
+           else
+cljs simulator material, which is assumed to not have radial cracks
+            exploc = fnexp(imm,tmpmid)
+           end if
+           dltmsh = xcond3(mmm,inaz,icomp) - xcond3(mmm-1,inaz,icomp)
+           if(mmm.le.nrheat2(inaz,icomp))then
+c   radout = cumulative outer radius assuming no thermal expansion
+            radouti = radouti + dltmsh                     
+            if (imm .ge. 5 .and. imm.le.8)then
+             totexpi = totexpi + dltmsh*exploc
+            else
+             totexpi = dltrlci
+            end if
+           endif
+           if(mmm.le.nrcondi2(inaz,icomp))then
+            radoutj = radoutj + dltmsh
+            if (mshmat(mmm) .ge. 5 .and. mshmat(mmm).le.8)then
+             totexpj = totexpj + dltmsh*explocj
+            else
+             totexpj = dltrlcj
+            end if
+           endif 
+           if(mmm.le.nrcond2(inaz,icomp))then 
+            radout = radout + dltmsh
+            if(imm .ge. 5 .and. imm.le.8)then
+c  material with radial cracks assumed to be located in outside part
+c  of simulator element or fuel element.
+c  fuel or ZrO2 with radial cracks
+             totexp = totexp + dltmsh*exploc
+            else
+             totexp = dltrlc
+            end if
+           end if
+          end do
+c  calculate gap thickness
+        mz = (icomp-1)*ndax + inaz
+c        rpel(mz) =radout + totexp
+c        rpeli(mz)=radoutj + totexpj
+c        rhwire(inaz,icomp)=radouti + totexpi
+        thkgpi1 = radoutj + totexpj - radouti - totexpi  
+c	thkgpi1= rpeli(mz)- rhwire(inaz,icomp)
+        thkgp1 = rci(mz) - radout - totexp
+c	thkgp1 = rci(mz) - rpel(mz) 
+c
+        if(ndbg.eq.1)then
+          write(output,9029)icomp,inaz,radouti,totexpi,radoutj,totexpj,
+     &     radout,totexp
+9029      format(' gap in rod; icomp=',i3,' inaz=',i3,
+     &         ' radouti=',e10.4,' totexpi=',e10.4,' radoutj=',e10.4,
+     &         ' totexpj=',e10.4,' radout=',e10.4,' totexp=',e10.4)        	        	
+c          write(output,9030)icomp,inaz,rpeli(mz),radouti,totexpi,
+c     &     thkgpi1
+c9030      format(' gap in rod; icomp=',i3,' inaz=',i3,
+c     &         ' rpeli=',e10.4,' radouti=',e10.4,' totexpi=',e10.4,
+c     &         ' thkgpi1=',e10.4) 
+c          write(output,9031)icomp,inaz,rci(mz),radout,totexp,
+c     &     thkgp1
+c9031      format(' gap in rod; icomp=',i3,' inaz=',i3,
+c     &         ' rci=',e10.4,' radout=',e10.4,' totexp=',e10.4,
+c     &         ' thkgp1=',e10.4)      
+          write(output,9032)icomp,inaz,rhwire(inaz,icomp),rpeli(mz),
+     &    rpel(mz),rci(mz)
+9032      format(' gap in rod; icomp=',i3,' inaz=',i3,
+     &         ' rhwire=',e10.4,' rpeli=',e10.4,' rpel=',e10.4,
+     &         ' rci=',e10.4)      
+        endif
+c        
+        if(thkgp1 .le. 0.0)thkgp1 = 0.0
+        if(thkgpi1.le. 0.0)thkgpi1= 0.0
+        do mmm = 1,10
+         gmix(mmm) = 0.0
+        end do
+cljs     if(idcomp(icomp) .eq. 6.or.icladf(icomp).eq.1)then
+        if(idcomp(icomp) .eq. 6.or.icladf(icomp).eq.1 .or.
+     &   rpel2(1,icomp).le.1.001e-4)then
+c  assume simulator fuel elements filled with helium
+c          gmix(1) = 1.0
+c          gmix(2) = 0.0
+c          gmix(3) = 0.0
+c          gmix(4) = 0.0
+c  hm assume simulator fuel elements filled with 95%Ar-5%Kr
+c          gmix(1) = 0.0
+c          gmix(2) = 0.95
+c          gmix(3) = 0.05
+c          gmix(4) = 0.0
+c  hm assume simulator fuel elements filled with Argon
+          gmix(1) = 0.0
+          gmix(2) = 1.0
+          gmix(3) = 0.0
+          gmix(4) = 0.0
+        else
+c   calculate mole fractions of gas in fuel-cladding gap
+c   ggivy(17,icomp) = helium > gmix(1)      
+c   ggivy(2,icomp) = krpton  > gmix(3)
+c   ggivy(1,icomp) = xenon   > gmix(4)
+          gas1 = ggivy(17,icomp) / 4.0026
+          gas3 = ggivy(2,icomp) / 88.0
+          gas4 = ggivy(1,icomp) / 136.0
+          gassum = gas1 + gas3 + gas4
+          gmix(1) = gas1 / gassum
+          gmix(3) = gas3 / gassum
+          gmix(4) = gas4 / gassum
+        end if
+c   calculate temperature of gap
+        tmpgap = 0.5*(tcond3(nrcond2(inaz,icomp),inaz,icomp) +
+     &           tcond3(nrcldi2(inaz,icomp),inaz,icomp))
+        congap = gascns(gmix, tmpgap, pgas(icomp))      
+        tmpgapi= 0.5*(tcond3(nrheat2(inaz,icomp),inaz,icomp) +
+     &           tcond3(nrcondi2(inaz,icomp),inaz,icomp))
+        congapi= gascns(gmix, tmpgapi, pgas(icomp))   
+c  isurf = 2 = UO2 on one side of gap and Zr on other side
+        isurf = 2
+        djump = gjump(gmix, tmpgap, pgas(icomp), isurf)
+        djumpi= gjump(gmix, tmpgapi, pgas(icomp), isurf)
+c  assume values for surface roughness of fuel and cladding surfaces
+c  f1= UO2 fuel
+c  f2= ZrO2 fuel	
+c  c = cladding
+c  h = W heater
+c  e = Mo or Cu electrode coated by ZrO2	
+        roughf1 = 2.1e-6        
+        roughc = 0.5e-6	
+        roughf2 = 0.3e-6
+        roughh = 1.6e-6
+        roughe = 6.0e-6
+        if (mshmat(nrcond2(inaz,icomp)-1).eq.21 .or.
+     &      mshmat(nrcond2(inaz,icomp)-1).eq.22)then
+chm  gap between cladding and electrode        
+         hgap = congap/(thkgp1 + 1.8*djump + roughc + roughe +
+     &           1.397e-6)
+c         hgap = congap/(thkgp1 + djump + 2.0*(roughc + roughe))
+        elseif (mshmat(nrcond2(inaz,icomp)-1).eq.5)then
+chm  gap between cladding and ZrO2 fuel
+         hgap = congap/(thkgp1 + 1.8*djump + roughf2 + roughc +
+     &           1.397e-6)        	
+c         hgap = congap/(thkgp1 + djump + 2.0*(roughf2 + roughc))     
+        else	
+chm  gap between cladding and UO2 fuel 
+         hgap = congap/(thkgp1 + 1.8*djump + roughf1 + roughc + 
+     &           1.397e-6)
+c         hgap = congap/(thkgp1 + djump + 2.0*(roughf1 + roughc))     
+        end if
+chm  gap between ZrO2 fuel and heater
+c	kheat = fnk(4,(tcond3(nrheat2(inaz,icomp),inaz,icomp)),mz)
+c	kfuel = fnk(5,(tcond3(nrcondi2(inaz,icomp),inaz,icomp)),mz)
+c	kmean=2*kheat*kfuel/(kheat+kfuel)
+c	hsld =0.00125*kmean/sqrt(roughh**2 + roughf2**2)/
+c     &	      exp(5.738-0.528*log(3.937e7*roughh))
+        hgapi= congapi/(thkgpi1 + 1.8*djumpi + roughh + roughf2 +
+     &           1.397e-6) 
+cc     &  + hsld
+c       hgapi = congap/(thkgpi1 + djumpi + 2.0*(roughh + roughf2))	
+       if(ndbg.eq.1.and.(timehy.ge.2000.).and.(timehy.le.2000.1))then
+          write(output,9038)icomp,inaz,thkgp1,thkgpi1,djump,djumpi
+9038      format(' gap in rod; icomp=',i3,' inaz=',i3,
+     &         ' thkgp=',e10.4,' thkgpi=',e10.4,' djump=',e10.4,
+     &         ' djumpi=',e10.4)
+       end if       
+chm       roughc is used. Fuel is assumed to be ZrO2     
+c  calculate effective gap conductance due to radiation heat transfer
+        tgap1 = tcond3(nrcond2(inaz,icomp),inaz,icomp)
+        tgap2 = tcond3(nrcldi2(inaz,icomp),inaz,icomp)
+        tgap3 = tcond3(nrheat2(inaz,icomp),inaz,icomp)
+        tgap4 = tcond3(nrcondi2(inaz,icomp),inaz,icomp)
+cljs  ZrO2 at inner surface of of cladding (second surface)
+cljs  assign thick oxide layer
+chm        rdum1 = 2.e-3
+chm        call zoemis(tgap2, rdum1, fgems2)
+cljs other surface is either UO2 or ZrO2, depending upon whether it
+cljs is a fuel rod or simulator rod.
+        if(idcomp(icomp).eq.6)then
+cljs simulator
+chm         imat=imm
+chm         fgems1 = fneps(imat,tgap1)
+chm         fgems3 = fneps(mshmat(1),tgap3)
+chm         fgems4 = fneps(imat,tgap4)
+chm begin
+c  fgems1: ZrO2 coating/ZrO2 pellet/other material
+	  if (mshmat(nrcond2(inaz,icomp)-1).eq.21 .or.
+     &        mshmat(nrcond2(inaz,icomp)-1).eq.22) then
+           rdum1=2.0e-4
+           call zoemis(tgap1,rdum1,fgems1)
+          else if (mshmat(nrcond2(inaz,icomp)-1).eq.5) then
+           rdum1=2.0e-3
+           call zoemis(tgap1,rdum1,fgems1)	  
+          else if (mshmat(nrcond2(inaz,icomp)-1).eq.6) then
+           fgems1 = femiss(tgap1)
+          else
+	   fgems1 = fneps(mshmat(nrcond2(inaz,icomp)-1),tgap1)
+	  end if
+c  fgems2: ZrO2 cladding
+c	  fgems2 = fneps(mshmat(nrcldi2(inaz,icomp)+1),tgap2)	
+          rdum1 = 2.e-4
+          call zoemis(tgap2, rdum1, fgems2) 
+c  fgems3: Heater material          
+          fgems3 = fneps(mshmat(nrheat2(inaz,icomp)-1),tgap3)          
+c  fgems4: ZrO2 pellet/other material  
+	  if (mshmat(nrcondi2(inaz,icomp)).eq.5) then
+	   rdum1=2.0e-3 	  
+           call zoemis(tgap4, rdum1, fgems4)
+          else if (mshmat(nrcondi2(inaz,icomp)).eq.6) then
+           fgems4 = femiss(tgap4)
+          else
+           fgems4 = fneps(mshmat(nrcondi2(inaz,icomp)),tgap4)    
+          end if        
+chm end
+cljs     call zoemis(tgap1, rdum1, fgems1)
+        else
+         fgems1 = femiss(tgap1)
+         rdum1=2.0e-4
+         call zoemis(tgap2,rdum1,fgems2)
+         fgems3 = femiss(tgap3)
+         fgems4 = femiss(tgap4)
+        end if
+cljs general formula for emissivity factor for two facing surfaces
+cljs with different areas:
+cljs femgen = 1./((1/e1) + (A1/A2)*((1/e2) -1.)))
+cljs where e1 and e2 are the emissivities of the two surfaces,
+cljs respectively, and A1 and A2 are the areas of the two areas,
+cljs respectively.                                              
+cljs For gap conductance, the areas of the two surfaces are almost
+cljs identical.
+       femgen = 1./((1./fgems1) + (1./fgems2) -1.)
+       femgeni= 1./((1./fgems3) + (1./fgems4) -1.)
+c       femgen = 1./((1./fgems1) + ((1./fgems2) -1.)
+c     &  *xcond3(nrcond2(inaz,icomp),inaz,icomp)
+c     &  /xcond3(nrcldi2(inaz,icomp),inaz,icomp))
+c       femgeni= 1./((1./fgems3) + ((1./fgems4) -1.)
+c     &  *xcond3(nrheat2(inaz,icomp),inaz,icomp)
+c     &  /xcond3(nrcondi2(inaz,icomp),inaz,icomp))
+       hgprad = femgen*sigbsr*(tgap2**2 + tgap1**2)*(tgap2 + tgap1)
+       hgpradi= femgeni*sigbsr*(tgap4**2 + tgap3**2)*(tgap4 + tgap3)     
+c       hgap = hgap + hgprad                        
+c       hgapi= hgapi+ hgpradi
+       thkgpd=thkgp1
+       thkgpdi=thkgpi1
+cljs set nominal null value for gap thickness for case of closed
+cljs gap so effective conductivity not set to zero.
+cljs     if(thkgpd.lt.1.e-6)thkgpd=1.e-6
+cljs  Since heat conduction solution used as-fabricated mesh,
+cljs  use as-fabricated gap size for calculating effective
+cljs  conductivity of gap.
+       tgpfab = xcond3(nrcldi2(inaz,icomp),inaz,icomp) -
+     &          xcond3(nrcond2(inaz,icomp),inaz,icomp)
+       tgpfabi= xcond3(nrcondi2(inaz,icomp),inaz,icomp) -
+     &          xcond3(nrheat2(inaz,icomp),inaz,icomp)
+       if(ndbg.eq.2.and.(timehy.ge.2000.).and.(timehy.le.2000.1))then
+          write(output,9039)icomp,inaz,hgprad,hgpradi
+9039      format(' gap in rod; icomp=',i3,' inaz=',i3,
+     &         ' hgprad=',e10.4,' hgpradi=',e10.4)
+       end if            
+       if(ndbg.eq.1)then
+          write(output,9040)icomp,inaz,tgpfab,tgpfabi,thkgp1,thkgpi1
+9040      format(' gap in rod; icomp=',i3,' inaz=',i3,
+     &         ' tgpfab=',e10.4,' tgpfabi=',e10.4,' thkgp=',e10.4,
+     &         ' thkgpi=',e10.4)     
+       end if
+       if(ndbg.eq.2.and.(timehy.ge.2000.).and.(timehy.le.2000.1))then
+          write(output,9042)icomp,inaz,tgap1,tgap2,tgap3,tgap4
+9042      format(' gap in rod; icomp=',i3,' inaz=',i3,
+     &         ' tgap1=',e10.4,' tgap2=',e10.4,' tgap3=',e10.4,
+     &         ' tgap4=',e10.4)
+       end if       
+cljs   set minimum nominal value
+       if(tgpfab .lt.1.e-5)tgpfab = 1.e-5
+       if(tgpfabi.lt.1.e-5)tgpfabi= 1.e-5             
+c       kgprd1 = hgprad*tgpfab
+c       kgprdi1= hgpradi*tgpfabi
+c       keffgp = hgap * tgpfab + kgprd1
+c       keffgpi =hgapi* tgpfabi+ kgprdi1
+        kgprd1 = hgprad*thkgpd
+        kgprdi1= hgpradi*thkgpdi
+        keffgp = hgap * thkgpd + kgprd1
+        keffgpi =hgapi* thkgpdi+ kgprdi1	
+       if(ndbg.eq.1.and.(timehy.ge.5000.).and.(timehy.le.5000.1))then
+          write(output,9045)icomp,inaz,kgprd1,kgprdi1,keffgp,keffgpi
+9045      format(' gap in rod; icomp=',i3,' inaz=',i3,
+     &         ' kgprd1=',e10.4,' kgprdi1=',e10.4,' keffgp=',e10.4,
+     &         ' keffgpi=',e10.4)      
+       end if 
+       hgap = hgap + hgprad                        
+       hgapi= hgapi+ hgpradi
+       return
+       end
+*endif

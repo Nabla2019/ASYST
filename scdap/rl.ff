@@ -1,0 +1,1312 @@
+*mlist
+*if def,selap
+       subroutine rl(anonc,acon,xnonc,xcon,dtime,atemp,sizes,sizel,
+     &     topa,v,vconv,p,nu,an,bnonc,bcon,tnonc,tcon,afs)
+c
+c  r1 calculates release increments of krypton, xenon, iodine,
+c  cesium, cadmium, zinc, and zinc iodide from a volume of ualx
+c  fuel or debris with a liquid phase and ualx.
+c
+c  Cognizant engineer: dlh.
+c
+      implicit none
+c
+      real atemp, dtime, p, sizel, sizes, topa, v, vconv, nu
+c
+      real tsolid, tliqid
+c
+c     this subroutine calculates release increments of krypton,
+c      xenon, iodine, cesium cadmium, zinc, and zinc iodide
+c      from a volume of ualx fuel or debris with a liquid phase
+c      and ualx
+c
+c     anonc(i)   = output amount of i th noncondensable gas
+c              released during the time increment (kg)
+c               i =  3 is krypton
+c               i =  4 is xenon
+c
+c     acon(k)   = output amount of k th condensable vapor
+c              released during the time increment (kg)
+c               k =  1 for iodine
+c               k =  5 for cadmium
+c               k = 18 for zinc iodide
+c               k = 19 for zinc
+c               k = 20 for cesium
+c
+c     xnonc(i,l) = output mass of i th noncondensable
+c                   gas that leaves the volume element in
+c                   bubbles of size l during time increment
+c                   dtime (kg)
+c                    i =  3 is krypton
+c                    i =  4 is xenon
+c
+c     xcon(k,l)  = output mass of k th condensable
+c                   vapor that leaves the volume element in
+c                   bubbles of size l during time increment
+c                   dtime (kg)
+c                    k =  1 for iodine
+c                    k =  5 for cadmium
+c                    k = 18 for zinc iodide
+c                    k = 19 for zinc
+c                    k = 20 for cesium
+c
+c     dtime   = input time increment for which releases
+c              are to be calculated (s)
+c
+c     atemp   = input average temperature during the time
+c                   increment considered (k)
+c
+c     sizes   = input solid fuel dimension (m)
+c
+c     sizel   = input liquid phase dimension (diameter) (m)
+c
+c     topa   = input component of liquid surface area normal
+c              to acceleration of gravity with access to
+c              effluent (m**2)
+c
+c     v    = input volume fuel or debris considered (m**3)
+c
+c     vconv   = input liquid pool convection velocity (m/s)
+c
+c     p    = input pressure (pa)
+c
+c     nu   = input top nusselt number for mass transport
+c              (unitless)
+c
+c     an(l)   = input/output number concentration of
+c              bubble size l (m**(-3))
+c
+c     bnonc(i,l) = input/output mass of i th noncondensable
+c              gas in bubble size l at start/end of
+c              time increment (kg)
+c               i =  3 is krypton
+c               i =  4 is xenon
+c
+c     bcon(k,l)  = input/output mass of k th condensable
+c              vapor in bubble size l at start/end of
+c              time increment (kg)
+c               k =  1 for iodine
+c               k =  5 for cadmium
+c               k = 18 for zinc iodide
+c               k = 19 for zinc
+c               k = 20 for cesium
+c
+c     tnonc(i)   = input/output total mass of i th
+c              noncondensable gas at start/end of
+c              time increment (kg)
+c               i =  3 is krypton
+c               i =  4 is xenon
+c
+c     tcon(k)   = input/output total mass of k th
+c              condensable vapor at start/end of
+c              time increment (kg)
+c               k =  1 for iodine
+c               k =  5 for cadmium
+c               k = 18 for zinc iodide
+c               k = 19 for zinc
+c               k = 20 for cesium
+c     afs         = soil fraction in element
+c
+c      xa(l)   = output volume of l th bubble size class average
+c              (m**3) common bsize
+c
+c      dba(l)   = output diameter of l th bubble size class average
+c              (m) common bsize.
+c
+c      f(l2,l1)  = output fraction of coalescing bubbles l2 and l1
+c              (where l1 is greater than l2)
+c              net volume that goes into size class l1
+c              common block bsize.
+c
+c     viscl   = output dynamic viscosity of liquid phase
+c              (kg/(m s))
+c              common block matsrs
+c
+c     rholsd = output liquid phase density (kg/m**3)
+c              common block matsrs
+c
+c     zusten   = output surface tension of liquid phase (n/m)
+c                   common block matsrs
+c
+c     rl was coded by d. l. hagrman october 4, 1989
+c     last modified on june 22, 1990.  REV 15
+c
+c
+*call bsize
+*call dcon
+*call matsrs
+*call ufiles
+c
+      real anonc(10), acon(20), dconl(20),
+     #        dnoncs(10), dcons(20), an(15), bnonc(10,15),
+     #        bcon(20,15), tnonc(10), tcon(20), afs, burp
+      real  enonc(10,15), econ(20,15), vnew(15)
+      real gmg(10), gmv(20), ceq(20)
+      real xgmix(10), cliq(20)
+      real  xnonc(10,15), xcon(20,15)
+c     local variables
+      integer i, k, l, l1, l2, ni
+      real acon1, acon18, acon19, acon20, acon5, amolg, anonc3,
+     #anonc4, ck, coef1, comp, denom, dform, difr, disol,
+     #dratio, fffr, fr, gceq, gden3, gden4, gdens, r, ratio,
+     #rrmole, sizeg, sum, sumc, sumcd, sumcda, sumcs,
+     #sumcsa, sumi, sumia, sumkr, sumkra, sumnc, sumxe, sumxea,
+     #sumzia, sumzn, sumzna, sumzni, taov, tau2, tgrain, tliq,
+     #tsat, vform
+      external bubble, gceq, gdens
+      save
+c     data statement gmg(i) = kg-mole mass of i th noncondensable gas
+      data gmg /4.003e+00,39.944e+00,83.80e+00,131.30e+00,
+     #  2.016e+00,28.020e+00,32.0e+00,28.01e+00,44.01e+00,
+     #  18.020e+00/
+c
+c              i = 1 is helium
+c              i = 2 is argon
+c              i = 3 is krypton
+c              i = 4 is xenon
+c              i = 5 is hydrogen
+c              i = 6 is nitrogen
+c              i = 7 is oxygen
+c              i = 8 is carbon monoxide
+c              i = 9 is carbon dioxide
+c              i =10 is water vapor
+c
+c     data statement gmv(k) = kg-mole mass of k th condensable vapor
+c
+      data gmv /2.54e+02,2.60e+02,1.50e+02,1.28e+02,1.12e+02,
+     # 1.08e+02,1.21e+02,1.71e+02,1.30e+02,1.28e+02,
+     # 1.19e+02,2.47e+02,1.8e+01,1.23e+02,2.70e+02,
+     # 1.2011e+01,2.348e+02,3.1922e+02,6.538e+01,1.3291e+02/
+c
+c     k     = input species index
+c                 k = 1 for iodine
+c                 k = 2 for cesium iodide
+c                 k = 3 for cesium hydroxide
+c                 k = 4 for tellurium
+c                 k = 5 for cadmium
+c                 k = 6 for silver
+c                 k = 7 for strontium hydroxide
+c                 k = 8 for barium hydroxide
+c                 k = 9 for hydrogen telluride
+c                 k = 10 for hydrogen iodide
+c                 k = 11 for tin
+c                 k = 12 for tin telluride
+c                 k = 13 for water vapor
+c                 k = 14 for zirconium oxide
+c                 k = 15 for uranium dioxide
+c                 k = 16 for carbon
+c                 k = 17 for silver iodide
+c                 k = 18 for zinc iodide
+c                 k = 19 for zinc
+c                 k = 20 for cesium
+c
+c
+c      parameter (burp) set here, as it is used in several if test,
+c      and may get changed ofter during development
+       parameter (burp=0.98)
+c     transfer input arguments to common blocks
+      topaa = topa
+      vv = v
+c
+c ********************************************************************
+c     temporary properties that should come from a srs matpro follow
+c
+c      at present, 2 allowable cases, alumium or soil (isv project)
+c
+       if (afs .lt. 0.1) then
+c     define liquid phase viscosity pending a matpro subcode
+c      to calculate it
+      viscl = 5.0e-03
+c     define liquid phase density pending a matpro subcode
+c      to calculate it
+      rholsd = 2.7e+03
+c     define liquid phase surface tension pending a matpro subcode
+c      surface tension from page f-20 of the handbook of chem & phys
+      zusten = 8.65e-01
+c     define liquid and solid diffusivities pending a matpro subcode
+      do 30 k = 1,20
+       dconl(k) = 8.2e-16 * atemp /
+     #      (viscl *((26.98e+00/rholsd)**3.3e-01))
+       dcons(k) = 2.59e-05 * exp(-1.458e+04/atemp)
+   30 continue
+      do 40 i = 1,10
+       dnoncs(i) = 2.59e-05 * exp(-1.458e+04/atemp)
+   40 continue
+c
+c      soil data
+       else
+       if (atemp.lt.1000.0) then
+          viscl = 100000.0
+       elseif (1000.0 .lt. atemp .and. atemp.lt.2400.0) then
+          viscl = 10.0**(0.91*(10000.0/atemp - 4.5))
+       else
+          viscl = 0.5
+       endif
+       rholsd = 2170.0
+       zusten = 0.3
+       do 10 k = 1,20
+       dconl(k) = 10.0**(-0.167 - (10000.0/atemp)*1.667)
+       dcons(k) = dconl(k)
+       if (k .le. 10) then
+          dnoncs(k) = dcons(k)
+       endif
+   10  continue
+       endif
+c     viscl   = dynamic viscosity of liquid phase
+c              (kg/(m s))
+c     rholsd   = liquid phase density (kg/m**3)
+c     dconl(k)   = diffusivity of k th condensable
+c              vapor in liquid phase (m**2/s)
+c               k =  1 for iodine
+c               k =  5 for cadmium
+c               k = 18 for zinc iodide
+c               k = 19 for zinc
+c               k = 20 for cesium
+c
+c     dnoncs(i)  = diffusivity of  i th noncondensable
+c             gas in solid phase (m**2/s)
+c               i =  3 is krypton
+c               i =  4 is xenon
+c
+c     dcons(k)   = diffusivity of k th condensable
+c              vapor in solid phase (m**2/s)
+c               k =  1 for iodine
+c               k =  5 for cadmium
+c               k = 18 for zinc iodide
+c               k = 19 for zinc
+c               k = 20 for cesium
+c
+c ********************************************************************
+c
+c     select number of bubble size classes considered
+      nbs = 14
+      nbsm1 = nbs - 1
+c
+c Note - the following solidus and liquidus temps. are for soil,
+c       or alumiun.
+c       These sould be calculated as a function of the actual
+c       constituents presents (maybe in subr. tmltmx?), and
+c       probably passed to subr. rl as arguments.
+c
+      if (afs .lt. 0.1) then
+         tsolid =  913.0
+         tliqid = 1173.0
+      else
+         tsolid = 1373.0
+         tliqid = 1673.0
+      endif
+c
+c     branch to consider completely solid ualx or ualx with a liquid
+c      phase
+      if (atemp .lt. tsolid) then
+c         case with temperature below solidus follows
+c         calculate species independent factors required
+       difr = 1.0e+00 - (1.5e-06 / sizes)
+       difr = difr * difr
+       coef1 = 1.5e-06 / sizes
+       coef1 = 1.216e+00 * coef1 * coef1 / difr
+c         12/sqr(phi) = 1.215854204
+c
+c         calcualte release from grains in a solid al matrix.
+c         assume temperature is increasing fast enough so that
+c          the final tau is >> the initial tau or that release is
+c          so small that the crude initial tau = 0 calculation
+c          will suffice.
+c          iodine
+       tau2 = dcons(1) * dtime /(sizes * sizes)
+       acon(1) = tcon(1) * coef1 * (tau2**1.5e+00)
+     #       * exp(-2.5e-01 * difr / tau2)
+c          zinc iodide
+       tau2 = dcons(18) * dtime /(sizes * sizes)
+       acon(18) = tcon(18) * coef1 * (tau2**1.5e+00)
+     #       * exp(-2.5e-01 * difr / tau2)
+c          cesium
+       tau2 = dcons(20) * dtime /(sizes * sizes)
+       acon(20) = tcon(20) * coef1 * (tau2**1.5e+00)
+     #       * exp(-2.5e-01 * difr / tau2)
+c          krypton
+       tau2 = dnoncs(3) * dtime /(sizes * sizes)
+       anonc(3) = tnonc(3) * coef1 * (tau2**1.5e+00)
+     #       * exp(-2.5e-01 * difr / tau2)
+c          xenon
+       tau2 = dnoncs(4) * dtime /(sizes * sizes)
+       anonc(4) = tnonc(4) * coef1 * (tau2**1.5e+00)
+     #       * exp(-2.5e-01 * difr / tau2)
+c
+c         check for blister release
+       amolg = tnonc(3) / gmg(3) + tnonc(4) / gmg(4)
+       amolg = amolg / v
+       denom = sizes * sizes - 2.25e-12
+c         r = the gas constant
+       r = 8.314e+03
+c
+c         calculate release from a solid al matrix.
+c         assume temperature is increasing fast enough so that
+c          the final tau is >> the initial tau or that release is
+c          so small that the crude initial tau = 0 calculation
+c          will suffice.
+c          zinc
+       tau2 = dcons(19) * dtime /(sizes * sizes)
+c *******************************************************************
+c     temporary debugging printout follows
+c         if(tau2 .gt. 5.0e-01) then
+c            write (output,902) tau2
+c 902      format(2x,'oops.  tau2 = ',e10.3,' is a little large'
+c    #  'for zinc')
+c         endif
+c *******************************************************************
+c         6/sqrt(phi) = 3.385137501
+       acon(19) = tcon(19) * (3.385e+00*sqrt(tau2) - tau2)
+c
+c          cadmium
+c         for temp above cadmium melting, assume all cd is in a pool
+c     cd and al are immiscable for temps near elements melting.
+       if(atemp .gt. 5.939e+02) then
+c             diffusion
+          tau2 = dconl(5) * dtime /(sizel * sizel)
+          if(tau2 .le. 5.41276204e-01 .and. tcon(5) .gt. 1.0e-275)
+     #         then
+       ceq(1) = gceq(atemp,p,1)
+             acon(5) = tcon(5) * (3.385137501e+00 * sqrt(tau2) -
+     #      tau2) * (1.0 - ceq(5)* v / tcon(5))
+          else
+             acon(5) = tcon(5)
+          endif
+c             convection
+          ck = nu * dconl(5) / sizel
+       taov = dtime*topa/v
+          acon(5) = acon(5) + tcon(5) * exp(-taov * ck)
+          if(acon(5) .gt. tcon(5)) then
+             acon(5) = tcon(5)
+          endif
+       endif
+      else
+c
+c         case with temperature above solidus follows
+c
+c        define bubble sizes and number used (must be .le. 15)
+c          set minimum average size classification diameter
+      if (afs .gt. 0.1) then
+         dba(1) = 1.0e-3
+      else
+         dba(1) = 1.0e-5
+      endif
+c          set maximum average size classification diameter
+c           so that 18 ratios larger is 10**4.5 times smallest dia.
+c           diameter.  i.e. dia increases 10 x every 4 sizes
+c
+      dba(13) = 1.0e+03 * dba(1)
+c         find geometric average volumes and diameters
+c         1/6 phi = 5.23598775e-01
+       xa(1) = 5.23598775e-01 * dba(1) * dba(1) * dba(1)
+c         ratio = (xmax/xmin)**(1./number of size classes between min
+c           and max)
+c        ratio = (xamax/xamin)**(1.0/1.2)
+      ratio = (dba(13)/dba(1))**(2.50e-01)
+       dratio = ratio**0.3333333e+00
+       do 50 l = 2,nbs
+          xa(l) = xa(l-1) * ratio
+          dba(l) = dba(l-1) * dratio
+   50   continue
+c         find bubble coalesence fractions
+       do 58 l1 = 1,nbsm1
+          do 56 l2 = 1,l1
+             f(l2,l1) = (xa(l1+1) - xa(l1) - xa(l2))/
+     #        (xa(l1+1) - xa(l1))
+   56      continue
+   58   continue
+       do 60 i = 1,10
+          xgmix(i) = 0.0e+00
+   60   continue
+       xgmix(3) = 1.0e+00
+c         find kr and xe gas densities at system pressure
+       gden3 = gdens(atemp,p,xgmix)
+       xgmix(3) = 0.0e+00
+       xgmix(4) = 1.0e+00
+       gden4 = gdens(atemp,p,xgmix)
+c *******************************************************************
+c         temporary debugging printout follows
+c         write out size classifications
+c         write (output,903)
+c 903   format(2x,'geometric average diameter of size classes',
+c    #    ' in meters follow')
+c         write (output,904) (dba(l),l=1,nbsm1)
+c 904   format(2x,10e10.3)
+c *******************************************************************
+c
+c         branch to consider two phase debris between 913 and 1173 k
+       if (atemp .lt. tliqid) then
+c
+c            case with temperature between solidus and liquidus follows
+c
+c            calculate release from grains
+c            determine grain size (as a function of temperature?)
+          sizeg = 1.5e-06
+c            assume temperature is increasing fast enough so that
+c             the final tau is >> the initial tau or that release is
+c             so small that the crude initial tau = 0 calculation
+c             will suffice.
+c             iodine
+          tau2 = dcons(1) * dtime /(sizeg * sizeg)
+          sum = 0.0e+00
+          do 110 l = 1,nbs
+             sum = sum + bcon(1,l)
+110      continue
+          tgrain = tcon(1) - sum
+          if(tgrain .lt. 1.0e-275) then
+             tgrain = 0.0e+00
+          endif
+       if (tau2 .le. 1.06926e-01) then
+             acon1 = tgrain * (3.385137501e+00 * sqrt(tau2) -
+     #      tau2)
+          else
+             acon1 = tgrain
+          endif
+c             zinc iodide
+          tau2 = dcons(18) * dtime /(sizeg * sizeg)
+          sum = 0.0e+00
+          do 120 l = 1,nbs
+             sum = sum + bcon(18,l)
+120      continue
+          tgrain = tcon(18) - sum
+          if(tgrain .lt. 1.0e-275) then
+             tgrain = 0.0e+00
+          endif
+       if (tau2 .le. 1.06926e-01) then
+             acon18 = tgrain * (3.385137501e+00 * sqrt(tau2) -
+     #      tau2)
+          else
+             acon18 = tgrain
+          endif
+c             cesium
+          tau2 = dcons(20) * dtime /(sizeg * sizeg)
+          sum = 0.0e+00
+          do 130 l = 1,nbs
+             sum = sum + bcon(20,l)
+130      continue
+          tgrain = tcon(20) - sum
+          if(tgrain .lt. 1.0e-275) then
+             tgrain = 0.0e+00
+          endif
+       if (tau2 .le. 1.06926e-01) then
+             acon20 = tgrain * (3.385137501e+00 * sqrt(tau2) -
+     #      tau2)
+          else
+             acon20 = tgrain
+          endif
+c             krypton
+          tau2 = dnoncs(3) * dtime /(sizeg * sizeg)
+          sum = 0.0e+00
+          do 140 l = 1,nbs
+             sum = sum + bnonc(3,l)
+140      continue
+          tgrain = tnonc(3) - sum
+          if(tgrain .lt. 1.0e-275) then
+             tgrain = 0.0e+00
+          endif
+       if (tau2 .le. 1.06926e-01) then
+             anonc3 = tgrain * (3.385137501e+00 * sqrt(tau2) -
+     #           tau2)
+          else
+             anonc3 = tgrain
+          endif
+c             xenon
+          tau2 = dnoncs(4) * dtime /(sizeg * sizeg)
+          sum = 0.0e+00
+          do 150 l = 1,nbs
+             sum = sum + bnonc(4,l)
+150      continue
+          tgrain = tnonc(4) - sum
+          if(tgrain .lt. 1.0e-275) then
+             tgrain = 0.0e+00
+          endif
+       if (tau2 .le. 1.06926e-01) then
+             anonc4 = tgrain * (3.385137501e+00 * sqrt(tau2) -
+     #      tau2)
+          else
+             anonc4 = tgrain
+          endif
+c
+c             (neglect zinc release from grains)
+c
+c            no cadmium release from grains because it was
+c           assumed all cd is in a pool.  (cd and al
+c            are immiscable for temps near elements melting.)
+c
+c            determine size of released bubbles using wallis
+c             page 247 and assuming a contact angle of 90 degrees
+c            estimate gas density at system pressure
+c            estimate gas mole fractions
+c            do 160 i = 1,10
+c               xgmix(i) = 0.0e+00
+c 160      continue
+c            sum = anonc3/gmg(3) + anonc4/gmg(4)
+c            if(sum .gt. 1.0e-275) then
+c               xgmix(3) = anonc3/(gmg(3) * sum)
+c               xgmix(4) = anonc4/(gmg(4) * sum)
+c               rhog  = gdens(atemp,p,xgmix)
+c            else
+c               if there is no gas use xenon at room temp.
+c               rhog  = 5.89e+00
+c            endif
+c
+c            dform = 1.872e+00 * sqrt(zusten/(9.8e+00*
+c    #        (rholsd - rhog)))
+c            note: the method from wallis was
+c             commented out because it gave 3 cm
+c             bubbles and that seemed too large.
+c             in the absence of a better argument,
+c             assume bubble size equals the grain size
+c             and hope the coalescence
+c             will be fast up to a limit determined by
+c             gas concentration and liquid properties.
+c            note: a multiplicative factor was added to the initial
+c             bubble size assumed in order to avoid putting
+c             all bubbles in one size (the smallest) and
+c             thus precluding coalesence without convection
+c            dform = sizeg * 1.0e+02
+c     deform = diameter of newly formed bubbles
+c
+          dform = sqrt(dba(1)*dba(2))
+c            1/6 phi = 5.23598775e-01
+          vform = 5.23598775e-01 * dform * dform * dform
+c *******************************************************************
+c            temporary debugging printout follows
+c            write (output,915) dform
+c 915 format(2x,'two phase region.  new bubble diameter = ',e10.3)
+c *******************************************************************
+c
+c            add gas released to bubbles that may exist
+          if(dform .lt. dba(1)) then
+             bnonc(3,1) = bnonc(3,1) + anonc3
+             bnonc(4,1) = bnonc(4,1) + anonc4
+c
+c               recalculate number density
+             an(1) = (bnonc(3,1)/gden3 + bnonc(4,1)/gden4)/
+c    #           bcon(1,1)/dens of i + ....
+     #      (xa(1) * v)
+             go to 180
+          endif
+          l = 2
+  170      if(dform .lt. dba(l)) then
+             fr = (vform -xa(l-1))/(xa(l) - xa(l-1))
+             bnonc(3,l) = bnonc(3,l) + fr * anonc3
+             bnonc(4,l) = bnonc(4,l) + fr * anonc4
+c
+             bnonc(3,l-1) = bnonc(3,l-1) + (1.0e+00 - fr) * anonc3
+             bnonc(4,l-1) = bnonc(4,l-1) + (1.0e+00 - fr) * anonc4
+c
+c               recalculate number densities
+             an(l) = (bnonc(3,l)/gden3 + bnonc(4,l)/gden4)/
+c    #          bcon(1,l)/dens of i + ....
+     #      (xa(l) * v)
+             an(l-1) = (bnonc(3,l-1)/gden3 +
+     #          bnonc(4,l-1)/gden4)/
+c    #          bcon(1,l-1)/dens of i + ....
+     #        (xa(l-1) * v)
+             go to 180
+          else
+             l = l + 1
+          endif
+          if(l .le. nbs) go to 170
+          bnonc(3,nbs) = bnonc(3,nbs) + anonc3
+          bnonc(4,nbs) = bnonc(4,nbs) + anonc4
+c
+c            recalculate number density
+          an(nbs) = (bnonc(3,nbs)/gden3 + bnonc(4,nbs)/gden4)/
+c    #          bcon(1,nbs)/dens of i + ....
+     #          (xa(nbs) * v)
+  180      continue
+c
+c            zero out grain releases that have been added to bubbles
+          anonc3 = 0.0e+00
+          anonc4 = 0.0e+00
+c
+c     check for more bubble volume than physical volume to
+c      hold it -- i.e. frothing
+      sum = 0.0
+      do 188 l = 1,nbsm1
+         sum = sum + an(l) * xa(l)
+  188 continue
+      if(sum .gt. burp) then
+c        write(6,924) sum
+c 924    format(2x,'   ***frothing***   bubble fraction = ',e15.5)
+         do 190 l2 = 1,nbsm1
+            bnonc(3,nbs) = bnonc(3,nbs) + bnonc(3,l2)
+            bnonc(4,nbs) = bnonc(4,nbs) + bnonc(4,l2)
+            bcon(1,nbs) = bcon(1,nbs) + bcon(1,l2)
+            bcon(5,nbs) = bcon(5,nbs) + bcon(5,l2)
+            bcon(18,nbs) = bcon(18,nbs) + bcon(18,l2)
+            bcon(19,nbs) = bcon(19,nbs) + bcon(19,l2)
+            bcon(20,nbs) = bcon(20,nbs) + bcon(20,l2)
+            an(nbs) = an(nbs) + an(l2) * xa(l2) / xa(nbs)
+            bnonc(3,l2) = 0.0
+            bnonc(4,l2) = 0.0
+            bcon(1,l2) = 0.0
+            bcon(5,l2) = 0.0
+            bcon(18,l2) = 0.0
+            bcon(19,l2) = 0.0
+            bcon(20,l2) = 0.0
+            an(l2) = 0.0
+  190    continue
+      endif
+c
+       else
+c
+c            case with temperature above liquidus follows
+c            form bubbles from any remaining noncondensables
+          sum = 0.0e+00
+          do 300 l = 1,nbs
+             sum = sum + bnonc(3,l) + bnonc(4,l)
+  300      continue
+          disol = tnonc(3) + tnonc(4) - sum
+          if(disol .gt. 1.0e-275) then
+c               estimate initial bubble size from
+c          olander pages 88 and 203
+c               dform = 4.0e+00 * zusten / p
+c               note: the method from olander was
+c          commented out because it gave 3 cm
+c          bubbles and that seemed too large.
+c          the problem may be that the bubbles
+c          are not in equilibrium as the olander
+c          formula assumes.  in the absence of
+c          a better argument, assume minimum
+c          size and hope the coalescence
+c          will be fast up to a limit determined by
+c          gas concentration and liquid properties
+c               note: all bubbles should not be put in
+c          one size class because that precludes
+c          coalesence when there is no convection
+             dform = sqrt(dba(1)*dba(2))
+c               1/6 phi = 5.23598775e-01
+             vform = 5.23598775e-01 * dform * dform * dform
+c *******************************************************************
+c            temporary debugging printout follows
+c            write (output,916) dform
+c 916 format(2x,'pure liquid region.  new bubble diameter = ',e10.3)
+c *******************************************************************
+c               calculate kr and xe amounts not in bubbles
+             sum = 0.0e+00
+             do 302 l = 1,nbs
+          sum = sum + bnonc(3,l)
+  302         continue
+             anonc3 = tnonc(3) - sum
+             if(anonc3 .lt. 1.0e-275) then
+          anonc3 = 0.0e+00
+             endif
+             sum = 0.0e+00
+             do 304 l = 1,nbs
+          sum = sum + bnonc(4,l)
+  304         continue
+             anonc4 = tnonc(4) - sum
+             if(anonc4 .lt. 1.0e-275) then
+          anonc4 = 0.0e+00
+             endif
+             if(dform .lt. dba(1)) then
+          bnonc(3,1) = bnonc(3,1) + anonc3
+          bnonc(4,1) = bnonc(4,1) + anonc4
+c
+c            calculate number density
+          an(1) = (bnonc(3,1)/gden3 + bnonc(4,1)/gden4)/
+c    #         bcon(1,1)/dens of i + ....
+     #      (xa(1) * v)
+c
+          go to 330
+             endif
+             l = 2
+  320         if(dform .lt. dba(l)) then
+          fr = (vform - xa(l-1))/(xa(l) - xa(l-1))
+          bnonc(3,l) = bnonc(3,l) + fr * anonc3
+          bnonc(4,l) = bnonc(4,l) + fr * anonc4
+c
+          bnonc(3,l-1) = bnonc(3,l-1) + (1.0 - fr) * anonc3
+          bnonc(4,l-1) = bnonc(4,l-1) + (1.0 - fr) * anonc4
+c
+c            calculate number density
+          an(l) = (bnonc(3,l)/gden3 + bnonc(4,l)/gden4)/
+c    #        bcon(1,l)/dens of i + ....
+     #         (xa(l) * v)
+c
+          an(l-1) = (bnonc(3,l-1)/gden3 +
+     #             bnonc(4,l-1)/gden4)/
+c    #        bcon(1,l-1)/dens of i + ....
+     #         (xa(l-1) * v)
+          go to 330
+             else
+          l = l + 1
+             endif
+             if(l .le. nbs) go to 320
+c          in six lines
+             bnonc(3,nbs) = bnonc(3,nbs) + anonc3
+             bnonc(4,nbs) = bnonc(4,nbs) + anonc4
+c
+c               calculate number density
+             an(nbs) = (bnonc(3,nbs)/gden3 + bnonc(4,nbs)/gden4)/
+c             bcon(1,nbs)/dens of i + .....
+     #        (xa(nbs) * v)
+  330         continue
+c
+             anonc3 = 0.0e+00
+c             zero out grain releases that have been added to bubbles
+             anonc4 = 0.0e+00
+c
+c           check for more bubble volume than physical volume to
+c            hold it -- i.e. frothing
+            sum = 0.0
+            do 338 l = 1,nbsm1
+               sum = sum + an(l) * xa(l)
+  338       continue
+            if(sum .gt. burp) then
+c              write(6,924) sum
+               do 340 l2 = 1,nbsm1
+                  bnonc(3,nbs) = bnonc(3,nbs) + bnonc(3,l2)
+                  bnonc(4,nbs) = bnonc(4,nbs) + bnonc(4,l2)
+                  bcon(1,nbs) = bcon(1,nbs) + bcon(1,l2)
+                  bcon(5,nbs) = bcon(5,nbs) + bcon(5,l2)
+                  bcon(18,nbs) = bcon(18,nbs) + bcon(18,l2)
+                  bcon(19,nbs) = bcon(19,nbs) + bcon(19,l2)
+                  bcon(20,nbs) = bcon(20,nbs) + bcon(20,l2)
+                  an(nbs) = an(nbs) + an(l2) * xa(l2) / xa(nbs)
+                  bnonc(3,l2) = 0.0
+                  bnonc(4,l2) = 0.0
+                  bcon(1,l2) = 0.0
+                  bcon(5,l2) = 0.0
+                  bcon(18,l2) = 0.0
+                  bcon(19,l2) = 0.0
+                  bcon(20,l2) = 0.0
+                  an(l2) = 0.0
+  340          continue
+            endif
+c
+          endif
+       endif
+c
+c         adjust bubble sizes for diffusion to bubbles
+c          first find concentrations and equilibrium concentrations
+c         iodine
+       sum = 0.0e+00
+       do 401 l = 1,nbs
+          sum = sum + bcon(1,l)
+401   continue
+       cliq(1) = (tcon(1) - sum) / v
+       if(cliq(1) .lt. 1.0e-275) then
+          cliq(1) = 0.0e+00
+       endif
+c         cadmium
+       sum = 0.0e+00
+       do 402 l = 1,nbs
+          sum = sum + bcon(5,l)
+402   continue
+       cliq(5) = (tcon(5) - sum) / v
+       if(cliq(5) .lt. 1.0e-275) then
+          cliq(5) = 0.0e+00
+       endif
+c         zinc iodide
+       sum = 0.0e+00
+       do 403 l = 1,nbs
+          sum = sum + bcon(18,l)
+403   continue
+       cliq(18) = (tcon(18) - sum) / v
+       if(cliq(18) .lt. 1.0e-275) then
+          cliq(18) = 0.0e+00
+       endif
+c         zinc
+       sum = 0.0e+00
+       do 404 l = 1,nbs
+          sum = sum + bcon(19,l)
+404   continue
+       cliq(19) = (tcon(19) - sum) / v
+       if(cliq(19) .lt. 1.0e-275) then
+          cliq(19) = 0.0e+00
+       endif
+c         cesium
+       sum = 0.0e+00
+       do 405 l = 1,nbs
+          sum = sum + bcon(20,l)
+405   continue
+       cliq(20) = (tcon(20) - sum) / v
+       if(cliq(20) .lt. 1.0e-275) then
+          cliq(20) = 0.0e+00
+       endif
+c
+       ceq(1) = gceq(atemp,p,1)
+       ceq(5) = gceq(atemp,p,5)
+       ceq(18) = gceq(atemp,p,18)
+       ceq(19) = gceq(atemp,p,19)
+       ceq(20) = gceq(atemp,p,20)
+c
+c        second find new bubble size
+c        r = the gas constant, 8.314e+03
+         r = 8.314e+03
+         sumc =  ceq(1) * cliq(1) / ( gmv(1) * gmv(1) )  +
+     #           ceq(5) * cliq(5) / ( gmv(5) * gmv(5) )  +
+     #           ceq(18) * cliq(18) / ( gmv(18) * gmv(18) )  +
+     #           ceq(19) * cliq(19) / ( gmv(19) * gmv(19) )  +
+     #           ceq(20) * cliq(20) / ( gmv(20) * gmv(20) )
+         sumc = 2.698e+01 * r * atemp * sumc /rholsd
+c        note that the largest size is not here in order to
+c         avoid growing larger that the largest
+c         the approximation is ok if release of large bubbles
+c         is fast enough to keep an(nbs) very small
+         do 420 l = 1,nbsm1
+            if(an(l) .gt. 1.0) then
+               sumnc = r * atemp * ( bnonc(3,l)/gmg(3) +
+     #                   bnonc(4,l)/gmg(4) )
+             if (sumnc .gt. 1.0e-275) then
+               vnew(l) = sumnc / (p - sumc)
+             else
+               vnew(l) = xa(l) * an(l) * v
+               go to 415
+             end if
+               do 410 ni = 1,5
+c                 1.612 is 4/3 pi ** 1/3
+                  vnew(l) = sumnc / ( p - sumc +
+     #             2.0 * zusten * 1.612 /
+     #             (vnew(l)**(1.0/3.0)) )
+c ********************************************************************
+c     write(*,900) l,vnew(l)
+c 900 format(2x,'iteration check.  l = ',i3,'  vnew(l) = ',e10.4)
+c ********************************************************************
+  410          continue
+c ********************************************************************
+  415        continue
+c           dia = vnew(l) * 6.0 / (3.141 * an(l) * v)
+c           dia = dia ** (1.0/3.0)
+c           write(*,925) l,dia
+c 925       format(2x,'new bubble size for l = ',I3,' is ',e10.4)
+c ********************************************************************
+            else
+               vnew(l) = xa(l) * an(l) * v
+            endif
+c           removed division here and multiplication below
+c           vnew(l) = vnew(l) / ( an(l) * v )
+  420    continue
+c
+c        third find amount of gas in expanded bubbles
+c
+         rrmole = 2.698e+01/rholsd
+         do 425 l = 1,nbsm1
+c           multiplication removed in this loop
+c           econ(1,l) = ceq(1) * vnew(l) * an(l) * v
+            econ(1,l) = ceq(1) * cliq(1) * vnew(l) * rrmole / gmv(1)
+            econ(5,l) = ceq(5) * cliq(5) * vnew(l) * rrmole / gmv(5)
+            econ(18,l) = ceq(18) * cliq(18) * vnew(l)*rrmole/gmv(18)
+            econ(19,l) = ceq(19) * cliq(19) * vnew(l)*rrmole/gmv(19)
+            econ(20,l) = ceq(20) * cliq(20) * vnew(l)*rrmole/gmv(20)
+c
+            enonc(3,l) = bnonc(3,l)
+            enonc(4,l) = bnonc(4,l)
+  425    continue
+c
+c        fourth re-distribute the gas in vnew(l) into fixed
+c
+c         re-distribute the gas in vnew(l) into fixed
+c          size classifications.
+c         initialize
+       do 430 l = 1, nbsm1
+c           got to have the division here but it is a little
+c            more efficient to leave it out above
+            if(an(l) .gt. 1.0) then
+               vnew(l) = vnew(l) / ( an(l) * v )
+            endif
+          bcon(1,l) = 0.0e+00
+          bcon(5,l) = 0.0e+00
+          bcon(18,l) = 0.0e+00
+          bcon(19,l) = 0.0e+00
+          bcon(20,l) = 0.0e+00
+          bnonc(3,l) = 0.0e+00
+          bnonc(4,l) = 0.0e+00
+  430   continue
+       do 460 l1 = 1, nbsm1
+          if(an(l1) .gt. 1.0e+00) then
+             if(vnew(l1) .lt. xa(1)) then
+                 bcon(1,1) = bcon(1,1) + econ(1,l1)
+                 bcon(5,1) = bcon(5,1) + econ(5,l1)
+                 bcon(18,1) = bcon(18,1) + econ(18,l1)
+                 bcon(19,1) = bcon(19,1) + econ(19,l1)
+                 bcon(20,1) = bcon(20,1) + econ(20,l1)
+                 bnonc(3,1) = bnonc(3,1) + enonc(3,l1)
+                 bnonc(4,1) = bnonc(4,1) + enonc(4,l1)
+          go to 450
+             endif
+             l2 = 2
+  440         if(vnew(l1) .lt. xa(l2)) then
+                 fffr =  ( xa(l2) - vnew(l1) )/
+     #                   ( xa(l2) - xa(l2-1) )
+                 bcon(1,l2-1) = bcon(1,l2-1) + fffr * econ(1,l1)
+                 bcon(5,l2-1) = bcon(5,l2-1) + fffr * econ(5,l1)
+                 bcon(18,l2-1) = bcon(18,l2-1) + fffr * econ(18,l1)
+                 bcon(19,l2-1) = bcon(19,l2-1) + fffr * econ(19,l1)
+                 bcon(20,l2-1) = bcon(20,l2-1) + fffr * econ(20,l1)
+                 bnonc(3,l2-1) = bnonc(3,l2-1) + fffr * enonc(3,l1)
+                 bnonc(4,l2-1) = bnonc(4,l2-1) + fffr * enonc(4,l1)
+          comp = 1.0e+00 - fffr
+                 bcon(1,l2) = bcon(1,l2) + comp * econ(1,l1)
+                 bcon(5,l2) = bcon(5,l2) + comp * econ(5,l1)
+                 bcon(18,l2) = bcon(18,l2) + comp * econ(18,l1)
+                 bcon(19,l2) = bcon(19,l2) + comp * econ(19,l1)
+                 bcon(20,l2) = bcon(20,l2) + comp * econ(20,l1)
+                 bnonc(3,l2) = bnonc(3,l2) + comp * enonc(3,l1)
+                 bnonc(4,l2) = bnonc(4,l2) + comp * enonc(4,l1)
+          go to 450
+             else
+          l2 = l2 + 1
+             endif
+             if(l2 .le. nbs) go to 440
+             bcon ( 1,nbs) = bcon ( 1,nbs) + econ( 1,l1)
+             bcon ( 5,nbs) = bcon ( 5,nbs) + econ( 5,l1)
+             bcon (18,nbs) = bcon (18,nbs) + econ(18,l1)
+             bcon (19,nbs) = bcon (19,nbs) + econ(19,l1)
+             bcon (20,nbs) = bcon (20,nbs) + econ(20,l1)
+            bnonc( 3,nbs) = bnonc( 3,nbs) + enonc( 3,l1)
+            bnonc( 4,nbs) = bnonc( 4,nbs) + enonc( 4,l1)
+c
+  450         continue
+          endif
+  460   continue
+c        fifth calculate new number densities
+c         calculate new number densities
+       do 470 l = 1,nbs
+          an(l) = (bnonc(3,l)/gden3 + bnonc(4,l)/gden4)/
+c    #       bcon(1,l)/dens of i + ....
+     #         (xa(l) * v)
+  470   continue
+c
+c        check for more bubble volume than physical volume to
+c         hold it -- i.e. frothing
+         sum = 0.0
+         do 480 l = 1,nbsm1
+            sum = sum + an(l) * xa(l)
+  480    continue
+         if(sum .gt. burp) then
+c           write(6,924) sum
+            do 490 l2 = 1,nbsm1
+               bnonc(3,nbs) = bnonc(3,nbs) + bnonc(3,l2)
+               bnonc(4,nbs) = bnonc(4,nbs) + bnonc(4,l2)
+               bcon(1,nbs) = bcon(1,nbs) + bcon(1,l2)
+               bcon(5,nbs) = bcon(5,nbs) + bcon(5,l2)
+               bcon(18,nbs) = bcon(18,nbs) + bcon(18,l2)
+               bcon(19,nbs) = bcon(19,nbs) + bcon(19,l2)
+               bcon(20,nbs) = bcon(20,nbs) + bcon(20,l2)
+               an(nbs) = an(nbs) + an(l2) * xa(l2) / xa(nbs)
+               bnonc(3,l2) = 0.0
+               bnonc(4,l2) = 0.0
+               bcon(1,l2) = 0.0
+               bcon(5,l2) = 0.0
+               bcon(18,l2) = 0.0
+               bcon(19,l2) = 0.0
+               bcon(20,l2) = 0.0
+               an(l2) = 0.0
+  490       continue
+         endif
+c
+c
+c        sixth find species totals in bubbles before bubble time step
+          sumkr = 0.0e+00
+          sumxe = 0.0e+00
+          sumi = 0.0e+00
+          sumcd = 0.0e+00
+          sumzni = 0.0e+00
+          sumzn = 0.0e+00
+          sumcs = 0.0e+00
+          do 500 l = 1,nbs
+             sumkr = sumkr + bnonc(3,l)
+             sumxe = sumxe + bnonc(4,l)
+             sumi = sumi + bcon(1,l)
+             sumcd = sumcd + bcon(5,l)
+             sumzni = sumzni + bcon(18,l)
+             sumzn = sumzn + bcon(19,l)
+             sumcs = sumcs + bcon(20,l)
+  500      continue
+c *******************************************************************
+c     temporary debugging printout follows
+c     write (output,905)
+c 905 format(2x,' species distribution before bubble time step')
+c     write (output,906) sumkr
+c 906 format(2x,'krypton total = ',e10.3,' distribution follows')
+c     write (output,907) (bnonc(3,l),l=1,nbs)
+c 907 format(10e10.3)
+c     write (output,908) sumxe
+c 908 format(2x,'xenon total = ',e10.3,' distribution follows')
+c     write (output,907) (bnonc(4,l),l=1,nbs)
+c     write (output,909) sumi
+c 909 format(2x,'iodine total = ',e10.3,' distribution follows')
+c     write (output,907) (bcon(1,l),l=1,nbs)
+c     write (output,910) sumcd
+c 910 format(2x,'cadmium total = ',e10.3,' distribution follows')
+c     write (output,907) (bcon(5,l),l=1,nbs)
+c     write (output,911) sumzni
+c 911 format(2x,'zinc iodine total = ',e10.3,' distribution follows')
+c     write (output,907) (bcon(18,l),l=1,nbs)
+c     write (output,912) sumzn
+c 912 format(2x,'zinc total = ',e10.3,' distribution follows')
+c     write (output,907) (bcon(19,l),l=1,nbs)
+c     write (output,913) sumcs
+c 913 format(2x,'cesium total = ',e10.3,' distribution follows')
+c     write (output,907) (bcon(20,l),l=1,nbs)
+c
+c     check to be sure that the mass added to bubbles is
+c      less than or equal to the mass that is available
+c     if(sumkr .gt. tnonc(3)) then
+c         write (output,917)
+c 917   format(2x,'%#@** error.  added more kr to bubbles',
+c    # ' than there was in the system')
+c         stop 'rl-1'
+c     endif
+c     if(sumxe .gt. tnonc(4)) then
+c         write (output,918)
+c 918   format(2x,'%#@** error.  added more xe to bubbles',
+c    # ' than there was in the system')
+c         stop 'rl-1'
+c     endif
+c     if(sumi .gt. tcon(1)) then
+c         write (output,919)
+c 919   format(2x,'%#@** error.  added more i to bubbles',
+c    # ' than there was in the system')
+c         stop 'rl-1'
+c     endif
+c     if(sumcd .gt. tcon(5)) then
+c         write (output,920)
+c 920   format(2x,'%#@** error.  added more cd to bubbles',
+c    # ' than there was in the system')
+c         stop 'rl-1'
+c     endif
+c     if(sumzni .gt. tcon(18)) then
+c         write (output,921)
+c 921   format(2x,'%#@** error.  added more zni to bubbles',
+c    # ' than there was in the system')
+c         stop 'rl-1'
+c     endif
+c     if(sumzn .gt. tcon(19)) then
+c         write (output,922)
+c 922   format(2x,'%#@** error.  added more zn to bubbles',
+c    # ' than there was in the system')
+c         stop 'rl-1'
+c     endif
+c     if(sumzn .gt. tcon(20)) then
+c         write (output,923)
+c 923   format(2x,'%#@** error.  added more cs to bubbles',
+c    # ' than there was in the system')
+c         stop 'rl-1'
+c     endif
+c *******************************************************************
+c
+c     seventh step bubbles across dtime
+      call bubble(xnonc,xcon,an,bnonc,bcon,dtime,atemp,
+     # sizel,vconv,p)
+c
+c     eighth find species totals in bubbles after time step
+       sumkra = 0.0e+00
+       sumxea = 0.0e+00
+       sumia = 0.0e+00
+       sumcda = 0.0e+00
+       sumzia = 0.0e+00
+       sumzna = 0.0e+00
+       sumcsa = 0.0e+00
+       do 520 l = 1,nbs
+          sumkra = sumkra + bnonc(3,l)
+          sumxea = sumxea + bnonc(4,l)
+          sumia = sumia + bcon(1,l)
+          sumcda = sumcda + bcon(5,l)
+          sumzia = sumzia + bcon(18,l)
+          sumzna = sumzna + bcon(19,l)
+          sumcsa = sumcsa + bcon(20,l)
+  520   continue
+c *******************************************************************
+c     temporary debugging printout follows
+c     write (output,914)
+c 914 format(2x,' species distribution after bubble time step')
+c     write (output,906) sumkra
+c     write (output,907) (bnonc(3,l),l=1,nbs)
+c     write (output,908) sumxea
+c     write (output,907) (bnonc(4,l),l=1,nbs)
+c     write (output,909) sumia
+c     write (output,907) (bcon(1,l),l=1,nbs)
+c     write (output,910) sumcda
+c     write (output,907) (bcon(5,l),l=1,nbs)
+c     write (output,911) sumzia
+c     write (output,907) (bcon(18,l),l=1,nbs)
+c     write (output,912) sumzna
+c     write (output,907) (bcon(19,l),l=1,nbs)
+c     write (output,913) sumcsa
+c     write (output,907) (bcon(20,l),l=1,nbs)
+c *******************************************************************
+c
+c     release = change in bubble amounts (sources were already
+c           added in when initial sum was totaled)
+       anonc(3) = sumkr - sumkra
+       anonc(4) = sumxe - sumxea
+       acon(1) = sumi - sumia
+       acon(5) = sumcd - sumcda
+       acon(18) = sumzni - sumzia
+       acon(19) = sumzn - sumzna
+       acon(20) = sumcs - sumcsa
+c
+c        add other releases in parallel
+c          assume temperature is increasing fast enough so that
+c          the final tau is >> the initial tau or that release is
+c          so small that the crude initial tau = 0 calculation
+c          will suffice.  also assume all mass not in bubbles is
+c          is the liquid (neglect mass held in grains).
+c
+c         diffusion and convection releases follow
+       taov = dtime * topa / v
+c         initialize mass released at zero
+       acon1 = 0.0e+00
+       acon5 = 0.0e+00
+       acon18 = 0.0e+00
+       acon19 = 0.0e+00
+       acon20 = 0.0e+00
+c          iodine
+       if(cliq(1) .gt. ceq(1)) then
+c             diffusion
+          tau2 = dconl(1) * dtime /(sizel * sizel)
+          sum = 0.0e+00
+          do 610 l = 1,nbs
+             sum = sum + bcon(1,l)
+  610      continue
+          tliq = tcon(1) - sum
+          if(tliq .lt. 1.0e-275) then
+             tliq = 0.0e+00
+          endif
+          if(tau2 .le. 5.41276204e-01) then
+             acon1 = tliq * (3.385137501e+00 * sqrt(tau2) -
+     #                  tau2) * (1.0 - ceq(1)/cliq(1))
+          else
+               acon1 = tliq * (1.0 - ceq(1)/cliq(1))
+          endif
+c             convection
+          ck = nu * dconl(1) / sizel
+            tsat = tliq * (1.0 - ceq(1)/cliq(1))
+          acon1 = acon1 + tliq * exp(-taov * ck)
+          if(acon1 .gt. tliq) then
+               acon1 = tsat
+          endif
+       endif
+c          cadmium
+       if(cliq(5) .gt. ceq(5)) then
+c             diffusion
+          tau2 = dconl(5) * dtime /(sizel * sizel)
+          sum = 0.0e+00
+          do 620 l = 1,nbs
+             sum = sum + bcon(5,l)
+  620      continue
+          tliq = tcon(5) - sum
+          if(tliq .lt. 1.0e-275) then
+             tliq = 0.0e+00
+          endif
+          if(tau2 .le. 5.41276204e-01) then
+             acon5 = tliq * (3.385137501e+00 * sqrt(tau2) -
+     #                  tau2) * (1.0 - ceq(5)/cliq(5))
+          else
+               acon5 = tliq * (1.0 - ceq(5)/cliq(5))
+          endif
+c             convection
+          ck = nu * dconl(5) / sizel
+            tsat = tliq * (1.0 - ceq(5)/cliq(5))
+          acon5 = acon5 + tliq * exp(-taov * ck)
+          if(acon5 .gt. tliq) then
+               acon5 = tsat
+          endif
+       endif
+c          zinc iodide
+       if(cliq(18) .gt. ceq(18)) then
+c             diffusion
+          tau2 = dconl(18) * dtime /(sizel * sizel)
+          sum = 0.0e+00
+          do 630 l = 1,nbs
+             sum = sum + bcon(18,l)
+  630      continue
+          tliq = tcon(18) - sum
+          if(tliq .lt. 1.0e-275) then
+             tliq = 0.0e+00
+          endif
+          if(tau2 .le. 5.41276204e-01) then
+             acon18 = tliq * (3.385137501e+00 * sqrt(tau2) -
+     #                  tau2) * (1.0 - ceq(18)/cliq(18))
+          else
+               acon18 = tliq * (1.0 - ceq(18)/cliq(18))
+          endif
+c             convection
+          ck = nu * dconl(18) / sizel
+            tsat = tliq * (1.0 - ceq(18)/cliq(18))
+          acon18 = acon18 + tliq * exp(-taov * ck)
+          if(acon18 .gt. tliq) then
+               acon18 = tsat
+          endif
+       endif
+c          zinc
+       if(cliq(19) .gt. ceq(19)) then
+c             diffusion
+          tau2 = dconl(19) * dtime /(sizel * sizel)
+          sum = 0.0e+00
+          do 640 l = 1,nbs
+             sum = sum + bcon(19,l)
+  640      continue
+          tliq = tcon(19) - sum
+          if(tliq .lt. 1.0e-275) then
+             tliq = 0.0e+00
+          endif
+          if(tau2 .le. 5.41276204e-01) then
+             acon19 = tliq * (3.385137501e+00 * sqrt(tau2) -
+     #                  tau2) * (1.0 - ceq(19)/cliq(19))
+          else
+               acon19 = tliq * (1.0 - ceq(19)/cliq(19))
+          endif
+c             convection
+          ck = nu * dconl(19) / sizel
+            tsat = tliq * (1.0 - ceq(19)/cliq(19))
+          acon19 = acon19 + tliq * exp(-taov * ck)
+          if(acon19 .gt. tliq) then
+               acon19 = tsat
+          endif
+        endif
+c          cesium
+       if(cliq(20) .gt. ceq(20)) then
+c             diffusion
+          tau2 = dconl(20) * dtime /(sizel * sizel)
+          sum = 0.0e+00
+          do 650 l = 1,nbs
+             sum = sum + bcon(20,l)
+  650      continue
+          tliq = tcon(20) - sum
+          if(tliq .lt. 1.0e-275) then
+             tliq = 0.0e+00
+          endif
+          if(tau2 .le. 5.41276204e-01) then
+          acon20 = tliq * (3.385137501e+00 * sqrt(tau2) -
+     #                  tau2) * (1.0 - ceq(20)/cliq(20))
+          else
+               acon20 = tliq * (1.0 - ceq(20)/cliq(20))
+          endif
+c             convection
+          ck = nu * dconl(20) / sizel
+            tsat = tliq * (1.0 - ceq(20)/cliq(20))
+          acon20 = acon20 + tliq * exp(-taov * ck)
+          if(acon20 .gt. tliq) then
+               acon20 = tsat
+          endif
+       endif
+c
+c          neglect krypton and zenon diffusion because conc .lt. eq
+c
+c         add diffusion and convection release to total
+       acon(1)  = acon(1)  + acon1
+       acon(5)  = acon(5)  + acon5
+       acon(18) = acon(18) + acon18
+       acon(19) = acon(19) + acon19
+       acon(20) = acon(20) + acon20
+c
+      endif
+c
+c
+c     revise total masses
+      do 700 i = 1,10
+       tnonc(i) = tnonc(i) - anonc(i)
+  700 continue
+      do 710 k = 1,20
+       tcon(k) = tcon(k) - acon(k)
+  710 continue
+      return
+      end
+*endif

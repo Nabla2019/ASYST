@@ -1,0 +1,492 @@
+*mlist
+       subroutine caltav (ix,vole,evol,tz,nel,nelem,numel,t,ntwalm,
+c
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: ewc.
+c
+     1                    tdave, tsave, tmltel,
+     # afz,afu,afs,afa1,afa2,afux2,afzx2,afalum,aflith,afcadm,
+     # afsoil,r,z,imme)
+c This is a COUPLE ROUTINE
+*in32 ix
+*in32 imme
+*in32end
+c
+c     this subroutine calculates average temperature of specified couple
+c     grid elements.
+c     Or it calculates the average temperature of material 1,
+c     the average structure temperature (materials 2, 3, and 4),
+c     and finds the element with the maximum structure temperature.
+c
+c     g. a. jayne          may, 1987.
+c
+c     called by tcoupl and trupt.
+c
+c     arguments list -
+c        ix     = the 4 node points and material index for each element
+c        vole   = sub-volumes associated with each element's nodes
+c        evol   = element volumes
+c        tz     = node temperatures
+c        nel    = number of elements specified in array nelem;
+c                 if nel = 0, then do max. temp. search and ave.
+c                 debris and structure temps. instead.
+c        nelem  = elements to use in ave. temp. calc.
+c        numel  = total number of elements
+c        t      = average temperature if nel > 0;
+c                 maximum wall temperture if nel <= 0
+c        ntwalm = element no. which has max. wall temperature
+c        tdave  = average temperature of debris (K).
+c        tsave  = average structure temp.
+c        tmltel(n) = melting temperature of material in element n (K).
+c      afz(n)=atomic fraction of zr in element n.
+c      afu(n)=metalic u.
+c      afs(n)=stainless steel.
+c      afa1(n)=silver-indium-cadmium.
+c      afa2(n)=boron carbide.
+c      afux2=uo2
+c      afzx2(n)=zro2.
+c      afalum(n)=aluminum.
+c      aflith(n)=lithium.
+c      afcadm(n)=cadmium.
+c      afsoil(n)=soil
+c      imme(n) = indicator of whether element empty (1), partially
+c                full (1), or full (2).
+c     arguments changed by this subroutine itself -
+c        t
+c        ntwalm
+c        tdave
+c        tsave
+c
+       implicit none
+c
+*call cons
+*call scddat
+*call hardpn
+*call ufiles
+*call contrl
+*call parm
+c  Local variables.
+       integer i,j,k,l,m,n,nel,ntwalm,numel
+       integer npecs,iuecs,npdcs,iudcs
+       real t,te,voltot
+c
+       integer ix(5,*),nelem(*),imme(*)
+       integer norent
+       real r(*),z(*)
+       real sumtd, sumvd, sumts, sumvs, tdave, tsave, tv,sumtld
+       real evol1,rhoelm,totmss,denom
+       real enrloc,rftemp,volloc,volhed
+       real vole(4,*), evol(*), tz(*), tmltel(*)
+       real afz(*),afu(*),afs(*),afa1(*),afa2(*),afux2(*),afzx2(*),
+     # afalum(*),aflith(*),afcadm(*),afsoil(*)
+       real frcful,basfil,zmintp,zmaxtp,eincrm,tstmax,rftden
+       real rhoel1,rhoel2,rhoel3,rhoel4,msslc1,msslc2,msslc3,msslc4,
+     # enrlc1,enrlc2,enrlc3,enrlc4,cplc1,cplc2,cplc3,cplc4,vollc1,
+     # vollc2,vollc3,vollc4,tmin
+       real zuden1,zucp1,zunth1,senthl,sden
+       external zuden1,zucp1,zunth1,senthl,sden
+       real polate
+       external polate
+c    store Couple tables for internal energy and density of carbon
+c    steel.  These tables are same as those used in Couple subroutine
+c    userp.
+c     entcs(i)=enthalpy of carbon steel at temeprature of entcs(i+1),
+c     entcs(i) = enthalpy (J/kg),
+c     entcs(i+1)=temperature (K),
+c     dencs(i)=density of carbon steel (kg/m**3) at temperature of
+c               dencs(i+1) (K).
+      data npecs / 18/
+      data iuecs /1/
+      real entcs,dencs
+      dimension entcs(36), dencs(12)
+c    reference temperature for enthalpy is 300 K.
+c*    data entcs / 135000.0, 300.0,  18500.0, 400.0,  240000.0, 600.0,
+c*   #            300000.0, 800.0, 365000.0, 1000.,  435000.0, 1200.,
+c*   #            515000.0, 1400., 615000.0, 1600.,  657500.0, 1700.,
+c*   #            957500.0, 1750., 993500.0, 1800., 1063500.0, 2000.,
+c*   #           1133500.0, 2200., 1273500., 2400.,  1623500., 2600.,
+c*   #            1973500., 2800., 2323500., 3000.,  4423500., 6000./
+      data entcs /   0.0  , 300.0,  50000.0, 400.0,  105000.0, 600.0,
+     #            165000.0, 800.0, 230000.0, 1000.,  300000.0, 1200.,
+     #            380000.0, 1400., 480000.0, 1600.,  522500.0, 1700.,
+     #            822500.0, 1800., 878300.0, 1900.,  934100.0, 2000.,
+     #           1045700.0, 2200., 1157300., 2400.,  1268900., 2600.,
+     #            1380500., 2800., 1492100., 3000.,  3166100., 6000./
+      data npdcs / 6/
+      data iudcs / 1/
+c     actual data shown below, but this data not used because Couple
+c     does not change volume of elements due to thermal expansion,
+c     so room temperature density always used to conserve mass.
+c***  data dencs / 7850.0, 300.0,  7825.0, 400.0,  7780.0, 600.0,
+c*** #             7750.0, 800.0,  7720.0,1000.0, 7720.0, 6000.0/
+      data dencs / 7850.0, 300.0,  7850.0, 400.0,  7850.0, 600.0,
+     #             7850.0, 800.0,  7850.0,1000.0, 7850.0, 6000.0/
+c
+      t = 0.0
+      if (nel .le. 0) go to 200
+      voltot = 0.0
+      do 100 m=1,nel
+      n = nelem(m)
+      i = ix(1,n)
+      j = ix(2,n)
+      k = ix(3,n)
+      l = ix(4,n)
+      t = t + tz(i)*vole(1,n) + tz(j)*vole(2,n) +
+     1        tz(k)*vole(3,n) + tz(l)*vole(4,n)
+      voltot = voltot + evol(n)
+  100 continue
+      t = t / voltot
+      go to 1000
+c
+  200 continue
+c
+      sumtd = 0.0
+      sumtld=0.0
+      sumvd = 0.0
+      sumts = 0.0
+      sumvs = 0.0
+      tdave = 0.0
+      tsave = 0.0
+      thkcer(1)=0.0
+      thkcer(2)=0.0
+      thkcer(3)=0.0
+      thkcer(4)=0.0
+      thkcer(5)=0.0
+      thkcer(6)=0.0
+      thkcer(7)=0.0
+c    thkcer(8)=internal energy of debris (new way) (J).
+      thkcer(8)=0.0
+c    thkcer(13)=internal energy in structural material
+c               in mesh (J).  (new way based on node temperatures)
+      thkcer(13)=0.0
+c    thkcer(14)=total mass of structural material (kg)
+      thkcer(14)=0.0
+      rftemp=300.0
+      rftden=3120.0
+      tstmax=0.0
+      volhed=0.0
+      do 300 n=1,numel
+      if (ix(5,n).lt.1 .or. ix(5,n).gt.4) go to 300
+c   skip of element is debris but it has not had any debris slump into
+c   it.
+      if(ix(5,n).eq.1.and.imme(n).eq.0)go to 300
+      i=ix(1,n)
+      j=ix(2,n)
+      k=ix(3,n)
+      l=ix(4,n)
+      tmin=min(tz(i),tz(j),tz(k),tz(l))
+      if(tmin.lt.rftemp)go to 300
+      tv = tz(ix(1,n))*vole(1,n) + tz(ix(2,n))*vole(2,n) +
+     1     tz(ix(3,n))*vole(3,n) + tz(ix(4,n))*vole(4,n)
+      evol1=vole(1,n)+vole(2,n)+vole(3,n)+vole(4,n)
+      te = tv / evol1
+c   define default orientation of element;
+c   2 = triangular elements, 3 = quadrilat-
+c   eral element to left of triangular elements, 4 = quadrilateral
+c   elements to right of triangular elements.
+      frcful=1.
+      norent=4
+      if(ix(5,n).eq.1.and.imme(n).eq.1)then
+c    case of partially filled element.
+c    identify whether element is quadrilateral in shape or triangular
+c    "crotch" element.
+      zmintp=min(z(j),z(k),z(l))
+      zmaxtp=max(z(j),z(k),z(l))
+         if(abs(zmaxtp-zmintp).le.0.001)then
+c        "crotch" element.
+         norent=2
+         else
+           zmintp=min(z(k),z(j))
+           zmaxtp=max(z(k),z(j))
+           if(abs(zmaxtp-zmintp).lt.1.e-3)then
+c     quadrilateral element to right of crotch element, it is tipped
+c     90 degrees.
+           norent=4
+           else
+c     quadrilateral element to left of crotch elements.
+           norent=3
+           end if
+         end if
+      end if
+      if (ix(5,n) .eq. 1) then
+c         Debris (Material 1), element full (imme(n)=2)
+c         imme(n)=1=element partially full.
+c   calculate fraction of element volume that is filled with debris.
+        if(imme(n).eq.1)then
+c    identify whether element is quadrilateral in shape or triangular
+c    "crotch" element.
+          if(norent.eq.2)then
+c        "crotch" element.
+          basfil=((height-z(i))/(z(k)-z(i)))*(r(j)-r(i))
+c    Note. 2*pi not applied to radius to be consistent with evol1.
+c    radius = 0.5*(r(l)+r(j))
+          frcful=0.5*basfil*(height-z(i))*0.5*(r(l)+r(j))/evol1
+          else
+c     quadrilateral element, assume parallel sides.
+          frcful=(height-z(i))/(z(k)-z(i))
+          end if
+        end if
+         if(frcful.ge.0.9999999)then
+         vollc1=twopi*vole(1,n)
+         vollc2=twopi*vole(2,n)
+         vollc3=twopi*vole(3,n)
+         vollc4=twopi*vole(4,n)
+         else
+           if(norent.eq.2)then
+           vollc1=frcful*twopi*(vole(1,n)+vole(2,n)+vole(3,n)+vole(4,n))
+           vollc2=0.0
+           vollc3=0.0
+           vollc4=0.0
+           else
+             if(norent.eq.4)then
+               if(frcful.ge.0.5)then
+               vollc1=twopi*vole(1,n)
+               vollc4=twopi*vole(4,n)
+               vollc2=twopi*2.0*(frcful-0.5)*vole(2,n)
+               vollc3=twopi*2.0*(frcful-0.5)*vole(3,n)
+               else
+               vollc1=twopi*2.0*(frcful-0.5)*vole(1,n)
+               vollc4=twopi*2.0*(frcful-0.5)*vole(4,n)
+               vollc2=0.0
+               vollc3=0.0
+               end if
+             else
+               if(frcful.ge.0.5)then
+               vollc1=twopi*vole(1,n)
+               vollc2=twopi*vole(2,n)
+               vollc3=twopi*2.0*(frcful-0.5)*vole(3,n)
+               vollc4=twopi*2.0*(frcful-0.5)*vole(4,n)
+               else
+               vollc1=twopi*2.0*(frcful-0.5)*vole(1,n)
+               vollc2=twopi*2.0*(frcful-0.5)*vole(2,n)
+               vollc3=0.0
+               vollc4=0.0
+               end if
+             end if
+           end if
+         end if
+       sumtd=sumtd+vollc1*tz(i)+vollc2*tz(j)+vollc3*tz(k)+vollc4*tz(l)
+       sumvd=sumvd+vollc1+vollc2+vollc3+vollc4
+      rhoel1=zuden1(afz(n),afu(n),afs(n),afa1(n),afa2(n),
+     # afux2(n),afzx2(n), afalum(n),
+c*** # aflith(n), afcadm(n), afsoil(n), tz(i))
+     # aflith(n), afcadm(n), afsoil(n), rftden)
+       msslc1=vollc1*rhoel1
+       enrlc1=zunth1(afz(n),afu(n),afs(n),afa1(n),afa2(n),afux2(n),
+     # afzx2(n),tz(i),afalum(n),aflith(n), afcadm(n), afsoil(n),
+     # rftemp)
+       cplc1=zucp1(afz(n),afu(n),afs(n),afa1(n),afa2(n),
+     # afux2(n),afzx2(n),afalum(n),aflith(n),afcadm(n),afsoil(n),tz(i))
+      rhoel2=zuden1(afz(n),afu(n),afs(n),afa1(n),afa2(n),
+     # afux2(n),afzx2(n), afalum(n),
+c*** # aflith(n), afcadm(n), afsoil(n), tz(j))
+     # aflith(n), afcadm(n), afsoil(n), rftden)
+       msslc2=vollc2*rhoel2
+       enrlc2=zunth1(afz(n),afu(n),afs(n),afa1(n),afa2(n),afux2(n),
+     # afzx2(n),tz(j),afalum(n),aflith(n), afcadm(n), afsoil(n),
+     # rftemp)
+       cplc2=zucp1(afz(n),afu(n),afs(n),afa1(n),afa2(n),
+     # afux2(n),afzx2(n),afalum(n),aflith(n),afcadm(n),afsoil(n),tz(j))
+      rhoel3=zuden1(afz(n),afu(n),afs(n),afa1(n),afa2(n),
+     # afux2(n),afzx2(n), afalum(n),
+c*** # aflith(n), afcadm(n), afsoil(n), tz(k))
+     # aflith(n), afcadm(n), afsoil(n), rftden)
+       msslc3=vollc3*rhoel3
+       enrlc3=zunth1(afz(n),afu(n),afs(n),afa1(n),afa2(n),afux2(n),
+     # afzx2(n),tz(k),afalum(n),aflith(n), afcadm(n), afsoil(n),
+     # rftemp)
+       cplc3=zucp1(afz(n),afu(n),afs(n),afa1(n),afa2(n),
+     # afux2(n),afzx2(n),afalum(n),aflith(n),afcadm(n),afsoil(n),tz(k))
+      rhoel4=zuden1(afz(n),afu(n),afs(n),afa1(n),afa2(n),
+     # afux2(n),afzx2(n), afalum(n),
+c*** # aflith(n), afcadm(n), afsoil(n), tz(l))
+     # aflith(n), afcadm(n), afsoil(n), rftden)
+       msslc4=vollc4*rhoel4
+       enrlc4=zunth1(afz(n),afu(n),afs(n),afa1(n),afa2(n),afux2(n),
+     # afzx2(n),tz(l),afalum(n),aflith(n), afcadm(n), afsoil(n),
+     # rftemp)
+       cplc4=zucp1(afz(n),afu(n),afs(n),afa1(n),afa2(n),
+     # afux2(n),afzx2(n),afalum(n),aflith(n),afcadm(n),afsoil(n),tz(l))
+       eincrm=vollc1*rhoel1*enrlc1+vollc2*rhoel2*enrlc2+
+     # vollc3*rhoel3*enrlc3+vollc4*rhoel4*enrlc4
+       thkcer(8)=thkcer(8)+eincrm
+c
+c   calculate internal energy in debris based on element temperature (ol
+c   way).
+c
+       enrloc=zunth1(afz(n),afu(n),afs(n),afa1(n),afa2(n),afux2(n),
+     # afzx2(n),te,afalum(n),aflith(n), afcadm(n), afsoil(n),
+     # rftemp)
+       volloc=frcful*twopi*evol1
+      rhoelm=zuden1(afz(n),afu(n),afs(n),afa1(n),afa2(n),
+     # afux2(n),afzx2(n), afalum(n),
+     # aflith(n), afcadm(n), afsoil(n), te)
+c       activate line below when reason for tmltel(29)=indefinite
+c       in input.scvp is resolved and then delte line below it.
+         if(tz(i).ge.tmltel(n).or.tz(i).gt.2873.)then
+c     calculate average temperature of material that is liquefied.
+         sumtd = sumtd + vollc1*tz(i)
+         sumvd = sumvd + vollc1
+c     store accumulated mass of liquefied material in index 1 of
+c     previously unused array that is in commom block.
+      totmss=msslc1
+c     total mass in element.
+      thkcer(1)=thkcer(1)+totmss
+      denom=afz(n)*91.22 + afu(n)*238.07 + afs(n)*55.85
+     # + afa1(n)*107.88 + afa2(n)*55.291 + afux2(n)*270.07
+     # + afzx2(n)*123.22 + afalum(n)*26.98 + afcadm(n)*112.41
+     # + afsoil(n)*28.09
+c    mass of stainless steel in element.
+       thkcer(2)=thkcer(2)+(afs(n)*55.85/denom)*totmss
+c    mass of metallic zr in element.
+       thkcer(3)=thkcer(3)+(afz(n)*91.22/denom)*totmss
+c    mass of Ag-In-Cd in element.
+       thkcer(4)=thkcer(4)+(afa1(n)*107.88/denom)*totmss
+c    mass of UO2 in element.
+       thkcer(5)=thkcer(5)+(afux2(n)*270.07/denom)*totmss
+c    mass of ZrO2 in element.
+       thkcer(6)=thkcer(6)+(afzx2(n)*123.22/denom)*totmss
+         end if
+         if(tz(j).ge.tmltel(n).or.tz(j).gt.2873.)then
+c     calculate average temperature of material that is liquefied.
+         sumtd = sumtd + vollc2*tz(j)
+         sumvd = sumvd + vollc2
+c     store accumulated mass of liquefied material in index 1 of
+c     previously unused array that is in commom block.
+      totmss=msslc2
+c     total mass in element.
+      thkcer(1)=thkcer(1)+totmss
+      denom=afz(n)*91.22 + afu(n)*238.07 + afs(n)*55.85
+     # + afa1(n)*107.88 + afa2(n)*55.291 + afux2(n)*270.07
+     # + afzx2(n)*123.22 + afalum(n)*26.98 + afcadm(n)*112.41
+     # + afsoil(n)*28.09
+c    mass of stainless steel in element.
+       thkcer(2)=thkcer(2)+(afs(n)*55.85/denom)*totmss
+c    mass of metallic zr in element.
+       thkcer(3)=thkcer(3)+(afz(n)*91.22/denom)*totmss
+c    mass of Ag-In-Cd in element.
+       thkcer(4)=thkcer(4)+(afa1(n)*107.88/denom)*totmss
+c    mass of UO2 in element.
+       thkcer(5)=thkcer(5)+(afux2(n)*270.07/denom)*totmss
+c    mass of ZrO2 in element.
+       thkcer(6)=thkcer(6)+(afzx2(n)*123.22/denom)*totmss
+       end if
+         if(tz(k).ge.tmltel(n).or.tz(k).gt.2873.)then
+c     calculate average temperature of material that is liquefied.
+         sumtd = sumtd + vollc3*tz(k)
+         sumvd = sumvd + vollc3
+c     store accumulated mass of liquefied material in index 1 of
+c     previously unused array that is in commom block.
+      totmss=msslc3
+c     total mass in element.
+      thkcer(1)=thkcer(1)+totmss
+      denom=afz(n)*91.22 + afu(n)*238.07 + afs(n)*55.85
+     # + afa1(n)*107.88 + afa2(n)*55.291 + afux2(n)*270.07
+     # + afzx2(n)*123.22 + afalum(n)*26.98 + afcadm(n)*112.41
+     # + afsoil(n)*28.09
+c    mass of stainless steel in element.
+       thkcer(2)=thkcer(2)+(afs(n)*55.85/denom)*totmss
+c    mass of metallic zr in element.
+       thkcer(3)=thkcer(3)+(afz(n)*91.22/denom)*totmss
+c    mass of Ag-In-Cd in element.
+       thkcer(4)=thkcer(4)+(afa1(n)*107.88/denom)*totmss
+c    mass of UO2 in element.
+       thkcer(5)=thkcer(5)+(afux2(n)*270.07/denom)*totmss
+c    mass of ZrO2 in element.
+       thkcer(6)=thkcer(6)+(afzx2(n)*123.22/denom)*totmss
+       end if
+         if(tz(l).ge.tmltel(n).or.tz(l).gt.2873.)then
+c     calculate average temperature of material that is liquefied.
+         sumtd = sumtd + vollc4*tz(l)
+         sumvd = sumvd + vollc4
+c     store accumulated mass of liquefied material in index 1 of
+c     previously unused array that is in commom block.
+      totmss=msslc4
+c     total mass in element.
+      thkcer(1)=thkcer(1)+totmss
+      denom=afz(n)*91.22 + afu(n)*238.07 + afs(n)*55.85
+     # + afa1(n)*107.88 + afa2(n)*55.291 + afux2(n)*270.07
+     # + afzx2(n)*123.22 + afalum(n)*26.98 + afcadm(n)*112.41
+     # + afsoil(n)*28.09
+c    mass of stainless steel in element.
+       thkcer(2)=thkcer(2)+(afs(n)*55.85/denom)*totmss
+c    mass of metallic zr in element.
+       thkcer(3)=thkcer(3)+(afz(n)*91.22/denom)*totmss
+c    mass of Ag-In-Cd in element.
+       thkcer(4)=thkcer(4)+(afa1(n)*107.88/denom)*totmss
+c    mass of UO2 in element.
+       thkcer(5)=thkcer(5)+(afux2(n)*270.07/denom)*totmss
+c    mass of ZrO2 in element.
+       thkcer(6)=thkcer(6)+(afzx2(n)*123.22/denom)*totmss
+       end if
+      else
+c         Structure (Materials 2, 3, or 4)
+        sumts = sumts + tv
+        sumvs = sumvs + evol1
+        if (te .gt. tstmax) then
+          tstmax = te
+          ntwalm = n
+        end if
+c    increment term storing total internal energy in structural
+c    material in mesh.
+        if(ix(5,n).eq.4)then
+c    case of carbon steel.
+c    Note. To maintain mass conservation with temperature change,
+c          density is made to not change with temperature.
+        rhoelm=polate(dencs,te,npdcs,iudcs)
+        enrlc1=polate(entcs,tz(i),npecs,iuecs)
+        vollc1=twopi*vole(1,n)
+        enrlc2=polate(entcs,tz(j),npecs,iuecs)
+        vollc2=twopi*vole(2,n)
+        enrlc3=polate(entcs,tz(k),npecs,iuecs)
+        vollc3=twopi*vole(3,n)
+        enrlc4=polate(entcs,tz(l),npecs,iuecs)
+        vollc4=twopi*vole(4,n)
+        else
+c    case of stainless steel or inconel.
+        rhoelm=sden(te)
+        enrlc1=senthl(tz(i),rftemp)
+        vollc1=twopi*vole(1,n)
+        enrlc2=senthl(tz(j),rftemp)
+        vollc2=twopi*vole(2,n)
+        enrlc3=senthl(tz(k),rftemp)
+        vollc3=twopi*vole(3,n)
+        enrlc4=senthl(tz(l),rftemp)
+        vollc4=twopi*vole(4,n)
+        end if
+c   add up internal energy in structural material.
+          thkcer(13)=thkcer(13)+rhoelm*vollc1*enrlc1+
+     #    rhoelm*vollc2*enrlc2+rhoelm*vollc3*enrlc3+
+     #    rhoelm*vollc4*enrlc4
+c   add up mass of structural material.
+          thkcer(14)=thkcer(14)+rhoelm*(vollc1+vollc2+vollc3+vollc4)
+c
+c       internal energy in structural material the old way.
+c
+      volloc=twopi*evol1
+        if(ix(5,n).eq.4)then
+c    case of carbon steel.
+        enrloc=polate(entcs,te,npecs,iuecs)
+        rhoelm=polate(dencs,te,npdcs,iudcs)
+        else
+c    case of stainless steel or inconel.
+        enrloc=senthl(te,rftemp)
+        rhoelm=sden(te)
+        end if
+c   add up internal energy in structural material.
+        volhed=volhed+twopi*evol1
+c***  Activate line below if internal energy of lower head just to be
+c***  computed up to top surface of debris bed.
+c***    end if
+      end if
+  300 continue
+c
+      if (sumvd .gt. 0.0) tdave = sumtd/sumvd
+      if (sumvs .gt. 0.0) tsave = sumts/sumvs
+      t=tstmax
+c
+ 1000 continue
+      return
+      end

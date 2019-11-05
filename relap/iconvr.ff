@@ -1,0 +1,579 @@
+*mlist
+       subroutine iconvr
+*in32 ivar
+*in32end
+c
+c  Check control system variable requests, compute initial values.
+c
+c  Cognizant engineer: rjw.
+c
+       use gentblc
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'convarc.h'
+       include 'pumpblk.h'
+       include 'trpblk.h'
+       include 'turbin.h'
+       include 'ufiles.h'
+c
+c  Local variables.
+       include 'cnvtpa.h'
+       integer i,ii,iix,ir,it,ivar(8),j,jx,jy,k,l,m,ncinc,pckcod(2)
+       real conv,ctrq,hold,var(8)
+       logical lphlp,tfail,lhed
+       equivalence (ivar(1),var(1))
+       character labl*64,chwrd(2)*8
+c  Data statements.
+       data ctrq/0.7375621495/
+c
+c  Check for legal variable requests, set packed code.
+       i = filndx(27)
+       ncinc = 100
+       if (iand(cnvopt(i),2) .ne. 0) ncinc = 10
+       do 20 j = 1,cnvnum(i)
+         if (cnvtyp(i) .eq. 0) go to 19
+         ir = cnvpnm(i)*ncinc + 20500001
+         if (cnvtyp(i) .eq. 19) go to 11
+         if (cnvnpa(i) .ne. 0) then
+           iix = 4
+           ii = i
+$if -def,hydrolod,1
+             if (cnvtyp(i) .eq. 1) then
+$if def,hydrolod,1
+             if (cnvtyp(i) .eq. 1 .or. cnvtyp(i) .eq. 24) then
+             iix = 5
+             ii = ii + 1
+           endif
+           do l = 1,cnvnpa(i)
+             write (chwrd(1),'(a8)') cnvalf(ii)
+             call scnreq (ir,chwrd(1),cnvint(ii),1,pckcod,conv,labl,
+     &       tfail)
+             fail = fail .or. tfail
+             cnvpck(ii) = pckcod(1)
+             cnvpck(ii+1) = pckcod(2)
+             if (tfail) then
+               cnvpck(ii) = -1
+             else
+               cnvpck(ii+1) = filndx(cnvpck(ii)) + cnvpck(ii+1)
+             endif
+             ii = ii + iix
+           enddo
+         endif
+         if (cnvtyp(i) .eq. 8) then
+           lphlp = .false.
+           do jy = 1,ngtbls
+             if (cnvgen(i) .eq. gtnum(jy)) then
+               cnvgen(i+1) = jy
+               lphlp = .true.
+               exit
+             endif
+           enddo
+           if (.not.lphlp) then
+             write (output,
+     & "('0******** Control component',i10,' references missing or erron
+     &eous table.')")
+     &       ir
+             fail = .true.
+             cnvgen(i) = 0
+           endif
+           go to 19
+         endif
+         if (cnvtyp(i).ne.10 .and. cnvtyp(i).ne.11) go to 19
+         if (cnvtrp(i) .eq. 0) go to 19
+         call itrscn (ir,cnvtrp(i),cnvtrp(i+1))
+         go to 19
+   11    hold = -cnvsfr(i)*cnvarn(i)
+         if (cnvsct(i) .eq. 0) go to 16
+         ii = filndx(27)
+         do l = 1,cnvnum(ii)
+           if (cnvsct(i) .eq. cnvpnm(ii)) go to 28
+           ii = ii + cnvlen(ii)
+         enddo
+         write (output,2012) cnvpnm(i)
+ 2012  format ('0******** Shaft component ',i5,' references nonexistent
+     &control component.')
+         fail = .true.
+         go to 16
+   28    cnvsct(i+1) = ii - filndx(27)
+         hold = hold + cnvarn(ii)
+   16    ii = i
+         m = 0
+         do 13 l = 1,cnvnpa(i)
+           if (cnvscp(ii) .eq. 0) go to 15
+           if (cnvscp(ii) .gt. 2) go to 17
+           jx = filndx(3)
+           do 18 it = 1,ncmps(jx)
+             if (cmpnum(jx) .eq. cnvscp(ii+1)) go to 63
+             jx = jx + cmplen(jx)
+   18      continue
+           go to 64
+   63      cnvscp(ii+2) = 3
+           cnvscp(ii+3) = jx - filndx(3)
+           if (cnvscp(ii) .eq. 1) then
+             if (cmptyp(jx) .ne. 4) then
+               write (output,2013) cnvpnm(i),cnvscp(ii+1)
+ 2013  format ('0******** Shaft component',i5,' refers to component',
+     & i4,' as a pump, but it is not.')
+               fail = .true.
+               go to 15
+             endif
+             if (cnvpnm(i) .ne. ipurvi(jx)) then
+               write (output,2008) cnvpnm(i),cnvscp(ii+1)
+ 2008  format ('0******** Shaft component',i5,' refers to pump component
+     &',i4,' but the pump does not reference the shaft component.')
+               fail = .true.
+               go to 15
+             endif
+             tfail =ipuctr(jx) .eq. 0
+             if (.not.tfail) tfail = trptm(ipuctr(jx+1)+filndx(18)) .lt.
+     &       0.0
+             if (tfail) hold = hold + pmpmt(jx) + pmpttk(jx)
+             if (iand(cnvnop(i),1) .eq. 0) go to 15
+             if (iand(cnvnop(i),2) .ne. 0) then
+               pmpold(jx) = cnvarn(i)
+               go to 15
+             endif
+             if (abs(cnvarn(i) - pmpold(jx)) .lt. 0.10) go to 15
+             write (output,2009) cnvpnm(i),cnvscp(ii+1)
+ 2009  format ('0******** Shaft component',i5,' rotational velocity does
+     & not agree with rotational velocity of pump',i4,'.')
+             fail = .true.
+             go to 15
+           endif
+           if (cmptyp(jx) .ne. 14) then
+             write (output,2014) cnvpnm(i),cnvscp(ii+1)
+ 2014  format ('0******** Shaft component',i5,' refers to component',
+     & i4,' as a turbine, but it is not.')
+             fail = .true.
+             go to 15
+           endif
+           if (cnvpnm(i) .ne. turscm(jx)) then
+             write (output,2010) cnvpnm(i),cnvscp(ii+1)
+ 2010  format ('0******** Shaft component',i5,' refers to turbine compon
+     &ent',i4,' but the turbine does not reference the shaft component.'
+     & )
+             fail = .true.
+             go to 15
+           endif
+           tfail = turctr(jx) .eq. 0
+           if (tfail) tfail = trptm(turctr(jx+1)+filndx(18)) .lt. 0.0
+           if (tfail) hold = hold + turtrq(jx)
+           if (iand(cnvnop(i),1) .eq. 0) go to 15
+           if (iand(cnvnop(i),2) .ne. 0) then
+             turvel(jx) = cnvarn(i)
+             go to 15
+           endif
+           if (abs(cnvarn(i) - turvel(jx)) .lt. 0.10) go to 15
+           write (output,2011) cnvpnm(i),cnvscp(ii+1)
+ 2011  format ('0******** Shaft component',i5,' rotational velocity does
+     & not agree with rotational velocity of turbine',i4,'.')
+           fail = .true.
+           go to 15
+   17      jx = filndx(27)
+           do it = 1,cnvnum(jx)
+             if (cnvpnm(jx) .eq. cnvscp(ii+1)) go to 45
+             jx = jx + cnvlen(jx)
+           enddo
+   64      write (output,2007) cnvpnm(i)
+ 2007  format ('0******** Shaft component',i5,' references nonexistent p
+     &ump, turbine, or generatr component.')
+           fail = .true.
+           go to 15
+   45      if (cnvpnm(i) .ne. cnvscp(ii+1)) then
+             write (output,2015) cnvpnm(i),cnvscp(ii+1)
+ 2015  format ('0******** Shaft component',i5,' refers to control compon
+     &ent as a generator, but shaft and generator numbers are not equal
+     &as required.')
+             fail = .true.
+             go to 15
+           endif
+           if (iand(cnvnop(i),16) .eq. 0) then
+             write (output,2016) cnvpnm(i)
+ 2016  format ('0******** Associated generator input not entered for sha
+     &ft component',i5,' but generator is referenced.')
+             fail = .true.
+             go to 15
+           endif
+           jx = jx + 4*cnvnpa(i)
+           m = jx
+           cnvscp(ii+2) = 27
+           cnvscp(ii+3) = jx - filndx(27)
+           ir = ir + 5
+           if (gentrp(jx) .ne. 0) call itrscn (ir,gentrp(jx),
+     &     gentrp(jx+1))
+           if (gendtr(jx) .ne. 0) call itrscn (ir,gendtr(jx),
+     &     gendtr(jx+1))
+           ir = ir - 5
+           if (iand(cnvnop(i),1) .eq. 0) go to 15
+           if (iand(cnvnop(i),2) .ne. 0) genvel(jx) = cnvarn(i)
+           if  (abs(cnvarn(i) - genvel(jx)) .lt. 0.10) go to 15
+           write (output,2017) cnvpnm(i),cnvscp(ii+1)
+ 2017  format ('0******** Shaft component',i5,' rotational velocity does
+     & not agree with rotational velocity of generator',i5,'.')
+           fail = .true.
+   15      ii = ii + 4
+   13    continue
+         if (m .eq. 0) go to 19
+         if (gentrp(m) .eq. 0) go to 126
+         iix = gentrp(m+1) + filndx(18)
+         if (trptm(iix) .ge. 0.0) go to 19
+  126    gentrq(m) =  genfr(m)*genvel(m)
+         if (gendtr(m) .eq. 0) go to 125
+         iix = gendtr(m+1) + filndx(18)
+         if (trptm(iix) .ge. 0.0) go to 124
+  125    gentrq(m) = gentrq(m) - hold
+  124    genpow(m) = gentrq(m)*genvel(m)
+   19  i = i + cnvlen(i)
+   20  continue
+c  Set initial conditions.
+       lhed = .false.
+       i = filndx(27)
+       do j = 1,cnvnum(i)
+         if (cnvtyp(i) .eq. 0) go to 29
+         lhed = lhed .or. (iand(cnvnop(i),1) .ne. 0)
+         go to (41,42,43,44,44,44,46,47,48,49,49,71,72,73,140,140,140,
+$if -def,hydrolod,1
+     &   29,29,150,150,150,74), cnvtyp(i)
+$if def,hydrolod,1
+     &   29,29,150,150,150,74,160), cnvtyp(i)
+         call fabend
+c  Initialize sum component.
+   41    if (iand(cnvnop(i),1).eq.0 .or. iand(cnvnop(i),2).eq.0)
+     &   go to 29
+         ii = i - 4
+         hold = cnvsan(ii)
+         do l = 1,cnvnpa(i)
+           ii = ii + 5
+           if (cnvpck(ii) .ge. 0) then
+             var(1) = fa(cnvpck(ii+1))
+             hold = hold + cnvsan(ii)*var(1)
+           endif
+         enddo
+         cnvarn(i) = cnvscl(i)*hold
+         go to 31
+c  Initialize multiplier component.
+   42    if (iand(cnvnop(i),1).eq.0 .or. iand(cnvnop(i),2).eq.0)
+     &   go to 29
+         ii  = i
+         hold = cnvscl(i)
+         do l = 1,cnvnpa(i)
+           if (cnvpck(ii) .ge. 0) then
+             var(1) = fa(cnvpck(ii+1))
+             hold = hold*var(1)
+           endif
+           ii = ii + 4
+         enddo
+         cnvarn(i) = hold
+         go to 31
+c  Initialize divider component.
+   43    if (iand(cnvnop(i),1).eq.0 .or. iand(cnvnop(i),2).eq.0)
+     &   go to 29
+         ii = i
+         var(1) = 1.0
+         var(2) = 1.0
+         do l = 1,cnvnpa(i)
+           if (cnvpck(ii) .ge. 0) var(l) = fa(cnvpck(ii+1))
+           ii = ii + 4
+         enddo
+         if (var(1) .eq. 0.0) then
+           var(1) = 1.0
+           fail = .true.
+           write (output,2001) cnvpnm(i)
+ 2001  format ('0******** Divisor in div component',i5,' is zero.')
+         endif
+         if (cnvnpa(i) .eq. 1) then
+           cnvarn(i) = cnvscl(i)/var(1)
+         else
+           cnvarn(i) = cnvscl(i)/var(1)*var(2)
+         endif
+         go to 31
+c  Initialize differential and integral components.
+   44    if (cnvpck(i) .lt. 0) go to 29
+         var(1) = fa(cnvpck(i+1))
+         cnvold(i) = var(1)
+         go to 31
+c  Initialize proportional-integral, lag, and lead-lag components.
+  140    if (cnvpck(i) .lt. 0) go to 29
+         var(1) = fa(cnvpck(i+1))
+         if (cnvtyp(i) .lt. 16) then
+           cnvold(i+2) = var(1)
+           if (iand(cnvnop(i),1) .eq. 0) go to 29
+           if (iand(cnvnop(i),2) .ne. 0) then
+             cnvold(i+3) = 0.0
+             cnvarn(i) = cnvscl(i)*cnvsan(i)*var(1)
+             go to 31
+           endif
+           cnvold(i+3) = max(min((cnvarn(i)-cnvsan(i)*cnvscl(i)*var(1))/
+     &     (cnvsan(i+1)*cnvscl(i)) , cnvmax(i)) , cnvmin(i))
+           go to 29
+         elseif (cnvtyp(i) .eq. 16) then
+           cnvold(i+1) = var(1)
+           if (iand(cnvnop(i),1) .eq. 0) go to 29
+           cnvarn(i) = cnvscl(i)*var(1)
+           go to 31
+         else
+           cnvold(i+2) = var(1)
+           if (iand(cnvnop(i),1) .eq. 0) go to 29
+           if (iand(cnvnop(i),2) .ne. 0) cnvarn(i) = cnvscl(i)*var(1)
+           cnvold(i+3) = (1.0 - cnvsan(i)/cnvsan(i+1))*cnvarn(i)
+         endif
+         go to 31
+c  Initialize pumpctl, steamctl, and feedctl components.
+  150    ii = i
+         do l = 1,cnvnpa(i)
+           if (cnvpck(ii) .lt. 0) go to 29
+           var(l) = fa(cnvpck(ii+1))
+           ii = ii + 4
+         enddo
+         if (cnvtyp(i) .ne. 22) then
+           cnvold(i+6) = var(1) - var(2)
+           if (iand(cnvnop(i),1) .eq. 0) go to 29
+           if (iand(cnvnop(i),2) .ne. 0) then
+             cnvold(i+7) = 0.0
+             cnvarn(i) = cnvsan(i+5)*cnvold(i+6)
+             go to 31
+           else
+             cnvold(i+7) = max(min((cnvarn(i) -
+     &       cnvsan(i+5)*cnvold(i+6)),cnvmax(i)),cnvmin(i))
+             go to 29
+           endif
+         else
+           cnvold(i+16) = (var(1) - var(2))*cnvsan(i+12) +
+     &     (var(3) - var(4))*cnvsan(i+13)
+           if (iand(cnvnop(i),1) .eq. 0) go to 29
+           if (iand(cnvnop(i),2) .ne. 0) then
+             cnvold(i+17) = 0.0
+             cnvarn(i) = cnvsan(i+15)*cnvold(i+16)
+             go to 31
+           else
+             cnvold(i+17) = max(min((cnvarn(i) - cnvsan(i+15)*
+     &       cnvold(i+16)),cnvmax(i)),cnvmin(i))
+             go to 29
+           endif
+         endif
+c  Initialize delay component.
+   46    if (iand(cnvnop(i),1) .eq. 0) then
+           if (.not.newrst) then
+             if (timehy .ne. safe2) then
+               var(1) = timehy - safe2
+               cnvnxt(i) = cnvnxt(i) + var(1)
+               do m = 1,cnvdct(i+1),2
+                 cnvtbl(i+m-1) = cnvtbl(i+m-1) + var(1)
+               enddo
+             endif
+           endif
+           go to 29
+         else
+           if (cnvpck(i) .lt. 0) then
+             var(1) = 0.0
+           else
+             var(1) = fa(cnvpck(i+1))
+           endif
+           cnvnxt(i) = timehy + cnvdli(i)
+           do m = 1,cnvdct(i+1),2
+             cnvtbl(i+m-1) = timehy
+             cnvtbl(i+m) = var(1)
+           enddo
+           cnvdft(i) = 0.0
+           if (iand(cnvnop(i),2) .ne. 0) cnvarn(i) = cnvscl(i)*var(1)
+         endif
+         go to 31
+c  Initialize function component.
+   47    if (iand(cnvnop(i),1).eq.0 .or. iand(cnvnop(i),2).eq.0)
+     &   go to 29
+         if (cnvgen(i) .eq. 0) go to 31
+         if (cnvpck(i) .lt. 0) go to 29
+         var(1) = fa(cnvpck(i+1))
+         l = cnvgen(i+1)
+         if (gen(l)%gttrp(1) .ne. 0) then
+           ii = gen(l)%gttrp(2) + filndx(18)
+           if (trptm(ii) .lt. 0.0) then
+             var(1) = trptm(ii)
+           else
+             write (chwrd(1),'(a8)') cnvalf(i)
+             if (chwrd(1) .eq. 'time') var(1) = var(1) - trptm(ii)
+           endif
+         endif
+         if (var(1) .eq. gen(l)%gtarg) then
+           var(2) = gen(l)%gtval(1)
+         else
+           call gtpolat (gen(l)%gtinfo,gtptr(l)%gtbl,var(1),var(2:2),
+     &     tfail)
+           gen(l)%gtarg = var(1)
+           gen(l)%gtval(1) = var(2)
+         endif
+         cnvarn(i) = cnvscl(i)*var(2)
+         go to 31
+c  Initialize standard function component.
+   48    if (iand(cnvnop(i),1).eq.0 .or. iand(cnvnop(i),2).eq.0)
+     &   go to 29
+         l = ishft(cnvnop(i),-24)
+         if (l .eq. 0) go to 29
+         if (cnvpck(i) .lt. 0) go to 29
+         var(1) = fa(cnvpck(i+1))
+         go to (111,112,113,114,115,116,117,118,119,119), l
+         call fabend
+  111    var(2) = abs(var(1))
+         go to 97
+  112    var(2) = sqrt(var(1))
+         go to 97
+  113    var(2) = exp(var(1))
+         go to 97
+  114    var(2) = log(var(1))
+         go to 97
+  115    var(2) = sin(var(1))
+         go to 97
+  116    var(2) = cos(var(1))
+         go to 97
+  117    var(2) = tan(var(1))
+         go to 97
+  118    var(2) = atan(var(1))
+         go to 97
+  119    var(2) = var(1)
+         if (cnvnpa(i) .ge. 2) then
+           ii = i
+           do jx = 2,cnvnpa(i)
+             ii = ii + 4
+             if (cnvpck(ii) .ge. 0) then
+               var(1) = fa(cnvpck(ii+1))
+               if (l .ne. 10) then
+                 var(2) = min(var(2),var(1))
+               else
+                 var(2) = max(var(2),var(1))
+               endif
+             endif
+           enddo
+         endif
+   97    cnvarn(i) = cnvscl(i)*var(2)
+         go to 31
+c  Initialize unit trip or unit delay component.
+   49    if (iand(cnvnop(i),1).eq.0 .or. iand(cnvnop(i),2).eq.0)
+     &   go to 29
+         if (cnvtrp(i) .eq. 0) go to 29
+         l = cnvtrp(i+1) + filndx(18)
+         var(2) = trptm(l)
+         if (cnvtyp(i) .ne. 11) then
+           cnvarn(i) = 0.0
+           if (iand(cnvnop(i),64) .eq. 0) then
+             if (var(2) .ge. 0.0) cnvarn(i) = cnvscl(i)
+           else
+             if (var(2) .lt. 0.0) cnvarn(i) = cnvscl(i)
+           endif
+         else
+           cnvarn(i) = cnvscl(i)*var(2)
+         endif
+         go to 31
+c  Initialize real number to integer power component.
+   71    if (iand(cnvnop(i),1).eq.0 .or. iand(cnvnop(i),2).eq.0)
+     &   go to 29
+         if (cnvpck(i) .lt. 0) go to 29
+         var(1) = fa(cnvpck(i+1))
+         cnvarn(i) = cnvscl(i)*var(1)**cnvgen(i)
+         go to 31
+c  Initialize real number to real power component.
+   72    if (iand(cnvnop(i),1).eq.0 .or. iand(cnvnop(i),2).eq.0)
+     &   go to 29
+         if (cnvpck(i) .lt. 0) go to 29
+         var(1) = fa(cnvpck(i+1))
+         cnvarn(i) = cnvscl(i)*var(1)**cnvsan(i)
+         go to 31
+c  Initialize real number to variable power component.
+   73    if (iand(cnvnop(i),1).eq.0 .or. iand(cnvnop(i),2).eq.0)
+     &   go to 29
+         ii = i
+         do l = 1,2
+           if (cnvpck(ii) .lt. 0) go to 29
+           var(l) = fa(cnvpck(ii+1))
+           ii = ii + 4
+         enddo
+         cnvarn(i) = 0.0
+         if (var(1).ne.0.0 .or. var(2).ne.0.0) cnvarn(i) =
+     &   cnvscl(i)*var(1)**var(2)
+         go to 31
+!  Initialize compare component.
+   74    if (iand(cnvnop(i),1).eq.0 .or. iand(cnvnop(i),2).eq.0)
+     &   go to 29
+         ii = i
+         do l = 1,2
+           if (cnvpck(ii) .lt. 0) go to 29
+           var(l) = fa(cnvpck(ii+1))
+           ii = ii + 4
+         enddo
+         cnvarn(i) = cnvscl(i)*(var(1) - var(2))**2
+$if def,hydrolod
+!  Initialize Force sum a component.
+  160    cnvarn(i) = 0.0
+$endif
+   31    cnvarn(i) = max(min(cnvarn(i),cnvmax(i)),cnvmin(i))
+   29    i = i + cnvlen(i)
+       enddo
+c  Restore cnvpck values.
+       i = filndx(27)
+       do j = 1,cnvnum(i)
+         if (cnvtyp(i).ne.0 .and. cnvtyp(i).ne.19) then
+           if (cnvnpa(i) .ne. 0) then
+             iix = 4
+             ii = i
+$if -def,hydrolod,1
+             if (cnvtyp(i) .eq. 1) then
+$if def,hydrolod,1
+             if (cnvtyp(i) .eq. 1 .or. cnvtyp(i) .eq. 24) then
+               iix = 5
+               ii = ii + 1
+             endif
+             do l = 1,cnvnpa(i)
+               if (cnvpck(ii) .ge. 0) cnvpck(ii+1) 
+     &         = cnvpck(ii+1) - filndx(cnvpck(ii))
+               ii = ii + iix
+             enddo
+           endif
+         endif
+         i = i + cnvlen(i)
+       enddo
+c  Edit initial values.
+       if (.not.lhed) return
+       if( iand(ihlppr(2),ishft(1,22)).eq.0 ) return
+       write (output,2000)
+ 2000  format ('0',20x,'Control variable edit')
+       i = filndx(27)
+       ii = 1
+  101  iix = min(ii+1,cnvnum(filndx(27)))
+       k = 0
+       do j = ii,iix
+         k = k + 1
+         ivar(4*k-3) = cnvpnm(i)
+         var(4*k-2) = cnvnam(i)
+         chwrd(k) = cnvtpa(cnvtyp(i))
+         var(4*k) = cnvarn(i)*cnvaro(i)
+         i = i + cnvlen(i)
+       enddo
+       write (output,2003) (ivar(4*j-3),var(4*j-2),chwrd(j),var(4*j),
+     & j=1,k)
+ 2003  format (i5,2a13,1p,g17.6,10x,i5,2a13,g17.6)
+       ii = ii + 2
+       if (ii .le. cnvnum(filndx(27))) go to 101
+       if (iand(cnvopt(filndx(27)),4) .ne. 0) then
+         if (unito) then
+           write (output,2041)
+ 2041  format ('0Generator     torque (n-m)     input power (watt)')
+         else
+           write (output,2042)
+ 2042  format ('0Generator     torque (ft-lbf)  input power (watt)')
+         endif
+         i = filndx(27)
+         do m = 1,cnvnum(i)
+           if (cnvtyp(i).eq.19 .and. iand(cnvnop(i),16).ne.0) then
+             k = i + 4*cnvnpa(i)
+             var(1) = gentrq(k)
+             if (.not.unito) var(1) = var(1)*ctrq
+             write (output,2043) cnvpnm(i),var(1),genpow(k)
+ 2043  format (i10,1p,2g17.6)
+           endif
+           i = i + cnvlen(i)
+         enddo
+       endif
+       return
+       end

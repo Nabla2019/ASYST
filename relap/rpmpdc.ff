@@ -1,0 +1,380 @@
+*mlist
+       subroutine rpmpdc(i,nc,len)
+c  Processes pump description cards for the pump component.
+c
+c  Cognizant engineer: rjw.
+c
+*in32 init
+*in32end
+c
+       implicit none
+       integer i,nc,len
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'pumpblk.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c Local variables.
+       integer kk,lx
+       integer init(12),l3d(18),l3e(9),l3h(13),l3i(9),l3j(7)
+       real cden,cflow,cinrt,crsec,ctork,ft,xinit(12),fr(10)
+       equivalence (xinit(1),init(1))
+       character lablf(22)*9
+c  Data statements.
+       data l3d/2*0,2*12,0,1,12*1/
+       data l3e/3*0,3,0,1,3*1/
+       data l3h/2*0,2*7,0,1,7*0/
+       data l3i/2*0,0,5,0,1,2,2*1/
+       data l3j/2*0,0,1,0,1,0/
+       data ft/0.3048/
+       data crsec/0.10471975512/, cflow/6.30833333e-5/,
+     & ctork/1.355817948/, cinrt/0.04214011009/, cden/16.018463374/
+       data lablf/'(rad/sec)','(rev/min)','         ','         ',
+     1            '(m3/sec) ','(gal/min)','(m)      ','(ft)     ',
+     2            '(N-m)    ','(lbf-ft) ','(kg-m2)  ','(lb-ft2) ',
+     3            '(kg/m3)  ','(lb/ft3) ','(N-m)    ','(lbf-ft) ',
+     4            '(sec)    ','(sec)    ','(rad/sec)','(rev/min)',
+     5            '(rad/sec)','(rev/min)'/
+c
+c  Read pump description cards.
+       nctble(i) = 0
+       cmptbl(i) = 0.0
+       iputdi(i+1) = 0
+       ipuhmi(i+1) = 0
+       iputmi(i+1) = 0
+       iputdi(i+1) = 0
+       ipumtk(i+1) = 0
+       ipuspi(i+1) = 0
+       ipurvi(i) = 0
+       l3h(1) = nc * 10000 + 301
+       l3h(6) = 1
+       call inp2 (fa(filndx(1)),init,l3h)
+       if (l3h(6) .gt. 0) go to 640
+       write (output,2070)
+ 2070  format ('0******** Pump s. p. table index and option card is miss
+     &ing, set to default values for continued checking.')
+       iputdi(i) = -1
+       ipuhmi(i) = -1
+       ipu2di(i) = -1
+       ipumtk(i) = -1
+       ipuspi(i) = -1
+       fail = .true.
+       go to 690
+  640  iputdi(i) = init(1)
+       if (iputdi(i).lt.-2 .or. iputdi(i).ge.1000) then
+         iputdi(i) = -1
+         write (output,"('0******** Pump table data indicator is out of 
+     &range, set to -1 for continued checking.')")
+         fail = .true.
+       endif
+       ipuhmi(i) = init(2)
+       if (ipuhmi(i).ge.-1 .and. ipuhmi(i).lt.1000) go to 650
+       ipuhmi(i) = -1
+       write (output,2072)
+ 2072  format ('0******** Pump two phase head and torque multiplier tabl
+     &e index is less than -1, set to -1 for continued checking.')
+       fail = .true.
+  650  ipu2di(i) = init(3)
+       if (ipu2di(i) .ne. -3) go to 651
+       if (ipuhmi(i) .eq. -1) go to 660
+       write (output,2146)
+ 2146  format ('0******** Two phase difference table indicator cannot be
+     & -3 when head and torque multiplier index is not -1.')
+       fail = .true.
+       go to 660
+  651  if (ipu2di(i) .ge. -2) go to 660
+       ipu2di(i) = -1
+       write (output,2073)
+ 2073  format ('0******** Pump two phase difference table indicator less
+     & than -1, set to -1 for continued checking.')
+       fail = .true.
+  660  ipumtk(i) = init(4)
+       if (ipumtk(i) .ge. -1) go to 665
+       ipumtk(i) = -1
+       write (output,2074)
+ 2074  format ('0******** Pump motor torque table index is less than -1,
+     & set to -1 for continued checking.')
+       fail = .true.
+  665  ipuspi(i) = init(5)
+       if (ipuspi(i) .ge. -1) go to 670
+       ipuspi(i) = -1
+       write (output,2075)
+ 2075  format ('0******** Pump speed table index is less than -1, set to
+     & -1 for continued checking.')
+       fail = .true.
+  670  iputrp(i) = init(6)
+       if (init(6).ge.0 .and. init(6).le.2000) go to 675
+       iputrp(i) = 0
+       write (output,2076)
+ 2076  format ('0******** Pump trip number is out of range, set to zero.
+     &')
+       fail = .true.
+  675  if (init(7).eq.0 .or. init(7).eq.1) go to 689
+       init(7) = 0
+       write (output,2077)
+ 2077  format ('0******** Pump reverse indicator not 0 or 1, set to 0 fo
+     &r continued checking.')
+       fail = .true.
+  689  cmpopt(i) = ior(cmpopt(i),ishft(init(7),5))
+  690  if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2079) (init(kk),kk=1,7)
+ 2079  format('0---- Edit of pump index & option indicators '/
+     & ' single phase table set index ................',i6/
+     & ' 2 phase head & torque multiplier table index ',i6/
+     & ' 2 phase difference table set index ..........',i6/
+     & ' pump motor torque table index ...............',i6/
+     & ' time dependent pump speed table index .......',i6/
+     & ' pump trip number index ......................',i6/
+     & ' pump reverse indicator ......................',i6/)
+c  Process next cards (302 - 304).
+       if (uniti) go to 704
+       fr(1) = crsec
+       fr(2) = cflow
+       fr(3) = ft
+       fr(4) = ctork
+       fr(5) = cinrt
+       fr(6) = cden
+       go to 706
+  704  fr(1) = 1.0
+       fr(2) = 1.0
+       fr(3) = 1.0
+       fr(4) = 1.0
+       fr(5) = 1.0
+       fr(6) = 1.0
+  706  l3d(1) = nc*10000 + 302
+       l3d(2) = -l3d(1) - 2
+       l3d(6) = 1
+       call inp2 (fa(filndx(1)),init,l3d)
+       if (l3d(6) .gt. 0) go to 710
+       write (output,2080)
+ 2080  format ('0******** Pump description parameters set to default val
+     &ues for continued checking.')
+       pmprsp(i) = 1.0
+       pmpspr(i) = 1.0
+       pmprfl(i) = 1.0
+       pmprhd(i) = 1.0
+       pmprtk(i) = 1.0
+       pmpint(i) = 1.0
+       pmprho(i) = 1.0
+       pmprmt(i) = 1.0
+       pmptf1(i) = 0.0
+       pmptf2(i) = 1.0
+       pmptf3(i) = 1.0
+       pmptf4(i) = 1.0
+       fail = .true.
+       go to 770
+  710  pmprsp(i) = xinit(1)*fr(1)
+       if (pmprsp(i) .gt. 0) go to 715
+       pmprsp(i) = 1.0
+       write (output,2081)
+ 2081  format ('0******** Rated pump speed not greater than 0., set to 1
+     &.0 for continued checking.')
+       fail = .true.
+  715  pmpspr(i) = xinit(2)
+  720  pmprfl(i) = xinit(3)*fr(2)
+       if (pmprfl(i) .gt. 0.) go to 725
+       pmprfl(i) = 1.0
+       write (output,2083)
+ 2083  format ('0******** Rated pump flow is not greater than 0., set to
+     & 1.0 for continued checking.')
+       fail = .true.
+  725  pmprhd(i) = xinit(4)*fr(3)
+       if (pmprhd(i) .gt. 0.) go to 730
+       pmprhd(i) = 1.0
+       write (output,2084)
+ 2084  format ('0******** Rated pump head is not greater than 0., set to
+     & 1.0 for continued checking.')
+       fail = .true.
+  730  pmprtk(i) = xinit(5)*fr(4)
+       if (pmprtk(i) .ge. 0.) go to 735
+       pmprtk(i) = 1.0
+       write (output,2085)
+ 2085  format ('0******** Rated pump torque not 0. or greater, set to 1.
+     &0 for continued checking.')
+       fail = .true.
+  735  pmpint(i) = xinit(6)*fr(5)
+       if (pmpint(i) .gt. 0.) go to 740
+       pmpint(i) = 1.0
+       write (output,2086)
+ 2086  format ('0******** Pump moment of inertia not greater than 0., se
+     &t to 1.0 for continued checking.')
+       fail = .true.
+  740  pmprho(i) = xinit(7)*fr(6)
+       if (pmprho(i) .ge. 0.) go to 745
+       pmprho(i) = 1.0
+       write (output,2087)
+ 2087  format ('0******** Pump rated density less than 0., set to 1.0 fo
+     &r continued checking.')
+       fail = .true.
+  745  pmprmt(i) = xinit(8)*fr(4)
+       if (pmprmt(i) .ge. 0.) go to 750
+       write (output,2088)
+ 2088  format ('0******** Pump rated motor torque is not greater than 0.
+     &, set to 1.0 for continued checking.')
+       fail = .true.
+  750  pmptf3(i) = xinit(9)*fr(4)
+       if (l3d(6) .ge. 12) go to 755
+           xinit(12) = 0.
+           if (l3d(6) .lt. 11) xinit(11) = 0.
+           if (l3d(6) .lt. 10) xinit(10) = 0.
+  755  continue
+       pmptf1(i) = xinit(10)*fr(4)
+       pmptf2(i) = xinit(11)*fr(4)
+       pmptf4(i) = xinit(12)*fr(4)
+       pmpold(i) = pmpspr(i)*pmprsp(i)
+       pmpspr(i) = pmpold(i)
+       if (uniti .neqv. unito) then
+         if (uniti) then
+               fr(1) = 1./crsec
+               fr(2) = 1./cflow
+               fr(3) = 1./ft
+               fr(4) = 1./ctork
+               fr(5) = 1./cinrt
+         endif
+       xinit(1) = xinit(1)*fr(1)
+       xinit(3) = xinit(3)*fr(2)
+       xinit(4) = xinit(4)*fr(3)
+       xinit(5) = xinit(5)*fr(4)
+       xinit(6) = xinit(6)*fr(5)
+       xinit(7) = xinit(7)*fr(6)
+       xinit(8) = xinit(8)*fr(4)
+         xinit(9) = xinit(9)*fr(4)
+         xinit(10) = xinit(10)*fr(4)
+         xinit(11) = xinit(11)*fr(4)
+         xinit(12) = xinit(12)*fr(4)
+       endif
+       lx = 0
+       if (unito) lx = 1
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2090) (xinit(kk),lablf(2*kk-lx),kk=1,8),
+     & (xinit(kk),lablf(10-lx),kk=9,12)
+ 2090  format('0Edit of pump fixed data parameters'/
+     & ' rated pump speed .................... =',1p,g14.6,a/
+     & ' pump speed ratio (initial/rated) .... =',g14.6,a/
+     & ' rated pump flow ..................... =',g14.6,a/
+     & ' rated pump head ..................... =',g14.6,a/
+     & ' rated pump torque ................... =',g14.6,a/
+     & ' pump moment of inertia .............. =',g14.6,a/
+     & ' pump rated density .................. =',g14.6,a/
+     & ' pump rated motor torque ............. =',g14.6,a/
+     & ' pump frictional torque coefficient #3 =',g14.6,a/
+     & ' pump frictional torque coefficient #1 =',g14.6,a/
+     & ' pump frictional torque coefficient #2 =',g14.6,a/
+     & ' pump frictional torque coefficient #4 =',g14.6,a)
+c  Process card 308, pump variable inertia card.
+  770  l3i(1)= nc*10000 + 308
+       l3i(6) = 1
+       call inp2 (fa(filndx(1)),xinit,l3i)
+       if (l3i(6)) 771,772,773
+  771  fail = .true.
+  772  pmptrp(i) = -1.0
+       filsiz(3) = filsiz(3) - 4
+       len = len - 4
+       go to 779
+  773  if (l3i(6) .eq. 5) go to 774
+       write (output,2143) l3i(1)
+ 2143  format ('0******** Incorrect number of words on card',i10,'.')
+       go to 771
+  774  fr(1) = 1.0
+       if (.not.unito) fr(1) = cinrt
+       pmptrp(i) = xinit(1)
+       do 775 kk = 1,4
+         pmptrp(i+kk) = xinit(kk+1)*fr(1)
+  775  continue
+       fr(1) =  1.0
+       lx = 1
+       if (unito) go to 776
+       fr(1) = 1.0/cinrt
+       lx = 0
+  776  do 777 kk = 1,4
+         xinit(kk+1) = pmptrp(i+kk)*fr(1)
+  777  continue
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2144) (xinit(kk),kk=1,5),lablf(12-lx)
+ 2144  format ('0For relative speed, s, .ge.',1p,g13.6/' pump inertia ='
+     & ,g13.6,'*s**3 +',g13.6,'*s**2 +',g13.6,'*s +',g13.6,a)
+       if  (xinit(1) .ge. 0.0) go to 779
+       write (output,2145)
+ 2145  format ('0******** Pump speed to start variable pump inertia is n
+     &egative.')
+       fail = .true.
+  779  l3e(1) = nc*10000 + 310
+       l3e(6) = 1
+       call inp2 (fa(filndx(1)),init,l3e)
+       if (l3e(6)) 781,900,780
+  781  fail = .true.
+       go to 900
+  780  cmpopt(i) = ior(cmpopt(i),4)
+       fr(1) = 1.
+       if (unito) go to 782
+           fr(1) = crsec
+  782  pmpstm(i) = xinit(1)
+       if (pmpstm(i) .ge. 0.) go to 785
+       pmpstm(i) = 0.0
+       write (output,2140)
+ 2140  format ('0******** Pump stop time is less than 0., set to 0. for
+     &continued checking.')
+       fail = .true.
+  785  pmpfsp(i) = xinit(2)*fr(1)
+       if (pmpfsp(i) .ge. 0.) go to 790
+       pmpfsp(i) = 0.0
+       write (output,2141)
+ 2141  format ('0******** Pump stop forward speed is less than 0., set t
+     &o 0. for continued checking.')
+       fail = .true.
+  790  pmpbsp(i) = xinit(3)*fr(1)
+       if (pmpbsp(i) .le. 0.) go to 800
+       pmpbsp(i) = 0.
+       write (output,2142)
+ 2142  format ('0******** Pump stop reverse speed is less than 0., set t
+     &o 0. for continued checking.')
+       fail = .true.
+       lx = 0
+       if (unito) lx = 1
+  800  fr(1) = 1.
+       if (uniti .and. unito) go to 820
+       if (.not. uniti .and. .not. unito) go to 820
+       fr(1) = crsec
+       if (uniti) fr(1) = 1/crsec
+  820  xinit(2) = xinit(2)*fr(1)
+       xinit(3) = xinit(3)*fr(1)
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2135) (xinit(kk),lablf(2*kk-lx+16),kk=1,3)
+ 2135  format ('0 Pump stop parameter values input are :'/
+     & ' pump stop time ................... =',1p,g14.6,a/
+     & ' pump maximum forward speed ....... =',g14.6,a/
+     & ' pump maximum reverse speed ....... =',g14.6,a)
+c  Process card 309, pump shaft card.
+  900  ipuctr(i) = 0
+       l3j(1) = nc*10000 + 309
+       l3j(6) = 1
+       call inp2 (fa(filndx(1)),init,l3j)
+       if (l3j(6)) 901,1000,902
+  901  fail = .true.
+       return
+  902  if (init(1).gt.0 .and. init(1).lt.10000) go to 903
+       write (output,2148)
+ 2148  format ('0******** Shaft component number out of range, set to 0.
+     &')
+       fail = .true.
+       init(1) = 0
+  903  cmpopt(i) = ior(cmpopt(i),16)
+       ipurvi(i) = init(1)
+       if (l3j(6) .eq. 1) go to 904
+       if (init(2).ge.0 .and. init(2).le.2000) go to 905
+       write (output,2149)
+ 2149  format ('0******** Shaft disconnect trip number is out of range,
+     &set to zero.')
+       fail = .true.
+  904  init(2) = 0
+  905  ipuctr(i) = init(2)
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2150) init(1),init(2)
+ 2150  format ('0Pump connected to shaft component',i5,' with disconnect
+     & trip number',i5)
+ 1000  return
+       end

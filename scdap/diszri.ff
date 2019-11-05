@@ -1,0 +1,269 @@
+*mlist
+*if def,selap
+       subroutine diszri(k,compj,igrdsp,wincl,winliq,wzrgrd,wzrinc,
+     # tzr,tox,tsur,ro,dzrinf,dinzrf,daxdis,thkgpl,pitch,igrinc,
+     # thincl,dzcond,daxgrd,retabg,thetgr,drgrdm,dia1gr,dza1gr)
+c
+c  diszri calculates the extent of interaction between the inconel grid
+c  spacer and adjacent Zr cladding.
+c
+c  Cognizant engineer: ewc.
+c
+      implicit none
+c
+      integer k,compj,igrdsp,igrinc
+      real wincl,winliq,wzrgrd,wzrinc
+      real tzr,tox,tsur,ro,dzrinf,dinzrf,daxdis,thkgpl,thincl,
+     # dzcond,pitch
+c
+c#  igrdsp    indicates existence/condition of grid spacer at this node
+c#              0 = no grid spacer at this axial node
+c#              1 = intact grid spacer
+c#              2 = grid spacer has melted this time step
+c#              3 = grid spacer has slumped away
+c#  wincl     mass of as-fabricated grid spacer at this axial node
+c#  winliq    mass of liquified inconel at this axial node
+c#  wzrgrd    mass of metallic zr in portion of fuel rod cladding that
+c#              contacts grid spacer
+c#  wzrinc    mass of zr liquified due to reaction with inconel grid
+c#              spacer
+c   tzr    = thickness of metallic phase of cladding at location of
+c            grid spacer (m).
+c   tox    = thickness of oxide layer on cladding at location of grid
+c            spacer (m).
+c   tsur   = temperature at location of grid spacer (K).
+c   ro     = outer radius of cladding at location of grid spacer (m).
+c   dzrinf = distance that reaction front has advanced into Zr cladding
+c            for case of idealized gas-tight interface (m).
+c   dinzrf = same as dzrinf, but for front passing into inconel (m).
+c   daxdis = distance that dissolution of Zr has propagated in axial
+c            direction (m).
+c   thkgpl = thickness of plate that grid spacer made with (m).
+c   thincl = height of grid spacer (m).
+c   pitch  = center-to-center spacing of fuel rods (m).
+c   daxgrd = radius of reaction zone in plate of grid spacer (m)
+c   retabg = effective radius of contact area between grid spacer
+c            cladding (m).
+c    thetgr = angle measuring circumferential spreading of reaction in
+c                 fuel rod cladding from eutectic reaction with grid
+c                spacer (radians). Due to symmetry, reaction zone is
+c                 completely spread when thetgr=pi/8.
+c   drgrdm = change in value of daxgrd during time step (m).
+c   dia1gr = position of front in one-dimensional system as adjusted
+c            for new contact area - Inconel (m)
+c   dza1gr = same as dia1gr but for Zr.
+c
+c
+c
+c
+c  Kinetics equation for inconel-Zr reaction is taken from report
+c  KfK-4921 by Garcia , Hofmann, and Denis.
+c
+*call cons
+*call contrl
+*call ufiles
+c      local variables.
+       real argsqt
+       real dzr1,din1,dzr2,din2,dzrdot,dindot,rgas
+       real volin,denin,denzr,aclad,rc
+       real dvid,ri1,ri2,thet1,thet2,vzr1,vzr2
+       real aw1,aw2,rni,rnz,
+     # dvzr,acoef,bcoef,ccoef,dz,z1,thetmx,daxgrd,retabg,
+     # thetgr,dthet,drgrdm,dxgrd0,dia1gr,dza1gr
+       real dcapi,dcapz,dia1,dza1,rc1,tmltin
+       real dxin,dxzr,thmlt
+c      rgas = universal gas constant (Pa * m**3/(kg-mole * K)
+       data rgas / 8.314/
+c      define densities of Zr and inconel
+       data denzr / 6.56e+3/, denin /6.e3/
+c      define melting temperature of Inconel 718.
+c      Note. Solidus temperature = 1533K, Liquidus = 1609K. (MATPRO).
+       data tmltin / 1609./
+       dxgrd0=daxgrd
+      if(igrinc.ge.0)then
+c     case of Zr grid spacer.
+c     assume oxide layer keeps it intact
+      igrdsp=1
+      go to 892
+      end if
+c     case of inconel grid spacer.
+c     store start of time step values of front.
+c     dzrinf, dinzrf = positions of leading edge of reaction zone in
+c     idealized geometry.
+      dzr1=dzrinf
+      din1=dinzrf
+c     rc = effective radius of contact between grid spacer and cladding.
+      if(retabg.le.2.e-3)then
+      rc=max(retabg,daxgrd)
+c     transient model.
+      else
+      rc=retabg
+      end if
+c     calculate extent of reaction during time step.
+      if(tsur.lt.1273.0.or.tzr.lt.1.e-5)then
+      dzrdot=0.0
+      dindot=0.0
+      else
+         if(tox.lt.20.e-6)then
+c      Note. Diffusivity in report equations has been changed from
+c      cm**2/s to m**2/s.
+         dzrdot=4.6364*exp(-252312./(rgas*tsur))
+         dindot=16.6127*exp(-288100./(rgas*tsur))
+         else
+           if(tox.lt.45.e-6)then
+           dzrdot=4.4792*exp(-255162./(rgas*tsur))
+           dindot=1.377e+9*exp(-504679./(rgas*tsur))
+           else
+               if(tox.lt.100.e-6)then
+               dzrdot=4.321e+5*exp(-407522./(rgas*tsur))
+               dindot=3.489e+15*exp(-693692./(rgas*tsur))
+               else
+               dzrdot=9.512e-4*exp(-172165./(rgas*tsur))
+               dindot=0.8941*exp(-253057./(rgas*tsur))
+               end if
+           end if
+         end if
+      end if
+c       Calculate changes in front using parabolic rate equation.
+c     rni=propagation of front at location in which inconel is in
+c     fresh contact with cladding.
+        rni=dindot*dt
+        rnz=dzrdot*dt
+        if(retabg.le.2.e-3.and.din1.gt.thkgpl)then
+c     model for transient area of contact.
+      rc1=rc-drgrdm
+      rc1=max(rc1,retabg)
+      aw1=pi*rc1**2
+      aw2=pi*rc**2
+       if(aw1.lt.1.e-10)aw1=1.e-10
+       if(aw2.lt.1.e-10)aw2=1.e-10
+       dcapi=(aw1/aw2)*(((dia1gr**2+rni)**0.5)-dia1gr)+((aw2-aw1)/aw2)*
+     # rni**0.5
+       dcapz=(aw1/aw2)*(((dza1gr**2+rnz)**0.5)-dza1gr)+((aw2-aw1)/aw2)*
+     # rnz**0.5
+       dia1=0.5*((rni/dcapi)-dcapi)
+       dza1=0.5*((rnz/dcapz)-dcapz)
+        dzr2=(dza1**2+dzrdot*dt)**0.5
+        din2=(dia1**2+dindot*dt)**0.5
+        dia1gr=din2
+        dza1gr=dzr2
+c      calculate growth of reaction zone in one-dimensional system
+c      taking into account new area of contact.
+        dxzr=dzr2-dza1
+        dxin=din2-dia1
+        else
+        dzr2=(dzr1**2+dzrdot*dt)**0.5
+        din2=(din1**2+dindot*dt)**0.5
+        dia1gr=din2
+        dza1gr=dzr2
+c       growth of reaction zone in one-dimensional system for case
+c       of constant contact area.
+        dxin=din2-din1
+        dxzr=dzr2-dzr1
+        end if
+        dinzrf=din1+dxin
+        dzrinf=dzr1+dxzr
+        din2=dinzrf
+        dzr2=dzrinf
+c
+c       Calculation for spread of reaction zone in grid spacer.
+c
+c       dvid=incremental increase in volume of reaction zone in Inconel.
+        dvid=0.5*pi*(rc**2)*(din2-din1)
+        dvzr=0.5*pi*(rc**2)*(dzr2-dzr1)
+c       ri1=position of leading edge of reaction zone in grid spacer
+c           at start of time step
+        ri1=daxgrd
+c       ri2=end of time step value.
+c       Note.  0.25 is result of only half of thickness of grid spacer
+c             being considered due to symmetry and only left half
+c             being considered due to symmetry.
+        ri2=(ri1**2+dvid/(0.25*thkgpl*pi))**0.5
+        if(tsur.ge.tmltin)then
+c      complete melting of grid spacer
+        ri2=0.5*thincl+1.e-6
+        end if
+            if(ri2.gt.(0.5*thincl))then
+c       melt propagation through grid spacer is completed, grid spacer
+c       will now slump.
+             igrdsp=3
+             ri2=0.5*thincl
+             end if
+        volin=0.125*thkgpl*pi*ri2**2
+        winliq=volin*denin
+        daxgrd=ri2
+        drgrdm=daxgrd-dxgrd0
+        if(din2.lt.(0.5*thkgpl))drgrdm=0.0
+c
+c     Calculation for spread of reaction zone in cladding
+c
+       if(tzr.lt.1.e-5)then
+c      cladding has no significant metallic layer, so reaction zone
+c      cannot spread into cladding.
+       wzrinc=0.0
+       daxdis=0.0
+       thetgr=0.0
+       dzrinf=0.0
+       go to 890
+       end if
+       thet1=thetgr
+       z1=daxdis
+c      aclad = cross section area of of one radian of cladding.
+        aclad=(ro**2-(ro-tzr)**2)
+c      vzr1 = volume of reaction zone in cladding at start of time step.
+       vzr1=0.5*aclad*thetgr*daxdis
+       if(igrdsp.eq.3.and.dzr1.lt.1.e-6)then
+c      All of grid spacer has melted in one time step.
+       dvzr=(dzr2/din2)*dvid
+       vzr2=vzr1+dvzr
+       else
+        if(dzr2.le.tzr)then
+c      case of reaction zone penetrating into cladding only at
+c      location of grid spacer contact point.
+        vzr2=0.5*pi*(rc**2)*dzr2
+        else
+          if(thetgr.lt.((pi/4.)-1.e-6))then
+c         case of reaction zone spreading in both circumferential and
+c         axial directions.
+          acoef=1.
+          bcoef=ro*(0.5*thet1+z1/ro)
+          ccoef=-ro*dvzr/aclad
+          argsqt=(bcoef**2)-4.*acoef*ccoef
+            if(argsqt.le.0.0)then
+            dz=0.0
+            else
+            dz=(-bcoef+sqrt((bcoef**2)-4.*acoef*ccoef))/(2.*acoef)
+            end if
+          dthet=dz/ro
+          thet2=thet1+dthet
+          if(thet2.gt.(pi/4.))thet2=pi/4.
+          thetgr=thet2
+          daxdis=dz+z1
+          thmlt=0.5*thincl
+          daxdis=min(daxdis,dzcond,thmlt)
+          vzr2=0.5*aclad*thetgr*daxdis
+          else
+c        case of reaction zone growing only in axial direction.
+         thetmx=0.25*pi
+         dz=(8./pi)*dvzr/aclad
+         daxdis=z1+dz
+         thmlt=0.5*thincl
+         daxdis=min(daxdis,dzcond,thmlt)
+         vzr2=0.5*aclad*thetmx*daxdis
+         end if
+        end if
+       end  if
+       wzrinc=vzr2*denzr
+890   continue
+c      Multiply volumes time 8. to account for fact that cladding is
+c      contacted by grid spacer at four points and that two-fold
+c      symmetry considered at each point of contact.
+       if(igrinc.ne.0)then
+      winliq=4.*winliq
+       if(winliq.gt.wincl)winliq=wincl
+       wzrinc=4.*wzrinc
+       end if
+892   continue
+      return
+      end
+*endif

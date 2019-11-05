@@ -1,0 +1,928 @@
+*mlist
+      subroutine dtstep
+c
+c  Controls time step selection and frequency of output and plotting
+c  edits during transient advancement.
+c
+c  Cognizant engineer: rjw.
+c
+*in32 jecf
+*in32end
+c
+$if def,msnt
+$if -def,ifortc,1
+       use dflib
+$if def,ifortc,1
+       use ifqwin
+$endif
+$if def,rma,1
+       use interfaces
+       use lpdatc
+$if def,rk3d,1 
+       use rkinc, only:rsflag 
+       use statcc
+       use tstpctc
+$if def,msnt
+$if -def,ifortc,1
+       use dflib
+$if def,ifortc,1
+       use ifqwin
+$endif
+       implicit none
+$if def,dll
+!dec$ attributes dllexport :: /comctl/
+!dec$ attributes dllexport :: /contrl/
+!dec$ attributes dllexport :: /fast/
+$endif
+       include 'fast.h'
+       include 'cpmdat.h'
+       include 'scddat.h'
+       include 'scntl.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'convarc.h'
+       include 'jundat.h'
+       include 'lcntrl.h'
+       include 'npacom.h'
+       include 'coupl.h'
+       include 'statec.h'
+       include 'trpblk.h'
+       include 'tsctlc.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'scdout.h'
+       include 'slumpv.h'
+       include 'ndxara.h'
+       include 'tblsp.h'
+       include 'ufilef.h'
+$if def,hp,2
+       common /cease/ desist
+       integer desist
+       common /dgstepg/ mitime
+       logical mitime
+$if def,rma
+        integer ifirst
+        data ifirst /0/
+        integer ncycle
+        real*4 time,cpu,dtrel
+ !xdec$ attributes dllimport :: /mxxtim/
+        common /mxxtim/ time,dtrel,cpu,ncycle
+$endif
+c
+c  Local variables.
+       real af,dtadj,dtctr,dthyx,dtintv,dtrem,
+     & dtx,prevnd,rf,ssdtim,stsold,timlft
+       integer i,icoran,iecf,iplt,iprnt,ivskp2,
+     & j,k,lncnt,m,numdt,nwqa
+       logical last,flag,flagl
+       character messg*133
+       integer(8) ia8(lfsiz)
+       equivalence (fa(1),ia8(1))
+c
+       save dtctr,dtx,prevnd,timlft
+       save icoran,lncnt,flagl
+c
+c  af     = amplification factor for time step (normally = 2.0)
+c  curtmi = time for next minor edit
+c  curtmj = time for next major edit
+c  curtrs = time for next restart edit
+c  dtadj  = the adjusted dt (doubled/halved)
+c  dtctr  = control dt
+c  dthyx  = minimum of new adj dt and last time step value of dtx
+c  dtintv = dt interval for minor/plot, major, or restart edits
+c  dtrem  = time remaining on cpu clock for this problem
+c  dtx    = courant dt
+c  flag   = true if we still need to do some steps to get to dtmax
+c  icoran = bin number to use for Courant limit (normally = 2)
+c  iecf   = packed word for minor edits, plots, major edits, & restarts
+c           edit control flag, 4 bits, numbered from right
+c           1 (=1) call rstrec for restart edits
+c           2 (=2) call majout for major edits
+c           3 (=4) call mirec for minor edits
+c           4 (=8) call pltrec for plot edits
+c           also used as a counter in the courant limit calculations
+c  iplt   = temporary storage for iecf?
+c  iprnt  = local value of print
+c  ivskp2 = some bits out of print
+c  j      = pointer to next timestep card
+c  last   = true if this is the last adv. for this time step card
+c  numdt  = integer number of dtmax steps between timehy and the
+c           current edit times (curtmi, curtmj, curtrs)
+c  nwqa   = pointer to second half of plot file scratch area
+c  prevnd = previous time step card end time
+c  rf     = retardation factor for time step (normally = 0.5)
+c  ssdtim = steady state time step
+c  stsold = time for next write to screen
+c  timlft = time left on this time step card, tpsend(i)-timehy
+c
+       save nwqa
+       integer iwrd8
+$if def,npa,2
+$if def,in32,1
+       real*4 time4
+       include 'pvmvr5.h'
+$if def,pvmcoupl,1
+       integer nstat
+c
+c  Data statements.
+       data dtrem/100.0/
+       data stsold/0.0/
+       data af/2.0/, rf/0.50/
+       data iwrd8/8/
+c
+$if def,rjw
+       k = filndx(4)
+       if (succes .ne. 0) then
+         do m = 1,nvols(k)
+           iecf = iand(ishft(vctrl(k),-8),o'3777')
+           if (iand(iecf,o'3757') .ne. 0) then
+             write (21,
+     &     "('dtreduc',i7,2es13.5,i10,o6)")
+     &       ncount,timehy-dt,dt,volno(k),iecf
+           endif
+           k = k + ivskp
+         enddo
+       else
+         do m = 1,nvols(k)
+           iecf = iand(ishft(vctrl(k),-8),o'3777')
+           if (iecf.ne.0 .and. errmax.gt.errlo .and. nrepet.gt.1)
+     &     write (21,"('dtnoexp',i7,2es13.5,i10,o6)")
+     &     ncount,timehy-dt,dt,volno(k),iecf
+           k = k + ivskp
+         enddo
+       endif
+$endif
+       rewind inpout
+       if (succes .eq. 0) then
+         do issys = 1,nloops
+           lpdat(issys)%lsuces = 0
+         enddo
+       elseif (succes .eq. 8) then
+         succes = 1
+       endif
+       aflag = .false.
+       last = .false.
+       iecf = 0
+       i = curctl
+c
+c  Initialization section.
+       if (.not.skipt) then
+         stsold = 0.0
+         lncnt = 0
+         nwqa = iplotlen/2
+         nwq = nwqa + ixpc
+         nwqa = nwqa + 1
+c  960 = 512 + 256 + 128 + 64.
+         print = ior(iand(print,not(960)),
+     &   iand(ishft(tstpct(i)%tsppac,4),960))
+c  Set skipt true if this is a restart.
+         if (ncount .ne. 0) skipt = .true.
+         iecf = 15
+         if (chngno(17)) then
+           af = 4.00
+           rf = 0.25
+           chngno(60) = .true.
+         endif
+c
+c  Compute the times at which to do the edits and set icoran.
+         if (chngno(60)) then
+           icoran = 1
+           prevnd = timehy
+           curtmi = min(tstpct(i)%tspend,timehy +
+     &     tstpct(i)%tsppmi*tstpct(i)%dtmax)
+           curtmj = min(tstpct(i)%tspend,timehy +
+     &     tstpct(i)%tsppmj*tstpct(i)%dtmax)
+           curtrs = min(tstpct(i)%tspend,timehy +
+     &     tstpct(i)%tspprs*tstpct(i)%dtmax)
+           if (.not.skipt) then
+c  Not a restart run, so start it out slowly.
+             dthy = 0.1*tstpct(i)%dtmax
+             dtht = 0.1*tstpct(i)%dtmax
+           endif
+           dtx = dthy
+         else
+c  On-line selection.
+           if (chngno(15) .or. iand(print,512).ne.0) then
+             icoran = 1
+           else
+             icoran = 2
+           endif
+           dthy = tstpct(i)%dtmax
+           dtht = dthy
+           if (nrepet .eq. 0 ) then
+             nrepet = 1
+             nstsp = nstsp - 1
+             curcmi = curcmi + 1
+             curcmj = curcmj + 1
+             curcrs = curcrs + 1
+           endif
+         endif
+         if (.not.skipt) then
+           skipt = .true.
+           aflag = .true.
+           dt = dthy
+         endif
+       endif
+c
+       nmechk = iand(tstpct(i)%tsppac,1) .eq. 0
+       ssdtim = tstpct(i)%dtmax
+c
+c  Update cpu time used.
+       call timer (safe1)
+       stscpu = stscpu + safe1
+c
+c  Check to see if we exceeded our cpu limits.
+       if (cpurem(1) .ne. 0.0) then
+         dtrem = 1.0e20
+         if (cpurem(3) .ne. 0.0) then
+c  Decrement cpu time left.
+           cpurem(3) = cpurem(3) - safe1
+           dtrem = cpurem(3)
+         endif
+c  Check for overrunning alloted cpu time.
+         if (dtrem .le. cpurem(1)) then
+           done = -4
+c  Set all edit bits true.
+           iecf = 15
+c  Go do edits and quit.
+           go to 27
+         endif
+       endif
+c
+c  Check if dump file is requested on 105 card.
+       if (cpurei(4) .lt. 0) then
+c  Check if this is the time to do the dump file.
+         if (cpurei(5) .le. ncount) then
+c  Check if this is first dump file.
+           if (cpurei(4) .eq. -1) then
+             call dmpcom (1)
+$if def,msnt
+$if -def,anydll,2
+             if (filsch(15)(1:1) .eq. '1')
+     &       k = setexitqq(qwin$exitnopersist)
+$endif
+             stop 'dtstep-1, 105 dump'
+           elseif (cpurei(4) .eq. -2) then
+             call dmpcom(1)
+             cpurei(4) = -3
+             succes = max(succes,1)
+             timehy = timehy - dt
+c  Go load old time values for repeated time step.
+             go to 14
+           else
+             call dmpcom (2)
+$if def,msnt
+$if -def,anydll,2
+             if (filsch(15)(1:1) .eq. '1')
+     &       k = setexitqq(qwin$exitnopersist)
+$endif
+             stop 'dtstep-2, 105 dump'
+           endif
+         endif
+       endif
+c
+       if (help .ne. 0) then
+         if (help .eq. -2) then
+           help = 0
+         elseif (help .lt. 0) then
+           done = -3
+           fail = .true.
+           iecf = 15
+           go to 27
+         elseif (help .le. 2) then
+           help = -help
+           succes = max(succes,1)
+           go to 19
+         endif
+       endif
+c  Check if advancements have failed.
+       if (.not.fail) then
+c  Come here for a good advancement.
+         dtadj = dt
+         if (succes .le. 1) then
+           if (succes .eq. 0) go to 100
+c  Unsuccessful, check whether time step should be repeated with halved
+c  time step.
+           if (iand(tstpct(i)%tsppac,1) .eq. 0) then
+             succes = 0
+             if (.not.chngno(60)) nrepet = nrepet - 1
+c  Go adjust time step size.
+             go to 101
+           endif
+         endif
+$if -def,3dkin,2
+         if (.not.chngno(60)) nrepet = nrepet + nrepet
+         timehy = timehy - dt
+$if def,3dkin,3
+         timehy = timehy - dt               
+         if(succes .eq. 999) go to 14
+         if (.not.chngno(60)) nrepet = nrepet + nrepet
+         dt = rf*dt
+         nmechk = nmechk .or. (rf*dt .le. tstpct(i)%dtmin)
+         if (dt .le. tstpct(i)%dtmin) go to 70
+         go to 14
+       else
+         help = -1
+         succes = max(succes,1)
+       endif
+c  Repeat this advancement
+   19  timehy = timehy - dt
+       write (output,2004)
+ 2004  format ('0******** Trouble, last advancement being repeated with
+     & debug printout.')
+c  Load old-time values for repeated advancement
+   14  if (iand(tstpct(i)%tsppac,2) .ne. 0) timeht = timehy
+       strdc2 = strdc2 + 1
+       k = filndx(4)
+cdir$ ivdep
+       do m = 1,nvols(k)
+         vctrl(k) = ior(iand(vctrl(k),not(ishft(4194303,8))),
+     &   ishft(iand(vctrl(k),524032),11))
+         vctrlx(k) = iand(vctrlx(k),not(2))
+         k = k + ivskp
+       enddo
+       call mover (.true.)
+       k = filndx(4)
+cdir$ ivdep
+       do m = 1,nvols(k)
+         vctrl(k) = iand(vctrl(k),not(524032))
+         k = k + ivskp
+       enddo
+       go to 450
+   70  dt = af*dt
+       if (.not. chngno(60)) nrepet = nrepet/2
+       timehy = timehy + dt
+       k = succes - 2
+       if (k .ge. 0) then
+         if (k .eq. 0) then
+           write (output,2001)
+ 2001  format ('0******** Thermodynamic property error with minimum time
+     & step, transient being terminated.')
+         else
+           write (output,2005)
+ 2005  format ('0******** Radiation stability limit at minimum time step 
+     &, transient being terminated.')
+         endif
+         help = -1
+         go to 19
+       endif
+       if (nany .gt. 0) then
+         nany = nany - 1
+         write (output,2002) ncount,timehy
+ 2002  format ('0$$$$$$$ Advancement',i8,' for time =',1p,e14.6,' had ex
+     &cessive error at the minimum time step.')
+         if (nany .eq. 0) write (output,2003)
+ 2003  format (' Above message being suppressed after 100 occurances.')
+       endif
+       succes = 0
+c  Come here for a good advancement.
+c  Tranfer printed information to print file if written to scratch file.
+  100  continue
+!     delete following "if block" per Marina to preclude excessive
+!     printout with inpout.
+! 100  if (iand(imdctl(1),dmwrite) .ne. 0) then
+!        imdctl(1) = iand(imdctl(1),not(dmwrite))
+!        do
+!          read (inpout,"(a)",iostat=k) messg
+!          if (k .lt. 0) then
+!            rewind inpout
+!            exit
+!          endif
+!          write (output,"(a)") trim(messg)
+!        enddo
+!      endif
+       if (.not.chngno(60)) nrepet = nrepet - 1
+       if (iand(tstpct(i)%tsppac,1).ne.0 .and.
+     & errmax.gt.errlo .and. dt.gt.tstpct(i)%dtmin) go to 150
+c  If errmax is small, can double time-step.
+  101  if (chngno(60)) then
+c  Increase dt gradually when the mass error is small.
+         dtadj = 1.1*dtadj
+       else
+         if (mod(nrepet,2) .eq. 0) then
+           dtadj = af*dtadj
+           nrepet = nrepet/2
+         endif
+       endif
+  150  nmechk = nmechk .or. (rf*dt .le. tstpct(i)%dtmin)
+c
+c  Update the statistics
+       if (iecf .eq. 0) then
+         stsdtn = min(stsdtn,dt)
+         stsdtx = max(stsdtx,dt)
+         stsdta = stsdta + dt
+         k = filndx(4)
+         do j = 1,nvols(k)
+           statv(j)%stlte2 = statv(j)%stlte2 +
+     &     iand(ishft(vctrl(k),-12),1)
+           statv(j)%strxl2 = statv(j)%strxl2 +
+     &     iand(ishft(vctrl(k),-22),1)
+           statv(j)%strex2 = statv(j)%strex2 +
+     &     iand(ishft(vctrl(k),-21),1)
+           statv(j)%strte2 = statv(j)%strte2 +
+     &     iand(ishft(vctrl(k),-20),1)
+           statv(j)%strap2 = statv(j)%strap2 +
+     &     iand(ishft(vctrlx(k),-1),1)
+           statv(j)%strdp2 = statv(j)%strdp2 +
+     &     iand(ishft(vctrlx(k),-2),1)
+           statv(j)%stvpk2 = statv(j)%stvpk2 +
+     &     iand(ishft(vctrlx(k),-3),1)
+           if (iand(vctrl(k),ishft(516352,11)) .ne. 0) statv(j)%strpe2 =
+     &     statv(j)%strpe2 + 1
+           vctrl(k) = iand(vctrl(k),not(ishft(4194303,8)))
+           vctrlx(k) = iand(vctrlx(k),not(2))
+           vctrlx(k) = iand(vctrlx(k),not(ishft(1,2)))
+           vctrlx(k) = iand(vctrlx(k),not(ishft(1,3)))
+           k = k + ivskp
+         enddo
+         k = filndx(5)
+         do j = 1,njuns(k)
+           statj(j)%stjck2 = statj(j)%stjck2 + iand(jc(k),1)
+           statj(j)%stccf2 = statj(j)%stccf2 + iand(ishft(jcex(k),-1),1)
+           statj(j)%stjpk2 = statj(j)%stjpk2 +
+     &     iand(ishft(jcex(k),-21),1)
+           jcex(k) = iand(jcex(k),not(ishft(1,21)))
+           k = k + ijskp
+         enddo
+       endif
+c
+c  Move the "d" bits from time step card into edit control flag.
+       iecf = ior(iecf,ishft(tstpct(i)%tsppac,-11))
+       if (chngno(60)) then
+         flag = .false.
+       else
+         flag = nrepet .ne. 0
+       endif
+c
+c  Check if we still need some advancements to make it to dtmax.
+c  *** The following change to the test on flag and the other tests
+c  *** using flag (marked by preceeding comment using cc) are a
+c  *** temporary fix.
+cc
+       if (.not.flag) then
+c
+c  Get new time-step after successful advancement to original newtime.
+c  Do necessary edits and plot records.
+       aflag = .true.
+       nstsp = nstsp + 1
+cc
+       endif
+c
+c  Check if we have run out of cpu time.
+       if (dtrem .le. cpurem(2)) done = -4
+c
+c  Check for trips to terminate transient (2 possibilities).
+       if (filid(18) .ne. 0.0) then
+         if (ntrps1(filndx(18)) .ne. 0) then
+           if (trptm(ntrps1(filndx(18)+1)) .ge. 0.0) done = -2
+           if (ntrps2(filndx(18)) .ne. 0) then
+             if (trptm(ntrps2(filndx(18)+1)) .ge. 0.0) done = -2
+           endif
+         endif
+       endif
+c
+c  Check control variables for time step control.
+       if (tspctr(1) .ne. 0) then
+         dtctr = cnvarn(tspctr(2))
+         if (dtctr .le. 0.0) then
+           write (output,2010)
+ 2010  format ('0******** Time step limit from control system is less th
+     &an or equal to zero.')
+           fail = .true.
+           done = -1
+         endif
+         dtctr = max(tstpct(i)%dtmin,dtctr)
+       else
+         dtctr = 1.0e75
+       endif
+cc
+       if (.not.flag) then
+c
+c  Check if we need the next new time step card.
+       last = flagl
+       if (last) then
+         j = curctl + 1
+c
+c  Check if there are any more time step cards available.
+         if (j .gt. curclm) then
+c  Then we have used last card, set flags to quit.
+           last = .false.
+           done = -1
+         else
+c
+c  Put data from next time step card into print.
+c  Save the previous end time in prevnd.
+           prevnd = tstpct(i)%tspend
+           i = i + 1
+c  960 = 512 + 256 + 128 + 64.
+           print = ior(iand(print,not(960)),
+     &     iand(ishft(tstpct(i)%tsppac,4),960))
+         endif
+         iecf = 15
+       else
+c
+c  Still have some more adv left to do with current time step card.
+c  The advancements are to continue.
+         if (chngno(60))then
+           if (timehy .ge. curtmi) then
+             iecf = ior(iecf,12)
+c  Include case where current time step size is greater than dtmax.
+             dtintv = tstpct(i)%tsppmi*tstpct(i)%dtmax
+             numdt = int((timehy - prevnd)/dtintv) + 1
+             curtmi = min(tstpct(i)%tspend,prevnd + numdt*dtintv)
+           endif
+           if (timehy .ge. curtmj) then
+             iecf = ior(iecf,14)
+             dtintv = tstpct(i)%tsppmj*tstpct(i)%dtmax
+             numdt = int((timehy - prevnd)/dtintv) + 1
+             curtmj = min(tstpct(i)%tspend,prevnd + numdt*dtintv)
+           endif
+           if (timehy .ge. curtrs) then
+             iecf = 15
+             dtintv = tstpct(i)%tspprs*tstpct(i)%dtmax
+             numdt = int((timehy - prevnd)/dtintv) + 1
+             curtrs = min(tstpct(i)%tspend,prevnd + numdt*dtintv)
+           endif
+         else
+           curcmi = curcmi - 1
+           curcmj = curcmj - 1
+           curcrs = curcrs - 1
+           if (curcmi .le. 0) then
+             curcmi = tstpct(i)%tsppmi
+             iecf = ior(iecf,12)
+           endif
+           if (curcmj .le. 0) then
+             curcmj = tstpct(i)%tsppmj
+             iecf = ior(iecf,14)
+           endif
+           if (curcrs .le. 0) then
+             curcrs = tstpct(i)%tspprs
+             iecf = 15
+           endif
+         endif
+       endif
+cc
+       endif
+       if (done .ne. 0) iecf = 15
+c
+c  Do requested edits.
+c  Test for steady state.
+c  If steady state is achieved, done = -5 and iecf = mask(4).
+   27  if (ishft(iroute,-6) .eq. 1) call sstchk(iecf, ssdtim)
+       iprnt = print
+c
+c  Write message every 10 cpu seconds to keep user informed of Relap5's
+c  progress or lack thereof.
+   39  if (stscpu .ge. stsold) then
+         stsold = stscpu + 10.0
+$if def,npa,1
+         if (iand(print,32) .eq. 0) then
+           if (lncnt .le. 0) then
+             lncnt = 10
+$if def,selap,5
+             if (scntrl(1)) then
+               write (tty,
+     & "('  cpu.sec    prob.time',11x,'dt     errmax     dtcrnt   ncount
+     &  bgmct')")
+             else
+               write (tty,
+     & "('  cpu.sec    prob.time',11x,'dt     errmax     dtcrnt   ncount
+     &')")
+$if def,selap,1
+             endif
+           else
+             lncnt = lncnt - 1
+           endif
+$if def,npa,1
+         endif
+$if def,selap,4
+         if (scntrl(1)) then
+           write (messg,"(f9.0,2es13.6,2es11.4,i9,f7.1)")
+     &     stscpu,timehy,dt,errmax,dtn,ncount,bgmct
+         else
+           write (messg,"(f9.0,2es13.6,2es11.4,i9)")
+     &     stscpu,timehy,dt,errmax,dtn,ncount
+$if def,selap,1
+         endif
+$if def,npa,1
+         if (iand(print,32) .eq. 0) then
+           write (tty,'(a)') messg(1:80)
+$if def,npa
+         else
+$if -def,in32,1
+           call fmessg (m,1,timehy,messg)
+$if def,in32,2
+           time4 = timehy
+           call fmessg (m,1,time4,messg)
+           if (m .ne. 0) write (tty,2008)
+ 2008 format(' Error number',i5,' returned from NPA message routine.')
+         endif
+$endif
+$if def,selap
+         if (icoup(1).ge.2) then
+           write (messg,2096) hgtdeb(1),tmpdmx(1),twalmx(1)
+ 2096  format ('debris height=',f6.3,' max. deb. temp.=',f6.1,
+     & ' max. structure temp.=',f6.1)
+$if def,npa,1
+           if (iand(print,32) .eq. 0) then
+             write (tty,'(a)') messg(1:80)
+$if def,npa
+           else
+$if -def,in32,1
+             call fmessg (m,1,timehy,messg)
+$if def,in32,2
+             time4 = timehy
+             call fmessg (m,1,time4,messg)
+             if (m .ne. 0) write (tty,2008)
+           endif
+$endif
+         endif
+$endif
+       endif
+       iplt = iecf
+       iecf = iand(iecf,iprnt)
+       mitime = iand(iecf,4) .ne. 0
+c  Write out the edits based on the flags.
+       if (iand(iecf,4) .ne. 0) then
+         if (iand(ihlppr(2),ishft(1,23)).ne.0) call mirec
+       elseif (done .eq. -7) then
+         done = -done
+       endif
+       if (iand(iecf,2) .ne. 0) call majout
+$if -def,rk3d,1
+       if (iand(iecf,1) .ne. 0) call rstrec
+$if def,rk3d
+       if (iand(iecf,1) .ne. 0) then
+         call rstrec
+         rsflag = .true.
+       else
+         rsflag = .false.
+       endif
+$endif
+       ivskp2 = iand(iplt,ishft(iprnt,3))
+       if (iand(iplt,8) .ne. 0) then
+         if (iand(ivskp2,8).ne.0 .or. iand(iprnt,32).ne.0) then
+           call pltwrt
+$if def,npa
+           if (iand(iprnt,32) .ne. 0) then
+             call ftrans (m,fa(ixpc+1))
+             if (m .ne. 0) write (tty,2009) m
+ 2009  format (' Error number',i5,' returned from NPA frame routine.')
+           endif
+$endif
+           if (iand(ivskp2,8) .ne. 0) then
+$if -def,in32,1
+             call sqoz (fa(ixpc+1),fa(ixpc+1),iplotlen-1)
+             write (rstplt) nwqa,iwrd8
+             write (rstplt) (ia8(k),k=ixpc,nwq)
+           endif
+         endif
+       endif
+$if def,rma
+       time = timehy
+       cpu = stscpu
+       ncycle = ncount
+       dtrel = dt
+       if (ifirst .eq. 0) then
+         call relsim (2)
+       else
+         call relsim (3)
+       endif
+       call simstate
+       ifirst = ifirst + 1
+$endif
+$if -def,readnonb
+$if def,npa
+       if (iand(iprnt,32) .ne. 0) then
+         if (done .eq. 0) call interi
+         if (done .eq. (-7)) then
+           iecf = ieor(iplt,15)
+           iprnt = iand(iprnt,not(32))
+           go to 39
+         endif
+       endif
+$endif
+$endif
+$if def,readnonb,1
+       if (done .eq. 0) call interi
+$if def,hp
+c  desist = -99 indicated a control-C on an HP workstation
+       if( desist .eq. -99 ) then
+         done = -7
+         desist = 0
+       endif
+$endif
+       if (done .eq. (-7)) then
+         iecf = ieor(iplt,15)
+         iprnt = iand(iprnt,not(32))
+         go to 39
+       endif
+c
+c  Check for last advancement using this time step card.
+       if (last) then
+c
+c  Update pointers to items on next time step card.
+         curctl = j
+         if (chngno(60)) then
+c  Update previous time step end time.
+           if (timehy .ge. curtmi) then
+c  Include case where current time step size is greater than dtmax.
+             dtintv = tstpct(i)%tsppmi*tstpct(i)%dtmax
+             numdt = int((timehy - prevnd)/dtintv) + 1
+             curtmi = min(tstpct(i)%tspend,prevnd + numdt*dtintv)
+           endif
+           if (timehy .ge. curtmj) then
+             dtintv = tstpct(i)%tsppmj*tstpct(i)%dtmax
+             numdt = int((timehy - prevnd)/dtintv) + 1
+             curtmj = min(tstpct(i)%tspend,prevnd + numdt*dtintv)
+           endif
+           if (timehy .ge. curtrs) then
+             dtintv = tstpct(i)%tspprs*tstpct(i)%dtmax
+             numdt = int((timehy - prevnd)/dtintv) + 1
+             curtrs = min(tstpct(i)%tspend,prevnd + numdt*dtintv)
+           endif
+         else
+           curcmi = tstpct(i)%tsppmi
+           curcmj = tstpct(i)%tsppmj
+           curcrs = tstpct(i)%tspprs
+         endif
+       endif
+c
+c  Are we finished with this transient?
+       if (done .ne. 0) then
+$if def,npa
+         if (iand(print,32) .ne. 0) then
+           call ftrmpa (m)
+           if (m .ne. 0) write (tty,2007) m
+ 2007  format (' Error number',i5,' returned from close of NPA.')
+         endif
+$endif
+$if def,pvmcoupl
+         if (filid(31) .ne. 0.0) then
+           if (chdprc .eq. 1) then
+             call pvmrcv
+             call pvmsnd
+           else
+             call pvmsnd
+             call pvmrcv
+           endif
+           if (pvmerr .lt. 0) then
+             last = .false.
+             fail = .true.
+             done = -1
+             filid(31) = 0
+             call pvmfexit (nstat)
+             iecf = 15
+             go to 27
+           endif
+         endif
+$endif
+         if (filid(16) .ne. 0.0) then
+           if( iand(ihlppr(2),ishft(1,23)).ne.0 ) call mirec
+         endif
+         return
+       endif
+c
+c  Set the next time step size.
+       dt = dtadj
+       if (chngno(60)) then
+         flag = .true.
+       else
+         flag = nrepet .eq. 0
+       endif
+c
+c  Are we done with this time step yet?
+       if (flag) then
+$if def,pvmcoupl
+         if (filid(31) .ne. 0.0) then
+           if (chdprc .eq. 1) then
+             call pvmrcv
+             call pvmsnd
+           else
+             call pvmsnd
+             call pvmrcv
+           endif
+           if (pvmerr .lt. 0) then
+             last = .false.
+             fail = .true.
+             done = -1
+             filid(31) = 0
+             call pvmfexit (nstat)
+             iecf = 15
+             go to 27
+           endif
+         endif
+$endif
+         if (chngno(60)) then
+c  Set new time step size to old courant limit.
+           dthy = dtx
+c
+c  If we are between one and two time steps from the end time,
+c  take it in two equal steps,
+c  If less than one time step from the end, take it in one step.
+           timlft = tstpct(i)%tspend - timehy
+c  Pick the minimum of last time step courant limit and current dthy.
+           dthyx = dthy
+           if (timlft .le. 2.0*dthyx) then
+             if (timlft .gt. dthyx) then
+               dthy = 0.5*timlft
+             else
+               dthy = timlft
+             endif
+           endif
+           dt = min(dt,dthy)
+         else
+c  Set new time step size to max dt.
+           dthy = tstpct(i)%dtmax
+           flagl = .false.
+           if (timehy + 1.1*dthy .ge. tstpct(i)%tspend) then
+             flagl = .true.
+             dthy = tstpct(i)%tspend - timehy
+           endif
+           dt = dthy
+           nrepet = 1
+c
+c  Reduce the time step to be no larger than 50% greater than previously
+c  scheduled time step.
+           dtadj = 1.5*dtadj
+           do
+             if (dt .le. dtadj) exit
+             nrepet = nrepet + nrepet
+             dt = rf*dt
+           enddo
+         endif
+         dtht = dthy
+       endif
+c
+c  Compute courant limit and reduce hydrodynamic time step if necessary.
+       if (chngno(60)) then
+         call courn1 (dtx)
+         dtx = min(dtx,1.1*dt,tstpct(i)%dtmax)
+         dtx = max(dtx,tstpct(i)%dtmin)
+       else
+         if (chngno(64)) then
+c  Call the new courant limit routine that uses the junction velocities
+c  instead of the volume averaged velocities when 64 is on.
+           call courn1(dtx)
+         else
+           call cournt (icoran,dtx)
+         endif
+       endif
+c  Set dtx to the minimum of courant, control, and 110% old value.
+c  Restrict new dt to be no more than 1.1 times old dt.
+       dtx = min(dtx,dtctr)
+       if (dt .gt. dtx) then
+         if (chngno(60)) then
+           dt = dtx
+c
+c  Adjust dt so that we take two smaller steps at the end if necessary.
+           if (timlft .le. 2.0*dt) then
+             if (timlft .gt. dt) then
+               dt = 0.5*timlft
+             else
+               dt = timlft
+             endif
+           endif
+         else
+           do
+             dt = rf*dt
+             nrepet = nrepet + nrepet
+             if (dt .le. dtx) exit
+           enddo
+         endif
+       endif
+c
+c  Successful advancement, go on to the next advancement.
+  450  ncount = ncount + 1
+       if (cpurei(4) .gt. 0) then
+         if (ncount .ge. cpurei(4) ) help = 3
+         if (ncount .gt. cpurei(5)) then
+           iecf = 15
+           ncount = ncount - 1
+           done = 8
+           go to 39
+         endif
+       endif
+c  Check whether to select semi- or nearly- implicit advancement
+c  depending on time step.
+       if (iand(print,512) .ne. 0) then
+         if (dt .gt. dtn) then
+           print = ior(print,128)
+         else
+           print = iand(print,not(128))
+         endif
+       endif
+c
+       timehy = timehy + dt
+       countn = ncount
+c
+c  Store new-time values in old-time values for next advancement.
+       if (succes .eq. 0) call mover (.true.)
+c
+c  Check for lockstep for hydro and heat transfer
+       if (iand(tstpct(i)%tsppac,2) .eq. 0) return
+       dtht = dt
+       aflag = .true.
+       return
+       end

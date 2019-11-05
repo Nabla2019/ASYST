@@ -1,0 +1,400 @@
+       subroutine inp (l1,nl1,hed,ncase,ndata,isw)
+c
+c  This subroutine reads data cards for the next case.
+c
+c  Cognizant engineer: rjw.
+c
+c  Parameters in argument list.
+       integer nl1,ncase,ndata,isw
+$if -def,in32,1
+       integer l1(nl1)
+$if def,in32,1
+       integer l1(2,nl1)
+       character hed*108
+c  l1     starting location of table-list array (input/output).
+c  nl1    length of l1 (input).
+c  hed    title string: title card, date, time (input/output).
+c  ncase  case number, incremented by 1 internally (input/output).
+c         input  case number, set = 0 for first call.
+c         output < 0 end-of-case (. card) found.
+c  ndata  flag for previous data (input/output).
+c         input  <= 0  ignore previous table-list array.
+c                >  0  use previous table-list array.
+c         output >  0  total storage used in table-list array.
+c                <  0  no cards found.
+c  isw    return status (output).
+c              0  normal return.
+c              1  end-of-file mark found.
+c              2  card format errors.
+c              3  l1 array too small.
+c
+       integer i,ia11,ia12
+       character bcd*96,erb*80,dlrs*8
+$if -def,in32,1
+       integer ptrn,ptrn2
+$if def,in32,1
+       integer ihld(2),iptrn(2),iptrn2(2)
+       logical nuse,nd,nc,cerr,nx,eox
+       parameter (modes=31,modesm=30)
+       include 'efiless.h'
+c
+c  msk = 2**30 - 1, msk17 = 2**17 - 1, msk11 = 2**11 - 1
+       parameter (msk=1073741823,msk17=131071,msk11=2047)
+c  msk29 = 2**29 - 1
+       parameter (msk29=536870911)
+c  lim = 2**29, ilim = 2**17, nlim = 2**11
+       parameter (lim=536870912,ilim=131072,nlim=2048)
+       data dlrs/'$$$$$$$$'/
+$if -def,in32
+$if def,cray,1
+       data ptrn/0777777777777777777777b/,ptrn2/0777777777777777777776b/
+$if -def,cray,2
+       data ptrn/o"0777777777777777777777"/,
+     & ptrn2/o"0777777777777777777776"/
+$endif
+$if def,in32,1
+       data iptrn/2147483647,-1/,iptrn2/2147483647,-2/
+c  iptrn = 2**31 - 1, iprtn2 = 2**31 -1, -2
+       include 'efilesd.h'
+c
+       hed = ' '
+       call edate (hed(82:91))
+       call eclock (hed(95:102))
+       ncase = ncase + 1
+       nuse = ndata .le. 0
+       eox = .false.
+       isw = 0
+       nt = nl1
+       nb = 2
+       if (.not.nuse) then
+$if -def,in32,2
+         ia21 = ishft(l1(1),-30)
+         ia22 = iand(l1(1),msk)
+$if def,in32,2
+         ia21 = l1(1,1)
+         ia22 = l1(2,1)
+         nt = nt - ia21
+         nb = nb + ia22
+         if (nb .ge. nt) go to 901
+         n1 = nl1
+         n2 = ia21 + ia22 + 1
+         do i = 1,ia21
+$if -def,in32,1
+           l1(n1) = iand(l1(n2),not(ishft(1,59)))
+$if def,in32,2
+           l1(1,n1) = iand(l1(1,n2),not(ishft(1,29)))
+           l1(2,n1) = l1(2,n2)
+           n1 = n1 - 1
+           n2 = n2 - 1
+         enddo
+       endif
+c
+       ncn = 0
+       nw = 0
+       nx = .true.
+       nuse = .true.
+       cerr = .false.
+       nd = .true.
+       n1 = nb
+       n2 = (nt+nb)/2
+       n3 = n2
+   21  nc = .true.
+       ikp = 0
+       read (input,"(a)",end=902) bcd
+       if (ncn .eq. 0) write (inpout,1001) ncase
+ 1001  format (' Listing of input data for case',i3/' ')
+       ncn = ncn + 1
+       do i= 1,80
+         if (bcd(i:i) .ne. ' ') go to 23
+       enddo
+       go to 30
+   23  if (bcd(i:i) .ne. '+') go to 24
+c  Continuation card found
+       if (nd) go to 903
+       ikp = i
+       nc = .false.
+       go to 50
+   24  if (bcd(i:i).eq.'*' .or. bcd(i:i).eq.'$') go to 30
+       if (bcd(i:i) .ne. '=') go to 25
+c  Title card found
+       hed(1:80) = bcd(1:80)
+       hed(i:i) = ' '
+       go to 30
+   25  if (bcd(i:i) .eq. '/') go to 27
+       if (bcd(i:i) .ne. '.') go to 28
+c  End-of-set (.) card found
+  922  ncase = -ncase
+   27  nuse = .false.
+       go to 30
+   28  nc = .false.
+       nx = .false.
+   30  if (nd) go to 50
+c  Use previous data in table-list array
+       ia11 = 0
+       if (cerr) ia11 = ishft(1,28)
+$if -def,in32,3
+       if (l1(n2) .ne. 1) go to 904
+       if (l1(nb).le.0 .or. l1(nb).gt.lim) go to 904
+       n5 = l1(nb)
+$if def,in32,3
+       if (l1(2,n2) .ne. 1) go to 904
+       if (l1(2,nb).le.0 .or. l1(2,nb).gt.lim) go to 904
+       n5 = l1(2,nb)
+       ncx = n5
+ 941   if (nb .ge. ilim) go to 906
+       nw = nw - 1
+       if (nw .ge. nlim) go to 906
+$if -def,in32,1
+       l1(nt) = ior(ior(ior(ishft(ncx,30),ia11),ishft(nb,11)),nw)
+$if def,in32,2
+       l1(1,nt) = ncx
+       l1(2,nt) = ior(ior(ia11,ishft(nb,11)),nw)
+       if (nw .eq. 0) go to 45
+       n3 = n2
+       do i = 1,nw
+$if -def,in32,2
+         if (l1(n3+1).lt.0 .or. l1(n3+1).gt.2) then
+           l1(n3+1) = 3
+$if def,in32,2
+         if (l1(2,n3+1).lt.0 .or. l1(2,n3+1).gt.2) then
+           l1(2,n3+1) = 3
+         endif
+$if -def,in32,1
+         l1(nb) = l1(nb+1)
+$if def,in32,1
+         l1(:,nb) = l1(:,nb+1)
+         n3 = n3 + 1
+         nb = nb + 1
+       enddo
+       n3 = nw
+   37  n4 = n3
+       n4 = min(n4,modes)
+$if -def,in32,1
+       call inppck (l1(nb),n4,l1(n2+1))
+$if def,in32,1
+       call inppck (l1(1,nb),n4,l1(1,n2+1))
+       nb = nb + 1
+       n2 = n2 + modes
+       n3 = n3 - modes
+       if (n3 .gt. 0) go to 37
+   45  if (n5 .eq. 0) go to 49
+       if (nt .eq. nl1) go to 46
+       n4 = nt + 1
+       do i = n4,nl1
+$if -def,in32,2
+         if (iand(ishft(l1(i),-30),msk29).eq.n5 .and.
+     &   iand(l1(i),ishft(1,29)).eq.0) go to 38
+$if def,in32,2
+         if (iand(l1(1,i),msk29).eq.n5 .and.
+     &   iand(l1(2,i),ishft(1,29)).eq.0) go to 38
+       enddo
+   46  if (nw .eq. 0) go to 40
+   49  nt = nt - 1
+       go to 40
+   38  write (inpout,"(' -------- Card above is replacement card.')")
+$if -def,in32,2
+       ia14 = iand(l1(i),msk11)
+       ia13 = iand(ishft(l1(i),-11),msk17)
+$if def,in32,2
+       ia14 = iand(l1(2,i),msk11)
+       ia13 = iand(ishft(l1(2,i),-11),msk17)
+       n6 = ia14 + (ia14 + modesm)/modes
+       n3 = nb - 1
+       if (ia14 .eq. nw) go to 42
+$if -def,in32,1
+       l1(i) = l1(nt)
+$if def,in32,1
+       l1(:,i) = l1(:,nt)
+       nb = ia13
+       n5 = nb + n6
+       if (n5 .gt. n3) go to 47
+       do n2 = n5,n3
+$if -def,in32,1
+         l1(nb) = l1(n2)
+$if def,in32,1
+         l1(:,nb) = l1(:,n2)
+         nb = nb + 1
+       enddo
+       n6 = ishft(n6,11)
+       do n2 = n4,nl1
+$if -def,in32,1
+         ia23 = iand(ishft(l1(n2),-11),msk17)
+$if def,in32,1
+         ia23 = iand(ishft(l1(2,n2),-11),msk17)
+         if (ia23 .le. ia13) cycle
+$if -def,in32,1
+         l1(n2) = l1(n2) - n6
+$if def,in32,1
+         l1(2,n2) = l1(2,n2) - n6
+       enddo
+       if (nw .ne. 0) go to 40
+$if -def,in32,1
+   47  l1(i) = l1(n4)
+$if def,in32,1
+   47  l1(:,i) = l1(:,n4)
+       nt = n4
+       go to 40
+$if -def,in32,1
+   42  l1(i) = ior(iand(l1(nt),not(ishft(msk17,11))),ishft(ia13,11))
+$if def,in32,2
+   42  l1(2,i) = ior(iand(l1(2,nt),not(ishft(msk17,11))),
+     & ishft(ia13,11))
+       nb = nb - n6
+       do i = nb,n3
+$if -def,in32,1
+         l1(ia13) = l1(i)
+$if def,in32,1
+         l1(:,ia13) = l1(:,i)
+         ia13 = ia13 + 1
+       enddo
+   40  cerr = .false.
+       nd = .true.
+       n1 = nb
+       n2 = (nt+nb)/2
+       n3 = n2
+       nw = 0
+   50  if (eox) go to 61
+       write (inpout,"(i6,4x,a)") ncn,bcd
+       if (nc) go to 60
+       if (ikp .eq. 0) go to 51
+       bcd(ikp:ikp) = ' '
+   51  n4 = 1
+       if (n1+40 .ge. n2) go to 905
+c  Crack the card image.
+c  bcd     card image.
+c  l1(n1)  data words.
+c  l1(n3)  format words.
+c  n5      number of words on card.
+c  n4      error on card if not 0.
+$if -def,in32,1
+       call cvic (bcd,l1(n1),l1(n3),n5,n4)
+$if def,in32,1
+       call cvic (bcd,l1(1,n1),l1(1,n3),n5,n4)
+       if (nd) ncx = ncn
+       if (n5 .eq. 0) go to 59
+       nd = .false.
+c  Search for forbidden pattern and change it if found.
+       do i = 1,n5
+$if -def,in32,2
+         if (l1(n1) .eq. ptrn) then
+           l1(n1) = ptrn2
+$if def,in32,3
+         if (l1(1,n1).eq.iptrn(1) .and. l1(2,n1).eq.iptrn(2)) then
+           l1(:,n1) = iptrn2
+           write (inpout,"(i6,4x,a)") ncn,bcd
+           write (inpout,2011) i
+ 2011  format (' $$$$$$$$ Word',i3,' has an unallowed bit pattern, it ha
+     & s been changed.')
+         endif
+         n1 = n1 + 1
+       enddo
+       n3 = n3 + n5
+       nw = nw + n5
+   59  if (n4 .eq. 0) go to 21
+c  Found an error on the card
+       nd = .false.
+       isw = 2
+       cerr = .true.
+$if -def,in32,2
+       read (dlrs,'(a8)') l1(n1)
+       l1(n3) = 3
+$if def,in32,3
+       read (dlrs,'(2a4)') l1(:,n1)
+       l1(1,n3) = 0
+       l1(2,n3) = 3
+       n1 = n1 + 1
+       n3 = n3 + 1
+       nw = nw + 1
+       erb = ' '
+       erb(n4:n4) = '^'
+       write (inpout,"(i6,4x,a)") ncn,bcd
+       write (inpout,1102) erb,n4
+ 1102  format (' ',9x,a80,4x,'^ points to card error at col.',i2)
+       do i = 1,80
+         if (i .ge. n4) then
+           if (bcd(i:i).eq.' ' .or. bcd(i:i).eq.',') go to 66
+         endif
+         bcd(i:i) = ' '
+       enddo
+       go to 21
+   66  bcd(i:i) = ' '
+       go to 51
+   60  if (nuse) go to 21
+   61  ia11 = nl1 - nt
+       ia12 = nb - 2
+       ndata = ia11 + ia12 + 1
+       if (nx) ndata = -ndata
+c  Construct [ table length | list length ] word,
+c  goes in position 1 of table-list array
+$if -def,in32,1
+       l1(1) = ior(ishft(ia11,30),ia12)
+$if def,in32,2
+       l1(1,1) = ia11
+       l1(2,1) = ia12
+       nt = nt + 2
+       do i = nt,nl1
+$if -def,in32,2
+         if (l1(i) .le. l1(i-1)) cycle
+         ia11 = l1(i)
+$if def,in32,3
+         if (l1(1,i) .lt. l1(1,i-1)) cycle
+         if (l1(1,i).eq.l1(1,i-1) .and. l1(2,i).le.l1(2,i-1)) cycle
+         ihld = l1(:,i)
+         n1 = i
+         do
+$if -def,in32,1
+           l1(n1) = l1(n1-1)
+$if def,in32,1
+           l1(:,n1) = l1(:,n1-1)
+           n1 = n1 - 1
+           if (n1 .lt. nt) exit
+$if -def,in32,3
+           if (ia11 .le. l1(n1-1)) exit
+         enddo
+         l1(n1) = ia11
+$if def,in32,4
+           if (ihld(1) .gt. l1(1,n1-1)) cycle
+           if (ihld(1).ne.l1(1,n1-1) .or. ihld(2).lt.l1(2,n1-1)) exit
+         enddo
+         l1(:,n1) = ihld
+       enddo
+       nt = nt - 1
+       do i = nt,nl1
+$if -def,in32,1
+         l1(nb) = l1(i)
+$if def,in32,1
+         l1(:,nb) = l1(:,i)
+         nb = nb + 1
+       enddo
+       return
+c
+  901  write (output,"(' ******** Insufficient storage allocation for pr
+     &evious data, processing terminated.')")
+       go to 911
+c  Found end-of-file
+  902  if (ncn .ne. 0) go to 921
+       isw = 1
+       return
+  921  write (inpout,"(' ******** End of file encountered before end(.) 
+     &card.')")
+       eox = .true.
+       isw = -2
+       go to 922
+  903  write (inpout,"(' ******** Continuation card indicated, but no pr
+     &evious data card; treated as new data card.')")
+       isw = 2
+       go to 28
+  904  write (inpout,"(' ******** Unrecognizable card number.')")
+       ia11 = ior(ia11,ishft(1,29))
+       n5 = 0
+       nw = 1
+       isw = 2
+       go to 941
+  905  write (output,"(' ******** Insufficient storage for data, process
+     &ing terminated.')")
+       go to 911
+  906  write (output,"(' ******** Number of words on a card or total num
+     &ber of words on cards too large, processing terminated.')")
+  911  isw = 3
+       return
+       end

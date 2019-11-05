@@ -1,0 +1,126 @@
+*mlist
+       subroutine rcards
+*in32 iscr
+*in32end
+c
+c  Reads input data for the next case, writes data on disk if not last
+c  case.
+c
+c  Cognizant engineer: rjw.
+c
+       use jvprnt
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'genrl.h'
+       include 'ufiles.h'
+c
+c  Local variables.
+       integer i,inxget,isw,iu,iud,lcontg,ndata,nfsize
+       logical frst
+       character*106 inprec
+c
+c  Data statements.
+       data iu/3/, iud/1/
+c
+       frst = iroute .eq. -1
+       iroute = 0
+c  Get space for input data.
+       filsiz(1) = lcontg(1)
+       if (filsiz(1) .le. 200) then
+         write (output,2001)
+ 2001  format ('0******** Insufficient storage for execution.')
+         go to 15
+       endif
+       call ftbrsv (2.0,filsiz(1),1,filndx(1))
+c  Read previous case data if this is a succeeding case.
+       if (ncase .gt. 0) go to 12
+c  Set for new series of cases.
+   11  ncase = 0
+       ndata = 0
+       go to 14
+c  Read previous case data.
+   12  write (tty,"(a)") ptitle(1:38)
+       write (output,"('1',3x,a)") ptitle
+       ndata = nfsize(-2.0)
+       i = inxget(-2.0)
+       if (ndata .gt. filsiz(1)) then
+         write (output,"('0******** Insufficient space to read previous 
+     &case data, possible programming error.')")
+         go to 15
+       endif
+       call ftbin (iud,fa(filndx(1)),ndata,i)
+c  Delete previous case data from disk.
+       call ftbdel (-2.0)
+       call ftbchk (iud)
+c  Get next set of input data.
+   14  open (unit=inpout,status='scratch')
+       call inp (fa(filndx(1)),filsiz(1),ctitle,ncase,ndata,isw)
+c  Process inp errors.
+       if (isw .eq. 3) go to 15
+       if (isw .ne. 1) go to 16
+       if (.not.frst) go to 15
+       write (output,2003)
+ 2003  format ('0******** No input data set was supplied.')
+   15  ncase = 0
+   19  iroute = 1
+       return
+   16  frst = .false.
+       if (isw .lt. 0) ncase = 0
+       if (ndata .le. 1) then
+         write (output,"('0******** No data cards entered for this case,
+     & all data deleted, or zero length input file.')")
+         write (tty,"('0******** No data cards entered for this case, al
+     &l data deleted, or zero length input file.')")
+         fail = .true.
+         if (ncase) 11,19,14
+       endif
+       write (tty,"(a)") trim(ctitle)
+c  If input errors, write ******** type message.
+       if (abs(isw) .eq. 2) then
+         write (output,2010)
+ 2010  format ('0******** Grammatical errors detected in input; search i
+     &nput listing for ^ marking point of error.')
+         fail = .true.
+       endif
+c  Return excess space.
+       call ftbsft (2.0,ndata,1,filndx(1))
+       filsiz(1) = ndata
+c  Save input data if not last case.
+       if (ncase .gt. 0) then
+         call ftbrsv (-2.0,filsiz(1),iu,i)
+         call ftbout (iud,fa(filndx(1)),filsiz(1),i)
+         call ftbchk (iud)
+       endif
+c
+c  Determine if input is to be printed.
+       call rhelp
+       if (iand(ihlppr(2),ishft(1,20)).ne.0) then
+         rewind (inpout)
+         do
+           read (inpout,'(a106)',iostat=i) inprec
+           if (i .lt. 0) exit
+           if (i .gt. 0) then
+             write (output,"('0Read error,',i5,', on ',a,', in subroutin
+     &e rcards, program cannot continue.')") i,inpout
+             write (tty,"('0Read error,',i5,', on ',a,', in subroutine r
+     &cards, program cannot continue.')") i,inpout
+             stop "rcards-1, Trouble"
+           endif
+           write (output,'(a106)') inprec
+         enddo
+         continue
+       endif
+       close (unit=inpout,status='delete')
+c  Check for no title card or blank title card.
+       if (ctitle .eq. ' ') then
+         write (output,"('0******** Error, title card must be furnished.
+     &')")
+         fail = .true.
+       else
+         write (output,'(''0'',a)') ptitle
+         write (output,'('' '',a)') ctitle
+       endif
+       return
+       end

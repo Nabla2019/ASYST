@@ -1,0 +1,213 @@
+*mlist
+*if def,selap
+       subroutine elem (imin,imax,ix,beta,matril,r,z,
+     & blkang,pore,plk,dimpe,dlk,ifel,mmf,mme,imme)
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: ewc.
+c
+c This is a COUPLE ROUTINE
+*in32 imin
+*in32 imax
+*in32 ix
+*in32 matril
+*in32 ifel
+*in32 mmf
+*in32 mme
+*in32 imme
+*in32end
+c
+       implicit none
+*call iparm
+*call parm
+*call ufiles
+*call contrl
+c
+c  Local variables.
+       integer i,ii,im,imtl,j,jj,jjmax,jxi,k,l,linea,m,mat,mjxi,mtl,n,
+     * nel,nstart,nstop
+       integer ier, nimme
+       integer node
+       external node
+       external findbl,hdwr,titl
+       integer imin(*),imax(*),ix(5,*),matril(5,*),ifel(*),mmf(*),
+     * imme(*),mme(*)
+       real beta(*),blkang(*),dimpe(*),dlk(*),pore(*),plk(*),r(*),z(*)
+       real zbot, ztop
+c
+      imtl = 0
+      do 200 n=1,numel
+      pore(n) = 0.0
+      dimpe(n)= 0.0
+  200 continue
+c
+c     print nodal point data
+  300 imtl = imtl + 1
+      read (eoin,1000) mtl,(matril(im,imtl),im=2,5),blkang(imtl),
+     * plk(imtl),mmf(imtl),mme(imtl),dlk(imtl)
+      matril(1,imtl) = mtl
+      if(imtl.ge.nmtl) call findbl
+      if(imtl.ge.nmtl) go to 301
+      go to 300
+  301 continue
+c***********************************************************************
+c     establish element information
+c***********************************************************************
+      jjmax=maxj-1
+      n=0
+      mtl=1
+      mjxi=1
+      nel = 0
+      do 440 jj=1,jjmax
+      nstop=min(imax(jj),imax(jj+1))-1
+      nstart=max(imin(jj),imin(jj+1))
+      do 440 ii=nstart,nstop
+      nel=nel+1
+      do 400 imtl=1,nmtl
+      if(ii.lt.matril(2,imtl)) go to 400
+      if(ii.ge.matril(3,imtl)) go to 400
+      if(jj.lt.matril(4,imtl)) go to 400
+      if(jj.ge.matril(5,imtl)) go to 400
+      mat=matril(1,imtl)
+      if(mat.lt.0) mat=abs(mat)
+      jxi=imtl
+  400 continue
+      if(mat.eq.mtl.and.mjxi.eq.jxi) go to 410
+      mtl=mat
+      mjxi=jxi
+      go to 420
+  410 if(ii.eq.nstart) go to 420
+      if(mnpo.ne.0) go to 420
+      if(jj.ne.jjmax.or.ii.ne.nstop) go to 440
+  420 i=node(ii,jj)
+      j=i+1
+      k=node(ii+1,jj+1)
+      l=k-1
+      m=nel
+      ix(1,m)=i
+      ix(2,m)=j
+      ix(3,m)=k
+      ix(4,m)=l
+      ix(5,m)=mtl
+      beta(m)=blkang(jxi)
+      pore(m) = plk(jxi)
+      dimpe(m)= dlk(jxi)
+      imme(m) = mme(jxi)
+      ifel(m) = mmf(jxi)
+      imtl=jxi
+  430 n=n+1
+      if(m.le.n) go to 440
+      ix(1,n)=ix(1,n-1)+1
+      ix(2,n)=ix(2,n-1)+1
+      ix(3,n)=ix(3,n-1)+1
+      ix(4,n)=ix(4,n-1)+1
+      ix(5,n)=ix(5,n-1)
+      beta(n)=beta(n-1)
+      pore(n) = pore(n-1)
+      dimpe(n)=dimpe(n-1)
+      imme(n) = imme(n-1)
+      ifel(n) = ifel(n-1)
+      if(m.gt.n) go to 430
+  440 continue
+      do 450 m=1,numel
+      i=ix(1,m)
+      j=ix(2,m)
+      k=ix(3,m)
+      l=ix(4,m)
+      if(l.eq.k.or.l.eq.j.or.l.eq.i) l=k
+  450 ix(4,m)=l
+      call titl
+      write (output,2004)
+      write (output,3002)
+      write (output,2011)
+      write (output,2008)
+      line = 4
+      do 10 jj = 1,numel,4
+      j = jj + 3
+      if(j.gt.numel) j = numel
+      write (output,2009)(n,(ix(i,n),i=1,5),beta(n),n=jj,j)
+      line = line + 1
+      linea = line
+      if(line .ge. 55) call hdwr(line)
+      if(linea.ge.55) write (output,2008)
+   10 continue
+      call titl
+      write (output,2004)
+      write (output,3002)
+      write (output,2012)
+      line = 4
+      do 11 jj = 1,numel,3
+      j = jj + 2
+      if(j.gt.numel) j=numel
+      write (output,2013)(n,ifel(n),imme(n),pore(n),dimpe(n),n=jj,j)
+      line = line + 1
+      linea = line
+      if(line.ge.55) call hdwr(line)
+      if(linea.ge.55) write (output,2012)
+   11 continue
+c
+      if (nslph .eq.-1) then
+c         For no slumping case -
+c           Check for porosity of 1.0 in material 1;
+c           check for presence of at least one partly full element;
+c           check that height intersects partly full elements.
+        ier = 0
+        nimme = 0
+        do 500 m=1,numel
+        if (ix(5,m) .eq. 1) then
+          if (pore(m) .eq. 1.0) ier = ier + 1
+          if (imme(m) .eq. 1) then
+            nimme = nimme + 1
+            i = ix(1,m)
+            j = ix(2,m)
+            k = ix(3,m)
+            l = ix(4,m)
+            zbot = min (z(i), z(j))
+            ztop = max (z(k), z(l))
+            if ((height .le. zbot) .or. (height .ge. ztop)) then
+              write (output,460) m, height, zbot, ztop
+  460         format ('0******** Top of material 1 (height) does ',
+     1                'not intersect partly full element ', i4 /
+     2                '   height, bottom, top =',3e13.5)
+              fail = .true.
+            end if
+          end if
+        end if
+  500   continue
+        if (ier .gt. 0) then
+          write (output,550) ier
+  550     format ('0******** For material 1 in no slumping case,',
+     1            ' porosity cannot be 1. (',i4,' elements)')
+          fail = .true.
+        end if
+        if (nimme .eq. 0) then
+          write (output,560)
+  560     format ('0******** Material 1 in no slumping case has',
+     1            ' no partly full elements')
+          fail = .true.
+        end if
+      end if
+c
+ 4001 format(6i5)
+ 2011 format('0 Element no(el),cornor nodal nos(i,j,k,l),material,no(
+     1mat),and conductivity angles(beta)')
+ 2008 format('0  el    i    j    k    l mat beta  el    i    j    k    l
+     * mat beta  el    i    j    k    l mat beta  el    i    j    k    l
+     * mat beta')
+ 2009 format(1x,4(5i5,i3,f4.0,1x))
+ 2012 format ('0    el  ifel imme      pore     dimpe   ',
+     1        '     el  ifel imme      pore     dimpe   ',
+     2        '     el  ifel imme      pore     dimpe' )
+ 2013 format (3(i7, 2i5, f11.4, e13.4))
+ 1000 format (5i5, 2f10.5, 2i5, f10.5)
+ 4050 format(7f10.4)
+ 4052 format(1x,i5,2x,7f10.4)
+ 1002 format(4i5,3f10.0)
+ 2000 format(1h0,'  i   j  node     r         z        i   j  node     r
+     1         z        i   j  node     r         z     ')
+ 2004 format(1h0, ' M e s h  o u t p u t   d a t a ')
+ 3002 format(1h0, ' E l e m e n t  d a t a ')
+      return
+      end
+*endif

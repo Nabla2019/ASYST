@@ -1,0 +1,260 @@
+*mlist
+       subroutine htrc2 (ih,jo,itype,time,dtime)
+c
+c  Subroutine is a modification of htcond and computes heat transfer
+c  coefficients for the non-reflood side boundary of the reflood model.
+c
+c  Cognizant engineer:  ras,rjw.
+c
+c  Called from qfmove.
+c
+       use gentblc
+       implicit none
+c
+c    input variables
+c     itype  -- reduced boundary type
+c     time   -- current transient time
+c     dtime  -- current time step size
+c    output arrays -- in common /htscr1/
+c     htb2   -- heat transfer coefficient fot each fine-mesh interval
+c     htf2   -- heat transfer coefficient * fluid or sink temperature
+c               for each fine-mesh interval
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'htrcom.h'
+       include 'htrflb.h'
+       include 'htscr1.h'
+       include 'htscr2.h'
+       include 'htsrcm.h'
+       include 'rflhtc.h'
+       include 'trpblk.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer hindex,i,ndex,indy,indz,inds,j,knum,m,num
+       integer ih,jo,itype,ihlp,k
+       logical err
+       real t,ti,tsink(1),time,dtime,val(1),term,aratio,tsinkh
+c
+       ti=time+dtime
+       inds = inxlsr(2-idrfl)
+       indz=inscr1+1-idrfl
+       indy = inxrfl(ih)
+       j = lhtrfl(ih) + filndx(8)
+       do 400 m = 1,htnusr(jo)
+         knum = nmzht(indy)
+         hindex = ihtptr(j) + filndx(8)
+         ndex = hindex + 1 - idrfl
+         num = htbnts(ndex)
+         iv = htbvo(ndex)
+         iv2 = ishft(htbnts(ndex),-12)
+         iv1 = iv + iv2
+         iv2 = iv1 + iv2
+         htdiam=hthdmo(ndex)
+         htsa  =htsrfo(ndex)
+         drod   = 2.0*htrado(ndex)
+         htdiam = hthdmo(ndex)
+         pitdia = htpovd(ndex)
+         axpf  =apfaco(ndex)
+         qfluxo=htbcco(ndex)
+         pgopta = pgopti(ndex)
+         pgflag = pgcall(ndex)
+       if (velf(iv1) .ge. 0.) then
+         htlen  = htlnfo(ndex)
+         gridk  = grdkfo(ndex)
+         if (pgopta .gt. 0) then
+           ivindx = htivfo(ndex)
+           gridz = quale(ivindx)
+         else
+           gridz  = grdzfo(ndex)
+         endif
+       else
+         htlen  = htlnro(ndex)
+         gridk  = grdkro(ndex)
+         if (pgopta .gt. 0) then
+           ivindx = htivro(ndex)
+           gridz = quale(ivindx)
+         else
+           gridz  = grdzro(ndex)
+         endif
+       endif
+       if (htbvc(ndex)) 11,12,15
+   11  i = htbvo(ndex)
+         t = ti
+         if (gen(i)%gttrp(1) .eq. 0) go to 16
+         t = trptm(gen(i)%gttrp(2))
+         if (t .ge. 0.0) t = ti - t
+   16    if (t .ne. gen(i)%gtarg) go to 13
+         tsink(1) = gen(i)%gtval(1)
+         go to 14
+   13    call gtpolat (gen(i)%gtinfo,gtptr(i)%gtbl,t,tsink(1:1),err)
+         gen(i)%gtarg = t
+         gen(i)%gtval(1) = tsink(1)
+         go to 14
+   12    tsink(1)   = 0.0
+         go to 14
+   15  continue
+         if (itype-2 .lt. 0) go to 21
+         tsink(1) = temp(iv)
+   14    i = htbnts(ndex)
+         if (itype .ne. 6) go to 37
+         t = 0.0
+         ihlp = inds
+         do k = 1,knum
+           t = t + tmpscr(ihlp)
+           ihlp = ihlp + nscra2
+         enddo
+         t = (t + (tmpscr(ihlp) - tmpscr(inds))*0.5)/float(knum)
+         go to 35
+   37    t = ti
+         if (gen(i)%gttrp(1) .eq. 0) go to 35
+       if (dtime .gt. 0.0) go to 36
+       ti = -1.0
+       go to 35
+   36    t = trptm(gen(i)%gttrp(2))
+         if (t .ge. 0.0) t = ti - t
+   35    if (t .ne. gen(i)%gtarg) go to 31
+         val(1) = gen(i)%gtval(1)
+         go to 32
+   31    call gtpolat (gen(i)%gtinfo,gtptr(i)%gtbl,t,val(1:1),err)
+         gen(i)%gtarg = t
+         gen(i)%gtval(1) = val(1)
+   32    if (itype-4) 390,34,40
+   34    do 105 k=1,knum
+         htf2(indz)=-val(1)
+         indz=indz+nscra1
+         inds=inds+nscra2
+  105    continue
+         go to 390
+   40    term=val(1)*tsink(1)
+         do 110 k=1,knum
+         htb2(indz)=val(1)
+         htf2(indz)=term
+         indz=indz+nscra1
+         inds=inds+nscra2
+  110    continue
+         go to 390
+   21    t = 0.0
+c
+           delgrv = (hydzc(iv2) + hydzc(iv2+1))*gravcn
+c                                                      1-D mass flux
+           ggasa = max(abs(ggas(iv)),0.001)
+           gliqa = max(abs(gliq(iv)),0.001)
+           gabs  = ggasa + gliqa
+           gcross = 0.
+           gcrosf = 0.
+c                                            Is this a 3-D problem?
+         if (iand(imap(iv+1),16384) .eq. 0
+     &         .and. iand(imap(iv+2),16384) .eq. 0) then
+c                                      put the correct sign on mass flux
+           g = sign(gabs,delgrv*gliq(iv))
+           if (htopta .eq. 34) then
+c                 Multiply G by average area to rod gap area for HTC.
+               aratio = (pitdia**2 - 0.7854)/(pitdia**2 - pitdia)
+             gcrosf = gliqa*aratio
+             gabs = 0.
+           endif
+         else
+c                                            other 2  3-D mass fluxs
+           if(htopta .eq. 10 .or. htopta .eq. 11) then
+c                 Multiply G by average area to rod gap area for HTC.
+               aratio = (pitdia**2 - 0.7854)/(pitdia**2 - pitdia)
+c                                             vertical bundle primary z
+             if (num .eq. 0) then
+c                     bundle is parallel with x so just need cross flows
+               gcross = max((ggas(iv)**2 + ggas(iv+1)**2),0.001)
+               gcross = gcross + gliq(iv)**2 + gliq(iv+1)**2
+               gcross = sqrt(gcross)*aratio
+               g = gabs*sign(1.0,g)*sign(1.0,gliq(iv))
+             elseif (num .eq. 1) then
+c                     bundle is parallel with y
+               ggasa = max(abs(ggas(iv+1)),0.001)
+               gliqa = max(abs(gliq(iv+1)),0.001)
+               gabs  = ggasa + gliqa
+               gcross = ggas(iv)**2 + ggas(iv+2)**2
+               gcross = gcross + gliq(iv)**2 + gliq(iv+2)**2
+               gcross = sqrt(gcross)*aratio
+               g = sign(gabs,delgrv*gliq(iv+1))
+             else
+c                     bundle is parallel with z
+               ggasa = max(abs(ggas(iv+2)),0.001)
+               gliqa = max(abs(gliq(iv+2)),0.001)
+               gabs  = ggasa + gliqa
+               gcross = ggas(iv)**2 + ggas(iv+1)**2
+               gcross = gcross + gliq(iv)**2 + gliq(iv+1)**2
+               gcross = sqrt(gcross)*aratio
+               g = sign(gabs,delgrv*gliq(iv+2))
+             endif
+           elseif (htopta .eq. 34) then
+               aratio = (pitdia**2 - 0.7854)/(pitdia**2 - pitdia)
+c                                      horizontal bundle primary x or y
+               if (num .eq. 0) then
+                 gabs = ggas(iv) + gliq(iv)
+                 gabs = max(abs(gabs),0.001)
+                 gliqa = gliq(iv+1)**2 + gliq(iv+2)**2
+                 gliqa = max(sqrt(gliqa),0.001)
+                 gcrosf = gliqa*aratio
+               elseif (num .eq. 1) then
+                 gabs = ggas(iv+1) + gliq(iv+1)
+                 gabs = max(abs(gabs),0.001)
+                 gliqa = gliq(iv)**2 + gliq(iv+2)**2
+                 gliqa = max(sqrt(gliqa),0.001)
+                 gcrosf = gliqa*aratio
+               else
+                 gabs = ggas(iv+2) + gliq(iv+2)
+                 gabs = max(abs(gabs),0.001)
+                 gliqa = gliq(iv)**2 + gliq(iv+1)**2
+                 gliqa = max(sqrt(gliqa),0.001)
+                 gcrosf = gliqa*aratio
+               endif
+           else
+c                                                     3d with no bundle.
+             ggasa = sqrt(ggasa**2 + ggas(iv+1)**2 + ggas(iv+2)**2)
+             gliqa = sqrt(gliqa**2 + gliq(iv+1)**2 + gliq(iv+2)**2)
+             ggasa = max(ggasa,0.001)
+             gliqa = max(gliqa,0.001)
+             gabs  = ggasa + gliqa
+             g = sign(gabs,delgrv*gliq(iv+num))
+           endif
+         endif
+         if (iand(vctrl(iv),ishft(1,30)) .ne. 0) then
+           ibundl = 1
+         else
+           ibundl = 0
+         endif
+         fstrat = fstrt(iv)
+         ihlp=inds
+         do 120 k=1,knum
+         t=t+tmpscr(ihlp)
+  120    ihlp=ihlp+nscra2
+         tw =(t+(tmpscr(ihlp)-tmpscr(inds))*0.5)/float(knum)
+         k = htstno(hindex)
+         chf = 0.
+c
+         call htrc1(k)
+         if (quala(iv) .gt. 1.0e-9 ) mode = mode + 20
+c
+         pgcall(ndex) = pgflag
+         htcoef = htcoef*htfftr(ndex)
+         qfluxo = qfluxo*htfftr(ndex)
+         chfmuo(ndex) = chfmul
+         htchfo(ndex) = chf*htfftr(ndex)
+         htmod(ndex) = mode
+         tsinkh =max(htcoef*tw - qfluxo,0.0)
+         gamw = gamw*htfftr(ndex)
+         htcg = htcg*htfftr(ndex)
+c
+         do k=1,knum
+         htb2(indz)=htcoef
+         htf2(indz)=tsinkh
+         htv1(indz)=htcg
+         htv2(indz)=gamw
+         indz=indz+nscra1
+         inds=inds+nscra2
+         enddo
+  390    indy=indy+1
+         j = j + 1
+  400    continue
+       return
+       end

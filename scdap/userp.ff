@@ -1,0 +1,537 @@
+*mlist
+*if def,selap
+       subroutine userp (n,i,j,k,l,mat,condr,condz,caprho,r,z,t,zz,u,
+     & ss,a1,a2,ux2,zx2,afalum,aflith,afcadm,afsoil,tbar,e,imme,
+     & hnatcr,tmpdot,tmltel,fracml,frcml0,keffz,keffr,pore,
+     & ix,imin,imax,ielem,jelem,elemij,ncslp)
+c
+c  Descriptive sentence for userp goes here.
+c
+c  Cognizant engineer: ewc.
+c
+c This is a COUPLE ROUTINE
+*in32 imme
+*in32 ix
+*in32 imin
+*in32 imax
+*in32 ielem
+*in32 jelem
+*in32 elemij
+*in32end
+c
+       implicit none
+*call contrl
+*call ufiles
+*call iparm
+*call parm
+       integer errflg,i,j,k,l,mat,n
+       integer ncslp,kdebr
+       integer imme(*)
+       real condr,condz,caprho,tbar,tdbave
+c
+       real r(*),z(*),t(*),u(*),ss(*),a1(*),a2(*),ux2(*),zx2(*)
+       real afalum(*), aflith(*), afcadm(*), afsoil(*)
+       real zz(*), e(9,*)
+       real grcp, grcon, fcpcp, fcon, tgtcp, tgtcon, agr, afc, atgt,
+     & agas, fluc, cpsmr, phit, tk, cpbar, cond, stot, ttot
+       integer ix,imin,imax,ielem,jelem,elemij
+       real hnatcr(*),tmpdot(*)
+       real tmltel,fracml,frcml0,keffz,keffr,pore
+       dimension ix(5,*),imin(*),imax(*),ielem(*),jelem(*),elemij(*)
+       dimension tmltel(*),fracml(*),keffz(*),keffr(*),
+     # pore(*),frcml0(*)
+      real zutco1
+      external grcp, fcpcp, tgtcp, smrcp, smrcon, sgrcon, sfcon, stgcon
+      external zutco1
+c     n = element number
+c     i = i-th node of element
+c     j = j-th node of element
+c     k = k-th node of element
+c     l = l-th node of element
+c     mat = material number
+c     rho = density of material
+c     condr = conductivity in xi direction
+c     condz = conductivity in eta direction
+c     if beta = 0., xi is same as r or x
+c     capc = specific heat
+c     caprho = rho*cpac
+c     note after this subroutine is called,caprho is used, but capc
+c     and rho are not
+c     tbar = average element temperature
+c     time = time
+c     beta = inclination angle - radians
+c     r = vector of node r or x values
+c     z = vector of node z or y values
+c     t = vector of temperatures
+c     insert user supplied portion of userp at this point
+c     userp insert for debris bed freezing and melting problem
+      real denss,denic,dencs
+      dimension denss(18),denic(18),dencs(18)
+      real enthss,enthic,enthcs
+      dimension enthss(18),enthic(18),enthcs(18)
+      real therss,theric,thercs
+      dimension therss(18),theric(18),thercs(18)
+      real tvalss,tvalic,tvalcs
+      dimension tvalss(18),tvalic(18),tvalcs(18)
+      real ther
+      dimension ther(3,18)
+*call cprops
+c
+      real x,y,tp,h,s,sz
+      dimension x(5), y(5), tp(5), h(5), s(5), sz(5)
+c
+c  Local variables.
+       integer ii,jj,m,matr,mm,nflagi,nn,nnu
+       integer ncompt
+       real a1a,a2a,adhdn,adtdn,afalm1,afcdm1,aflth1,afsoi1,cp,dhdr,
+     * dhdz,dsdr,dsdz,dtdr,dtdz,eps,rftemp,rowbar,ssa,ua,ux2a,zx2a,zza
+       real dsdrdm,dsdzdm
+       real temp1,rftden,tempzu,rowbrd,tmp1,tmp2,tmax
+       real zucp1,zuden1,zuint,zunth1
+       external zucp1,zuden1,zuint,zunth1
+       external grad,intgrl,tablea
+       external kpool
+       real polate
+       external polate
+c    cpcs(i) = heat capacity of carbon steel at temperature of cpcs(i+1)
+c              J/kg.K versus K
+c              values for cpcs are derived from table of carbon steel
+c              enthalpy as function of temperature (array enthcs).
+       integer npcpcs,iucpcs
+       data npcpcs / 24/
+       data iucpcs / 1/
+       dimension cpcs(48)
+       real cpcs
+       data cpcs/ 500.0, 200.0, 500.0, 400.0, 275.0, 400.01,
+     #           275.0, 600.0, 300.0, 600.01,  300.0, 800.0,
+     #          325.0, 800.01, 325.0, 1000.0, 350.0, 1000.01,
+     #          350.0, 1200.0, 400.0, 1200.01, 400.0, 1400.0,
+     #          500.0, 1400.01, 500.0, 1600.0, 429.29, 1600.01,
+     #          429.29, 1700.0, 3000.0, 1800.0 , 558.0 ,1800.01,
+     #          558.0, 1900.0, 558.0, 2000.0, 558.0, 2200.0,
+     #          558.0, 2400.0,  558.0, 2600.01, 558.0, 6000.0 /
+c
+      data  nflagi /1/
+c  Density of stainless steel (gram/cm**3).
+      data denss/7.894,7.860,7.783,7.698,7.603,7.498,7.386,7.264,
+     *7.199,6.926,6.862,6.725,6.557,6.416,6.243,6.058,5.861,5.861/
+c  Density of inconel 718 (gram/cm**3).
+      data denic/18*8.0/
+c  Density of carbon steel(gram/cm**3).
+c  Data from nuclear systems materials handbook.
+c    since expansion or contraction of element volumes due to
+c    temperature changes are not computed by Couple model, fix the
+c    density to conserve mass in elements.
+c***  data dencs/7.850,7.825,7.780,7.750,14*7.720/
+      data dencs/7.850,7.850,7.850,7.850,14*7.850/
+c  Enthalpy of stainless steel (cal/gram) reference temp = 273K.
+      data enthss/0.23,12.57,38.24,65.19,93.43,122.95,153.77,185.88,
+     *202.41,226.41,285.41,323.41,361.41,399.41,437.41,475.41,513.41,
+     *1083.41/
+c  Enthalpy of inconel (j/kg) reference temp = 0K.
+      data enthic/.12742e6,.16010e6,.20555e6,.25317e6,.30295e6,
+     *.35491e6,.40903e6,.46532e6,.52377e6,.79170e6,.86910e6,
+     *1.1719e6,1.2529e6,1.372e6,1.491e6,1.6101e6,1.7292e6,
+     *3.7536e6/
+c  Enthalpy of carbon steel(j/kg) reference temp = 0 K.
+c  Note that the reference temperature for this data is
+c  based upon older couple dat, but the specific heat was
+c  obtained from the nuclear systems materials handbook.
+c    data below defines enthalpy with respect to reference temperature
+c    of 0.0 K
+c**   data enthcs/.1350e6,.1850e6,.2400e6,.3000e6,.3650e6,.4350e6,
+c**  *.5150e6,.6150e6,.6575e6,.9575e6,.99350e6,.10635e7,.11335e7,
+c**  *1.2735e6,1.6235e6,1.9735e6,2.3235e6,4.4235e6/
+c    data below defines enthalpy with respect to reference temperature
+c    of 300 K.
+      data enthcs/ 0.0   ,.5000e5,1.05e5, 1.650e5,.2300e6,.3000e6,
+     *.3800e6,.4800e6,.5225e6,.8225e6,.87830e6,.93410e6,1.0457e6,
+     *1.1573e6,1.2689e6,1.3805e6,1.4921e6,3.1661e6/
+c  Thermal conductivity of stainless steel (w/m-K).
+      data therss/12.97,14.59,17.82,21.06,24.29,27.53,30.76,34.00,
+     *35.61,17.81,18.14,18.79,19.44,20.09,20.73,21.38,22.03,22.03/
+c  Thermal conductivity of inconel 718 (w/m-K).
+      data theric/11.45,12.68,14.27,15.85,17.44,19.03,20.62,22.21,
+     *10*23.80/
+c  Thermal condutivity of carbon steel ( w/m-K).
+c  Data from the nuclear systems materials handbook.
+      data thercs/51.6,50.0,47.5,44.5,41.0,37.0,33.5,30.0,29.0,
+     *28.0,27.5,7*25.0/
+c  Temperature table for stainless steel (K).
+      data tvalss/300.0,400.0,600.0,800.0,1000.0,1200.0,1400.0,
+     *1600.0,1699.0,1700.0,1800.0,2000.0,2200.0,2400.0,2600.0,
+     *2800.0,3000.0,6000.0/
+c  Temperature table for inconel 718 (K).
+      data tvalic/298.0,373.0,473.0,573.0,673.0,773.0,873.0,973.0,
+     *1073.0,1533.0,1663.0,1664.0,1800.0,2000.0,2200.0,2400.0,
+     *2600.0,6000.0/
+c  Temperature table for carbon steel (K).
+      data tvalcs/300.0,400.0,600.0,800.0,1000.0,1200.0,1400.0,
+     *1600.0,1700.0,1800.0,1900.0,2000.0,2200.0,2400.0,2600.0,
+     *2800.0,3000.0,6000.0/
+c
+      ncompt=0
+      rftemp=300.0
+      rftden=3120.0
+      keffr(n)=0.0
+      keffz(n)=0.0
+      hnatcr(n)=0.0
+      fracml(n)=0.0
+      stot=0.0
+      ttot=0.0
+      if (mat.eq.5 .or. mat.eq.6) go to 1000
+      m = 18
+      mm = 3
+      if (nflagi .eq. 0) go to 425
+      nflagi = 0
+      do 5 ii =1,mm
+      do 5 jj =1,m
+      hval(ii,jj) = 0.0
+      sval(ii,jj) = 0.0
+      tval(ii,jj) = 0.0
+    5 continue
+c*** convert stainless steel, inconel, and carbon steel density from
+c*** (gram/cm**3) to (kg/m**3)
+      do 10 ii=1,m
+      denss(ii) = denss(ii)*1.0e3
+      denic(ii) = denic(ii)*1.0e3
+      dencs(ii) = dencs(ii)*1.0e3
+   10 continue
+c***  convert stainless steel enthalpy from (cal/gram) to (j/kg)
+      do 20 ii=1,m
+      enthss(ii) = enthss(ii)*4.1868e3
+   20 continue
+c*** convert stainless steel, inconel, and carbon steel from
+c*** (j/kg) to (j/m**3)
+      do 30 ii=1,m
+      enthss(ii) = enthss(ii)*denss(ii)
+      enthic(ii) = enthic(ii)*denic(ii)
+      enthcs(ii) = enthcs(ii)*dencs(ii)
+   30 continue
+c***  form the conductivity arrays into 1/k arrays
+      do 40 ii=1,m
+      therss(ii) = 1.0/therss(ii)
+      theric(ii) = 1.0/theric(ii)
+      thercs(ii) = 1.0/thercs(ii)
+   40 continue
+c***  fill hval ,ther, and tval array
+      do 60 ii=1,m
+      hval(1,ii) = enthss(ii)
+      hval(2,ii) = enthic(ii)
+      hval(3,ii) = enthcs(ii)
+      ther(1,ii) = therss(ii)
+      ther(2,ii) = theric(ii)
+      ther(3,ii) = thercs(ii)
+      tval(1,ii) = tvalss(ii)
+      tval(2,ii) = tvalic(ii)
+      tval(3,ii) = tvalcs(ii)
+   60 continue
+c*** form integration
+      do 70 ii=1,mm
+      call intgrl(tval,ther,sval,mm,m,ii)
+   70 continue
+  425 continue
+c     fill in h matrix and s matrix
+      tp(1) = t(i)
+      tp(2) = t(j)
+      tp(3) = t(k)
+      tp(4) = t(l)
+      tmax=max(t(i),t(j),t(k),t(l))
+      if (mat .ne. 1) go to 75
+      zza = zz(n)
+      ua  = u(n)
+      ssa = ss(n)
+      a1a = a1(n)
+      a2a = a2(n)
+      ux2a= ux2(n)
+      zx2a= zx2(n)
+      afalm1=afalum(n)
+      aflth1=aflith(n)
+      afcdm1=afcadm(n)
+      afsoi1=afsoil(n)
+c   compute default value of thermal conductivity for debris.
+      tdbave=0.25*(tp(1)+tp(2)+tp(3)+tp(4))
+      kdebr=zutco1(zza,ua,ssa,a1a,a2a,ux2a,zx2a,afalm1,aflth1,
+     #afcdm1,afsoil,tdbave)
+   75 continue
+c
+      if (k .eq. l) then
+        nnu = 3
+      else
+        nnu = 4
+      end if
+c
+      if (mat .le. 1) then
+c               ***** debris *****
+c   heat capacity modeling is made consistent with MATPRO modeling for
+c   enthalpy of mixture in subroutine zunth1.
+        tmp1=tbar
+        if(tbar.lt.2830.0)then
+        cp = zucp1(zza, ua, ssa, a1a, a2a, ux2a, zx2a,
+     #  afalm1, aflth1, afcdm1, afsoi1, tbar)
+        else
+          if(tbar.gt.2873.0)then
+          tmp1=3200.0
+          cp = zucp1(zza, ua, ssa, a1a, a2a, ux2a, zx2a,
+     #    afalm1, aflth1, afcdm1, afsoi1, tmp1)
+          else
+          tmp2=2873.0
+          tmp1=2830.0
+          cp=(zunth1(zza, ua, ssa, a1a, a2a, ux2a, zx2a, tmp2,
+     #    afalm1, aflth1, afcdm1, afsoi1, rftemp) -
+     #    zunth1(zza, ua, ssa, a1a, a2a, ux2a, zx2a, tmp1,
+     #    afalm1, aflth1, afcdm1, afsoi1, rftemp))/(tmp2-tmp1)
+          end if
+        end if
+         rowbar=zuden1(zza, ua, ssa, a1a, a2a, ux2a, zx2a,
+     &   afalm1, aflth1, afcdm1, afsoi1, rftden)
+         stot = 0.
+         ttot = 0.
+         do 520 nn=1,nnu
+           h(nn)=zunth1(zza, ua, ssa, a1a, a2a, ux2a, zx2a, tp(nn),
+     &     afalm1, aflth1, afcdm1, afsoi1, rftemp)*rowbar
+           temp1=tp(nn)
+           if(temp1.gt.4500.0)temp1=4500.0
+           tempzu=temp1
+           if(tempzu.lt.rftemp)tempzu=rftemp
+           s(nn) = zuint(zza,ua,ssa,a1a,a2a,ux2a,zx2a,afalm1,aflth1,
+     &     afcdm1,afsoi1,tempzu,rftemp,errflg)
+           sz(nn) = zuint(zza,ua,ssa,a1a,a2a,ux2a,zx2a,afalm1,aflth1,
+     &     afcdm1,afsoi1,tempzu,rftemp,errflg)
+c  Set variables for possible default calculation.
+           stot = stot + 0.25*s(nn)
+           ttot = ttot + 0.25*tp(nn)
+  520    continue
+c
+c      call kpool to calculate integral of 1/k dt for nodes
+c      that are part of molten pool or that bracket liquid-solid
+c      interface.
+c     sigf = maximum error in temperature on solidified side of element
+c            with liquid-solid interface (K). If this value is greater
+c            than a defined tolerance, then another iteration is made.
+c            These values are computed n KPOOL and used in COUPLE.
+c     maxe = number of element with sigf.
+         call kpool (n, r, z, ix, t, zz, u, ss, a1, a2,
+     #   ux2, zx2, afalum, aflith, afcadm, afsoil, keffz, keffr,
+     #   tmltel, fracml, frcml0, pore, depth, rap,
+     #   cnpool, tpool, imin, imax, ielem, jelem,
+     #   elemij, imme, alhir, dh, rass, zptop, hnatcr, tmpdot,
+     #   s, sz, sigf, ncompt, ncslp)
+c
+       elseif (mat.eq.7 .or. mat.eq.8 .or. mat.eq.9 .or. mat.eq.10) then
+c               ***** HTGR properties *****
+         rowbar = e(2,mat)
+         cp     = e(5,mat)
+         phit   = e(6,mat)
+c
+         if (mat .eq. 7) then
+c               ***** htgr graphite ******
+            do 530 nn = 1,nnu
+            h(nn) = grcp (tp(nn)) * rowbar * tp(nn)
+            call sgrcon (tp(nn), phit, grcon, tk)
+            s(nn) = grcon
+  530       continue
+c
+         elseif (mat .eq. 8) then
+c               ***** htgr fuel compact *****
+            do 532 nn = 1,nnu
+            h(nn) = fcpcp (tp(nn)) * rowbar * tp(nn)
+            call sfcon (tp(nn), fcon, tk)
+            s(nn) = fcon
+  532       continue
+c
+         elseif (mat .eq. 9) then
+c              ***** htgr target material *****
+            do 534 nn = 1,nnu
+            h(nn) = tgtcp (tp(nn)) * rowbar * tp(nn)
+            call stgcon (tp(nn), tgtcon, tk)
+            s(nn) = tgtcon
+  534       continue
+c
+         else
+c              ***** htgr smeared properties *****
+            agr    = e(4,mat)
+            afc    = e(6,mat)
+            atgt   = e(7,mat)
+            agas   = e(8,mat)
+            fluc   = e(9,mat)
+            cpbar  = 0.0
+            condr  = 0.0
+            do 536 nn = 1,nnu
+            call smrcp (tp(nn),agr,afc,atgt,agas,cpsmr)
+            call smrcon (tp(nn),agr,afc,atgt,agas,fluc,cond)
+            cpbar  = cpbar + 0.25*cpsmr
+            condr  = condr + 0.25*cond
+  536       continue
+            caprho = cpbar * rowbar
+            condz  = condr
+            go to 1000
+         endif
+c
+         elseif(mat.eq.2 .or. mat.eq.3 .or. mat.eq.4) then
+c              ***** stainless, inconel, or carbon steel *****
+            if(mat.eq.4)then
+c         calculate cp using polate
+c       since deformation in response to thermal expansion is not
+c       calculated by Couple model, only apply room temperature
+c       density to conserve mass in each element.
+            rowbar=7850.0
+            cp=polate(cpcs,tbar,npcpcs,iucpcs)
+            else
+            rowbar = e(2,mat)
+            cp     = e(5,mat)
+            end if
+            matr = mat-1
+            do 540 nn = 1,nnu
+            call tablea (m,tval,hval,tp(nn),matr,h(nn),mm)
+            call tablea (m,tval,sval,tp(nn),matr,s(nn),mm)
+  540       continue
+         else
+c
+c              ***** user supplied constant data *****
+            rowbar = e(2,mat)
+            cp     = e(5,mat)
+            do 550 nn = 1,nnu
+            h(nn) = e(2,mat)*e(5,mat)*tp(nn)
+            s(nn) = (1.0/e(3,mat))*tp(nn)
+  550       continue
+      end if
+c
+c     triangular mesh?
+      if (k .eq. l) then
+        h(4) = h(3)
+        s(4) = s(3)
+      end if
+c
+      x(1) = r(i)
+      x(2) = r(j)
+      x(3) = r(k)
+      x(4) = r(l)
+      y(1) = z(i)
+      y(2) = z(j)
+      y(3) = z(k)
+      y(4) = z(l)
+c     determine gradients
+      call grad (k,l,dtdr,dtdz,x,y,tp)
+      call grad (k,l,dhdr,dhdz,x,y,h)
+      if(mat.eq.1)then
+c    ncompt = 0 = effective conductivity is not needed for this
+c                 element.
+        if(ncompt.eq.0)then
+        call grad (k,l,dsdr,dsdzdm,x,y,s)
+        else
+        dsdr=0.0
+        end if
+c   ignore dsdz computed on previous call, which used s values for
+c   radial direction.
+        if(ncompt.eq.0)then
+        call grad (k,l,dsdrdm,dsdz,x,y,sz)
+        else
+        dsdz=0.0
+        end if
+      else
+      call grad (k,l,dsdr,dsdz,x,y,s)
+      end if
+       eps = 1.0e-06
+      if(itran.ne.1) then
+         write(output,101)
+  101 format(' ********* Avg temperature in userp out of range.')
+         fail=.true.
+      endif
+c      compute caprho (rho*cp)
+      adtdn = sqrt(dtdr**2 + dtdz**2)
+      adhdn = sqrt(dhdr**2 + dhdz**2)
+c
+      if (adtdn .gt. eps) then
+         if(mat.eq.1.and.imme(n).eq.1)then
+c   partially filled debris element.
+c   heat capacity modeling is made consistent with MATPRO modeling for
+c   enthalpy of mixture in subroutine zunth1.
+        tmp1=tbar
+        if(tbar.lt.2830.0)then
+        cp = zucp1(zza, ua, ssa, a1a, a2a, ux2a, zx2a,
+     #  afalm1, aflth1, afcdm1, afsoi1, tbar)
+        else
+          if(tbar.gt.2873.0)then
+          tmp1=3200.0
+          cp = zucp1(zza, ua, ssa, a1a, a2a, ux2a, zx2a,
+     #    afalm1, aflth1, afcdm1, afsoi1, tmp1)
+          else
+          tmp2=2873.0
+          tmp1=2830.0
+          cp=(zunth1(zza, ua, ssa, a1a, a2a, ux2a, zx2a, tmp2,
+     #    afalm1, aflth1, afcdm1, afsoi1, rftemp) -
+     #    zunth1(zza, ua, ssa, a1a, a2a, ux2a, zx2a, tmp1,
+     #    afalm1, aflth1, afcdm1, afsoi1, rftemp))/(tmp2-tmp1)
+          end if
+        end if
+         rowbrd=zuden1(zza, ua, ssa, a1a, a2a, ux2a, zx2a,
+     #   afalm1, aflth1, afcdm1, afsoi1, rftden)
+         caprho = cp * rowbrd
+         else
+         caprho = adhdn / adtdn
+         if (caprho .lt. rowbar) caprho = cp*rowbar
+         end if
+      elseif (mat .eq. 1) then
+c   heat capacity modeling is made consistent with MATPRO modeling for
+c   enthalpy of mixture in subroutine zunth1.
+        tmp1=tbar
+        if(tbar.lt.2830.0)then
+        cp = zucp1(zza, ua, ssa, a1a, a2a, ux2a, zx2a,
+     #  afalm1, aflth1, afcdm1, afsoi1, tbar)
+        else
+          if(tbar.gt.2873.0)then
+          tmp1=3200.0
+          cp = zucp1(zza, ua, ssa, a1a, a2a, ux2a, zx2a,
+     #    afalm1, aflth1, afcdm1, afsoi1, tmp1)
+          else
+          tmp2=2873.0
+          tmp1=2830.0
+          cp=(zunth1(zza, ua, ssa, a1a, a2a, ux2a, zx2a, tmp2,
+     #    afalm1, aflth1, afcdm1, afsoi1, rftemp) -
+     #    zunth1(zza, ua, ssa, a1a, a2a, ux2a, zx2a, tmp1,
+     #    afalm1, aflth1, afcdm1, afsoi1, rftemp))/(tmp2-tmp1)
+          end if
+        end if
+         caprho = cp * rowbar
+      else
+         caprho = e(2,mat)*e(5,mat)
+      endif
+c
+c      compute condr, condz
+       if (abs(dsdr) .gt. eps.and.ncompt.eq.0) then
+          condr = abs(dtdr/dsdr)
+          if (abs(dsdz) .gt. eps) then
+             condz = abs(dtdz/dsdz)
+          else
+             condz = condr
+          endif
+       elseif (mat .eq. 1) then
+          if(ncompt.eq.0)then
+c         default calculation for conductivity for debris
+            if(stot.ge.1.e-6)then
+              condr = ttot / stot
+              condz = condr
+            else
+              condr=kdebr
+              condz=kdebr
+            endif
+          else
+            condr=keffr(n)
+            condz=keffz(n)
+          end if
+       else
+c         default calculation of conductivity for other materials
+          condr = e(3,mat)
+          condz = condr
+       endif
+c
+      if (condr .lt. e(3,mat).and.mat.ne.1) then
+         condr = e(3,mat)
+         condz = condr
+      endif
+c
+ 1000 continue
+      return
+      end
+*endif

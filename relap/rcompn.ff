@@ -1,0 +1,266 @@
+*mlist
+       subroutine rcompn
+!  Controls processing of hydrodynamic components.
+!
+!  Cognizant engineer: rjw.
+!
+       use cmpdat
+       use jundat
+       use voldat
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'rcompc.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+!
+!  Local variables.
+       integer l3a(9)
+       real ftbnid
+       integer, parameter :: lens=11
+       integer i,ix,j,k,m,n,n3,n4,nc
+       integer inp10,inp9,isfdes,lcontg,lcntgs
+       logical lhed
+       character flag*8,delt*8,cmpfl*8
+!
+!  Data statements.
+       data flag/'flags'/, delt/'delete'/
+       data l3a/2*0,2,3,0,1,-1,-1,-1/
+!
+c      call inplnk (10000,ix,n3,n4,fa(filndx(1)))
+c      if (n4.ne.0 .or. (ix.ne.-1 .and. ix.lt.10000000)) then
+         allocate (cmphld(999))
+         do i = 1,999
+           nullify (cmphld(i)%volp,cmphld(i)%junp)
+         enddo
+c      endif
+       lhed = .false.
+!  Determine if component file already exists.
+       if (filid(3) .ne. 0.0) then
+         n = filndx(3)
+         do n3 = 1,ncmps(n)
+           nc = cmpnum(n)
+           if (nvc(n) .ne. 0) then
+             allocate (cmphld(nc)%volp(nvc(n)))
+             cmphld(nc)%volp(:) = vol(nvcn(n):nvcn(n)+nvc(n)-1)
+           endif
+           if (njc(n) .ne. 0) then
+             allocate (cmphld(nc)%junp(njc(n)))
+             cmphld(nc)%junp(:) = jun(njcn(n):njcn(n)+njc(n)-1)
+           endif
+           n = n + cmplen(n)
+         enddo
+         deallocate (vol,jun)
+!  Set for possible renodalization, bring in existing file.
+         if (filid(4) .eq. 0.0) filid(4) = ftbnid(1)
+         if (filid(5) .eq. 0.0) filid(5) = ftbnid(1)
+         cmpsrc = .false.
+         nc = filsiz(3) + lens
+         if (lcontg(1) .lt. nc) go to 12
+         call ftbsft (filid(3),nc,1,filndx(3))
+         filsiz(3) = nc
+         k = lcontg(1)
+         do i = 5,4,-1
+           if (filsiz(i) .ne. 0) then
+             if (filsiz(i) .gt. k) go to 12
+             j = filndx(i)
+             if (i .eq. 4) then
+               do m = 1,nvols(j)
+                 vctrl(j) = iand(vctrl(j),not(8))
+                 j = j + ivskp
+               enddo
+             else
+               do m = 1,njuns(j)
+                 jc(j) = iand(jc(j),not(128))
+                 j = j + ijskp
+               enddo
+             endif
+           endif
+         enddo
+         ncomp = ncmps(filndx(3))
+         ncmps(filndx(3)) = filsiz(3) - lens - 1
+         go to 104
+       endif
+!  Get filid's for component, volume, and junction data.
+       cmpsrc = .true.
+       filid(3) = ftbnid(1)
+       filid(4) = filid(3) + 1.0
+       filid(5) = filid(4) + 1.0
+!  Get enough space to handle first component card.
+       filsiz(3) = lens + 1
+       if (lcontg(1) .ge. filsiz(3)) go to 11
+   12  write (output,2001)
+ 2001  format ('0******** Insufficient space to process hydrodynamic com
+     &ponent (0010000-9999999) cards.')
+       filsiz(1) = inp10(fa(filndx(1)),0010000,9999999)
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+       fail = .true.
+       go to 35
+   11  call ftbrsv (filid(3),filsiz(3),1,filndx(3))
+       ncmps(filndx(3)) = 0
+!  Get initial junction and volume blocks.
+       do i = 5,4,-1
+         if (lcontg(1) .eq. 0) go to 12
+         filsiz(i) = 1
+         call ftbrsv (filid(i),1,-1,filndx(i))
+       enddo
+       nvols(filndx(4)) = 0
+       njuns(filndx(5)) = 0
+!  Set component count to zero and component number to 1.
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,3000)
+ 3000  format ('0',41x,'Edit of component input data'/17x,'(quantities p
+     &rinted are input values, set by default, or set by error recovery)
+     &')
+       lhed = .true.
+       ncomp = 0
+  104  nc = 1
+!  See if component nc is entered.
+   10  l3a(1) = nc*10000
+       i = ncmps(filndx(3)) + filndx(3)
+       cmpnum(i) = nc
+       call inplnk (l3a(1),ix,n3,n4,fa(filndx(1)))
+       if (n4 .ne. 0) go to 17
+!  See if first card missing but other cards entered.
+       if (ix .eq. -1) go to 32
+       ix = ix/10000
+       if (ix .ne. nc) go to 14
+       if (lhed) go to 120
+       lhed = .true.
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,3000)
+  120  write (output,2002) l3a(1)
+ 2002  format ('0******** Card',i8,' is missing.')
+       ncomp = ncomp + 1
+       go to 13
+   14  nc = ix
+       go to 18
+   17  ncomp = ncomp + 1
+       if (.not.lhed) then
+         lhed = .true.
+         if (iand(ihlppr(2),ishft(1,22)).ne.0) write (output,3000)
+       endif
+!  Get component name and type(ccc0000 card).
+       l3a(6) = i
+       call inp2 (fa(filndx(1)),cmpnam,l3a)
+       if (l3a(6) .le. 0) go to 13
+!  Check type and transfer to appropriate component processing routine.
+       iextra = ior(iextra,1)
+       write (cmpfl,'(a8)') cmpnam(i+1)
+       do j = 1,17
+         if (cmpfl .eq. cmpalf(17)) go to 5
+         if (cmpfl .eq. cmpalf(j)) go to 16
+       enddo
+       if (cmpfl .eq. delt) go to 110
+    5  write (output,2004) cmpfl,l3a(1)
+ 2004  format ('0******** Component type ',a8,' on card',i8,' is illegal
+     &.')
+   13  write (output,2003) nc
+ 2003  format ('0******** Data for component',i4,' cannot be processed.'
+     & )
+       cmptyp(i) = 0
+       cmplen(i) = 4
+       j = l3a(1) + 9999
+       filsiz(1) = inp10(fa(filndx(1)),l3a(1),j)
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+       fail = .true.
+       ncmps(filndx(3)) = ncmps(filndx(3)) + cmplen(i)
+       filsiz(3) = filsiz(3) + cmplen(i)
+       if (lcntgs(filid(3),1) .lt. filsiz(3)) go to 12
+       call ftbsft (filid(3),filsiz(3),1,filndx(3))
+       go to 19
+  110  call rcdelt
+       go to 19
+   16  cmptyp(i) = j
+       cmpflg = .false.
+       if (l3a(6) .eq. 3) then
+         cmpflg = .true.
+         write (cmpfl,'(a8)') cmpnam(i+2)
+         if (cmpfl .ne. flag) then
+           write (output,2006) l3a(1)
+ 2006  format ('0******** Incorrect alphanumeric word in word 3 of card'
+     & ,i9,', correct value assumed.')
+           fail = .true.
+         endif
+       endif
+       select case (j)
+       case (1,7,17)
+         call rpipe
+       case (2)
+         call rtmdv
+       case (3)
+         call rmtplj
+       case (4)
+         call rpump
+       case (5,6,8,15)
+         call rbrnch
+       case (9)
+         call rtmdj
+       case (10)
+         call rsngv
+       case (11)
+         call rsngj
+       case (12)
+         call rvalve
+       case (13)
+         call raccum
+       case (14)
+         call rturb
+       case (16)
+         call r3dcmp
+       case default
+         call fabend
+       end select
+!  See if there can be more components.
+   19  nc = nc + 1
+   18  if (nc .lt. 1000) go to 10
+!  Check if any components have been entered.
+   32  filsiz(1) = inp9(fa(filndx(1)))
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+       if (ncomp .ne. 0) go to 40
+   35  if (isfdes(filid(3)) .ne. 0) call ftbdel (filid(3))
+       if (isfdes(filid(4)) .ne. 0) call ftbdel (filid(4))
+       if (isfdes(filid(5)) .ne. 0) call ftbdel (filid(5))
+       filid(3) = 0.0
+       filid(4) = 0.0
+       filid(5) = 0.0
+       filsiz(3) = 0
+       filsiz(4) = 0
+       filsiz(5) = 0
+       return
+!  Move hydrodynamic files to lower memory.
+   40  ncmps(filndx(3)) =  ncomp
+       filsiz(3) = filsiz(3) - lens
+       call ftbsft (filid(3),filsiz(3),2,filndx(3))
+       do j = 3,5
+         if (filsiz(j) .eq. 0) filid(j) = 0.0
+       enddo
+       call fmvlwr
+       nvolsv = nvols(filndx(4))
+       njunsj = njuns(filndx(5))
+       allocate (vol(nvolsv),jun(njunsj))
+       n = filndx(3)
+       i = 1
+       j = 1
+       do n3 = 1,ncmps(n)
+         nc = cmpnum(n)
+         if (nvc(n) .ne. 0) then
+           ix = i + nvc(n)
+           vol(i:ix-1) = cmphld(nc)%volp(:)
+           i = ix 
+           deallocate (cmphld(nc)%volp)
+         endif
+         if (njc(n) .ne. 0) then
+           ix = j + njc(n)
+           jun(j:ix-1) = cmphld(nc)%junp(:)
+           j = ix 
+           deallocate (cmphld(nc)%junp)
+         endif
+         n = n + cmplen(n)
+       enddo
+       deallocate (cmphld)
+       return
+       end

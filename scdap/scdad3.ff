@@ -1,0 +1,498 @@
+*mlist
+*if def,selap
+       subroutine scdad3
+c
+c  Calculates convective heat transfer at surfaces of SCDAP components.
+c
+c  Cognizant engineers: ewc, ljs and rjw.
+c
+       use scdmod
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'htrcom.h'
+       include 'jundat.h'
+       include 'scddat.h'
+       include 'cpmdat.h'
+       include 'debcom.h'
+       include 'statec.h'
+       include 'plndat.h'
+       include 'slumpv.h'
+       include 'scntl.h'
+       include 'hardpn.h'
+       include 'radata.h'
+       include 'solcom.h'
+       include 'buntim.h'
+       include 'cora.h'
+       include 'miscon.h'
+       include 'voldat.h'
+       include 'scdout.h'
+       include 'ndxara.h'
+       include 'tblsp.h'
+       include 'thplot.h'
+       include 'cons.h'
+       include 'nhtara.h'
+       include 'scdcom.h'
+       include 'trnot1.h'
+       include 'trnot2.h'
+       include 'ufiles.h'
+       include 'fpfast.h'
+       include 'fparm2.h'
+       include 'fpdkht.h'
+       include 'bconds.h'
+       include 'nrcom.h'
+       include 'uoxcom.h'
+       include 'fecom.h'
+       include 'bwgeom.h'
+       include 'intcom.h'
+       include 'debout.h'
+       include 'blageo.h'
+       include 'blinit.h'
+       include 'scdads.h'
+       include 'scdpow.h'
+       include 'bwtrns.h'
+       include 'dbacct.h'
+c
+c  Local variables.
+       integer ib,ibp,id,il,il2,il2s,ils,ilt,is,ise,j,jb,jbb,k,kmax,
+     & l,nl,nmaxjk,ntest1
+       real frcpps,htsfrc,htsapr,expdrc
+       real femgen,sigbsr,htcrad
+       integer nshrdn,jj
+       integer ndbg
+       data expdrc / 0.5/
+c
+         ndbg=0
+       do j = 1,ncomp
+c  Reset flag indicating whether new ceramic hardpan formed during time
+c  step.
+         nceram(j) = 0
+         qsdt(j) = 0.0
+         qndt(j) = 0.0
+         qodt(j) = 0.0
+         qedt(j) = 0.0
+         qstor(j) = 0.0
+       enddo
+c  Since locations in core that become severely damaged no longer have
+c  convective heat transfer terms that are calculated by intact geometry
+c  models, zero these terms out each time step.
+       nmaxjk=2*ndcomp*ndax
+       do j = 1,nmaxjk
+         htsht(j) =  0.0
+         htshff(j) = 0.0
+         htshft(j) = 0.0
+         htshgg(j) = 0.0
+         htshgp(j) = 0.0
+         htshgt(j) = 0.0
+         htsqst(j) = 0.0
+         htsqsf(j) = 0.0
+         htsqsg(j) = 0.0
+         htssmf(j) = 0.0
+         htssmg(j) = 0.0
+       enddo
+       if (nvirn.ne.3 .and. nvirn.ne.4 .and. nvirn.ne.6) then
+c  Store vapor void fraction at each axial node of each scdap
+c  component.
+         do j = 1,ncomp
+           do k = 1,naz
+             ilt = (j - 1)*ndax + k
+             nl = nvad(ilt) + filndx(4)
+             vgcore(k,j) = voidg(nl)
+           enddo
+         enddo
+       endif
+c
+c  The following loop calling htrc1 was copied from a similar loop
+c  later in this subroutine.  The lower loop used to call htrc1; that
+c  has been removed and the call is now is this loop.  There is
+c  probably much redundant coding in both loops.  If this works,
+c  cleanup will follow.
+       if (nvirn .eq. 2) then
+         do j = 1,ncomp
+           if (idcomp(j) .eq. 3) then
+             ibp = ibwrc(j)
+             kmax = max0(nazs(ibp),nazb(ibp)) + 1
+             if (kmax .le. naz) then
+               do k = kmax,naz
+                 iempty(k,j) = 1
+               enddo
+             endif
+           endif
+         enddo
+       endif
+       do j = 1,ncomp
+         if (idcomp(j).eq.5 .or. idcomp(j).eq.7) then
+           do k = 1,naz
+             totm = masful(k,j) + mascdo(k,j) + mascdi(k,j)
+             ratm = totm/totmas(k,j)
+             if (ratm.le.0.01) iempty(k,j) = 1
+           enddo
+         endif
+       enddo
+       do j = 1,ncomp
+         ise = 1
+         if ((idcomp(j).eq.2 .and. islbot(j).eq.0) .or. idcomp(j).eq.4
+     &   .or. idcomp(j).eq.8) ise = 2
+         do is = 1,ise
+           if (is .eq. 1) then
+             jb = j
+             jbb = j
+             ils = (j - 1)*ndax
+             il2s = il
+           else
+             jb = ndcomp + nsout(j)
+             jbb = nsout(j)
+             ils = (j - 1)*ndax
+             il2s = (jb - 1)*ndax
+           endif
+           do k = 1,naz
+c  If no rod-like geometry at this location, then skip over
+c  these calculations.
+             if ((irubpp(k,j).ne.1 .and. lcrucb(k,j).lt.1) .or.
+     &       ise.ne.1) then
+c  itopdb(k,j)=k if no existence of 100% flow blockage at this
+c  location. Otherwise it equals number of first axial node above
+c  blockage.
+               il = ils + k
+               il2 = il2s + k
+               if (j.eq.jb .and. (iempty(k,j).eq.1 .or. scntrl(11)))
+     &         then
+                 htgamf = 0.0
+                 htgamg = 0.0
+                 qfluxo = 0.0
+                 qfgo = 0.0
+                 htcf = 0.0
+                 htcg = 0.0
+                 go to 100
+               endif
+               if (j .ne. jb) then
+c  Calculations for second surfaces.
+                 if (idcomp(j) .eq. 8) then
+                   htsasv(il2) = wpsur2(il)*dzcond(il)*nsigl(j)
+                 else
+                   htsasv(il2) = slbwd(j)*dzcond(il)*nsigl(j)
+                 endif
+cljs change
+                 htsa = htsasv(il2)
+                 tw = tcond3(1,k,j)
+                 ib = (nsout(j) - 1)*ndax + k
+                 qfluxo = qouts(ib)
+                 il = (jb - 1)*ndax + k
+                 if (iempty(k,j).eq.1 .or. scntrl(11)) then
+                   htgamf = 0.0
+                   htgamg = 0.0
+                   qfluxo = 0.0
+                   qfgo = 0.0
+                   htcf = 0.0
+                   htcg = 0.0
+                   go to 100
+                 endif
+                 l = nvad(il) + filndx(4)
+               else
+                 l = nvad(il) + filndx(4)
+                 if (idcomp(j).eq.2 .or. idcomp(j).eq.4 .or. idcomp(j)
+     &           .eq.5 .or. idcomp(j).eq.7) then
+                   htsasv(il) = slbwd(j)*dzcond(il)*nsigl(j)
+                 elseif (idcomp(j) .eq. 8) then
+                   htsasv(il) = wpsur1(il)*dzcond(il)*nsigl(j)
+                 else
+                   htsasv(il) = 2.0*pi*rcrsto(il)*dzcond(il)*nsigl(j)
+c  Reduce surface area to account for presence of cohesive debris at
+c  node. 
+                   htsfrc=1.0 - dzfrcq(k,j)**expdrc
+c  If plane blockage, account for flow only from top of node.
+                   if (nplblk(ncmpgp(j),k).eq.1) then
+                     htsfrc = 0.5*(1.0 - dzfrcq(k,j)**expdrc)
+                   endif
+                   if (htsfrc .lt. 0.0) htsfrc = 0.0
+c  Account for surface area on horizontal surfaces.
+c***               htsapr = (pitch(j)**2)/(htsasv(il)/float(nsigl(j)))
+c***               if (htsfrc.lt.htsapr) htsfrc = htsapr
+                   htsasv(il) = htsfrc*htsasv(il)
+                   if (htsasv(il).lt.1.e-6) htsasv(il) = 1.e-6
+                 endif
+                 htsa = htsasv(il)
+                 tw = tcond3(nrods2(k,j),k,j)
+                 if (tw .lt. 200.0) then
+                   write (output,"('0******** Unrealistic surface temper
+     &ature encountered in subroutine SCDAD3, calculations stopped.')")
+                   write (output,8907) timehy,tw,j,k
+8907   format (' time =',es14.6,' s,   surface temperature',' =',es12.4,
+     & ' K,   component number =',i3,'   axial node =',i3)
+                   write (output,8909) volno(l),voidf(l),tempg(l)
+8909   format (' RELAP5 volume number for surface =',i10,
+     & ' volume fraction liquid =',es13.5,'  temperature of vapor phase 
+     7=',es12.4,' K')
+                   write (output,8911) tempf(l),quala(l),p(l)
+8911   format (' temperature of liquid phase =',es12.4,' K',
+     & '  noncondensible quality =',es13.5,'  pressure=',es13.5,' Pa')
+                   if (help .ge. 0) help = 1
+                 endif
+c
+c  qout here is the convective heat flux (no radiation) calculated in
+c  heatcn.
+                 qfluxo = qout2(k,jb,1)
+                 aflowp(k) = aflowp(k) + avol(l)
+                 if (j .eq. ncomp) aflowp(k) = avol(l)
+               endif
+               id = is*10000 + jb*100 + k
+               iv = l
+               iv1 = iv
+               iv2 = iv
+               htdiam = diamv(iv1)
+               htlenc = zcond2(naz,1) + 0.5*dzcnd2(naz,1)
+               if (idcomp(j).eq.2 .and. j.eq.jb) then
+c  Possibility that fuel rods next to reflector or shroud are in
+c  configuration of rubble debris, and thus variable diamv reduced
+c  to value typical for porous debris, so get hydraulic diameter
+c  from axial node 1, which is most likely node to become porous
+c  debris.
+                 htdiam = diamv(nvad((j-1)*ndax+1)+filndx(4))
+                 htlenc=zcond2(naz,1)+0.5*dzcnd2(naz,1)
+               endif
+c  Define input variables to HTRC1 that were added recently.
+c  These variables are defined in htrcomc.H or in htcond.F
+               ggasa = abs(ggas(iv))
+               gliqa = abs(gliq(iv))
+               gabs = max(ggasa + gliqa,0.001)
+               g = hydzc(iv2) + hydzc(iv2+1)
+               g = (ggas(iv1) + gliq(iv1))*sign(1.0,g)
+c  drod = outer diameter of rod.
+cljs change
+               if (idcomp(j) .eq. 8 )then
+                  drod = slbwd(j)/pi
+               elseif(idcomp(j).eq.2)then
+cljs  set nominal value to drod for CHF purposes
+                 drod = 2.e-2
+               else
+                 drod = 2.*rco2(k,j)
+               endif
+c  delgrv=(gravity constant)*(length of heat structure).
+               delgrv=g*dzcnd2(k,j)
+c  gcross = mass flux in direction perpindicular to rod.
+               gcross=0.0
+c  gcrosf = (gravity constant)*(ratio of flow area to gap area).
+               gcrosf=0.0
+c  pitdia = ratio of pitch to diameter.
+               pitdia=1.
+cljs
+               if (idcomp(j) .ne. 8 .or. idcomp(j). ne. 2)then   
+               pitdia = pitch(j)/rco2(k,j)
+               end if
+c  htopta = index that defines configuration of heat structure.
+               htopta = 1
+c  ivindx = index of RELAP5 control volume at inlet of bundle (used for
+c           Czech CHF correlation).
+               ivindx=iv
+c  /htrcom/ variables pgopta and pgflag are parameters used in Czech
+c  heat transfer package and can be left undefined when this package is
+c  not used.
+               if (htlenc.lt.1.e-3) htlenc = 1.e-3
+               htlen = zcond2(k,j)
+               gridz = 0.0
+               gridk = 1.0
+               if (ngrid .gt. 0) then
+c  This coding assumes that the flow at the time of dryout will be from
+c  bottom to top.
+                 if (idcomp(j) .eq. 0) then
+                   do idoknt = 1,ngrid
+                     if (htlen .gt. zgrid(idoknt,j)) then
+                       gridz = htlen - zgrid(idoknt,j)
+c  A grid spacer loss coefficient of 1. is assumed.
+                       gridk = 1.0
+                       go to 90
+                     endif
+                   enddo
+                 endif
+               endif
+   90          axpf = 1.0
+               hfg = sathg(iv) - sathf(iv)
+               chf = 0.0
+               chfmul = 0.0
+c  Protect against divide by zero in subroutine CONDEN for case of
+c  condensation during accumulator injection.
+               ntest1 = 0
+               call htrc1 (id)
+               qlxorj(il) = qfluxo
+c  If flow completely blocked off at node, set convective heat transfer
+c  to zero.
+               if (idcomp(j).eq.0) then
+                 if (nbublk(ncmpgp(j),k).eq.1)then
+                   htcf = 0.0
+                   htcg = 0.0
+                   qfluxo = 0.0
+                   qfgo = 0.0
+                   htzht = 0.0
+                   htzhff = 0.0
+                   htzhft = 0.0
+                   htzhgg = 0.0
+                   htzhgp = 0.0
+                   htzhgt = 0.0
+                   htqot = 0.0
+                   htqof = 0.0
+                   htqog = 0.0
+                   htgamf = 0.0
+                   htgamg = 0.0
+                 end if
+               end if
+               frcpps = pps(l)/p(l)
+cljs  following if()then gives way too small htcg for case of 
+cljs  quala equal to 1.
+cljs           if (frcpps.lt.0.01) then
+               if (frcpps.ge.9.)then
+                 frcpps = frcpps*100.0
+                 qfluxo = frcpps*qfluxo
+                 htcf = frcpps*htcf
+                 htcg = frcpps*htcg
+                 qfgo = 0.0
+                 htzht = frcpps*htzht
+                 htzhff = frcpps*htzhff
+                 htzhft = frcpps*htzhft
+                 htzhgg = frcpps*htzhgg
+                 htzhgp = frcpps*htzhgp
+                 htzhgt = frcpps*htzhgt
+                 htqot = frcpps*htqot
+                 htqof = frcpps*htqof
+                 htqog = frcpps*htqog
+                 htgamf = 0.0
+                 htgamg = 0.0
+               endif
+               if (j .ne. jb) then
+                 tcols(ib) = tempg(l)
+                 hout(ib) = htcf + htcg
+               else
+                 tcolc(il) = tempg(l)
+                 hfix(il) = htcf + htcg
+                 hcnvec(il) = hfix(il)
+               endif
+               hfixf(il) = htcf
+               hfixg(il) = htcg
+               htsht(il) = htzht
+               htshff(il) = htzhff
+               htshft(il) = htzhft
+               htshgg(il) = htzhgg
+               htshgp(il) = htzhgp
+               htshgt(il) = htzhgt
+               htsqst(il) = htqot
+               htsqsf(il) = htqof
+               htsqsg(il) = htqog
+               htssmf(il) = htgamf
+               htssmg(il) = htgamg
+               qffcon = hfixf(il)*(tw - tempf(l))
+               qfgcon = hfixg(il)*(tw - tempg(l))
+               qftcon = qffcon + qfgcon
+               qffhtr = qflux0(il) - qfg0(il)
+               qfghtr = qfg0(il)
+               qfthtr = qffhtr + qfghtr
+               frch = 1.0
+               if (htgamf .ge. 0.0) then
+                 if (abs(qffhtr) .gt. 1.0e-6) frch = qffcon/qffhtr
+               else
+                 if (abs(qfghtr) .gt. 1.0e-6) frch = qfgcon/qfghtr
+               endif
+c  Exclude surface area within hardpan region.
+  100          if (nblkrd(k,j) .eq. 1) then
+                 scd21(k,jbb,is)%qscd = 0.0
+                 scd21(k,jbb,is)%qwgscd = 0.0
+                 scd21(k,jbb,is)%gamscd = 0.0
+                 scd21(k,jbb,is)%gamccd = 0.0
+               endif
+               if (idcomp(j).eq.0) then
+                 if (nbublk(ncmpgp(j),k) .eq. 1) then
+                   scd21(k,jbb,is)%qscd = 0.0
+                   scd21(k,jbb,is)%qwgscd = 0.0
+                   scd21(k,jbb,is)%gamscd = 0.0
+                   scd21(k,jbb,is)%gamccd = 0.0
+                 endif
+               endif
+               if (idcomp(j).eq.1) then
+                 if (wremsr((j-1)*ndax+k).gt.1.e-10) then
+                   scd21(k,jbb,is)%qscd = 0.0
+                   scd21(k,jbb,is)%qwgscd = 0.0
+                   scd21(k,jbb,is)%gamscd = 0.0
+                   scd21(k,jbb,is)%gamccd = 0.0
+                 endif
+               endif
+               if (idcomp(j).eq.3) then
+                 if (mbcs((ibwrc(j)-1)*ndax+k).lt.1.e-6) then
+                   scd21(k,jbb,is)%qscd = 0.0
+                   scd21(k,jbb,is)%qwgscd = 0.0
+                   scd21(k,jbb,is)%gamscd = 0.0
+                   scd21(k,jbb,is)%gamccd = 0.0
+                 endif
+               endif
+               qflux0(il) = qfluxo
+               qfg0(il) = qfgo
+             endif
+           enddo
+         enddo
+c  Embedded flow channels in ap600 reflector.
+         if (ishdcr(j).eq.1 .and. nodech(j).gt.1) then
+           do k = 1,naz
+             if (nblkrf(j) .lt. 1) then
+               axpf = 1.0
+               gridz = 10.
+               gridk = 1.0
+               iv = nvechn(k,j) + filndx(4)
+               iv1 = iv
+               iv2 = iv
+               hfg = sathg(iv) - sathf(iv)
+               htdiam = diamv(iv1)
+               htlen = dzcnd2(k,j)
+               htlenc=zcond2(naz,1)+0.5*dzcnd2(naz,1)
+               if (htlenc.lt.1.e-3) htlenc = 1.e-3
+c  Define input variables to HTRC1 that were added recently.
+c  These variables are defined in htrcomc.H or in htcond.F.
+               ggasa = abs(ggas(iv))
+               gliqa = abs(gliq(iv))
+               gabs = max(ggasa + gliqa,0.001)
+               g = hydzc(iv2) + hydzc(iv2+1)
+               g = (ggas(iv1) + gliq(iv1))*sign(1.0,g)
+c              drod = outer diameter of rod
+               drod=htdiam
+c  delgrv=(gravity constant)*(length of heat structure)
+               delgrv=g*dzcnd2(k,j)
+c  gcross = mass flux in direction perpindicular to rod
+               gcross = 0.0
+c  gcrosf = (gravity constant)*(ratio of flow area to
+c           gap area)
+               gcrosf = 0.0
+c  pitdia = ratio of pitch to diameter
+               pitdia=1.0
+c  htopta = index that defines configuration of heat structure.
+               htopta = 1
+c  ivindx = index of RELAP5 control volume at inlet of bundle (used for
+c  Czech CHF correlation).
+               ivindx = iv
+               htsa = htlen*4.0*avol(iv1)/diamv(iv1)
+               tw = tcond3(nodech(j),k,j)
+c  tsat = not defined for earlier call.
+               id = k
+               call htrc1 (id)
+               qrfl(k,j) = qfluxo*htsasv(il)
+               echflx(k,j) = qrfl(k,j)
+               qwgrfl(k,j) = qfgo*htsasv(il)
+               gamrfl(k,j) = (qfluxo - qfgo)*htgamf
+             else
+c  Molten material is slumping through flow channel below axial node
+c  npldrn(j).
+               qrfl(k,j) = 0.0
+               qwgrfl(k,j) = 0.0
+               gamrfl(k,j) = 0.0
+               echflx(k,j) = 0.0
+               if (k.le.kbrssr(j)) then
+                 if (npldrn(j).ge.1 .or.
+     &           (k.ge.nplguo(j) .and. nplguo(j).ge.1)) then
+c  Note. echflx(k,j) is positive when heat flowing from reflector to
+c  fluid in embedded flow channels.
+                   echflx(k,j) = -qssrbk(k,j)
+                 endif
+               endif
+             endif
+           enddo
+         endif
+       enddo
+       return
+       end
+*endif

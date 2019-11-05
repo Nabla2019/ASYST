@@ -1,0 +1,1973 @@
+*mlist
+       subroutine statep (check)
+!
+!  Compute equation of state and derivitives for time advanced volumes.
+!
+!  Cognizant engineer:  hxc(air),  jat(non-air).
+!
+       use invtbl
+       use lpdatc
+       use mserrd
+       implicit none
+       integer check
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'mxnfcd.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'scntl.h'
+!
+!  Local variables.
+       real prop(36),s(36)
+!
+       real phiv(6,6),viscsa(6),thcnda(6)
+       real aet,cvao,cvaq,dcva,dp,dpdt,dpsdp,dpsdug,dpsdxa,dte,
+     & dv,pa,ra,rdet,rdp,rdu,res,rhogf,term,termx,toler,u,
+     & ua,uao,vb,vg,vmix,xa,xs,xphiv,qlnk,sorpix
+$if def,selap
+       real delpsl,delusl,dpsdt,dvair,dvar,dvhe,dvhy,dvkr,dvni,dvxe,
+     & dvsf6,dvoxy,dvco2,dvcom,lambdb,pst
+$endif
+       real g11,g12,g21,g22,gr1,gr2,grdet,gb1,gx1,gx2,gcondn,gdiscr
+       integer nrpts
+       real ttr(11), ro(11) ,tmt
+       real ttt(25), hh(25), h, pol8
+       integer npts, indx, ierr
+       integer i,ih1,ih2,ih3,ih4,ih5,ih6,iq,ix,j,j1,k,k1,m,mark,
+     & matrl,nh1,nh2,nh3,nh4,nh5,nh6,noncnp
+       integer itop,ibot,jx,ldf,jvx,jupdw,loop,ifrmto,jtype
+       logical erx,extrp,extrp2,jstop,lflag1
+$if def,mmfld,2
+       real c0,c1,c2,umt0
+       integer ih7,jj,nh7,nn
+!
+       integer ierx,ierxp,iones(2),niter
+       real advdp,advdug,advdxa,ba,bf,bs,cpa,ddpsdp,ddvdp,ddxsdp,
+     & delps,delus,df1dug,df1dxa,df2dp,df2dxa,dtgdps,
+     & dtgdus,du,duadt,dum,dusdp,dusdug,dusdxa,dvsdus,dvsdps,f11,f12,
+     & f21,f22,plast,r1,r2,rs,rvsubg,sdvdp,sdvdug,sdvdxa,sff,sss,ta,
+     & term1,term2,ua1,ulast,va,vf,voidmt,xka,xkf,xks,xxa,xxf,xxs
+       real rhoffa,rhofb,tempfa,tempfb,rhofpa,rhofpb,tmpfpa,tmpfpb
+       logical err
+       integer it
+       integer iprop(36)
+       equivalence (prop(1),iprop(1))
+       character chwrd*9
+!
+!  tref and visao are needed for air viscosity calculation.
+!  Sutherlands formula = xxx*(t/tref)**1.5*(reft+tref)/(t+tref)
+!  reft = the reference temperature (273.13 k).
+!  xxx = viscosity or thermal conductivity.
+!  tref = 114. k (the temperature constant from "Statiscal
+!  Thermodynamics" by Tien and Lienhard).
+!  visao = 1.73374e-5*(273.13+114.)/273.13**1.5=1.487e-6
+!  thconao = 0.0242*(273.13+114.)/273.13**1.5=2.076e-3
+       save ttr, ro, nrpts
+       save ttt, hh, npts, indx
+!
+       data toler/0.0005/,iq/0/
+!
+!  Construct the following table so that the function
+!  pol8 may be used to do the linear interpolation
+!  for density as function of temperature for aluminum.
+!  This data is from page 4-7 of cronenberg's report
+!  entitled "Handbook Of Material Melt Properties",
+!  Report No. ESA-Scdap-101, April 1989.  The units there
+!  were g/cm**3 for density and k for temperature.  Thus, here
+!  where si units are required, the density table has been
+!  multiplied by 1000 to give kg/m**3.
+!      (Start of table)
+!
+       data  ttr/ 250.,300.,400.,500.,600.,800.,933.,933.01,1000.,
+     & 1200.,1400./
+       data  ro/ 2710.,2701.,2681.,2661.,2639.,2591.,2559.,2385.,
+     & 2365.,2305.,2255./
+       data nrpts /11/
+!
+!      All units are s.i.
+       data ttt/273.15,313.15,353.15,393.15,433.15,473.15,513.15,
+     & 553.15,593.15,633.15,673.15,713.15,753.15,793.15,833.15,
+     & 873.15,913.15,932.,933.,1000.,1200.,1400.,1600.,1800.,2000./
+       data hh /0.,3.6056e4,7.282e4,1.103e5,1.485e5,1.874e5,
+     & 2.271e5,2.675e5,3.086e5,3.505e5,3.931e5,4.365e5,4.806e5,
+     & 5.255e5,5.712e5,6.1767e5,6.649e5,7.608e5,1.0678e6,1.146e6,
+     & 1.3811e6,1.6167e6,1.851e6,2.087e6,2.3217e6/
+       data npts/25/
+       data indx/1/
+       data iones/1,1/
+!
+       i = lpdat(issys)%liv
+       matrl = volmat(i)
+!
+!  If current system loop contains a different fluid from the last one,
+!  call stcset
+       if (matrl.ne.nfluid) call stcset (matrl)
+!
+!  Set voids for time-dependent volumes.
+       if (lvtvol(lpdat(issys)%llvect) .ne. 0) then
+         ih1 = lvtvol(lpdat(issys)%llvect)
+         do m = 1,lvptr(ih1)
+           ih1 = ih1 + 1
+           i = lvptr(ih1)
+$if def,mmfld,1
+           if (lnonmf(issys) .eq. 0) then
+             voidf(i) = max(0.0,min(1.0,1.0 - voidg(i)))
+$if def,mmfld,4
+           else
+             voidf(i) = max(0.0,min(1.0,1.0 - voidg(i) - voidm(i) -
+     &       voidms(i)))
+           endif
+           if (voidf(i) .lt. 1.0e-10) voidf(i) = 0.0
+         enddo
+       endif
+!
+       i = lpdat(issys)%liv
+       ih1 = ixvff
+       ih2 = ixvff
+       ih3 = ixvff
+       nh1 = 0
+       nh2 = 0
+       nh3 = 0
+       do m = 1,lpdat(issys)%livn
+         if (iand(vctrl(i),33) .eq. 0) then
+           ihld1(ih1) = i
+           ih1 = ih1 + scskp
+           nh1 = nh1 + 1
+           if (quala(i).lt.1.0e-9 .and. iand(imap(i),64).eq.0) then
+             ihld2(ih2) = i
+             ihld2a(ih2) = vctrln(i)
+             ih2 = ih2 + scskp
+             nh2 = nh2 + 1
+           else
+             ihld3(ih3) = i
+             ih3 = ih3 + scskp
+             nh3 = nh3 + 1
+           endif
+         endif
+         i = i + ivskp
+       enddo
+       if (nh1 .eq. 0) go to 999
+$if def,mmfld
+       if (lnonmf(issys) .ne. 0) then
+         ih1 = ixvff
+         ih7 = ixvff
+         nh7 = 0
+         do m = 1,nh1
+           i = ihld1(ih1)
+           if (voidm(i) .gt. 1.0e-16) then
+             ihld7(ih7) = i
+             ih7 = ih7 + scskp
+             nh7 = nh7 + 1
+           endif
+           ih1 = ih1 + scskp
+         enddo
+       endif
+$endif
+       lflag1 = .false.
+       ih1 = ixvff
+       do m = 1,nh1
+         i = ihld1(ih1)
+         ix = vctrls(i)
+         ia(ix+22) = sth2xv(i)
+         ia(ix+72) = sth2xv(i)
+         fa(ix+58) = 0.0
+         rhofs(ix) = 1.0e-7
+$if def,mmfld,1
+         if (lnonmf(issys) .eq. 0) then
+           voidf(i) = max(0.0,min(1.0,1.0-voidg(i)))
+$if def,mmfld,4
+         else
+           voidf(i) = max(0.0,min(1.0,1.-voidg(i)-voidm(i)-voidms(i)))
+         endif
+         if (voidf(i) .lt. 1.0e-10) voidf(i) = 0.0
+         mark = 0
+         if (p(i) .le. 0.0) mark = 256
+         vctrl(i) = ior(vctrl(i),mark)
+         lflag(ix) = ppso(i).ge.pcrit .and. pps(i).lt.pcrit
+         lflag1 = lflag1 .or. lflag(ix)
+         ih1 = ih1 + scskp
+       enddo
+!  If any previously supercritical volumes found, set appropriate void
+!  fractions.
+       if (lflag1) then
+         ih1 = ixvff
+         ih4 = ixvff
+         nh4 = 0
+         do m = 1,nh1
+           i = ihld1(ih1)
+           ix = vctrls(i)
+           if (lflag(ix)) then
+             ihld4(ih4) = i
+             ih4 = ih4 + scskp
+             nh4 = nh4 + 1
+           endif
+           ih1 = ih1 + scskp
+         enddo
+         ih4 = ixvff
+         do m = 1,nh4
+           i = ihld4(ih4)
+           voidg(i) = 0.0
+$if def,mmfld,1
+           if (lnonmf(issys) .eq. 0) then
+             if (voidgo(i) .gt. 0.05) voidg(i) = 1.0
+             voidf(i) = max(0.0,min(1.0,1.0-voidg(i)))
+$if def,mmfld,5
+           else
+             if (voidgo(i) .gt. 0.05) voidg(i) = 1.0 - voidm(i)
+             voidf(i) = max(0.0,min(1.0,1.0-voidg(i)-voidm(i) -
+     &       voidms(i)))
+           endif
+           if (voidf(i) .lt. 1.0e-10) voidf(i) = 0.0
+           ih4 = ih4 + scskp
+         enddo
+       endif
+!
+!  Normal volumes with air.
+       if (nh3 .ne. 0) then
+         ih3 = ixvff
+         do m = 1,nh3
+           i = ihld3(ih3)
+           ix = vctrls(i)
+!  Vapor phase properties.
+           cvao = 0.0
+           uao = 0.0
+           dcva = 0.0
+           ra = 0.0
+           k = i
+           do j = 1,lpdat(issys)%lnoncn
+             qlnk = qualan(k)
+             if (iand(imap(i),64).ne.0 .and. j.eq.1) qlnk = 1.0
+             cvao = cvaox(j)*qlnk + cvao
+             uao = uaox(j)*qlnk + uao
+             dcva = dcvax(j)*qlnk + dcva
+             ra = rax(j)*qlnk + ra
+             k = k + 1
+           enddo
+!  Check for all air
+           if (quala(i).le.0.99999999 .or. iand(imap(i),64).ne.0) then
+!
+!  Do liquid properties if voidg not equal to one.
+             if (voidg(i) .lt. 1.0) then
+!
+!  Liquid properties.
+               pres(ix) = p(i)
+               ubar(ix) = uf(i)
+               if (nfluid .eq. 1) then
+                 call sth2x6 (fa(ndxstd),tt(ix),iq,erx)
+               elseif (nfluid .eq. 2) then
+                 call std2x6 (fa(ndxstd),tt(ix),iq,erx)
+               else
+                 call strpu1 (fa(ndxstd),tt(ix),iq,erx)
+               endif
+               if (erx) then
+                 if (voidg(i) .gt. 0.99999) then
+                   tempf(i) = -1.0
+                   go to 101
+                 else
+                   vctrl(i) = ior(vctrl(i),16384)
+                   go to 536
+                 endif
+               endif
+               if (iq .eq. 2) then
+!  Superheated liquid state.
+!  Extrapolate specific volume and temperature at constant pressure.
+                 vb = vsubf(ix)*betaf(ix)
+                 vs(ix) = vsubf(ix)
+                 term = (ubar(ix) - usubf(ix))/(cpf(ix) - pres(ix)*vb)
+                 if (chngno(36)) term = min(term,50.0)
+                 tf(ix) = tt(ix) + term
+                 vsubf(ix) = vsubf(ix) + vb*term
+                 betaf(ix) = vb/vsubf(ix)
+                 kapaf(ix) = vs(ix)*kapaf(ix)/vsubf(ix)
+                 if (vsubf(ix).le.0.0) then
+                   if (voidg(i) .gt. 0.99999) then
+                     tempf(i) = -1.0
+                     go to 101
+                   else
+!  17408 = 1024 + 16384.
+                     vctrl(i) = ior(vctrl(i),17408)
+                     go to 536
+                   endif
+                 endif
+               elseif (iq .ne. 1) then
+!                if (voidg(i) .gt. 0.99999) then
+                 if (voidg(i) .gt. 0.99999999) then
+                   tempf(i) = -1.0
+                   go to 101
+                 else
+!  17408 = 1024 + 16384.
+                   vctrl(i) = ior(vctrl(i),17408)
+                   go to 536
+                 endif
+               else
+!  Subcooled liquid state.
+                 tf(ix) = tt(ix)
+                 cpf(ix) = cp(ix)
+                 betaf(ix) = beta(ix)
+                 kapaf(ix) = kapa(ix)
+                 entpyf(ix) = entpy(ix)
+                 vsubf(ix) = vbar(ix)
+               endif
+               term = -1.0/(vsubf(ix)*vsubf(ix))
+               dv = vsubf(ix)*betaf(ix)
+               rdu = 1.0/(cpf(ix) - vsubf(ix)*betaf(ix)*p(i))
+               drfduf(i) = term*dv*rdu
+               dtfduf(i) = rdu
+               dv = cpf(ix)*vsubf(ix)*kapaf(ix) -
+     &         tf(ix)*(vsubf(ix)*betaf(ix))**2
+               dte = p(i)*vsubf(ix)*kapaf(ix) - tf(ix)*vsubf(ix)*
+     &         betaf(ix)
+               rdp = -rdu
+               drfdp(i) = term*dv*rdp
+               dtfdp(i) = dte*rdp
+               rhof(i) = 1.0/vsubf(ix)
+               rhofs(ix) = rhof(i)
+!  Recompute the partial derivatives when the thermal front is in the
+!  cell.
+               if (dfront(i) .gt. 0.0) then
+                 ldf = invfnd(i)
+                 do loop = 1,invcnt(i)
+                   jx = invj(ldf)%invvnx
+!  Get from-to junction flag.
+                   ifrmto = iand(ishft(invj(ldf)%invjun,-2),1)
+!  Get up-down juction flag.
+                   jupdw  = iand(ishft(jc(jx),-27),1)
+!  When jupdw = 0, then the k vol is the down vol.
+!
+!  Set top-bot flag.
+                   jtype = abs(ifrmto - jupdw)
+                   jvx = ij1nx(jx-ifrmto+1)
+                   if (jtype .eq. 1) then
+                     ibot = jvx
+                   else
+                     itop = jvx
+                   endif
+                   ldf = ldf + 1
+                 enddo
+                 prop(2) = p(i)
+                 prop(4) = uf(itop)
+                 iprop(23) = sth2xv(i)
+                 if (nfluid .eq. 1) then
+                   call sth2x6 (fa(ndxstd),prop,it,err)
+                 elseif (nfluid .eq. 2) then
+                   call std2x6 (fa(ndxstd),prop,it,err)
+                 else
+                   call strpu1 (fa(ndxstd),prop,it,err)
+                 endif
+                 if (err) then
+                   vctrl(i) = ior(vctrl(i),32768)
+                   go to 536
+                 endif
+                 rhoffa = 1.0/prop(3)
+                 tempfa = prop(1)
+                 prop(2) = p(i)
+                 prop(4) = uf(ibot)
+                 iprop(23) = sth2xv(i)
+                 if (nfluid .eq. 1) then
+                   call sth2x6 (fa(ndxstd),prop,it,err)
+                 elseif (nfluid .eq. 2) then
+                   call std2x6 (fa(ndxstd),prop,it,err)
+                 else
+                   call strpu1 (fa(ndxstd),prop,it,err)
+                 endif
+                 if (err) then
+                   vctrl(i) = ior(vctrl(i),32768)
+                   go to 536
+                 endif
+                 rhofb = 1.0/prop(3)
+                 tempfb = prop(1)
+                 prop(2) = p(itop)
+                 prop(4) = uf(i)
+                 iprop(23) = sth2xv(i)
+                 if (nfluid .eq. 1) then
+                   call sth2x6 (fa(ndxstd),prop,it,err)
+                 elseif (nfluid .eq. 2) then
+                   call std2x6 (fa(ndxstd),prop,it,err)
+                 else
+                   call strpu1 (fa(ndxstd),prop,it,err)
+                 endif
+                 if (err) then
+                   vctrl(i) = ior(vctrl(i),32768)
+                   go to 536
+                 endif
+                 rhofpa = 1.0/prop(3)
+                 tmpfpa = prop(1)
+                 prop(2) = p(ibot)
+                 prop(4) = uf(i)
+                 iprop(23) = sth2xv(i)
+                 if (nfluid .eq. 1) then
+                   call sth2x6 (fa(ndxstd),prop,it,err)
+                 elseif (nfluid .eq. 2) then
+                   call std2x6 (fa(ndxstd),prop,it,err)
+                 else
+                   call strpu1 (fa(ndxstd),prop,it,err)
+                 endif
+                 if (err) then
+                   vctrl(i) = ior(vctrl(i),32768)
+                   go to 536
+                 endif
+                 rhofpb = 1.0/prop(3)
+                 tmpfpb = prop(1)
+!  rhoffa-rhofb,tempfa-tempfb give the change in density, temp under
+!  constant pressure.
+                 drfduf(i) = (rhoffa - rhofb)/(uf(itop) -
+     &           uf(ibot))
+                 dtfduf(i) = (tempfa - tempfb)/(uf(itop) -
+     &           uf(ibot))
+!  rhofpa-rhofpb,tempfpa-tempfpb give the change in density, temp under
+!  constant internal energy.
+                 drfdp(i) = (rhofpa - rhofpb)/(p(itop) -
+     &           p(ibot))
+                 dtfdp(i) = (tmpfpa - tmpfpb)/(p(itop) -
+     &           p(ibot))
+               endif
+               tempf(i) = tf(ix)
+               betaff(i) = betaf(ix)
+               csubpf(i) = cpf(ix)
+               kapaff(ix) = kapaf(ix)
+               sff = entpyf(ix)
+             endif
+!
+!  Vapor/air mixture properties.
+!     The gas properties iteration uses two equations for a Gibbs-
+!     Dalton mixture, (1) xs*us + xa*ua(t(us,ps)) - ug       and
+!     (2) xs*vs(us,ps) = xa*( ra*t(us,ps)/(p-ps) )      with us and ps
+!     as the iterations variables.  The newton-rapson derivatives of (2)
+!     are approximated assuming the gas constant for steam (ps*vs/t) is
+!     constant.  Equ (2) is also cleared of ps and p-ps in the
+!     denominator so the limiting cases are handled correcty.
+!
+  101        xa = max(1.0e-5,min(quala(i),0.99999))
+             xs = 1.0 - xa
+             pres(ix) = p(i)
+!
+!  Check for noncondensibles first appearing.  If so, reset voidg to
+!  0.00001 if it is zero, and set quala to 0.00001. Assume that air
+!  entered volume at same temperature as previous vapor temperature.
+!  Set the advanced quantities, P, ug, and the iteration guesses, pres
+!  and ubar based on the above.
+!
+!  Test bit 7 to see if this is a repeat for air appearance.
+!
+             if (iand(imap(i),64).ne.0) then
+               if (voidg(i) .eq. 0.0) voidg(i) = 1.0e-6
+               sorpix = vo(i)*(rhom(i) - rho(i))
+               xa = (sourca(ix) + hyarg(i)*qualao(i)*vo(i))/
+     &         (hyarg(i)*vo(i) + 0.5*(sorpix + sourcm(ix)))
+               xa = max(2.0e-9,min(xa,0.10000))
+               quala(i) = xa
+               xs = 1.0 - xa
+               va = xs/(xa*rhog(i))
+               pa = ra*tempg(i)/va
+               pres(ix) = p(i)
+               p(i) = p(i) + pa
+               ustm(i) = ug(i)
+               ubar(ix) = ug(i)
+               ua = cvao*tempg(i) + 0.5*dcva*(tempg(i) - tao)**2 + uao
+               ug(i) = xa*ua + xs*ug(i)
+             else
+!
+!  Initialization of iteration variables ps and us.
+               pres(ix) = ppso(i)
+               ubar(ix) = ustmo(i)
+             endif
+!  Normal starting of noncondensible state.
+             delps = pres(ix)
+             delus = ubar(ix)
+             niter = 0
+             extrp2 = .false.
+             jstop = .false.
+!  Beginning of iteration for ps and us.
+             ierx = 0
+             ierxp = 0
+  796        plast = pres(ix)
+             ulast = ubar(ix)
+!  Steam properties (use g subscript to make coding parallel to
+!  non-condensable coding).
+             extrp = .false.
+             if (nfluid .eq. 1) then
+               call sth2x6 (fa(ndxstd),tt(ix),iq,erx)
+             elseif (nfluid .eq. 2) then
+               call std2x6 (fa(ndxstd),tt(ix),iq,erx)
+             else
+               call  strpu1 (fa(ndxstd),tt(ix),iq,erx)
+             endif
+             if (erx) then
+               pres(ix) = min(p(i),(plast - 0.33*delps))
+               ubar(ix) = ulast - 0.33*delus
+               erx = .false.
+               ierx = ierx + 1
+               if (ierx .le. 5) go to 796
+               vctrl(i) = ior(vctrl(i),8192)
+               go to 536
+             endif
+             if (iq .lt. 3) then
+               if (iq .eq. 1) then
+!  9216 = 1024 + 8192.
+                 vctrl(i) = ior(vctrl(i),9216)
+                 go to 536
+               endif
+!  Subcooled steam.
+!  Extrapolate specific volume and temperature at constant pressure.
+!  Make saturation call with pres to get extrapolated values.
+               ps(ix) = max(pres(ix),pmin)
+               tsat(ix) = tt(ix)
+               vsubfs(ix) = vsubf(ix)
+               vsubgs(ix) = vsubg(ix)
+               usubfs(ix) = usubf(ix)
+               usubgs(ix) = usubg(ix)
+               betafs(ix) = betaf(ix)
+               betags(ix) = betag(ix)
+               kapafs(ix) = kapaf(ix)
+               kapags(ix) = kapag(ix)
+               cpfs(ix) = cpf(ix)
+               cpgs(ix) = cpg(ix)
+               entfs(ix) = entpyf(ix)
+               entgs(ix) = entpyg(ix)
+               vb = vsubgs(ix)*betags(ix)
+               vs(ix) = vsubgs(ix)
+               term = (ulast - usubgs(ix))/(cpgs(ix) - pres(ix)*vb)
+               if (chngno(36)) then
+                 if (term .lt. -50.0) then
+                   extrp = .true.
+                   extrp2 = .true.
+                   term = -50.0
+                 endif
+               endif
+               ttg(ix) = tsat(ix) + term
+               vsubg(ix) = vsubgs(ix) + vb*term
+               betag(ix) = vb/vsubg(ix)
+               kapag(ix) = kapags(ix)
+               ubar(ix) = ulast
+               entpyg(ix) = entgs(ix)
+               rhogs(ix) = 1.0/vsubgs(ix)
+               if (vsubg(ix).le.0.0 .or. ttg(ix).le.0.0) then
+                 pres(ix) = min(p(i),(plast - 0.33*delps))
+                 ubar(ix) = ulast - 0.33*delus
+                 ierx = ierx + 1
+                 if (ierx .le. 5) go to 796
+!  9216 = 1024 + 8192.
+                 vctrl(i) = ior(vctrl(i),9216)
+                 go to 536
+               endif
+             else
+!  Superheated vapor state.
+               ttg(ix) = tt(ix)
+               cpg(ix) = cp(ix)
+               betag(ix) = beta(ix)
+               kapag(ix) = kapa(ix)
+               entpyg(ix) = entpy(ix)
+               vsubg(ix) = vbar(ix)
+               rhogs(ix) = 1.0/vsubg(ix)
+             endif
+             rs = pres(ix)*vsubg(ix)/ttg(ix)
+             dte = vsubg(ix)*(pres(ix)*kapag(ix) - ttg(ix)*betag(ix))
+             dp = pres(ix)*vsubg(ix)*betag(ix) - cpg(ix)
+             dtgdps = dte/dp
+             dtgdus = -1.0/dp
+!  Air properties.
+             term = max(ttg(ix) - tao,0.0)
+             ua = cvao*ttg(ix) + 0.5*dcva*term*term + uao
+             duadt = cvao + dcva*term
+             pa = p(i) - pres(ix)
+             f11 = xa*duadt*dtgdps
+             f12 = xs + xa*duadt*dtgdus
+!  dvsdus and dvsdps include 1/vsubg factor.
+             du = cpg(ix) - vsubg(ix)*betag(ix)*pres(ix)
+             dvsdus = betag(ix)/du
+             dv = cpg(ix)*kapag(ix) - ttg(ix)*vsubg(ix)*betag(ix)*
+     &       betag(ix)
+             dvsdps = -dv/du
+             term = 1.0/pres(ix) + dvsdps - dtgdps/ttg(ix)
+             f22 = xs*pa*rs
+             f21 = -xs*rs - xa*ra + f22*term
+             term = dvsdus - dtgdus/ttg(ix)
+             f22 = f22*term
+             rdet = 1.0/(f11*f22 - f12*f21)
+!  2*2 matrix inversion for newton iteration.
+             if (jstop .or. (extrp .and. extrp2)) go to 850
+             r1 = xs*ubar(ix) + xa*ua - ug(i)
+             r2 = xs*rs*pa - xa*ra*pres(ix)
+             res = r1*r1 + r2*r2
+!  Globally convergent Newton's method.
+             g11 = f11*f11 + f21*f21
+             g12 = f11*f12 + f21*f22
+             g21 = f12*f11 + f22*f21
+             g22 = f12*f12 + f22*f22
+             gr1 = f11*r1 + f21*r2
+             gr2 = f12*r1 + f22*r2
+             gb1 = g11 + g22
+             grdet = g11*g22 - g21*g12
+             gdiscr = gb1*gb1 - 4.0*grdet
+!  Compute the condition no of the jacobian square matrix.
+             if (gdiscr .ge. 0.) then
+               gx1 = gb1 + sqrt(gdiscr)
+               gx2 = gb1 - sqrt(gdiscr)
+             else
+               write (output,*)' Error in global Newton method.'
+               stop 'statep-1'
+             endif
+             gcondn = gx1/max(1.e-200,gx2)
+!
+             if (gcondn .gt. 1.0e10) then
+               g11 = g11 + 0.001
+               g22 = g22 + 0.001
+               grdet = g11*g22 - g21*g12
+             endif
+             if (abs(grdet) .lt. 1.0e-200) grdet = 1.0e-200
+             grdet = 1.0/grdet
+             delps = (g12*gr2 - g22*gr1)*grdet
+             delus = (g21*gr1 - g11*gr2)*grdet
+             if (niter.gt.20) go to 840
+             niter = niter + 1
+             pres(ix) = min(pres(ix) + delps,p(i))
+             ubar(ix) = ubar(ix) + delus
+             if (pres(ix) .lt. 0.0) then
+               pres(ix) = pres(ix) - delps
+               ierxp = ierxp + 1
+               if (ierxp .gt. 11) go to 840
+               go to 796
+             endif
+             jstop = (niter.gt.20 .or. res.lt.1.0e6) .and.
+     &       abs(delus).lt.toler*ug(i) .and. abs(delps).lt.toler*p(i)
+             go to 796
+!  Iteration failed.
+  840        if (help .ne. 0) then
+               if (iand(ihlppr(2),ishft(1,0)).ne.0) then
+                 if (iand(vctrlx(i),1).ne.0) write (output,2009)
+     &           pres(ix),delps,ubar(ix),delus,res
+               endif
+             endif
+ 2009  format ('0******** State for non-condensable mixture does not con
+     &verge'/' ps=  ',1p,e15.6,', dps= ',e15.6,', us=  ',e15.6,
+     & ', dus= ',e15.6,', res= ',e15.6)
+             vctrl(i) = ior(vctrl(i),65536)
+             go to 536
+!  Iteration converged, get final mixture properties.
+!  p derivatives.
+  850        df2dp = -xs*rs
+             dpsdp = -f12*df2dp*rdet
+             dusdp = f11*df2dp*rdet
+!  ug derivatives.
+             df1dug = 1.0
+             dpsdug = f22*df1dug*rdet
+             dusdug = -f21*df1dug*rdet
+!  xa derivatives.
+             df1dxa = ubar(ix) - ua
+             df2dxa = ra*pres(ix) + rs*pa
+             dpsdxa =(f22*df1dxa - f12*df2dxa)*rdet
+             dusdxa =(-f21*df1dxa + f11*df2dxa)*rdet
+!  Final temperature derivatvies.
+             dtgdp(i) = dtgdps*dpsdp + dtgdus*dusdp
+             dtgdug(i) = dtgdps*dpsdug + dtgdus*dusdug
+             dtgdxa(i) = dtgdps*dpsdxa + dtgdus*dusdxa
+!  Final density derivatives calculated using
+!  vg = (vs*va)/(vs+va), which gives for the derivative of rhog
+!  drhog = -(dva/(va*va) + dvs/(vs*vs)).
+!  air formulas for dva/(va*va).
+             term2 = 1.0/(ra*ttg(ix))
+             term1 = pa*term2/ttg(ix)
+             advdp = term1*dtgdp(i) + term2*(dpsdp - 1.0)
+             advdug = term1*dtgdug(i) + term2*dpsdug
+             advdxa = term1*dtgdxa(i) + term2*dpsdxa
+!  Steam formulas for dvs/(vs*vs).
+!  Remember dvsdps and dvsdus include a 1/vsubg factor.
+             rvsubg = 1.0/vsubg(ix)
+             sdvdp = (dvsdps*dpsdp + dvsdus*dusdp)*rvsubg
+             sdvdug = (dvsdps*dpsdug + dvsdus*dusdug)*rvsubg
+             sdvdxa = (dvsdps*dpsdxa + dvsdus*dusdxa)*rvsubg
+!  Mixture density derivatives.
+             drgdp(i) = -(advdp + sdvdp)
+             drgdug(i) = -(advdug + sdvdug)
+             drgdxa(i) = -(advdxa + sdvdxa)
+!  Final mixture properties.
+             rhog(i) = 1.0/vsubg(ix) + pa/(ra*ttg(ix))
+             tempg(i) = ttg(ix)
+             betagg(i) =-drgdug(i)/(dtgdug(i)*rhog(i))
+             csubpg(i) = (1.0 - p(i)*drgdug(i)/(rhog(i)*rhog(i)))/
+     &       dtgdug(i)
+             kapagg(ix) = -dtgdp(i)/dtgdug(i)
+             kapagg(ix) = ( drgdp(i) + drgdug(i)*kapagg(ix) )/rhog(i)
+             hsteam(i) = ubar(ix) + pres(ix)*vsubg(ix)
+             pps(i) = max(pres(ix),1.0e-10)
+             ustm(i) = ubar(ix)
+             sss = entpyg(ix)
+!
+!  Saturation properties.
+             ps(ix) = max(pmin,pps(i))
+             if (nfluid .eq. 1) then
+               call sth2x2 (fa(ndxstd),tsat(ix),erx)
+             elseif (nfluid .eq. 2) then
+               call std2x2 (fa(ndxstd),tsat(ix),erx)
+             else
+               call strpx (fa(ndxstd),tsat(ix),erx)
+             endif
+             if (erx) then
+               vctrl(i) = ior(vctrl(i),32768)
+               go to 536
+             endif
+             satt(i) = tsat(ix)
+             sathg(i) = hsubgs(ix)
+             sathf(i) = hsubfs(ix)
+             if (voidf(i) .eq. 0.0 .or. tempf(i) .eq. -1.0) then
+               term = -1.0/(vsubfs(ix)*vsubfs(ix))
+               dv = vsubfs(ix)*betafs(ix)
+               rdu = 1.0/(cpfs(ix) - vsubfs(ix)*betafs(ix)*p(i))
+               drfduf(i) = term*dv*rdu
+               dtfduf(i) = rdu
+               dv = cpfs(ix)*vsubfs(ix)*kapafs(ix) -
+     &         tsat(ix)*(vsubfs(ix)*betafs(ix))**2
+               dte = p(i)*vsubfs(ix)*kapafs(ix) - tsat(ix)*vsubfs(ix)*
+     &         betafs(ix)
+               rdp = -rdu
+               drfdp(i) = term*dv*rdp
+               dtfdp(i) = dte*rdp
+               rhof(i) = 1.0/vsubfs(ix)
+               rhofs(ix) = rhof(i)
+               if (tempf(i) .eq. -1.0) then
+!  Water property error but almost all gas.
+                 tempf(i) = tempg(i)
+               else
+                 tempf(i) = tsat(ix)
+               endif
+               betaff(i) = betafs(ix)
+               csubpf(i) = cpfs(ix)
+               kapaff(ix) = kapafs(ix)
+               sff = entfs(ix)
+               uf(i) = usubfs(ix)
+             endif
+             if (iand(imap(i),64).ne.0) then
+               rho(i) = rhof(i) + (rhog(i) - rhof(i))*max(1.e-05,
+     &         voidg(i))
+             else
+               rho(i) = voidf(i)*rhof(i) + voidg(i)*rhog(i)
+             endif
+$if def,mmfld,1
+             if (lnonmf(issys) .eq. 0) then
+               quals(i) = voidg(i)*rhog(i)/rho(i)
+$if def,mmfld,5
+             elseif (voidg(i) .eq. 0.0 .and. voidf(i) .eq. 0.0) then
+               quals(i) = 0.0
+             else
+               quals(i) = voidg(i)*rhog(i)/rho(i)
+             endif
+             quale(i) = quals(i)
+             term = tsat(ix)*(vsubgs(ix) - vsubfs(ix))/
+     &       max(1.0e-6,hsubgs(ix) - hsubfs(ix))
+             dtdp(i) = term*dpsdp
+             dtdug(i) = term*dpsdug
+             dtdxa(i) = term*dpsdxa
+!  Homogeneous equilibrium sound speeds evaluated at non-equ prop.
+             if (voidg(i) .ne. 1.0) then
+!  Homogeneous equilibrium sound speed.
+               vs(ix) = vsubg(ix)
+               va = ra*tempg(i)/max(1.0e-10,pa)
+               vf = 1.0/rhof(i)
+!  Qualities below are based on total mixture mass.
+               xxs = (1.0 - quala(i))*quals(i)
+               xxa = quala(i)*quals(i)
+               xxf = 1.0 - quals(i)
+               bs = betag(ix)
+               ba = 1.0/tempg(i)
+               bf = betaff(i)
+               xks = kapag(ix)
+               xka = 1.0/max(1.0e-10,pa)
+               xkf = kapaff(ix)
+               cps(ix) = cpg(ix)
+               cpa = duadt + ra
+               vg = va*vs(ix)/(va + vs(ix))
+               f11 = xxa*va*ba - xxs*vs(ix)*bs +
+     &         dtdp(i)*((xxa*cpa+xxs*cps(ix))/tempg(i) +
+     &         xxf*csubpf(i)/tempf(i))
+               f12 = sss - sff
+               f21 = xxa*va*(xka + ba*dtdp(i)) + xxs*vs(ix)*(xks -
+     &         bs*dtdp(i))
+               f22 = -vs(ix)
+               r1 = xxa*va*ba + xxf*vf*bf
+               r2 = xxa*va*xka
+               rdet = 1.0/(f11*f22 - f12*f21)
+               ddpsdp = (f22*r1 - f12*r2)*rdet
+               ddxsdp = (-f21*r1 + f11*r2)*rdet
+               ddvdp = (1.0 - xxf)*(xa*xa*va*((ba*dtdp(i) + xka)*
+     &         ddpsdp - xka) + xs*xs*vs(ix)*((bs*dtdp(i) - xks)*
+     &         ddpsdp)) + xxf*vf*(bf*dtdp(i)*ddpsdp - xkf) + (vg - vf)*
+     &         ddxsdp
+               aet = -1.0/ddvdp
+               if (aet .gt. 0.0) sounde(i) = sqrt(aet)/rho(i)
+             else
+!  Single phase homogeneous frozen sound speed (no mass transfer).
+               dv = kapagg(ix)*csubpg(i)/(tempg(i)*rhog(i)) -
+     &         (betagg(i)/rhog(i))**2
+               dp = -csubpg(i)/tempg(i)
+               aet = -dv/dp
+               if (aet .gt. 0.0) sounde(i) = 1.0/(rhog(i)*sqrt(aet))
+             endif
+           else
+!
+!  System of ideal gas.
+!c
+!c    need to look here for appearance in pure vapor
+!c
+             ua1 = ug(i) - cvao*tao - uao
+             if (ua1 .gt. 0.0) then
+               ta = tao + (sqrt(cvao**2 + 2.0*ua1*dcva) - cvao)/dcva
+             else
+               ta = (ug(i) - uao)/cvao
+             endif
+!  Repeat time step if negative temperature.
+!            if (ta .lt. 0.0) then
+             if (ta.lt.0.0 .or. ta.gt.5000.0) then
+               vctrl(i) = ior(vctrl(i),8192)
+               go to 536
+             endif
+             vg = ra*ta/p(i)
+             cvaq = cvao + dcva*max(ta - tao,0.0)
+!  Single phase properties.
+             dtdp(i) = 1.0e-20
+!  Under predict enthalpy so code uses mass transfer defaults to
+!  prevent ill-conditioned or singular 5X5 pressure equation.
+             hsteam(i) = ug(i) + p(i)*vg*0.9
+!  Vapor properties.
+             sathg(i) = hsteam(i) + 0.1
+             csubpg(i) = cvaq + ra
+             sounde(i) = sqrt(vg*p(i)*csubpg(i)/cvaq)
+             tempg(i) = ta
+             rhog(i) = 1.0/vg
+             betagg(i) = 1.0/ta
+             dtgdug(i) = 1.0/(csubpg(i) - p(i)*vg*betagg(i))
+             dtgdp(i) = 0.0
+             drgdug(i) = -betagg(i)*dtgdug(i)*rhog(i)
+             drgdp(i) = (csubpg(i)/p(i) - vg*betagg(i))*rhog(i)*
+     &       dtgdug(i)
+             pps(i) = 1.0
+             satt(i) = ta
+             voidg(i) = 1.0
+             quala(i) = 1.0
+             quals(i) = 1.0
+             quale(i) = 1.0
+!  Liquid properties.
+             sathf(i) = sathg(i) - 0.1
+             tempf(i) = ta
+             rho(i) = rhog(i)
+$if def,mmfld,1
+             if (lnonmf(issys) .eq. 0) then
+               voidf(i) = max(0.0,min(1.0,1.0 - voidg(i)))
+$if def,mmfld,4
+             else
+               voidf(i) = max(0.0,min(1.0,1.0 - voidg(i) - voidm(i) -
+     &         voidms(i)))
+             endif
+             if (voidf(i) .lt. 1.0e-10) voidf(i) = 0.0
+             uf(i) = ug(i)
+             rhof(i) = rhog(i)
+             csubpf(i) = csubpg(i)
+             betaff(i) = betagg(i)
+             dtfdp(i) = dtgdp(i)
+             drfdp(i) = drgdp(i)
+             dtfduf(i) = dtgdug(i)
+             drfduf(i) = drgdug(i)
+!  Air properties.
+             dtdug(i) = 0.0
+             dtdxa(i) = 0.0
+             dtgdxa(i) = 0.0
+             drgdxa(i) = 0.0
+           endif
+!
+           ttg(ix) = max(tempg(i),satt(i))
+           pres(ix) = pps(i)
+           noncnp = lpdat(issys)%lnoncn + 1
+           do j = 2,noncnp
+             s(j) = 0.0
+             viscsa(j) = 0.0
+             thcnda(j) = 0.0
+           enddo
+           prop(1) = wmoles(matrl)
+           s(1) = (1.0 - quala(i))/wmoles(matrl)
+           if (s(1) .ge. 1.0e-9) then
+             call viscos (nfluid,iones,iones,1,1,tempg(i),
+     &       pres(ix),rhogs(ix),satt(i),'vapor',viscsa(1),erx)
+             call thcond (nfluid,iones,iones,dum,1,1,
+     &       ttg(ix),pres(ix),rhogs(ix),'vapor',thcnda(1),erx)
+             j1 = 1
+             k1 = 1
+           else
+             j1 = 2
+             k1 = 2
+             viscsa(1) = 0.0
+             thcnda(1) = 0.0
+           endif
+           k = i
+           do j=1,lpdat(issys)%lnoncn
+             prop(j+1) = wmolea(j)
+             if (qualan(k) .ge. 0.001) then
+               s(j+1) = qualan(k)*quala(i)/wmolea(j)
+               if (tref(j) .eq. 0.0 .or. tempg(i) .le. 0.0) then
+                 viscsa(j+1) = visao(j)
+                 thcnda(j+1) = thca(j)
+               else
+                 viscsa(j+1) = visao(j)*tempg(i)**1.5/(tempg(i) +
+     &           tref(j))
+                 thcnda(j+1) = thca(j)*tempg(i)**thcb(j)
+               endif
+             endif
+             k = k + 1
+           enddo
+           viscg(i) = 0.0
+           thcong(i) = 0.0
+           do j = j1,noncnp
+             if (j.eq.1 .or. qualan(i+j-2).ge.0.002) then
+               xphiv = 0.0
+               do k = k1,noncnp
+                 if (k.eq.1 .or. qualan(i+k-2).ge.0.002) then
+                   if (j .eq. k) then
+                     phiv(j,k) = 1.0
+                   else
+                     termx = sqrt(prop(k)/(8.0*(prop(k)+prop(j))))
+                     if (viscsa(j).gt.0.0 .and. viscsa(k).gt.0.0) then
+                       phiv(j,k) = termx*(1.0 + sqrt(viscsa(j)/
+     &                 viscsa(k)*sqrt(prop(k)/prop(j))))**2
+                     else
+                       phiv(j,k) = termx*(1.0 +
+     &                 sqrt(sqrt(prop(k)/prop(j))))**2
+                     endif
+                   endif
+                   xphiv = s(k)*phiv(j,k) + xphiv
+                 endif
+               enddo
+               xphiv = s(j)/xphiv
+               viscg(i) = viscg(i) + viscsa(j)*xphiv
+               thcong(i) = thcong(i) + thcnda(j)*xphiv
+             endif
+           enddo
+$if def,selap
+           if (scntrl(1)) then
+             oxyftr(i) = 0.0
+             if (quala(i) .ne. 1.0) then
+               dvhe=0.0
+               dvhy=0.0
+               dvni=0.0
+               dvkr=0.0
+               dvxe=0.0
+               dvair=0.0
+               dvar=0.0
+               dvsf6=0.0
+               dvoxy=0.0
+               dvco2=0.0
+               dvcom=0.0
+!mpf multiplication factor in dv* calculations should be using 1/wmole,
+!    but it is local data
+!mpf multiplication factor in dv calculation should be using 1/wmoles
+!    for water
+!mpf sf6 added.
+               if (nonhe.ne.0 .and. qualan(i+nonhe-1).gt.0.001)
+     &         dvhe = qualan(i+nonhe-1)*viscsa(nonhe+1)*0.249813
+               if (nonhy.ne.0 .and. qualan(i+nonhy-1).gt.0.001)
+     &         dvhy = qualan(i+nonhy-1)*viscsa(nonhy+1)*0.496047
+               if (nonni.ne.0 .and. qualan(i+nonni-1).gt.0.001)
+     &         dvni = qualan(i+nonni-1)*viscsa(nonni+1)*0.035696
+               if (nonkr.ne.0 .and. qualan(i+nonkr-1).gt.0.001)
+     &         dvkr = qualan(i+nonhy-1)*viscsa(nonkr+1)*0.011933
+               if (nonxe.ne.0 .and. qualan(i+nonxe-1).gt.0.001)
+     &         dvxe = qualan(i+nonxe-1)*viscsa(nonxe+1)*0.007616
+!  Molecular weight of air assumed to be 28.97.
+               if (nonair.ne.0 .and. qualan(i+nonair-1).gt.0.001)
+     &         dvair = qualan(i+nonair-1)*viscsa(nonair+1)*0.034518
+               if(nonar.ne.0 .and. qualan(i+nonar-1).gt.0.001)
+     &         dvar = qualan(i+nonar-1)*viscsa(nonar+1)*0.0255033
+               if(nonsf6.ne.0 .and. qualan(i+nonsf6-1).gt.0.001)
+     &         dvsf6 = qualan(i+nonsf6-1)*viscsa(nonsf6+1)*0.006847
+               if(nonoxy.ne.0 .and. qualan(i+nonoxy-1).gt.0.001)
+     &         dvoxy = qualan(i+nonoxy-1)*viscsa(nonoxy+1)*0.0312512
+               if(nonco2.ne.0 .and. qualan(i+nonco2-1).gt.0.001)
+     &         dvco2 = qualan(i+nonco2-1)*viscsa(nonco2+1)*0.0227221
+               if(noncom.ne.0 .and. qualan(i+noncom-1).gt.0.001)
+     &         dvcom = qualan(i+noncom-1)*viscsa(noncom+1)*0.0357015
+               dv=8314.3*tempg(i)/p(i)*(dvhe+dvhy+dvni+dvkr+dvxe+dvar+
+     &         dvsf6+dvoxy+dvco2+dvcom+(1.0-quala(i))*viscsa(1)*
+     &         0.055509)
+               dv = max(dv ,1.0e-10)
+               xphiv = thcnda(1)*vsubg(ix)/(dv*cpg(ix))
+               if (xphiv .gt. 0.0) oxyftr(i) = 16.0*dv*pps(i)/
+     &         (8314.3*tempg(i)*thcnda(1))*xphiv**0.3333333
+               oxyftr(i) = max(oxyftr(i),0.0)
+             endif
+           endif
+$endif
+           call viscos (nfluid,iones,iones,1,1,tempf(i),
+     &     p(i),rhofs(ix),satt(i),'liquid',viscf(i),erx)
+           call thcond (nfluid,iones,iones,dum,1,1,
+     &     tempf(i),p(i),rhof(i),'liquid',thconf(i),erx)
+           if (p(i) .lt. pcrit) then
+             if (nfluid .eq. 1) then
+               call psatpd(tsatt(i),p(i),dpdt,2,erx)
+             elseif (nfluid .eq. 2) then
+               call pstpd2(tsatt(i),p(i),dpdt,2,erx)
+             else
+               call strsat(fa(ndxstd),2,p(i),tsatt(i),dpdt,erx)
+             endif
+             tsatt(i) = max(tsatt(i),satt(i))
+             dttdp(i) = 1.0/max(1.0e-6,dpdt)
+           else
+             tsatt(i) = tempg(i)
+             dttdp(i) = 1.0e-12
+           endif
+!-wdgb
+           ttempi(i) = satt(i)
+           if (chngno(74)) then
+!  Test if there is noncondensable and it is in the annular/vert
+!  stratification.
+             if (quala(i) .ne. 0.0) then
+               if (floreg(i).eq.6 .or. floreg(i).eq.13) call tempi(i)
+             endif
+           endif
+!wdg-e
+  536      ih3 = ih3 + scskp
+         enddo
+       endif
+!
+!  Normal volumes without air.
+       if (nh2 .ne. 0) then
+         lflag1 = .false.
+         ih2 = ixvff
+         do m = 1,nh2
+           i = ihld2(ih2)
+           ix = vctrls(i)
+!  Saturation properties.
+           pres(ix) = p(i)
+           ps(ix) = max(p(i),pmin)
+           lflag(ix) = p(i) .gt. pcrit
+           lflag1 = lflag1 .or. lflag(ix)
+           ih2 = ih2 + scskp
+         enddo
+         if (lflag1) then
+           ih2 = ixvff
+           ih4 = ixvff
+           ih5 = ixvff
+           nh5 = nh2
+           nh2 = 0
+           nh4 = 0
+           do m = 1,nh5
+             i = ihld2(ih5)
+             ix = vctrls(i)
+             if (lflag(ix)) then
+               ihld4(ih4) = i
+               ihld4a(ih4) = vctrln(i)
+               ih4 = ih4 + scskp
+               nh4 = nh4 + 1
+             else
+               ihld2(ih2) = i
+               ihld2a(ih2) = vctrln(i)
+               ih2 = ih2 + scskp
+               nh2 = nh2 + 1
+             endif
+             ih5 = ih5 + scskp
+           enddo
+!  Super-critical state.
+           ih4 = ixvff
+           do m = 1,nh4
+             i = ihld4(ih4)
+             ix = vctrls(i)
+             ubar(ix) = voidg(i)*ug(i) + (1.0 - voidg(i))*uf(i)
+             ih4 = ih4 + scskp
+           enddo
+           ih4 = ixvff
+           do m = 1,nh4
+             i = ihld4(ih4)
+             ix = vctrls(i)
+             if (nfluid .eq. 1) then
+               call sth2x6 (fa(ndxstd),tt(ix),iq,erx)
+             elseif (nfluid .eq. 2) then
+               call std2x6 (fa(ndxstd),tt(ix),iq,erx)
+             else
+               call strpu1 (fa(ndxstd),tt(ix),iq,erx)
+             endif
+             if (erx) then
+!  49152 = 16384 + 32768.
+               vctrl(i) = ior(vctrl(i),49152)
+               qual(ix) = 1.0
+               tt(ix) = 600.0
+               cp(ix) = 5.836331e+3
+               beta(ix) = 3.399518e-3
+               kapa(ix) = 3.538871e-9
+               vbar(ix) = 1.453358e-3
+               hbar(ix) = ubar(ix) + p(i)*vbar(ix)
+             endif
+             ih4 = ih4 + scskp
+           enddo
+           ih4 = ixvff
+           do m = 1,nh4
+             i = ihld4(ih4)
+             ix = vctrls(i)
+             satt(i) = tt(ix)
+             tsatt(i) = satt(i)
+             sathf(i) = hbar(ix)
+             sathg(i) = hbar(ix) + 0.1
+             dtdp(i) = 1.0e-12
+             dttdp(i) = 1.0e-12
+             dtdug(i) = 0.0
+             dtdxa(i) = 0.0
+             term = -1.0/(vbar(ix)*vbar(ix))
+             dv = vbar(ix)*beta(ix)
+             rdu = 1.0/(cp(ix) - vbar(ix)*beta(ix)*p(i))
+             dtfduf(i) = rdu
+             dtgdug(i) = rdu
+             drfduf(i) = term*dv*rdu
+             drgdug(i) = drfduf(i)
+             dv = cp(ix)*vbar(ix)*kapa(ix) - tt(ix)*(vbar(ix)*
+     &       beta(ix))**2
+             dte = p(i)*vbar(ix)*kapa(ix) - tt(ix)*vbar(ix)*beta(ix)
+             rdp = -rdu
+             drfdp(i) = term*dv*rdp
+             drgdp(i) = drfdp(i)
+             dtfdp(i) = dte*rdp
+             dtgdp(i) = dtfdp(i)
+             drgdxa(i) = 0.0
+             dtgdxa(i) = 0.0
+             rhog(i) = 1.0/vbar(ix)
+             rhof(i) = rhog(i)
+             tempf(i) = tt(ix)
+             tempg(i) = tt(ix)
+             betaff(i) = beta(ix)
+             betagg(i) = beta(ix)
+             csubpf(i) = cp(ix)
+             csubpg(i) = cp(ix)
+             kapaff(ix) = kapa(ix)
+             kapagg(ix) = kapa(ix)
+             pps(i) = p(i)
+             hsteam(i) = ubar(ix) + pres(ix)*vbar(ix)
+             rhofs(ix)  = rhof(i)
+             rhogs(ix)  = rhog(i)
+             uf(i) = ubar(ix)
+             ug(i) = ubar(ix)
+             voidg(i) = qual(ix)
+$if def,mmfld,1
+             if (lnonmf(issys) .eq. 0) then
+               voidf(i) = max(0.0,min(1.0,1.0-voidg(i)))
+$if def,mmfld,4
+             else
+               voidf(i) = max(0.0,min(1.0,1.0 - voidg(i) - voidm(i) -
+     &         voidms(i)))
+             endif
+             if (voidf(i) .lt. 1.0e-10) voidf(i) = 0.0
+             rho(i) = rhog(i)
+             if (po(i).lt.pcrit .and. p(i).ge.pcrit)
+     &       rhom(i) = rho(i)
+             quals(i) = qual(ix)
+             quale(i) = qual(ix)
+             aet = (kapaff(ix)*csubpf(i)/(tempf(i)*rhof(i)) -
+     &       (betaff(i)/rhof(i))**2)/csubpf(i)*tempf(i)
+             mark = 0
+!  180224 = 16384 + 32768 + 131072.
+             if (aet .le. 0.0) mark = 180224
+             vctrl(i) = ior(vctrl(i),mark)
+             aet = abs(aet)
+             sounde(i) = 1.0/(rhof(i)*sqrt(aet))
+             ih4 = ih4 + scskp
+           enddo
+         endif
+       endif
+       if (nh2 .ne. 0) then
+         if (nfluid .eq. 1) then
+           call svh2x2 (fa(ndxstd),ixvff,ihld2,nh2,tsat)
+         elseif (nfluid .eq. 2) then
+           ih2 = ixvff
+           do m = 1,nh2
+             i = ihld2(ih2)
+             ix = vctrls(i)
+             ps(ix) = max(min(ps(ix),pcrit),pmin)
+             call std2x2 (fa(ndxstd),tsat(ix),erx)
+             if (erx) vctrl(i) = ior(vctrl(i),32768)
+             ih2 = ih2 + scskp
+           enddo
+         else
+           call stvrpx (fa(ndxstd),ixvff,ihld2,nh2,tsat)
+         endif
+         ih2 = ixvff
+         do m = 1,nh2
+           i = ihld2(ih2)
+           ix = vctrls(i)
+           satt(i) = tsat(ix)
+           tsatt(i) = satt(i)
+           sathf(i) = hsubfs(ix)
+           sathg(i) = hsubgs(ix)
+           dtdp(i) = tsat(ix)*(vsubgs(ix) - vsubfs(ix))/
+     &     max(1.0e-6,hsubgs(ix) - hsubfs(ix))
+           dttdp(i) = dtdp(i)
+           ustm(i) = usubgs(ix)
+           dtdug(i) = 0.0
+           dtdxa(i) = 0.0
+           lflag(ix) = voidf(i) .eq. 0.0
+           lflag2(ix) = voidg(i) .eq. 0.0
+           ih2 = ih2 + scskp
+         enddo
+!  Liquid properties.
+         ih2 = ixvff
+         ih4 = ixvff
+         ih5 = ixvff
+         nh4 = 0
+         nh5 = 0
+         do m = 1,nh2
+           i = ihld2(ih2)
+           ix = vctrls(i)
+           if (lflag(ix)) then
+             ihld5(ih5) = i
+             ih5 = ih5 + scskp
+             nh5 = nh5 + 1
+           else
+             ihld4(ih4) = i
+             ih4 = ih4 + scskp
+             nh4 = nh4 + 1
+           endif
+           ih2 = ih2 + scskp
+         enddo
+!  Saturated liquid state.
+         if (nh5 .ne. 0) then
+           ih5 = ixvff
+           do m = 1,nh5
+             i = ihld5(ih5)
+             ix = vctrls(i)
+             tf(ix) = tsat(ix)
+             cpf(ix) = cpfs(ix)
+             betaf(ix) = betafs(ix)
+             kapaf(ix) = kapafs(ix)
+             vsubf(ix) = vsubfs(ix)
+             uf(i) = usubfs(ix)
+             ih5 = ih5 + scskp
+           enddo
+         endif
+         if (nh4 .ne. 0) then
+           ih4 = ixvff
+           ih5 = ixvff
+           ih6 = ixvff
+           nh5 = 0
+           nh6 = 0
+           do m = 1,nh4
+             i = ihld4(ih4)
+             ix = vctrls(i)
+             if ((uf(i) .lt. usubfs(ix))
+     &       .or. (p(i).lt.pmin .and. voidg(i).lt.1.0)) then
+               ihld5(ih5) = i
+               ih5 = ih5 + scskp
+               nh5 = nh5 + 1
+             else
+               ihld6(ih6) = i
+               ih6 = ih6 + scskp
+               nh6 = nh6 + 1
+             endif
+             ih4 = ih4 + scskp
+           enddo
+!  Subcooled liquid state.
+           if (nh5 .ne. 0) then
+             ih5 = ixvff
+             do m = 1,nh5
+               i = ihld5(ih5)
+               ix = vctrls(i)
+               ubar(ix) = uf(i)
+               psat(ix) = tsat(ix)
+               qual(ix) = 0.0
+               if (nfluid .eq. 1) then
+                 call sth2xf (fa(ndxstd),tt(ix),iq,erx)
+               elseif (nfluid .eq. 2) then
+                 call std2xf (fa(ndxstd),tt(ix),iq,erx)
+               else
+                 call strpu2 (fa(ndxstd),tt(ix),iq,erx)
+               endif
+               if (erx .or. qual(ix).ne.0.0) then
+                 vctrl(i) = ior(vctrl(i),16384)
+                 tt(ix) = tsat(ix)
+                 cp(ix) = cpfs(ix)
+                 beta(ix) = betafs(ix)
+                 kapa(ix) = kapafs(ix)
+                 vbar(ix) = vsubfs(ix)
+               endif
+               ih5 = ih5 + scskp
+             enddo
+             ih5 = ixvff
+             do m = 1,nh5
+               i = ihld5(ih5)
+               ix = vctrls(i)
+               tf(ix) = tt(ix)
+               cpf(ix) = cp(ix)
+               betaf(ix) = beta(ix)
+               kapaf(ix) = kapa(ix)
+               vsubf(ix) = vbar(ix)
+               ih5 = ih5 + scskp
+             enddo
+           endif
+!  Superheated liquid state.
+!  Extrapolate specific volume and temperature at constant pressure.
+           if (nh6 .ne. 0) then
+             ih6 = ixvff
+             do m = 1,nh6
+               i = ihld6(ih6)
+               ix = vctrls(i)
+               vb = vsubfs(ix)*betafs(ix)
+               rhofs(ix) = 1.0/vsubfs(ix)
+               cpf(ix) = cpfs(ix)
+               term = (uf(i) - usubfs(ix))/(cpfs(ix) - p(i)*vb)
+               if (chngno(36)) then
+                 term = min(term,50.0)
+               else
+!                if (voidg(i) .gt. 0.999990) then
+                 if (voidg(i) .gt. 0.999999990) then
+                   voidg(i) = 1.0
+                   voidf(i) = 0.0
+                   term = 0.0
+!  Set rhom to zero as indicator to set rhom to rho later thus bypassing
+!  the mass error check when this corrective action is taken.
+                   rhom(i) = 0.0
+                 endif
+               endif
+               tf(ix) = tsat(ix) + term
+               vsubf(ix) = vsubfs(ix) + vb*term
+               betaf(ix) = vb/vsubf(ix)
+               kapaf(ix) = vsubfs(ix)*kapafs(ix)/vsubf(ix)
+               mark = 0
+!  17408 = 1024 + 16384.
+               if (vsubf(ix).le.0.0) mark = 17408
+               vctrl(i) = ior(vctrl(i),mark)
+               ih6 = ih6 + scskp
+             enddo
+           endif
+         endif
+!  Common liquid coding.
+         ih2 = ixvff
+         do m = 1,nh2
+           i = ihld2(ih2)
+           ix = vctrls(i)
+           rhof(i) = 1.0/vsubf(ix)
+           rhofs(ix) = max(rhof(i),rhofs(ix))
+           term = -rhof(i)*rhof(i)
+           dv = vsubf(ix)*betaf(ix)
+           rdu = 1.0/(cpf(ix) - vsubf(ix)*betaf(ix)*p(i))
+           drfduf(i) = term*dv*rdu
+           dtfduf(i) = rdu
+           dv = cpf(ix)*vsubf(ix)*kapaf(ix) - tf(ix)*(vsubf(ix)*
+     &     betaf(ix))**2
+           dte = p(i)*vsubf(ix)*kapaf(ix) - tf(ix)*vsubf(ix)*betaf(ix)
+           rdp = -rdu
+           drfdp(i) = term*dv*rdp
+           dtfdp(i) = dte*rdp
+!  Recompute the partial derivatives when the thermal front is in the
+!  cell.
+           if (dfront(i) .gt. 0.) then
+             ldf = invfnd(i)
+             do loop = 1,invcnt(i)
+               jx = invj(ldf)%invvnx
+!  Get from-to junction flag.
+               ifrmto = iand(ishft(invj(ldf)%invjun,-2),1)
+!  Get up-down juction flag.
+               jupdw  = iand(ishft(jc(jx),-27),1)
+!  When jupdw = 0, then the k vol is the down vol.
+!
+!  Set top-bot flag.
+               jtype = abs(ifrmto - jupdw)
+               jvx = ij1nx(jx-ifrmto+1)
+               if (jtype .eq. 1) then
+                 ibot = jvx
+               else
+                 itop = jvx
+               endif
+               ldf = ldf + 1
+             enddo
+             prop(2) = p(i)
+             prop(4) = uf(itop)
+             iprop(23) = sth2xv(i)
+             if (nfluid .eq. 1) then
+               call sth2x6 (fa(ndxstd),prop,it,err)
+             elseif (nfluid .eq. 2) then
+               call std2x6 (fa(ndxstd),prop,it,err)
+             else
+               call strpu1 (fa(ndxstd),prop,it,err)
+             endif
+             if (err) vctrl(i) = ior(vctrl(i),32768)
+             rhoffa = 1.0/prop(3)
+             tempfa = prop(1)
+             prop(2) = p(i)
+             prop(4) = uf(ibot)
+             iprop(23) = sth2xv(i)
+             if (nfluid .eq. 1) then
+               call sth2x6 (fa(ndxstd),prop,it,err)
+             elseif (nfluid .eq. 2) then
+               call std2x6 (fa(ndxstd),prop,it,err)
+             else
+               call strpu1 (fa(ndxstd),prop,it,err)
+             endif
+             if (err) vctrl(i) = ior(vctrl(i),32768)
+             rhofb = 1.0/prop(3)
+             tempfb = prop(1)
+             prop(2) = p(itop)
+             prop(4) = uf(i)
+             iprop(23) = sth2xv(i)
+             if (nfluid .eq. 1) then
+               call sth2x6 (fa(ndxstd),prop,it,err)
+             elseif (nfluid .eq. 2) then
+               call std2x6 (fa(ndxstd),prop,it,err)
+             else
+               call strpu1 (fa(ndxstd),prop,it,err)
+             endif
+             if (err) vctrl(i) = ior(vctrl(i),32768)
+             rhofpa = 1.0/prop(3)
+             tmpfpa = prop(1)
+             prop(2) = p(ibot)
+             prop(4) = uf(i)
+             iprop(23) = sth2xv(i)
+             if (nfluid .eq. 1) then
+               call sth2x6 (fa(ndxstd),prop,it,err)
+             elseif (nfluid .eq. 2) then
+               call std2x6 (fa(ndxstd),prop,it,err)
+             else
+               call strpu1 (fa(ndxstd),prop,it,err)
+             endif
+             if (err) vctrl(i) = ior(vctrl(i),32768)
+             rhofpb = 1.0/prop(3)
+             tmpfpb = prop(1)
+!  rhoffa-rhofb,tempfa-tempfb give the change in density, temp under
+!  constant pressure.
+             drfduf(i) = (rhoffa - rhofb)/(uf(itop) -
+     &       uf(ibot))
+             dtfduf(i) = (tempfa - tempfb)/(uf(itop) -
+     &       uf(ibot))
+!  rhofpa-rhofpb,tempfpa-tempfpb give the change in density, temp under
+!  constant internal energy.
+             drfdp(i) = (rhofpa - rhofpb)/(p(itop) -
+     &       p(ibot))
+             dtfdp(i) = (tmpfpa - tmpfpb)/(p(itop) -
+     &       p(ibot))
+           endif
+           tempf(i) = tf(ix)
+           betaff(i) = betaf(ix)
+           csubpf(i) = cpf(ix)
+           kapaff(ix) = kapaf(ix)
+           ih2 = ih2 + scskp
+         enddo
+!  Vapor properties.
+         ih2 = ixvff
+         ih4 = ixvff
+         ih5 = ixvff
+         nh4 = 0
+         nh5 = 0
+         do m = 1,nh2
+           i = ihld2(ih2)
+           ix = vctrls(i)
+           if (lflag2(ix)) then
+             ihld5(ih5) = i
+             ih5 = ih5 + scskp
+             nh5 = nh5 + 1
+           else
+             ihld4(ih4) = i
+             ih4 = ih4 + scskp
+             nh4 = nh4 + 1
+           endif
+           ih2 = ih2 + scskp
+         enddo
+!  Saturated vapor state.
+         if (nh5 .ne. 0) then
+           ih5 = ixvff
+           do m = 1,nh5
+             i = ihld5(ih5)
+             ix = vctrls(i)
+             ttg(ix) = tsat(ix)
+             cpg(ix) = cpgs(ix)
+             betag(ix) = betags(ix)
+             kapag(ix) = kapags(ix)
+             vsubg(ix) = vsubgs(ix)
+             rhogs(ix) = 1.0/vsubg(ix)
+             ug(i) = usubgs(ix)
+             ih5 = ih5 + scskp
+           enddo
+         endif
+         if (nh4 .ne. 0) then
+           ih4 = ixvff
+           ih5 = ixvff
+           ih6 = ixvff
+           nh5 = 0
+           nh6 = 0
+           do m = 1,nh4
+             i = ihld4(ih4)
+             ix = vctrls(i)
+             if (p(i).lt.ptrip .or. ug(i).gt.usubgs(ix)) then
+               ihld5(ih5) = i
+               ih5 = ih5 + scskp
+               nh5 = nh5 + 1
+             else
+               ihld6(ih6) = i
+               ih6 = ih6 + scskp
+               nh6 = nh6 + 1
+             endif
+             ih4 = ih4 + scskp
+           enddo
+!  Superheated vapor state.
+           if (nh5 .ne. 0) then
+             ih5 = ixvff
+             do m = 1,nh5
+               i = ihld5(ih5)
+               ix = vctrls(i)
+               ubar(ix) = ug(i)
+               psat(ix) = tsat(ix)
+               qual(ix) = 1.0
+               if (nfluid .eq. 1) then
+                 call sth2xf (fa(ndxstd),tt(ix),iq,erx)
+               else  if ( nfluid .eq. 2 ) then
+                 call std2xf (fa(ndxstd),tt(ix),iq,erx)
+               else
+                 call  strpu2 (fa(ndxstd),tt(ix),iq,erx)
+               endif
+               if (erx .or. qual(ix).ne.1.0) then
+                 vctrl(i) = ior(vctrl(i),8192)
+                 tt(ix) = tsat(ix)
+                 cp(ix) = cpgs(ix)
+                 beta(ix) = betags(ix)
+                 kapa(ix) = kapags(ix)
+                 vbar(ix) = vsubgs(ix)
+               endif
+               ih5 = ih5 + scskp
+             enddo
+             ih5 = ixvff
+             do m = 1,nh5
+               i = ihld5(ih5)
+               ix = vctrls(i)
+               ttg(ix) = tt(ix)
+               cpg(ix) = cp(ix)
+               betag(ix) = beta(ix)
+               kapag(ix) = kapa(ix)
+               vsubg(ix) = vbar(ix)
+               rhogs(ix) = 1.0/vsubg(ix)
+               ih5 = ih5 + scskp
+             enddo
+           endif
+!  Subcooled steam.
+!  Extrapolate specific volume and temperature at constant pressure.
+           if (nh6 .ne. 0) then
+             ih6 = ixvff
+             do m = 1,nh6
+               i = ihld6(ih6)
+               ix = vctrls(i)
+               vb = vsubgs(ix)*betags(ix)
+               rhogs(ix) = 1.0/vsubgs(ix)
+               cpg(ix) = cpgs(ix)
+               term = (ug(i) - usubgs(ix))/(cpgs(ix) - p(i)*vb)
+               if (chngno(36)) term = max(term,-50.0)
+               ttg(ix) = tsat(ix) + term
+               vsubg(ix) = vsubgs(ix) + vb*term
+               betag(ix) = vb/vsubg(ix)
+               kapag(ix) = kapags(ix)
+               mark = 0
+!  9216 = 1024 + 8192.
+               if (vsubg(ix).le.0.0 .or. ttg(ix).le.ttrip) mark =
+     &         9216
+               vctrl(i) = ior(vctrl(i),mark)
+               ih6 = ih6 + scskp
+             enddo
+           endif
+         endif
+!  Common vapor coding.
+         ih2 = ixvff
+         do m = 1,nh2
+           i = ihld2(ih2)
+           ix = vctrls(i)
+           rhog(i) = 1.0/vsubg(ix)
+$if def,dbgprnt,3
+           if (isnan(rhog(i))) then
+             write (12,"('statep01',i5,i10)") ncount,volno(i)
+           endif
+           term = -rhog(i)*rhog(i)
+           dv = vsubg(ix)*betag(ix)
+           rdu = 1.0/(cpg(ix) - vsubg(ix)*betag(ix)*p(i))
+           drgdug(i) = term*dv*rdu
+           dtgdug(i) = rdu
+           dv = cpg(ix)*vsubg(ix)*kapag(ix) - ttg(ix)*(vsubg(ix)*
+     &     betag(ix))**2
+           dte = p(i)*vsubg(ix)*kapag(ix) -
+     &     ttg(ix)*vsubg(ix)*betag(ix)
+           rdp = -rdu
+           drgdp(i) = term*dv*rdp
+           dtgdp(i) = dte*rdp
+           drgdxa(i) = 0.0
+           dtgdxa(i) = 0.0
+           tempg(i) = ttg(ix)
+           ttg(ix) = max(tempg(i),satt(i))
+           betagg(i) = betag(ix)
+           csubpg(i) = cpg(ix)
+           kapagg(ix) = kapag(ix)
+           pps(i) = p(i)
+           hsteam(i) = ug(i) + pres(ix)*vsubg(ix)
+!-wdgb
+           if (chngno(74)) ttempi(i) = satt(i)
+!  Total mixture variables.
+           rho(i) = voidf(i)*rhof(i) + voidg(i)*rhog(i)
+           if (rhom(i) .eq. 0.0) rhom(i) = rho(i)
+$if def,mmfld,1
+           if (lnonmf(issys) .eq. 0) then
+             rhogf = 1.0/rho(i)
+             quals(i) = voidg(i)*rhog(i)*rhogf
+             u = (voidf(i)*rhof(i)*uf(i) + voidg(i)*rhog(i)*ug(i))*
+     &       rhogf
+             term = usubgs(ix) - usubfs(ix)
+             if (term .ne. 0.0) then
+               quale(i) = max(0.0,min(1.0,(u - usubfs(ix))/term))
+             else
+               quale(i) = quals(i)
+             endif
+$if def,mmfld,10
+           elseif (voidg(i) .eq. 0.0 .and. voidf(i) .eq. 0.0) then
+             quals(i) = 0.0
+             quale(i) = 0.0
+           else
+             rhogf = 1.0/rho(i)
+             quals(i) = voidg(i)*rhog(i)*rhogf
+             u = (voidf(i)*rhof(i)*uf(i)+voidg(i)*rhog(i)*ug(i))*rhogf
+             quale(i) = max(0.0,min(1.0,(u-usubfs(ix))/(usubgs(ix)-
+     &       usubfs(ix))))
+           endif
+           ih2 = ih2 + scskp
+         enddo
+!  Homogeneous equilibrium sound speeds.
+         ih2 = ixvff
+         ih4 = ixvff
+         ih5 = ixvff
+         ih6 = ixvff
+         nh4 = 0
+         nh5 = 0
+         nh6 = 0
+         do m = 1,nh2
+           i = ihld2(ih2)
+           if (quale(i) .eq. 0.0) then
+             ihld4(ih4) = i
+             ih4 = ih4 + scskp
+             nh4 = nh4 + 1
+           elseif (quale(i) .eq. 1.0) then
+             ihld5(ih5) = i
+             ih5 = ih5 + scskp
+             nh5 = nh5 + 1
+           else
+             ihld6(ih6) = i
+             ih6 = ih6 + scskp
+             nh6 = nh6 + 1
+           endif
+           ih2 = ih2 + scskp
+         enddo
+!  Two phase sound speed.
+         if (nh6 .ne. 0) then
+           ih6 = ixvff
+           do m = 1,nh6
+             i = ihld6(ih6)
+             ix = vctrls(i)
+             dpdt = 1.0/max(1.0e-6,dtdp(i))
+             aet = quale(i)*(cpgs(ix)/tsat(ix) +
+     &       dpdt*(dpdt*kapags(ix) - 2.0*betags(ix))*vsubgs(ix)) +
+     &       (1.0 - quale(i))*(cpfs(ix)/tsat(ix) +
+     &       dpdt*(dpdt*kapafs(ix) - 2.0*betafs(ix))*vsubfs(ix))
+$if def,dbgprnt,3
+           if (isnan(aet)) then
+             write (12,"('statep02',i5,i10)") ncount,volno(i)
+           endif
+             mark = 0
+!  163840 = 32768 + 131072.
+             if (aet .le. 0.0) mark = 163840
+             vctrl(i) = ior(vctrl(i),mark)
+             aet = abs(aet)
+             vmix = quale(i)*vsubgs(ix) + (1.0 - quale(i))*vsubfs(ix)
+             sounde(i) = dpdt*sqrt(1.0/aet)*vmix
+             ih6 = ih6 + scskp
+           enddo
+         endif
+!  Single phase sound speeds.
+         if (nh4 .ne. 0) then
+           ih4 = ixvff
+           do m = 1,nh4
+             i = ihld4(ih4)
+             ix = vctrls(i)
+             aet = (kapaff(ix)*csubpf(i)/(tempf(i)*rhof(i)) -
+     &       (betaff(i)/rhof(i))**2)/csubpf(i)*tempf(i)
+$if def,dbgprnt
+           if (isnan(aet)) then
+             write (12,"('statep03',i5,i10,4es13.5/23x,4es13.5)")
+     &       ncount,volno(i),p(i),voidg(i),quala(i),tempf(i),
+     &       rhof(i),betaff(i),kapaff(ix),csubpf(i)
+           endif
+$endif
+             mark = 0
+!  147456 = 16384 + 131072.
+             if (aet .le. 0.0) mark = 147456
+             vctrl(i) = ior(vctrl(i),mark)
+             aet = abs(aet)
+             sounde(i) = 1.0/(rhof(i)*sqrt(aet))
+             ih4 = ih4 + scskp
+           enddo
+         endif
+         if (nh5 .ne. 0) then
+           ih5 = ixvff
+           do m = 1,nh5
+             i = ihld5(ih5)
+             ix = vctrls(i)
+             aet = (kapagg(ix)*csubpg(i)/(tempg(i)*rhog(i)) -
+     &       (betagg(i)/rhog(i))**2)/csubpg(i)*tempg(i)
+$if def,dbgprnt,3
+           if (isnan(aet)) then
+             write (12,"('statep04',i5,i10)") ncount,volno(i)
+           endif
+             mark = 0
+!  139264 = 8192 + 131072.
+             if (aet .le. 0.0) mark = 139264
+             vctrl(i) = ior(vctrl(i),mark)
+             aet = abs(aet)
+             sounde(i) = 1.0/(rhog(i)*sqrt(aet))
+             ih5 = ih5 + scskp
+           enddo
+         endif
+         call viscos (nfluid,ihld2[ixvff),vctrls,nh2,scskp,tempf,
+     &   p,rhofs,satt,'liquid',viscf,erx)
+         call viscos (nfluid,ihld2[ixvff),vctrls,nh2,scskp,tempg,
+     &   p,rhogs,satt,'vapor',viscg,erx)
+         call thcond (nfluid,ihld2[ixvff),vctrls,ihld9[ixvff),nh2,
+     &   scskp,tempf,p,rhofs,'liquid',thconf,erx)
+         call thcond (nfluid,ihld2[ixvff),vctrls,ihld9[ixvff),nh2,
+     &   scskp,ttg,p,rhogs,'vapor',thcong,erx)
+$if def,selap
+         if (scntrl(1)) then
+           ih2 = ixvff
+           do m = 1,nh2
+             i = ihld2(ih2)
+             oxyftr(i) = 0.0
+             if (voidg(i) .ne. 0.0) then
+               dv = max(8314.3*tempg(i)/p(i)*viscg(i)*0.055509,
+     &         1.0e-10)
+               xphiv = thcong(i)*vsubg(ix)/(dv*csubpg(i))
+               if (xphiv .gt. 0.0) oxyftr(i) = 16.0*dv*pps(i)/
+     &         (8314.3*tempg(i)*thcong(i))*xphiv**0.3333333
+               oxyftr(i) = max(oxyftr(i),0.0)
+             endif
+             ih2 = ih2 + scskp
+           enddo
+         endif
+$endif
+       endif
+!  Get surface tension by calling appropriate subroutine for the
+!  material.
+       call surftn (nfluid,ihld1[ixvff),nh1,scskp,satt,sigma,erx)
+!!
+       ih1 = ixvff
+       do m = 1,nh1
+         i = ihld1(ih1)
+$if def,dbgprnt
+         if (sigma(i) .le. 0.0) then
+           write (12,"('stateps1',2i5,i10,3es13.5)") ncount,matrl,
+     &     volno(i),satt(i),sigma(i)
+         endif
+$endif
+         ih1 = ih1 + scskp
+       enddo
+!!
+       
+!
+!  Normal volume with metal mixture.
+$if def,mmfld
+       if (lnonmf(issys).ne.0 .and. nh7.ne.0) then
+         ih7 = ixvff
+         do m = 1,nh7
+           i = ihld7(ih7)
+           c0 = 0.0
+           c1 = 0.0
+           c2 = 0.0
+           umt0 = 0.0
+           nn = i
+           do jj = 1,lnonmf(issys)
+             c0 = c0 + mma0(jj)*qualm(nn)
+             c1 = c1 + mma1(jj)*qualm(nn)
+             c2 = c2 + mma2(jj)*qualm(nn)
+             umt0 = umt0 + mmu0(jj)*qualm(nn)
+             nn = nn + 1
+           enddo
+           h = um(i)
+           if (h.lt.hh(1) .or. h.gt.hh(npts)) then
+             ierr = 1
+           else
+             ierr = 0
+           endif
+           tempmt(i) = pol8(ttt,hh,h,npts,indx)
+           tmt = tempmt(i)
+           if (tmt.lt.ttr(1) .or. tmt.gt.ttr(nrpts)) then
+             ierr = 1
+           else
+             ierr = 0
+           endif
+           voidmt = voidm(i) + voidms(i)
+           if(tmt .gt. 933.) then
+             voidm(i) = voidmt
+             voidms(i) = 0.
+           endif
+           if (tmt .lt. 932.) then
+             voidms(i) = voidmt
+             voidm(i) = 0.
+           endif
+           if (tmt.ge.932. .and. tmt.le.933.) then
+             voidms(i) = (933.-tmt)*voidmt
+             voidm(i) = (tmt-932.)*voidmt
+           endif
+           rhomt(i) = pol8(ro,ttr,tmt,nrpts,indx)
+!          viscm(i) = 0.0
+!          thconm(i) = 0.0
+!          sigmam(i) = 0.0
+!          do jj = 1,lnonmf(issys)
+!            viscm(i) = viscm(i)+qualm(i+jj-1)*xxxx
+!            thconm(i) = thconm(i)+qualm(i+jj-1)*yyy
+!            sigmam(i) = sigmam(i)+qualm(i+jj-1)*zzz
+!          enddo
+           rho(i) = rho(i) + voidm(i)*rhomt(i)
+           ih7 = ih7 + scskp
+         enddo
+       endif
+$endif
+!
+       lflag1 = .false.
+       ih1 = ixvff
+       do m = 1,nh1
+         i = ihld1(ih1)
+         ix = vctrls(i)
+         sth2xv(i) = ia(ix+22)
+         hvmix(i) = p(i)/rho(i) + quals(i)*ug(i) +
+     &   (1.0 - quals(i))*uf(i)
+         tmassv(i) = rho(i)*v(i)
+         tiengv(i) = (voidf(i)*rhof(i)*uf(i) + voidg(i)*rhog(i)*ug(i))*
+     &   v(i)
+         if (check .eq. 0) rhom(i) = rho(i)
+         erx = rho(i).le.0.0 .or. rhom(i).le.0.0 .or.
+     &   rhof(i) .le. 0.0 .or. rhog(i) .le. 0.0
+     &   .or. rhof(i)-rhog(i).lt.-0.00001
+     &   .or. viscf(i).le.0.0 .or. viscg(i).le.0.0 .or.
+     &   thconf(i).le.0.0 .or. thcong(i).le.0.0 .or. sigma(i).lt.0.0
+     &   .or. csubpf(i).le.0.0 .or. csubpg(i).le.0.0 .or.
+     &   tempf(i).le. 0.0 .or. tempg(i).le.0.0
+         mark = 0
+         if (erx) mark = 262144
+         vctrl(i) = ior(vctrl(i),mark)
+         if (check.eq.0 .and. iand(vctrl(i),517376).ne.0) then
+           if (iand(imap(i),64).ne.0) then
+             chwrd = 'iteration'
+           else
+             chwrd = 'repeat'
+           endif
+           write (output,2001) chwrd,ncount,volno(i)
+ 2001  format ('0******** Water property error during ',a,'.',2x,
+     & 'ncount ='i7,'  volno ='i10)
+         endif
+!  517376 = 256 + 1024 + 8192 + 16384 + 32768 + 65536 + 131072 + 262144.
+         lflag1 = lflag1 .or. iand(vctrl(i),517376).ne.0
+         ih1 = ih1 + scskp
+       enddo
+       if (lflag1) lpdat(issys)%lsuces = 2
+       if (help.ne.0 .and. iand(ihlppr(2),ishft(1,0)).ne.0) then
+         i = lpdat(issys)%liv
+         do m = 1,lpdat(issys)%livn
+           if (iand(vctrl(i),33).eq.0 .and.
+     &     iand(vctrl(i),517376) .ne. 0) then
+             if (iand(vctrlx(i),1).ne.0) then
+               write (output,2003) volno(i),p(i),ug(i),uf(i),quala(i),
+     &         voidf(i),voidg(i)
+ 2003  format ('0******** Thermodynamic property failure, volno= ',i10,
+     & ', p =',1p,e15.6,', ug =',e15.6,', uf =',e15.6/42x,'quala =',
+     & e15.6,', voidf ='e15.6,', voidg =',e15.6)
+               if (iand(vctrl(i),256) .ne. 0) write (output,2012)
+ 2012  format (' ******** Pressure is negative.')
+               if (iand(vctrl(i),32768) .ne. 0) write (output,2008)
+ 2008  format (' ******** Two phase property call had error.')
+               if (iand(vctrl(i),8192) .ne. 0) write (output,2010)
+ 2010  format (' ******** Vapor phase property call had error.')
+               if (iand(vctrl(i),16384) .ne. 0) write (output,2011)
+ 2011  format (' ******** Liquid phase property call had error.')
+               if (iand(vctrl(i),1024) .ne. 0) write (output,2013)
+ 2013  format (' ******** Extrapolation error.')
+               if (iand(vctrl(i),24576) .eq. 24576) write (output,2016)
+ 2016  format (' ******** Both liquid and vapor flags may mean condition
+     & is over critical point.')
+               if (iand(vctrl(i),65536) .ne. 0) write (output,2014)
+ 2014  format (' ******** Iteration nonconvergence.')
+               if (iand(vctrl(i),131072) .ne. 0) write (output,2015)
+ 2015  format (' ******** Sonic velocity had negative square root.')
+               if (iand(vctrl(i),262144) .ne. 0) then
+                 write (output,2007) volno(i),rho(i),rhom(i),rhof(i),
+     &           rhog(i),viscf(i),viscg(i),thconf(i),thcong(i),sigma(i),
+     &           csubpf(i),csubpg(i),tempf(i),tempg(i)
+ 2007  format('0******** One of the following properties is negative or
+     &rhof.lt.rhog'/5x,' volno(i) =',i10/
+     & 5x,'rho(i) =',1p,g13.5,' rhom(i) =',g13.5,
+     & ' rhof(i) =',g13.5,' rhog(i) =',g13.5/
+     & 5x,'viscf(i) =',g13.5,' viscg(i) =',g13.5,
+     & ' thconf(i) =',g13.5,' thcong(i) =',g13.5/
+     & 5x,'sigma(i) =',g13.5,' csubpf(i) =',g13.5,
+     & ' csubpg(i) =',g13.5/5x,'tempf(i) =',g13.5,
+     & ' tempg(i) =',g13.5)
+               endif
+             endif
+           endif
+           i = i + ivskp
+         enddo
+       endif
+  999  continue
+$if def,msdbug
+!  Store more data and print information.
+       do idbx = 1,msdbvols
+         if (volidxm(idbx) .eq. 0) cycle
+         if (volsysm(idbx) .eq. issys) then
+           i = volidxm(idbx)
+           ix = vctrls(i)
+           ms(idbx)%drfdp(2) = drfdp(i)
+           ms(idbx)%drfduf(2) = drfduf(i)
+           ms(idbx)%drgdp(2) = drgdp(i)
+           ms(idbx)%drgdug(2) = drgdug(i)
+           ms(idbx)%dtdp(2) = dtdp(i)
+           ms(idbx)%dtdug(2) = dtdug(i)
+           ms(idbx)%dtdxa(2) = dtdxa(i)
+           ms(idbx)%dtfdp(2) = dtfdp(i)
+           ms(idbx)%dtfduf(2) = dtfduf(i)
+           ms(idbx)%dtgdp(2) = dtgdp(i)
+           ms(idbx)%dtgdug(2) = dtgdug(i)
+           ms(idbx)%dtgdxa(2) = dtgdxa(i)
+           ms(idbx)%dttdp(2) = dttdp(i)
+           ms(idbx)%p(2) = p(i)
+           ms(idbx)%pps(2) = pps(i)
+           ms(idbx)%quala(2) = quala(i)
+           ms(idbx)%rho(2) = rho(i)
+           ms(idbx)%rhof(2) = rhof(i)
+           ms(idbx)%rhog(2) = rhog(i)
+           ms(idbx)%rhom(2) = rhom(i)
+           ms(idbx)%tempf(2) = tempf(i)
+           ms(idbx)%tempg(2) = tempg(i)
+           ms(idbx)%tsat(2) = satt(i)
+           ms(idbx)%tsatt(2) = tsatt(i)
+           ms(idbx)%uf(2) = uf(i)
+           ms(idbx)%ug(2) = ug(i)
+           ms(idbx)%voidf(2) = voidf(i)
+           ms(idbx)%voidg(2) = voidg(i)
+$if def,dbgprnt
+           write (12,"('mserre',i8,i10/(a7,3es13.5,4x,a7,3es13.5))")
+     &     ncount,volno(i),
+     &     'drfdp  ',ms(idbx)%drfdp,    'drfduf ',ms(idbx)%drfduf,
+     &     'drgdp  ',ms(idbx)%drgdp,    'drgdug ',ms(idbx)%drgdug,
+     &     'dtdp   ',ms(idbx)%dtdp,     'dtdug  ',ms(idbx)%dtdug,
+     &     'dtdxa  ',ms(idbx)%dtdxa,    'dtfdp  ',ms(idbx)%dtfdp,
+     &     'dtdxa  ',ms(idbx)%dtdxa,    'dtfdp  ',ms(idbx)%dtfdp,
+     &     'dtfduf ',ms(idbx)%dtfduf,   'dtgdp  ',ms(idbx)%dtgdp,
+     &     'dtgdug ',ms(idbx)%dtgdug,   'dtgdxa ',ms(idbx)%dtgdxa,
+     &     'dttdp  ',ms(idbx)%dttdp,    'p      ',ms(idbx)%p,
+     &     'pps    ',ms(idbx)%pps,      'quala  ',ms(idbx)%quala,
+     &     'rho    ',ms(idbx)%rho,      'rhom   ',ms(idbx)%rhom,
+     &     'rhof   ',ms(idbx)%rhof,     'rhog   ',ms(idbx)%rhog,
+     &     'tempf  ',ms(idbx)%tempf,    'tempg  ',ms(idbx)%tempg,
+     &     'tsat   ',ms(idbx)%tsat,     'tsatt  ',ms(idbx)%tsatt,
+     &     'uf     ',ms(idbx)%uf,       'ug     ',ms(idbx)%ug,
+     &     'voidf  ',ms(idbx)%voidf,    'voidg  ',ms(idbx)%voidg
+$endif
+         endif
+       enddo
+$endif
+       return
+       end

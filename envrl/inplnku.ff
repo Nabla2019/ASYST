@@ -1,0 +1,123 @@
+       subroutine inplnku (card,next,where,many,a)
+$if def,iua
+c
+c  This subroutine searches the table array inside the a array for
+c  card numbered card.  It sets next to the next largest card number.
+c  It returns the number on items on the card in many.
+c
+c  Cognizant engineer: rjw
+c
+c  Parameters in the call list
+c  card    card number to find in table array
+c  next    next larger card number in table array
+c          = -1 if no such card exists
+c  where   index in list array where card data is stored
+c  many    number of data items on cards if > 0
+c          = 0, no card found
+c          < 0, format error on card
+c  a       table-list array containing table and list beginning at a(1)
+c
+c  card number packed word (64 bits) (a(1,1) and a(2,1))
+c  these are the entries in the table array
+c  bits numbered 1-32 in each 32-bit word starting from right
+c  word   bits  quantity
+c  a(1,1) 1-29  card number
+c         30    used bit, = 1 if used before
+c         31-32 not used yet
+c  a(2,1) 1-11  no. words on card
+c         12-28 index into list array where binary data is at
+c         29    format error bit, = 1 if format error on card
+c         30    card number error bit, = 1 if card number is illegal
+c         31-32 not used yet
+c
+       integer card,next,where,many
+$if -def,in32,1
+       integer a(1)
+$if def,in32,1
+       integer a(2,*)
+c
+c  msk = 2**30 - 1, mak17 = 2**17 - 1, msk11 = 2**11 -1
+       parameter (msk=1073741823,msk17=131071,msk11=2047)
+c  msk29 = 2**29 - 1
+       parameter (msk29=536870911)
+c
+       save i1old,i2old,nxtold,ilim,ip,in,iold
+c
+       data i1old/0/,i2old/0/,nxtold/0/
+       data ilim/0/,ip/0/,in/0/,iold/0/
+c
+       many = 0
+       next = -1
+$if -def,in32,2
+       i1 = iand(a(1),msk) + 1
+       i2 = ishft(a(1),-30)
+$if def,in32,2
+       i1 = a(2,1) + 1
+       i2 = a(1,1)
+       if (i2 .eq. 0) return
+       if (i1.eq.i1old .and. i2.eq.i2old) go to 20
+       i1old = i1
+       i2old = i2
+       ilim = i1 + i2
+       i = 0
+c  Binary search for card number
+   10  i = i + 1
+       i2 = ishft(i2,-1)
+       if (i2 .ne. 0) go to 10
+       in = ishft(1,i-1)
+       ip = i1 + in
+       go to 30
+   20  if (nxtold .ne. card) go to 30
+       i = iold
+       nthis = 0
+       go to 40
+   30  i = ip
+       ii = in
+$if -def,in32,1
+   31  nthis = card - iand(ishft(a(i),-30),msk29)
+$if def,in32,1
+   31  nthis = card - iand(a(1,i),msk29)
+c  nthis = 0, found the card
+       if (nthis .eq. 0) go to 35
+   32  ii = ishft(ii,-1)
+       if (ii .eq. 0) go to 50
+       if (nthis .gt. 0) go to 33
+       i = i + ii
+       if (i .le. ilim) go to 31
+       i = i - ii
+       go to 32
+   33  i = i - ii
+       if (i .gt.i1) go to 31
+       i = i + ii
+       go to 32
+c  Found the card in the table at index = i
+c  go to 32 if it has the use bit is set (already used once)
+c  drop through to 40 if use bit is not set
+$if -def,in32,5
+   35  if (iand(a(i),ishft(1,29)) .ne. 0) go to 32
+   40  a(i) = ior(a(i),ishft(1,59))
+       where = iand(ishft(a(i),-11),msk17)
+       many = iand(a(i),msk11)
+       if (iand(a(1),ishft(1,28)) .ne. 0) many = -many
+$if def,in32,5
+   35  if (iand(a(2,i),ishft(1,29)) .ne. 0) go to 32
+!mpfu   40  a(1,i) = ior(a(1,i),ishft(1,29))
+   40  where = iand(ishft(a(2,i),-11),msk17)
+       many = iand(a(2,i),msk11)
+       if (iand(a(2,i),ishft(1,28)) .ne. 0) many = -many
+       if (many .eq. 0) many = -1
+   50  if (nthis .lt. 0) go to 55
+   52  i = i - 1
+   55  if (i .le. i1) go to 60
+c  go to 52 and get next card if format errors on card
+$if -def,in32,2
+       if (iand(a(i),ishft(1,29)) .ne. 0) go to 52
+       next = iand(ishft(a(i),-30),msk29)
+$if def,in32,2
+       if (iand(a(2,i),ishft(1,29)) .ne. 0) go to 52
+       next = iand(a(1,i),msk29)
+   60  nxtold = next
+       iold = i
+$endif
+       return
+       end

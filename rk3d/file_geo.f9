@@ -1,0 +1,332 @@
+      SUBROUTINE FILE_GEO(IOERROR,
+     &  ZB,DDX,DDY,DDZ,NSPACX,NSPACY,NSPACZ,NXSTART,NXEND,
+     &  NCOL2DT,NCOLZT,LSEXT2DT,LROD2DT,LSEXTZT,
+     &  NROT2DT,NREF2DT,NTOPZT,EXP3DT,BUSURF3DT)
+C     
+C     THIS SUBROUTINE READS THE GEOMETRICAL PARAMETERS
+C     
+      include 'param.fcb'
+      include 'bcs.fcb'
+      include 'bcshex.fcb'
+      include 'crod.fcb'
+      include 'geom.fcb'
+      include 'extsor.fcb'
+      include 'basic.fcb'
+      include 'xsec1.fcb'
+      include 'nonfue.fcb'
+      include 'cntl.fcb'
+      include 'dataf.fcb'
+      include 'hexdim.fcb'
+      include 'bpitch.fcb'
+      include 'hgeo.fcb'
+      include 'adf.fcb'
+
+      DIMENSION
+     &  LSEXTZT(*)                         ,
+     &  NCOL2DT(NXORIG,NYORIG,*)           ,NCOLZT(*)                 ,
+     &  LSEXT2DT(NXORIG,*)                 ,LROD2DT(NXORIG,*)         ,
+     &  NXSTART(*)                         ,NXEND(*)                  ,
+     &  ZB(*)                              ,NTOPZT(*)                 ,
+     &  DDX(*)                             ,DDY(*)                    ,
+     &  DDZ(*)                             ,NSPACX(*)                 ,
+     &  NSPACY(*)                          ,NSPACZ(*)                 ,
+     &  NROT2DT(NXORIG,*)                  ,NREF2DT(NXORIG,*)
+      DIMENSION EXP3DT(NXORIG,NYORIG,NZORIG),
+     $ BUSURF3DT(6,NXORIG,NYORIG,NZORIG)
+
+      INTEGER*8 ID(50),IDY(800),IDX(800) !vmq
+      CHARACTER INITSUREXP*8
+
+      HEXBUGRAD='N'    !...burnup gradient treatment option
+C     
+C---- THE NUMBER OF ADF`S IS NODE GEOMETRY DEPENDENT
+C     
+C--   FOR HEXAGONAL GEOMETRY ===> NADFS = 8
+C--   FOR CARTEZIAN GEOMETRY ===> NADFS = 6
+C     
+      IF(NSHAP.EQ.'HEXA')THEN
+       NADFS = 8
+      ELSE
+       NADFS = 6
+      ENDIF
+C     
+C     READ BOUNDARY CONDITIONS :
+C     
+C--------INTERNAL TO CODE B.C. VARIABLES FOR CART GEOMETRY
+C     
+C--------LIXW = #     : X-AXIS LEFT
+C--------LIXE = #     : X-AXIS RIGHT
+C--------LIYS = #     : Y-AXIS SOUTH
+C--------LIYN = #     : Y-AXIS NORTH
+C--------LIZU = #     : Z-AXIS UP
+C--------LIZD = #     : Z-AXIS DOWN
+C     
+C--------INPUT B.C. FOR HEXA & CART GEOMETRIES
+C     
+C--------LIHO = #     : EXTERIOR B.C.
+C--------LIPS = #     : INTERIOR B.C.
+C--------LIZU = #     : Z-AXIS UP
+C--------LIZD = #     : Z-AXIS DOWN
+C     
+C---  THE VALUES OF # CAN BE ONE OF FOUR CHOICES:
+C     
+C     # = 0  : ZERO CURRENT (REFLECTIVE)
+C     # = 1  : ZERO FLUX
+C     # = 2  : NON-REENTRANT CURRENT
+C     # = 3  : CYCLIC (ROTATIONAL)
+C     # = 4  : NOT APPLICABLE
+C     
+C     ** FOR CERTAIN GEOMETRIES AND SYMMETRIES NOT ALL BOUNDARIES EXIST **
+C     ***THUS NOT APPLICABLE USED ***
+C     
+C     
+      READ (2,*) LIHO,LIPS,LIZU,LIZD
+
+      IF(NSHAP.EQ.'CART')THEN
+C     
+C-------ASSIGN INTERNAL TO CODE B.C. FOR CART GEOMETRY
+C     
+       LIXW=LIHO
+       LIXE=LIHO
+       LIYN=LIHO
+       LIYS=LIHO
+       IF(IDRUN.EQ.'HCORE') THEN
+        LIYN=LIPS
+       ELSEIF(IDRUN.EQ.'QCORE') THEN
+        LIYN=LIPS
+        LIXW=LIPS
+       ENDIF
+C     
+C---  READ IN PITCH OF BUNDLE IN INCHES
+C     
+       READ (2,*) BPITCHX,BPITCHY
+       
+C------READ DIMENSION INFO IN X,Y DIRECTIONS :
+       
+       READ (2,*) NSUBX,NSUBY
+       READ (2,*) (NSPACX(I),DDX(I),I=1,NSUBX)
+       READ (2,*) (NSPACY(J),DDY(J),J=1,NSUBY)
+       
+       DO 15 IY=1,NYORIG
+        NXSTART(IY)=1
+        NXEND(IY)=NXORIG
+ 15    CONTINUE
+       NXSKIP=1
+      ELSEIF(NSHAP.EQ.'HEXA')THEN
+C     
+C     
+C---- THE FOLLOWING INPUT APPEARS ONLY WHEN THE [ NSHAP = "HEXA" ]
+C     
+       READ(2,*) DELH
+
+       NXSKIP=2
+       
+       IF(IDRUN.EQ.'FCORE') THEN
+        NYCENTER=NHR+1
+        NXSTART(NYCENTER)=1
+        NXEND(NYCENTER)=NXORIG
+        DO 20 IY=1,NHR
+         NXSTART(NYCENTER+IY)=NXSTART(NYCENTER+IY-1)+1
+         NXEND(NYCENTER+IY)=NXEND(NYCENTER+IY-1)-1
+         NXSTART(NYCENTER-IY)=NXSTART(NYCENTER+IY)
+         NXEND(NYCENTER-IY)=NXEND(NYCENTER+IY)
+ 20     CONTINUE
+       ELSEIF(IDRUN.EQ.'TCORE') THEN
+        NYCENTER=1
+        NXCENTER=2*NHR+1
+        NXSTART(NYCENTER)=1
+        NXEND(NYCENTER)=NXCENTER
+        DO 25 IY=1,NYORIG-1
+         NXSTART(IY+1)=NXSTART(IY)+1
+         NXEND(IY+1)=NXEND(IY)+1
+ 25     CONTINUE
+       ELSEIF(IDRUN.EQ.'SCORE') THEN
+        NYCENTER=1
+        NXSTART(1)=NHR+1
+        NXEND(1)=NXSTART(1)
+        DO 30 IY=1,NYORIG-1
+         NXSTART(IY+1)=NXSTART(IY)-1
+         NXEND(IY+1)=NXEND(IY)+1
+ 30     CONTINUE
+       ENDIF
+      ENDIF
+C     
+C     
+C------READ THE DIFFERENT FUEL COLORS OVER THE CORE
+C     (   FOR EACH FIGURE RADIALLY  )
+C     
+      DO 99 IB=1,NFIGURE
+       READ (2,89) NBASIC(IB)
+ 89    FORMAT(I3)
+       DO 100 IY=1,NYORIG
+        READ(2,*) (NCOL2DT(IX,IY,IB),
+     @    IX=NXSTART(IY),NXEND(IY),NXSKIP)
+ 100   CONTINUE
+ 99   CONTINUE
+C     
+C-----READ ROTATION ORIENTATION OF NODES FOR ADF APPLICATION
+      READ(2,*)
+      DO 101 IY=1,NYORIG
+       READ(2,*) (NROT2DT(IX,IY),
+     @   IX=NXSTART(IY),NXEND(IY),NXSKIP)
+ 101  CONTINUE
+C     
+C     
+C-----READ REFLECTION ORIENTATION OF NODES FOR ADF APPLICATION
+      READ(2,*)
+      DO 102 IY=1,NYORIG
+       READ(2,*) (NREF2DT(IX,IY),
+     @   IX=NXSTART(IY),NXEND(IY),NXSKIP)
+ 102  CONTINUE
+C     
+C-----READ NUMBER & SIZE OF AXIAL SUBREGIONS
+C     ( EACH SUBREGION HAS A DIFFERENT AXIAL LENGTH )
+C     
+      READ (2,*) NSUBZ
+      READ (2,*) (NSPACZ(K),DDZ(K),K=1,NSUBZ)
+      READ (2,*) IZCOLS,IZCOLE
+      READ (2,*) (NCOLZT(IZ),IZ=1,NZORIG)
+C     
+C-----READ TOP-BOTTOM ORIENTATION OF NODES FOR ADF APPLICATION
+C     
+      READ (2,*)
+      READ (2,*) (NTOPZT(IZ),IZ=1,NZORIG)
+C     
+C...  GEOMETRICAL PARAMETERS FOR THE CONTROL ROD ROUTINE
+C     
+C     
+C------SKIP FOLLOWING INPUT IF X-SECTION CORRECTION OPTION IS OFF
+C     
+      IF(NXSEC.EQ.'Y') THEN
+       
+C     
+C------READ  LOCATION OF THE CONTROL BANKS
+C     
+       READ(2,*)
+       NBACU= 0
+       DO 1677 IY=1,NYORIG
+        READ(2,*) (LROD2DT(IX,IY),IX=NXSTART(IY),NXEND(IY),NXSKIP)
+        DO 1678 IX=NXSTART(IY),NXEND(IY),NXSKIP
+         IF(LROD2DT(IX,IY).GT.NBACU)NBACU=LROD2DT(IX,IY)
+ 1678   CONTINUE
+ 1677  CONTINUE
+C     
+C------TOTAL NUMBER OF BANKS IN THE CORE
+C     
+       IF(NBACU.GT.NBMAX)THEN
+        WRITE(6,*)'####ERROR, INPUT THE RIGHT CONTROL BANK ID.S`'
+        IOERROR = 1
+       ENDIF
+C     
+C------READ CONTROL ROD AXIAL OFFSET FROM BOTTOM OF THE FUEL [INCHES]
+C     
+       READ(2,*) RODOFFSET
+       DO 39 IBK=1,NBACU
+        ZB(IBK) = ZB(IBK) + RODOFFSET
+ 39    CONTINUE
+      ELSE
+       
+       NBACU = 0
+       DO 2677 IY=1,NYORIG
+        DO 2678 IX=NXSTART(IY),NXEND(IY),NXSKIP
+         LROD2DT(IX,IY)= 0
+ 2678   CONTINUE
+ 2677  CONTINUE
+       RODOFFSET = 0.00
+       
+      ENDIF
+C     
+C-------READ THE RADIAL LOCATION OF THE EXTERNAL SOURCE
+C     
+      DO 45 IY=1,NYORIG
+       READ(2,*)(LSEXT2DT(IX,IY),IX=NXSTART(IY),NXEND(IY),NXSKIP)
+ 45   CONTINUE
+C     
+C-------READ THE AXIAL LOCATION OF THE EXTERNAL SOURCE
+C     
+      READ (2,*)
+      READ (2,*)(LSEXTZT(IZ),IZ=1,NZORIG)
+      CLOSE(2)
+C     
+C     READ 3-D EXPOSURE MAP
+C     
+C--------------------
+      IF(IEXP.EQ.'Y')THEN
+C--------------------
+       OPEN(79,FILE=FINITEXP,STATUS='OLD')
+       READ(79,*)
+       READ(79,*)
+       READ(79,*)NNODE
+       READ(79,*)
+       READ(79,*)
+       NHALF=(NZORIG+1)/2
+       DO 221 IY=1,NY
+        NS=NXSTART(IY)
+        NE=NXEND(IY)
+        DO 333 IX=NXSTART(IY),NXEND(IY),NXSKIP
+         IF(NCOL2DT(IX,IY,NCOLZT(NHALF)).NE.0)THEN
+          NS=IX
+          GOTO 334
+         ENDIF
+ 333    CONTINUE
+ 334    DO 335 IX=NXEND(IY),NXSTART(IY),-NXSKIP
+         IF(NCOL2DT(IX,IY,NCOLZT(NHALF)).NE.0)THEN
+          NE=IX
+          GOTO 336
+         ENDIF
+ 335    CONTINUE
+ 336    READ(79,*)(ID(IX),IX=NS,NE,NXSKIP)
+        DO 222 IX=NXSTART(IY),NXEND(IY),NXSKIP
+         IF(ID(IX).NE.0)THEN
+          IDY(ID(IX))=IY
+          IDX(ID(IX))=IX
+         ENDIF
+ 222    CONTINUE
+ 221   CONTINUE
+       READ(79,*)
+
+       DO 223 IDUM=1,NNODE
+        READ(79,*)IN
+        READ(79,*)(EXP3DT(IDX(IN),IDY(IN),IZ),IZ=IZCOLS,IZCOLE)
+        DO IZ=IZCOLS,IZCOLE
+         DO ISUR=1,6
+          BUSURF3DT(ISUR,IDX(IN),IDY(IN),IZ)=
+     $      EXP3DT(IDX(IN),IDY(IN),IZ)
+         ENDDO
+        ENDDO
+ 223   CONTINUE
+       IF(NSHAP.EQ.'HEXA')THEN
+        READ(79,'(A5)',ERR=228)INITSUREXP
+        CALL INPUTCK('INITSUREXP',INITSUREXP,'Y','N',' ',IOERROR)
+       ELSE
+        INITSUREXP='N'
+       ENDIF
+
+       IF(INITSUREXP.EQ.'Y')THEN
+        HEXBUGRAD='Y'
+        DO 227 IDUM=1,NNODE
+         READ(79,*)IN
+         READ(79,*)((BUSURF3DT(ISUR,IDX(IN),IDY(IN),IZ),
+     $     IZ=IZCOLS,IZCOLE),ISUR=1,6)
+ 227    CONTINUE
+        CLOSE(79)
+        RETURN
+       ENDIF
+
+ 228   WRITE(55,229)
+       WRITE(6,229)
+ 229   FORMAT(/,'------------ NOTE --------------------'
+     $ ,/,'INITIAL SURFACE EXPOSURE NOT AVAILABLE'
+     $ ,/,'BURNUP GRADIENT TREATMENT WILL BE TURNED OFF'
+     $ ,/,'(SURFACE BURNUP ONLY USED IN HEX GEOM)'
+     $ ,/,'--------------------------------------',/)
+       CLOSE(79)
+C--------------------   
+      ENDIF
+C--------------------
+
+      RETURN
+      END
+
+
+

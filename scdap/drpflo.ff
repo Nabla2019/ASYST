@@ -1,0 +1,783 @@
+*if def,selap
+       subroutine drpflo(zz,dzrod,tsur,tsur0,wzrinc,winliq,tox,tzr,ro,
+     & wuobng,unuca,wremuo,powadd,pitch1,igrdsp,kfaila,kfailg,naz,compj,
+     7 idcomp,kfail1)
+!  drpflo calculates the the relocation of liquefied fuel rod material
+!  that flows through breaches in the cladding oxide shell.  The
+!  variables that are calculated include: 1. effective radius of drops
+!  of relocated material, 2. velocity and elevation of drops,
+!  3. rate of oxidation of drops, and 4. temperature of drops.
+!
+!  Cognizant engineer: ljs.
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       include 'cons.h'
+       include 'scntl.h'
+       include 'scddat.h'
+       include 'dbacct.h'
+       include 'ufiles.h'
+       include 'contrl.h'
+       include 'fecom.h'
+       include 'tblsp.h'
+       include 'fast.h'
+       include 'comctl.h'
+       include 'voldat.h'
+       include 'statec.h'
+       include 'hfuson.h'
+       include 'scdpow.h'
+       include 'miscon.h'
+       dimension zz(ndax),tsur(ndax),tsur0(ndax),tox(ndax),tzr(ndax),
+     & dzrod(ndax)
+       dimension wzrinc(ndax),winliq(ndax),ro(ndax)
+       dimension wuobng(ndax),unuca(ndax),powadd(ndax),wremuo(ndax)
+       dimension kfaila(ndax),kfailg(ndax),igrdsp(ndax)
+       real(kr) zz,dzrod,tsur,tsur0,umeas,tox,tzr
+       real(kr) wzrinc,winliq,ro
+       real(kr) wuobng,unuca,powadd,wremuo
+       real(kr) afracu,afracz,afraco,wzrsum,wuosum,wox0
+       real(kr) thetaa,thetar,epstht,sigmix,rhomix
+       real(kr) ceff,ceffzr,ceffuo,qdkns,wmxdif,qtotox
+       real(kr) condox,zotcon,zoden,rhozro,czro,alpzro,condzr,rhozr,
+     & cden,czr,ccp,ccpr,alpzr,fraden,fotmtl,conduo,rhouo,cpuo,
+     & alpuo
+       real(kr) qloss2,qloss1,fgrayb,cabvap,cabwat,epswat,alpwat,
+     & diawat,pitch1,timpox,timpzr,tcover,dtdrop,rhodrp,cpdrop,
+     & hgdrp1,voldrp,volnod,oxlis0,
+     & epsgs1,absgs1,woxdrp,hcpdrp,qtcrad,qtcvec,qlssum,tmnsnk,
+     & qmxsnk
+       real(kr) qhbgen,qhbstm,qhbcon,qindrp,
+     & qmxsk2,tsurdt,fcfdrp,powad1
+       real(kr) frcslp,tztop,tzbot,tzgrad,tdotk,tbtwns,coef1,rdrpex,
+     & wuotot,wzrtot,woxtot,msnode,msdrop,frcnd0,tmelt,ndrfld,
+     & urfld,tfreez,frcone,foxrfl,tdrsl1,tdrslm,foxdrp,
+     & dltfrz,dtmpfr,tsloc1,dtdrsl,dltsol,dltsl1,tbtwmx
+       real(kr) tgrmlt
+       real(kr) sigrad
+       real(kr) uo,co,do
+       real tzrmlt,tfrz11,tsrfrz
+       real freduc
+       real voidsh,hfzave
+       real tshmin
+       real toxtmp
+       real wdrdif
+       real fovlp1,ftmsmt
+       real woxgan,woxmax,mssdrp
+       real fbkrf1,fbkmin,blkrf1,blkrf2,qathrs,qastop
+       real(kr) zusten,zuden,pliq,coxwtk,coxwtkr,zocp,dum1,fden,fcp,zucp
+       integer in,iln,n,idcomp
+       integer kfaila,igrdsp,naz,compj,k,kaxn,ivol,isteam,
+     & nshap,nfreez,nshatr
+       integer kfailg
+       integer kfail1(ndax)
+       integer idrpsw,kfailz
+       integer nstart
+       integer ndbg
+       dimension idrpsw(ndax)
+! thetaa = advancing contact angle (radians).
+!   100 degrees = 1.74 radians.
+       data thetaa / 1.74/
+! thetar = receding contact angle (radians) [1.40=80 degrees]
+       data thetar / 1.40/
+! fcfdrp = configuration and emissivity factor
+! for radiation from drops of relocating material.
+       data fcfdrp / 0.5/
+! tgrmlt = melting temperature of standalone Inconel.
+       data tgrmlt / 1609.0 /
+       data sigrad/ 5.6680e-8/
+       data uo/1.827834e5/, co/10310.75/, do/0.52257/
+! frcslp = fraction of height of cladding at node that slumps with
+! each individual slumping.
+! coef1 = coefficient in correlation that determines period of time
+! between individual slumpings.
+       data coef1 / 0.05/
+! rdrpex = size of drops as determined from fuel rod melt down
+! experiments (m).
+! ndrfld = number of drops released at a node at one time during
+! reflood.
+       data rdrpex / 3.5e-3/, ndrfld/  1./, urfld/ 0.500/
+! foxrfl = factor on oxidation of drops during reflood
+       data foxrfl / 1./
+! foxdrp = factor on oxidation of frozen drops.
+! since subroutine oxydef accounts for drops, set foxdrp to 1.
+       data foxdrp / 1.00/
+! tdrslm = threshold temperature for reslumping of frozen drops (K)
+       data tdrslm / 5000./
+       data dtdrsl / 1.0 /
+! dltfrz = time period for grouping together drops that freeze (s).
+! dltfrz = 0.0 = no grouping together.
+! dtmpfr = temperature interval for grouping together drops that
+! freeze (K),  dtmpfr = 0.0 = no grouping together.
+! dltsol = temperature difference between melting (slumping) and
+! solidification (stop of slumping) of drop (K)
+       data dltfrz/ 10.0/, dtmpfr/ 500./, dltsol / 100./
+       data tzrmlt / 2200./
+       data tsrfrz / 1951.0/
+       data tshmin / 1000.0/
+       data voidsh / 0.0001/
+cljs  dtspll = 1.e-4 = spalling almost every time step
+cljs  dtspll = 0.1 = factor of three or so less H2 during reflood.
+cljs  at instant of spalling, weight gain during time step
+cljs  varies from about 1.e-3 to 4.e-3
+c      ttmpbk = temperature causing temporary full blockage of fluid
+c               in area of relocated cladding material (K).
+      data ttmpbk / 2950./
+cljs  qathrs = threshold value of fraction noncondensible gas at node
+cljs           to start reduction in rate of oxidation.
+      data qathrs / 0.9/
+cljs  qastop = threshold value of fraction of noncondensible gas at
+cljs           node for stopping oxidation of slumped cladding at that
+cljs           node.
+      data qastop / 0.95/
+!
+      ndbg=0
+      hfzave = 0.164e+8
+      nfreez=0
+        if(fovlap.lt.0.5)then
+        fovlap=0.5
+        end if
+cljs  set index indicating new slumping to zero
+      do n=1,naz
+      idrops(n,compj) = 0
+      end do
+! generate heat of fusions in common block hfuson
+      z=0.0
+      u=0.333333333
+      call qfuson
+! Check for possibility that at one or more locations liquefied
+! material breached cladding oxide shell during time step. If so,
+! iniitialize size of drops, temperature, elevation, velocity,
+! oxidations parameters.
+      epstht=1.-thetar/thetaa
+cfix  drop flow from axial node 1 not modeled
+cfix  do10k=naz,1,-1
+      do10k=naz,2,-1
+cljs  initialize mass of drops that may slump to zero.
+        wuodrp(k,compj) = 0.0
+        wzrdrp(k,compj) = 0.0
+        ndrops(k,compj) = 0.0
+        kfailz=kfail1(k)
+cljs  all of melted material at node now modeled to slump at once.
+cfix    if(ndrops(k,compj).ge.1)go to 10
+        if(ndrops(k,compj).ge.1.0)go to 10
+cljs change, 5/17/11
+cljs  since slumping from axial node 1 cannot result in freezing
+cljs  at any other axial node, skip further calculations
+cljs    if(kfailz.lt.1)go to 10
+cfix    if(kfailz.le.1)go to 10
+        if(kfailz.ne.1)go to 10
+! preclude drop relocation of melted intact cladding if
+! previously frozen drops have relocated.
+        if(idrfz1(k,compj).eq.2)kfailz=0
+! Initialize term that stores heat transferred from drops to steam.
+        qsdrps(k,compj)=0.0
+! Initialize term that stores total heat generation due to
+! oxidation of drops.
+        qdrops(k,compj)=0.0
+! initialize mass fraction of slumping components
+        afraco=0.0
+        afracu=0.0
+        afracz=1.0
+! If rubble debris at this location, do not perform slumping
+! calculation.
+        if(irubpp(k,compj).eq.1)go to 10
+cljs  if frozen drops, go to 10
+cljs  entire axial node modeled to slump at once
+        if(fdrmn1(k,compj).ge.1.e-8)go to 10
+        if(kfailz.eq.0)go to 10
+! compute melting temperature of cladding.
+        tmelt=pliq(afraco,afracu,afracz)
+        ivol=nvad((compj-1)*ndax+k)+filndx(4)
+! ++   begin calculation of fraction of node that slumps.
+! calculate surface tension of liquefied material that slumps.
+        sigmix=zusten(tsur(k))
+        afracz=1.
+        afracu=0.0
+        afraco=0.0
+        if(kfailz .ge.1)then
+          wuotot=wuobc2(k,compj)
+          wzrtot=wzrbc2(k,compj)
+          woxtot=woxbc2(k,compj)
+        end if
+        if(wzrtot.gt.1.e-6)then
+          if((wuotot/wzrtot).gt.1.e-3)then
+            call atomfr(wuotot,wzrtot,woxtot,afracu,afracz,afraco)
+          end if
+        end if
+cljs    msnode=wuotot+wzrtot+woxtot
+cljs  just consider Zr mass at node.
+        msnode=wzrtot
+        rhomix=zuden(afracu, afracz, tsur(k))
+        rdrops(k,compj)=rdrpex
+! calculate volume of drop.
+        voldrp=0.66666666*pi*rdrops(k,compj)**3
+        msdrop=rhomix*voldrp
+        frcone=msdrop/msnode
+        frcslp=0.0
+        if(kfailz .ge.1)then
+! slumping of intact cladding.
+! user has defined that transition smoothing of cladding meltdown
+! is not to be performed.
+            frcslp=1.
+            ndrops(k,compj)=1./frcone
+        else
+! slumping of previously frozen drops.
+cljs  this branch in effect is deleted by never getting case
+cljs  of kfailz.lt.1
+          frcslp=1.0
+          ndrops(k,compj)=1./frcone
+cljs      ndrfz2(k,compj)=0.0
+          idrfz2(k,compj)=0
+          fdrmn1(k,compj)=0.0
+        end if
+        fdrmn2(k,compj)=fdrmn1(k,compj)+frcslp
+        if(fdrmn2(k,compj).gt.(1.0+1.e-10))then
+          frcnd0=frcslp
+          frcslp=1.0-fdrmn1(k,compj)
+          ndrops(k,compj)=frcslp/frcnd0
+          fdrmn2(k,compj)=1.0
+        end if
+        wuosum=frcslp*wuotot
+        wzrsum=frcslp*wzrtot
+        wox0=frcslp*woxtot
+cljs    if(kfailz .eq.0.and.idrfz1(k,compj).eq.2)then
+! signal that all previously frozen drops have slumped from node.
+cljs      idrfz2(k,compj)=0
+cljs    end if
+        if(k.lt.naz)then
+          tztop=0.5*(tsur(k)+tsur0(k))
+        else
+          tztop=tsur(k)
+        end if
+        if(k.gt.1)then
+          tzbot=0.5*(tsur(k)+tsur(k-1))
+        else
+          tzbot=tsur(k)
+        end if
+        tzgrad=abs((tztop-tzbot)/dzrod(k))
+        if(tzgrad.lt.1.0)tzgrad=1.0
+        tdotk=(tsur(k)-tsur0(k))/dt
+        if(tdotk.lt.1.0)tdotk=1.0
+        tbtwns=coef1*dzrod(k)*tzgrad/tdotk
+        if(tbtwns.lt.(1.5*dt))tbtwns=1.5*dt
+! in equation below, 0.1 is node height used in study to
+! determine maximum value of tbtwns ( 0.1 m).
+        tbtwmx=0.5*0.1/dzrod(k)
+        if(tbtwns.gt.tbtwmx)tbtwns=tbtwmx
+        idrops(k,compj)=1
+        zdrops(k,compj)=zz(k)
+        tdrpsz(k,compj)=tsur(k)
+        tdrops(k,compj)=tsur(k)
+        umeas=vdrop
+! Store mass of Zr and UO2 in drop.
+        wzrdrp(k,compj)=(1./ndrops(k,compj))*wzrsum
+        wuodrp(k,compj)=(1./ndrops(k,compj))*wuosum
+! calculate and store nuclear heat in drops, which may contain
+! dissolved UO2.
+        if(kfailz .ge.1)then
+          powadd(k)=(wremuo(k)/wuobng(k))*unuca(k)*frcslp*dzrod(k)
+          if(nspowi.eq.3.or.nspowi.eq.1)then
+            if(powtot(1).gt.0.0)powadd(k)=powadd(k)/powtot(1)
+          end if
+        else
+          powadd(k)=frcslp*pdrfz1(k,compj)
+        end if
+! all previously frozen drops that remelt are modeled to slump
+! together, so set idrfz2 to 0.
+! zero out nuclear heat in slumped material for electrical heater
+! rod.
+        if(idcomp.eq.6)powadd(k)=0.0
+! Initial weight gain = total weight of oxygen in drop divided
+! by surface area of drop.
+        wdrop0(k,compj)=wox0/ (2.*pi*rdrops(k,compj)**2)
+! Calculate weight gain for completely oxidized drops
+! (weight gain for total oxidation) =
+! ((32.0/91.22*(mass of Zr in drop) +(32.0/810.)*
+! (mass of UO2 in drop)) / (surface area of drop)
+! 32.0 = molecular weight of O2,
+! 91.22 = atomic weight of Zr,
+! 810.0 = molecular weight of U3O6 tha is converted to U3O8.
+        wdrpmx(k,compj)=(1./ndrops(k,compj))*
+     #   ((32./91.22)*wzrsum+(32.0/810.)*wuosum)/
+     #     (2.*pi*rdrops(k,compj)**2)
+        fudrop(k,compj)=wuosum/(wuosum+wzrsum+wox0)
+        powad1=powadd(k)/dzrod(k)
+        if(nspowi.eq.3.or.nspowi.eq.1)powad1=powtot(1)*powad1
+! calculate effective heat of reaction of mixture.
+        heffox(k,compj)=(1.-fudrop(k,compj))*(6.45e+6)*(91.22/32.)+
+     +  fudrop(k,compj)*(1.84e+5)*(810./32.)
+   10 continue
+!  Calculate elevation, temperature and oxidation of drops that are in
+!  motion.
+cljs calculate axial node where drops freeze.
+cljs  start loop finding axial node that material from axial node
+cljs  identified in do10 loop will solidify at.
+      do 55 k=naz,1,-1
+        if(idrops(k,compj).ne.1)go to 55
+c   material slumping from axial node 1 goes below bottom of rod.
+        if(k.eq.1)go to 55
+        nstart = k-1
+      nfreez = 0
+      do40n=nstart,1,-1
+        if(nfreez.eq.1)go to 40
+        idrpsw(n)=0
+        if(irubpp(n,compj).eq.1)go to 40
+        zdrops(n,compj) = zz(n)        
+        ivol=nvad((compj-1)*ndax+n)+filndx(4)
+        kdrops(k,compj)=n
+        umeas=vdrop
+! represent interavtion of strong upward draft on drops by decreasing
+! velocity of slumping.
+        udrops(n,compj)=umeas
+! calculate effective oxidation kinetics constant.
+! First obtain oxidation kinetics constant for Zr.
+        if (chngno(70)) then
+          ceffzr = coxwtkr(tdrops(n,compj))
+        else
+          ceffzr = coxwtk(tdrops(n,compj))
+        endif
+! Next, obtain oxidation kinetics equation for UO2.
+        ceffuo=24.4*exp(-26241./tdrops(n,compj))
+! Calculate effective oxidation kinetics constant.
+        ceff=(1.-fudrop(n,compj))*ceffzr + fudrop(n,compj)*ceffuo
+        if(tdrops(n,compj).lt.1000.)ceff=0.0
+! Calculate change in weight gain.
+        kaxn=n
+        ivol=nvad((compj-1)*ndax+kaxn)+filndx(4)
+          wdrop1(n,compj)=wdspls(n,compj)+
+     #      sqrt(wdspa0(n,compj)**2+ceff*dt)
+          wdrspa(n,compj)=sqrt(wdspa0(n,compj)**2+ceff*dt)
+        oxlis0 = 0.0
+        wmxdif=oxlis0*dt+wdrop0(n,compj)
+        if(wdrop1(n,compj).gt.wmxdif)wdrop1(n,compj)=wmxdif
+        if(wdrop1(n,compj).lt.wdrop0(n,compj))
+     &     wdrop1(n,compj)= wdrop0(n,compj)
+cljs    if(wdrop1(n,compj).gt.wdrpmx(n,compj))then
+cljs      idrops(n,compj)=4
+cljs      wdrop1(n,compj)=wdrpmx(n,compj)
+cljs      go to 40
+cljs    end if
+        if(tmlsol(n,compj).ge.300.0)then
+          if(tdrops(n,compj).gt.tmlsol(n,compj))
+     #      tdrops(n,compj)=tmlsol(k,compj)
+        end if
+        tfreez=pliq(afraco,afracu,afracz)-50.0
+        if(tfreez.gt.2200.0)tfreez=2200.0
+! require drops to freeze at least one node below node of origin.
+! tsfrez = temperature of surface at or below which drops are
+! regarded as instantaneously freezing.
+            if(tsur(kaxn).lt.tsfrez)then     
+            nfreez=1
+            idrfz1(kaxn,compj) = 1
+            idrfz2(kaxn,compj) = 1
+            kdrops(k,compj) = kaxn
+            rdrops(kaxn,compj) = rdrpex            
+            tnxdr2(kaxn,compj) = timehy
+            end if
+        if(nfreez.eq.1)then
+          idrfz1(n,compj) = 1
+          idrfz2(n,compj) = 1
+          idrpsw(n)=1
+          udrops(n,compj)=0.0
+        end if
+   40 continue
+   55 continue
+! calculation for frozen drops.
+      do 60n = naz,1,-1
+        if(idrfz1(n,compj).ne.1)go to 60
+        if(wdfzm2(n,compj).ge.0.9999)then
+cljs   complete oxidation of relocated material at axial node.
+        cycle
+        end if
+        ivol = nvad((compj-1)*ndax+n)+filndx(4)
+        if(tsur(n).gt.ttmpbk)then
+        cycle
+        end if
+        if(dzfrcq(n,compj).gt.fbtrn2)then
+        cycle
+        end if
+        kaxn=n
+        tdrops(n,compj)=tsur(kaxn)
+        if(irubpp(kaxn,compj).eq.1)go to 60
+! calculate effective oxidation kinetics constant.
+! First obtain oxidation kinetics constant for Zr.
+       toxtmp = tsur(kaxn)
+       if (chngno(70)) then
+          ceffzr = coxwtkr(toxtmp)
+       else
+          ceffzr = coxwtk(toxtmp)
+       endif
+! Next, obtain oxidation kinetics equation for UO2.
+        ceffuo = 24.4*exp(-26241./tsur(kaxn))
+! Calculate effective oxidation kinetics constant.
+        ceff=(1.-fudfz2(n,compj))*ceffzr + fudfz2(n,compj)*ceffuo
+        ivol=nvad((compj-1)*ndax+kaxn)+filndx(4)
+cljs apply blockage factor.
+cljs  steam starvation limit never applied for oxidation of relocated
+cljs  cladding.
+        freduc=1.
+cljs  take into account steam starvation.
+          if(quala(ivol).ge.qathrs)then
+cljs  if hydrogen present, then oxidation in steam.
+cljs  If no hydrogen present but 100% non-condensible, do not impose
+cljs  limit.
+            do in=1,noncn
+              if(in.ne.nonhy)then  
+              cycle
+              else
+                if(qualan(ivol+in-1).gt.0.1)then
+                  if(quala(ivol).ge.qastop)then
+                  freduc = 0.0
+                  else
+                  freduc = 1. - (quala(ivol) - qathrs)/
+     &            (qastop - qathrs)
+                    if(freduc.lt.0.0)freduc = 0.0
+                  end if
+                end if
+              end if
+            end do
+          end if
+cljs    dzfrcq(n,compj) = fraction of flow space filled with slumped
+cljs                      material.
+        ftmsmt = 1.
+        if(fathrs.ge.0.001)then
+          if(tnxdr2(n,compj).ge.timehy)then
+            if(timehy.lt.(tnxdr2(n,compj) + fathrs*dzrod(n)))then
+            ftmsmt = (timehy - tnxdr2(n,compj))/(fathrs*dzrod(n))
+              if(ftmsmt.gt.1.0)ftmsmt = 1.0
+            end if
+          end if
+        end if
+c   take into account large blockage during reflood
+        fbkmin = fbafll
+        fbkrf1 = 1.
+          if(dzfrcq(n,compj).gt.fbtrn1)then
+            if(dzfrcq(n,compj).lt.fbtrn2)then
+            fbkrf1 = 1. - (dzfrcq(n,compj)-fbtrn1)/(fbtrn2-fbtrn1)
+              if(fbkrf1.lt.fbkmin)fbkrf1 = fbkmin
+            else
+            fbkrf1 = fbkmin
+            end if
+          end if
+        ceff=fbkrf1*ftmsmt*freduc*ceff
+        if(tsur(kaxn).lt.1000.)ceff=0.0
+! Calculate change in weight gain.
+! dtspll=mimimum weight gain before will shatter again,
+! (kg O2/m2).
+! for cladding at temperature of 1600 K, oxide shattering
+! every 0.1 s results in shattering after weight gain of
+! 1.1e-5 kg O2/m2.
+! surface of drop (s).
+! ***   BE
+        nshatr = 0
+        if(voidf(ivol).le.voidsh)then
+cljs  case of no oxide shattering
+          wdrfz2(n,compj)=sqrt(wdrfz1(n,compj)**2 + ceff*dt)   
+            wdrdif=wdrfz2(n,compj)-wdrfz1(n,compj)
+          wfzsa2(n,compj)=sqrt(wfzsa1(n,compj)**2+ceff*dt)
+        else
+! **   BE
+          if(tsur(kaxn).gt.tshmin.and.tsur(kaxn).lt.tshmax)     
+     #    nshatr=1
+          if(nshatr.eq.0.or. wfzsa1(n,compj).lt.dtspll)then
+            wdrfz2(n,compj) = wdrfz1(n,compj)
+     &      + sqrt(wfzsa1(n,compj)**2 +ceff*dt) - wfzsa1(n,compj)
+              wdrdif=wdrfz2(n,compj)-wdrfz1(n,compj)
+            wfzsa2(n,compj)=sqrt(wfzsa1(n,compj)**2+ceff*dt)
+          else
+! oxide spalling occurs
+cljs  variable wfzsp1(n,compj) and wfzsp1(n,compj) are never used.
+            wfzsp2(n,compj)=wdrfz1(n,compj)
+c     check for complete oxidation
+            wdrfz2(n,compj)=wdrfz1(n,compj)+sqrt(ceff*dt)
+            wdrdif = wdrfz2(n,compj)-wdrfz1(n,compj)
+            wfzsa2(n,compj)=sqrt(ceff*dt)
+          end if
+        end if
+cljs  update fraction of oxidation of relocated cladding 
+cljs   drops are half spheres
+        woxgan = (ndrfz2(n,compj)*1.0*pi*rdrops(n,compj)**2)*
+     &           wdrfz2(n,compj)
+cljs   on time step of drop solidifacation, weight gain for
+cljs   complete oxidation not yet calculated, so make estimate.
+        if(timehy.lt.(tnxdr2(n,compj) + dt))then
+        mssdrp = 6550.0*ndrfz2(n,compj)*0.666666*pi*
+     &           rdrops(n,compj)**3
+        woxmax = (32.0/91.22)*mssdrp
+        else
+        woxmax = wslom2(n,compj)
+        end if
+        wdfzm2(n,compj) = woxgan/woxmax
+! Limit weight gain to maximum allowed by mass diffusion.
+        nshap=2
+cljs calculation of oxlis0 is redundant because oxlis0 never applied.
+cljs    call oxydef(oxlis0,kaxn,nshap)
+! if temperature above fuel melting temperature, blockage stops
+! oxidation.
+! If all surface area of rod is in contact with drops, assume that
+! drops are in contact with each other and thus no surface area of
+! drops is exposed to steam.
+! The 0.05 term is result of drops being assumed to
+! concentrate in elevation interval of 0.05 m.
+! limit rate of oxidation to maximum allowsed by limits on
+! mass diffusion and availability of steam.
+        if(wdfzm2(n,compj).gt.0.999)then            
+          idrfz2(n,compj)=3
+          go to 60
+        endif
+! Calculate heat generation per unit surface area.
+cljs    qdkns=hfzox2(n,compj)*(wdrfz2(n,compj)-wdrfz1(n,compj))/dt
+        qdkns=hfzave*(wdrfz2(n,compj)-wdrfz1(n,compj))/dt
+! calculate total heat generation due to oxidation for drop.
+        qtotox=2.*pi*(rdrpex**2)*qdkns
+c   adrop = surface area of drops exposed to oxdidation.
+cljs    qdrops(n,compj)=ndrfz2(n,compj)*
+        fovlp1 = fovlap
+        qdrops(n,compj)=(1./fovlp1)*ndrfz2(n,compj)*
+     #    2.*pi*(rdrpex**2)*qdkns/dzrod(n)
+! calculate hydrogen production due to oxidation of drops.
+        hgdrp1=((wdrfz2(kaxn,compj)-wdrfz1(kaxn,compj))*
+     &    (1./fovlp1)*
+     #    ndrfz2(kaxn,compj)*2.*pi*(rdrops(kaxn,compj)**2)/8.)/dt
+        hgdrps(kaxn,compj)=hgdrps(kaxn,compj)+hgdrp1
+! update hydrogen source term for RELAP5.
+        if(.not.scntrl(8))then
+          ivol=nvad((compj-1)*ndax+kaxn)+filndx(4)
+          do 50 in = 1,noncn
+            if (in .ne. nonhy) go to 50
+            iln = ivol + in - 1
+            gaman(iln)=gaman(iln)+ recipv(ivol)*hgdrp1*float(isgl)
+            gaman(iln)=max(gaman(iln),0.0)
+            enthn(iln)=uo+co*tdrops(n,compj)+
+     #        do/2.0*(tdrops(n,compj)-tao)**2
+   50     continue
+        endif
+        qcdrps(kaxn,compj)=qcdrps(kaxn,compj)+
+cljs #    ndrfz2(n,compj)*qtotox/dzrod(kaxn)
+     &    (1./fovlp1)*ndrfz2(n,compj)*qtotox/dzrod(kaxn)
+! add on nuclear heat in dissolved fuel in frozen drops.
+        powad1=pdrfz2(kaxn,compj)
+        if(nspowi.eq.3.or.nspowi.eq.1)powad1=powad1*powtot(1)
+        powad1=powad1/dzrod(kaxn)
+        qcdrps(kaxn,compj)=qcdrps(kaxn,compj)+powad1
+        woxdrp=2.*pi*(rdrops(n,compj)**2)*wdrfz2(n,compj)
+        call atomfr(wfzuo2(n,compj),wfzzr2(n,compj),woxdrp, afracu,
+     #  afracz,afraco)
+! Preclude repeated cyling between drops freezing and melting by
+! setting remelting temperature to 50 K greater than freezing
+! temperature.
+! account for oxide shell on drop keeping it from slumping
+! at soon as melting temperature of drop is reached.
+        tdrsl1=tmpfal-dtdrsl
+! Since void fraction chugs from 0.0 to ~ 0.001 to 0.0 for first
+! few seconds at beginning of reflood, put upper bound on temperature
+! to preclude slumping of frozen drops in interval of time when
+! void fraction of liquid has dropped momentarily back to zero.
+! If entire surface covered with drops, then remelting of drops may
+! not result in drop-like slumping but in slumping of large slug.
+         if(tsur(kaxn).ge.4000.0)then
+! Drop has liquefied.
+          idrops(n,compj)=0
+          idrfz2(n,compj)=2
+            write(output,9553)n,compj,idrfz2(n,compj),idrops(n,compj),
+     &      timehy
+9553        format(' DRPFLO liq frozen drops, n=',i5,' compj=',i5,
+     &      ' idrfz2=',i5,' idrops=',i5,' timehy=',e10.4)
+          fdrmn2(n,compj)=0.0
+          udrops(n,compj)=vdrop
+        end if
+   60 continue
+! Calculate relocation of liquefied material from Inconel spacer
+! grids reacting with Zr cladding.
+      do70k=naz,1,-1
+        qsdrgs(k,compj)=0.0
+! initial fraction of surface area that is covered with drops,
+! both static and moving in one case, and static only in another
+! case.
+        fadrpg(k,compj)=0.0
+        fafdrg(k,compj)=0.0
+! If rubble debris at this location, do not perform slumping
+! calculation.
+        if(irubpp(k,compj).eq.1)go to 70
+        if(kfailg(k).eq.0)go to 70
+        ivol=nvad((compj-1)*ndax+k)+filndx(4)
+        idrpgs(k,compj)=1
+        zdrpgs(k,compj)=zz(k)-0.5*dzrod(k)
+        tdrgsz(k,compj)=tsur(k)
+        tdrpgs(k,compj)=tsur(k)
+        udrpgs(k,compj)=vdrop
+        afracu=0.0
+        afracz=1.
+! approximate density of mixture of Inconel and Zr with that of
+! Zr.
+        rhomix=zuden(afracu, afracz, tsur(k))
+        rdrpgs(k,compj)=5.e-3
+! calculate volume of drop.
+        voldrp=0.66666666*pi*rdrpgs(k,compj)**3
+! calculate volume of liquefied material at axial node.
+        volnod=(winliq(k)+wzrinc(k))/rhomix
+        ndrpgs(k,compj)=volnod/voldrp
+! Store mass of Zr and UO2 in drop.
+        windrp(k,compj)=(1./ndrpgs(k,compj))*winliq(k)
+        wzgdrp(k,compj)=(1./ndrpgs(k,compj))*wzrinc(k)
+        kdrpgs(k,compj)=k
+   70 continue
+! calculate elevation, temperature and oxidation
+! of drops that are in motion.
+      do80n=naz,1,-1
+        idrpsw(n)=0
+        if(idrgsz(n,compj).eq.0)go to 80
+        if(irubpp(n,compj).eq.1)go to 80
+        if(idrpgs(n,compj).ne.1)go to 80
+        udrpgs(n,compj)=vdrop
+! calculate change in elevation.
+        zdrpgs(n,compj)=zdrpgs(n,compj)-udrpgs(n,compj)*dt
+        if(zdrpgs(n,compj).le.0.0)then
+          idrpgs(n,compj)=5
+          kdrpgs(n,compj)=0
+          go to 80
+        end if
+! find current axial zone of drop.
+        call zone(naz,zz,zdrpgs(n,compj),k)
+        kdrpgs(n,compj)=k
+        kaxn=k
+        qtotox=0.0
+! Calculate time that drops covers a point on surface of cladding.
+        tcover=1.772453*rdrpgs(n,compj)/udrpgs(n,compj)
+! Calculate thermal properties of cladding oxide layer,
+! metallic portion of cladding, and UO2.
+        condox=zotcon(tsur(kaxn))
+        rhozro=zoden(tsur(kaxn))
+        czro=zocp(tsur(kaxn))
+        alpzro=condox/(rhozro*czro)
+        if (chngno(70)) then
+          call cthconr (tsur(kaxn),condzr,dum1)
+        else
+          call cthcon (tsur(kaxn),condzr,dum1)
+        endif
+        rhozr=cden(tsur(kaxn))
+         if (chngno(70)) then
+           czr = ccpr(tsur(kaxn))
+         else
+           czr = ccp(tsur(kaxn))
+         endif
+        alpzr=condzr/(rhozr*czr)
+        fraden=0.95
+        fotmtl=2.0
+        call fthcon(tsur(kaxn),fraden,fotmtl,conduo,dum1)
+        dum1=0.0
+        rhouo=fden(tsur(kaxn),dum1)
+        cpuo=fcp(tsur(kaxn),dum1,fotmtl,fraden)
+        alpuo=conduo/(cpuo*rhouo)
+! Calculate time for thermal wave to penetrate through oxide
+! layer on outside surface of cladding.
+        timpox=(tox(kaxn)**2)/alpzro
+! timpzr = time for thermal wave to penetrate through metallic
+! layer in cladding.
+        timpzr=timpox+(tzr(kaxn)**2)/alpzr
+        if(timpzr.lt.tcover)then
+          timpzr=tcover
+        end if
+        if(timpox.gt.tcover)then
+          timpox=tcover
+          timpzr=timpox
+        end if
+! Calculate heat loss from drop by conduction into fuel rod
+! substrate.
+! smooth transition from one axial node to another by applying
+! continuous change in temperature in axial direction.
+        tsurdt=tsur(kaxn)
+        qloss1=7.69*(rdrpgs(n,compj)**2)*(tdrpgs(n,compj)-tsurdt)*
+     #   (sqrt(rhozro*czro*condox*timpox) + sqrt(condzr*czr*rhozr)*
+     #   (sqrt(timpzr)-sqrt(timpox)) + sqrt(rhouo*conduo*cpuo)*
+     #   (sqrt(tcover)-sqrt(timpzr)))
+! increment fraction of surface area of rod at axial node k that
+! is covered with drops that originated at axial node n.
+        fadrpg(kaxn,compj)=fadrpg(kaxn,compj)+
+     #   (ndrpgs(n,compj)*2.*pi*rdrpgs(n,compj)**2)/
+     #   (2.*pi*ro(kaxn)*dzrod(kaxn))
+        fafdrg(kaxn,compj)=fafdrg(kaxn,compj)+
+     #   (ndrpgs(n,compj)*2.*pi*rdrpgs(n,compj)**2)/
+     #   (2.*pi*ro(kaxn)*dzrod(kaxn))
+! calculate heat loss from drop to fluid due to convection/radiation.
+! Obtain steam pressure and steam temperature.
+        ivol=nvad((compj-1)*ndax+kaxn)+filndx(4)
+! Obtain absorption coeffient.
+        isteam=1
+        diawat=1.e-4
+        alpwat=0.0
+        call emissv(epsgs1,absgs1,tempg(ivol),p(ivol),pitch1,
+     #   tdrpgs(n,compj),isteam,diawat,alpwat,epswat,cabvap,cabwat)
+! Calculate gray body factor.
+! Assume hydrogen does not absorb radiation.
+        fgrayb=fcfdrp*(pps(ivol)/p(ivol))*
+     #   (1.-exp(-cabvap*p(ivol)*pitch1))
+        qloss2=2.*pi*(rdrpgs(n,compj)**2)*
+     #  (hfixg((compj-1)*ndax+kaxn)*(tdrpgs(n,compj)-tempg(ivol))+
+     #  fgrayb*sigrad*((tdrpgs(n,compj)**4) - tempg(ivol)**4))*tcover
+        qtcvec=hfixg((compj-1)*ndax+kaxn)*(tdrpgs(n,compj)-tempg(ivol))
+        qtcrad=fgrayb*sigrad*((tdrpgs(n,compj)**4) - tempg(ivol)**4)
+        qloss1=(dt/tcover)*qloss1
+        qloss2=(dt/tcover)*qloss2
+        qlssum=(qloss1+qloss2)
+! limit heat loss from drop to maximum amount that can
+! conduct from drop during time step.
+        tmnsnk=tsurdt
+        if(tempg(ivol).lt.tmnsnk)tmnsnk=tempg(ivol)
+        qmxsnk=0.5*condzr*2.*pi*(rdrpgs(n,compj)**2)*
+     #   ((tdrpgs(n,compj)-tmnsnk)/rdrpgs(n,compj))*dt
+        afracu=0.0
+        afracz=1.
+        rhodrp=zuden(afracu,afracz,tsur(kaxn))
+        cpdrop=zucp(afracu,afracz,tsur(kaxn))
+! add on heat of fusion spread over 50 K.
+        cpdrop=cpdrop+chefus/50.
+        hcpdrp=(2./3.)*pi*ndrpgs(n,compj)*rhodrp*cpdrop*
+     #   rdrpgs(n,compj)**3
+        qmxsk2=hcpdrp*(tdrpgs(n,compj)-tmnsnk)/ndrpgs(n,compj)
+        if(qmxsk2.lt.qmxsnk)qmxsnk=qmxsk2
+        qsdrgs(kaxn,compj)=qsdrgs(kaxn,compj)+
+     #  ndrpgs(n,compj)*qloss2/dt
+        qcdrgs(kaxn,compj)=qcdrgs(kaxn,compj)+
+     #   (ndrpgs(n,compj)*qloss1/dt)/dzrod(kaxn)
+        qhbstm=ndrpgs(n,compj)*qloss2
+        qhbcon=ndrpgs(n,compj)*qloss1
+        qindrp=qhbstm-qhbcon
+        dtdrop=qindrp/hcpdrp
+        tdrpgs(n,compj)=tdrgsz(n,compj)+dtdrop
+        if(tdrpgs(n,compj).lt.tmnsnk)tdrpgs(n,compj)=tmnsnk
+! solution may overshoot temperature of drops during quenching
+! process, so limit temperature to eutectic melting temperature
+! of UO2-ZrO2 mixture.
+        if(tdrpgs(n,compj).gt.2850.)tdrpgs(n,compj)=2850.
+        if(tdrpgs(n,compj).le.(tgrmlt-50.0))then
+! Drop has solidified.
+          idrpgs(n,compj)=2
+          idrpsw(n)=1
+          udrpgs(n,compj)=0.0
+        endif
+   80 continue
+! calculation for frozen drops of spacer grid material.
+      do90n=naz,1,-1
+        if(idrpgs(n,compj).ne.2)go to 90
+        if(idrpsw(n).eq.1)go to 90
+        kaxn=kdrpgs(n,compj)
+        tdrpgs(n,compj)=tsur(kaxn)
+        if(irubpp(kaxn,compj).eq.1)go to 90
+        qtotox=0.0
+        ivol=nvad((compj-1)*ndax+kaxn)+filndx(4)
+        fadrpg(kaxn,compj)=fadrpg(kaxn,compj)+
+     #   (ndrpgs(n,compj)*2.*pi*rdrpgs(n,compj)**2)/
+     #   (2.*pi*ro(kaxn)*dzrod(kaxn))
+        afracu=0.0
+        afracz=1.
+!  Preclude repeated cyling between drops freezing and melting by
+!  setting rmelting temperature to 50 K greater than freezing
+!  temperature.
+        if(tsur(kaxn).ge.tgrmlt)then
+! Drop has liquefied.
+          idrpgs(n,compj)=1
+        endif
+   90 continue
+      return
+      end
+*endif

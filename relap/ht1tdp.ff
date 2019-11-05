@@ -1,0 +1,564 @@
+*mlist
+       subroutine ht1tdp (ih,time,dtime)
+c  Advance one heat structure one time step by advancing the transient
+c  one dimensional heat conduction equation.
+c
+c  Cognizant engineer: rjw.
+c
+       use gentblc
+       use lpdatc
+$if def,rk3d,1
+       use rkinc
+       implicit none
+c
+       integer ih
+       real dtime,time
+c  Subroutine arguments.
+c  ih    Index to heat structure pointer and number.
+c  time  Time at beginning of current time step - t0.
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'convarc.h'
+       include 'fpfast.h'
+       include 'gapvar.h'
+       include 'htrcom.h'
+       include 'htscr.h'
+       include 'htsrcm.h'
+$if def,makemap,1
+       include 'makmap.h'
+       include 'rkinc.h'
+       include 'trpblk.h'
+       include 'voldat.h'
+       include 'ufiles.h'
+c
+       integer cols,errsw,hindex,i,idx,idxo,iicl,
+     & inde,index,indh,indi,indt,initem,iplas,ipx1,ipx2,irup,
+     & itemp,jjjj,nn,probid,temidx
+       real bkt,block,cltave,dtdt,dtovr2,ggo,ggn,powin,
+     & qdi,qdo,tempn
+       logical err,sw1
+cc
+       integer ic,ii,i1,i2
+cc
+$if def,selap,1
+       integer jx
+c
+       hindex = ihtptr(ih) + filndx(8)
+       probid = htstno(hindex)
+       errsw = 0
+       cols = htnmpt(hindex)
+       nn = cols - 1
+       htdt(hindex) = dtime
+       qfgox(1) = 0.
+       qfgox(2) = 0.
+       qffo = 0.
+       qfgo = 0.
+       htrfno(hindex) = 0.
+       htrfnn(hindex) = 0.
+       index = htiscr(hindex) + ixpc
+       htgsmf(index) = 0.0
+       htgsmg(index) = 0.0
+       htgsmf(index+1) = 0.0
+       htgsmg(index+1) = 0.0
+       temidx = htxft(hindex) + filndx(8)
+       initem = htxit(hindex) + filndx(8)
+       idxo = htgom(hindex) + filndx(8)
+c  Set up pressures for gap deformation model.
+       iplas = ishft(iand(imw(hindex),2048),-11)
+       sw1 = gpintp(idxo) .le. 0.0
+       if (htnusr(hindex) .ne. 0) then
+         pgas = 0.0
+         if (.not.sw1) then
+           i = htgap(hindex+1)
+           pgas = gpintp(idxo)*max(satt(i),tempg(i))
+c  At first structure in set of structures, save index (for later use)
+c  in idxtop (only 1st str in set has htnusr .ne. 0.)
+         endif
+         idxtop = hindex
+       endif
+       if (.not.sw1) then
+         i = htbvo(hindex+1)
+         pfluid = p(i)
+c  Have gas anywhere in the rod, check for calc plastic strain on flag.
+c  iplas ne 0 then check for rupture.
+         if (iplas .ne. 0) then
+           irup = ishft(iand(imw(idxtop),512),-9)
+c  If rupture has occurred, exhaust the gas.
+           if (irup .eq. 1) pgas = pfluid
+         endif
+       endif
+c
+       if (succes .eq. 0) then
+c  Move final temperatures to initial temperatures if last advancement
+c  is to be saved.
+         call ftbmov (httmp(temidx),httmp(initem),cols)
+         htpowo(hindex) = htpown(hindex)
+       endif
+       dtovr2 = dtime*0.5
+c  Get power for various input options.
+       i = htsrt(hindex)
+$if def,selap,6
+       if (i .lt. 0) then
+         jx = htsrt(hindex+1) + filndx(34)
+         htpown(hindex) = fpsfgs(jx)
+         htpowo(hindex) = fpsfgs(jx)
+         htfctr(hindex) = arean(htgom(hindex)+filndx(8))/
+     &   (httots(hindex)*htsrfn(hindex))
+$if -def,selap,1
+       if (i .eq. 0) then
+$if def,selap,1
+       elseif (i .eq. 0) then
+         htpown(hindex) = 0.0
+         powin = 0.0
+       elseif (i .ge. 1000) then
+         if (i .lt. 10000 .or. i .gt. 100000 ) then
+           htpown(hindex) = fa(htsrt(hindex+1)+filndx(21))
+$if def,rk3d
+         elseif (i .eq. 100000) then
+           htpown(hindex) = rk4o(htsrt(hindex+1))%htpow
+$endif
+         else
+           htpown(hindex) = cnvarn(htsrt(hindex+1)+filndx(27))
+         endif
+         htpowo(hindex) = htpown(hindex)
+       else
+         i = htsrt(hindex+1)
+         tempn= time + dtime
+         if (gen(i)%gttrp(1) .ne. 0) then
+           itemp = gen(i)%gttrp(2)
+           if (trptm(itemp) .lt. 0.0) then
+             tempn= trptm(itemp)
+           else
+             tempn = tempn - trptm(itemp)
+           endif
+         endif
+         if (tempn .eq. gen(i)%gtarg) then
+           htpown(hindex) = gen(i)%gtval(1)
+         else
+           call gtpolat (gen(i)%gtinfo,gtptr(i)%gtbl,tempn,
+     &     htpown(hindex:hindex),err)
+           gen(i)%gtarg = tempn
+           gen(i)%gtval(1) = htpown(hindex)
+         endif
+       endif
+       powin = (htpowo(hindex) + htpown(hindex))*htfctr(hindex)*dtovr2
+c
+c  Get material properties.
+       irup = 0
+       if (cladex(hindex) .lt. 0.0) irup = 1
+c  irup=0 means this node is not ruptured node; irup=1 means this node
+c  is ruptured node, and gapcon will use deformed dimensions for gap
+c  conductance calculation.
+       iicl = iand(imw(hindex),511)
+       cltave = 0.5*(httmp(initem+iicl-1) + httmp(initem + cols -1))
+       dtdt   = hetrat(hindex)
+       call madata (initem,index,idxo,cols,probid,
+     & .false.,errsw,hindex,dtime,dtdt,cltave,block,irup,iplas)
+c  iplas.ne.0 means plastic strain calc on.
+       if (iplas .ne. 0) then
+c  If this is the first time the clad has ruptured, set some flags.
+c  First time is indicated by rupture flag=0.
+         if (ishft(iand(imw(idxtop),512),-9) .eq. 0) then
+c  Rupture flag no set yet, has the clad ruptured (block gt 0)?
+           if (block .gt. 0.0) then
+c  Tell the world about the blockage.
+             jjjj = htstno(hindex)
+             ipx1 = jjjj/1000
+             ipx2 = jjjj - ipx1*1000
+             write (output,8000) ipx1, ipx2, timehy, block
+ 8000  format ('1Heat structure ',i5,'-',i3.3,' ruptured at ',1p,g12.5,
+     & ' seconds with a channel blockage of ',g12.5,' %'//)
+c  Set rupture flag for first str in set to show rod ruptured.
+c  Set rupture flag for this node to show it is ruptured node.
+             imw(idxtop) = ior(imw(idxtop),512)
+             imw(hindex) = ior(imw(hindex),512)
+c  Exhaust the gas.
+             pgas = pfluid
+c  Set inside mw reaction flag for this level = 1.
+             imw(hindex) = ior(imw(hindex),8192)
+c  Alter the loss coeff if asked on 1cccg004 and they have not been
+c  altered yet for this rod.
+             if (iand(imw(idxtop),4096).ne.0 .and. iand(imw(idxtop),
+     &       1024) .eq. 0) call kloss (block, hindex)
+c  Initialize loss flag for the 1st str in set.
+             imw(idxtop) = ior(imw(idxtop),1024)
+           endif
+         endif
+       endif
+       if (errsw .eq. 1) then
+         htopt(hindex) = ior(htopt(hindex),2)
+         return
+       endif
+c  Get new boundary conditions.
+$if def,makemap
+             if (targmp .eq. 3 .and.
+     &           targcn .eq. ncount .and.
+     &           target/100 .eq. probid) then
+c  Divide target by 100 to remove the 00 (left) or 01 (right) side flag
+       call htcondd (hindex,index,initem,initem+nn,
+     & time,dtime,probid)
+             endif
+$endif
+       call htcond (hindex,index,initem,initem+nn,
+     & time,dtime,probid)
+c  Load matrix coefficients for 1-d conduction equation in slab.
+       idx = idxo
+       inde = index
+       do i = 1,nn
+         hte(inde+htscrp) = -httc(inde)*htsrwt(idx)*dtovr2
+         inde = inde + htscrp
+         idx = idx + htgskp
+       enddo
+c  Coefficients for left boundry cell.
+       ggo = htvhc(index)*htrvwt(idxo)
+cc
+c      write (output,7501) probid,htflag(index),htflag(index+1),
+c    & htopt(hindex)
+c7501  format ('ht1tdp00',i10,2i5,i12)
+cc
+       if (htflag(index) .le. 1) then
+c  Case 1  surface temperature = co.
+         hte(index) = 0.0
+         htb(index) = 1.0
+         htf(index) = htqost(index)
+       else
+c  Case 2  surface flux = co, same coding as case 3.
+c  Case 3  convective bc.
+         bkt = areao(idxo)*dtime
+         hte(index) = hte(index+htscrp)
+         htb(index) = ggo - hte(index) + bkt*hthht(index)
+         htf(index) = powin*htsrc(idxo) - hte(index)*httmp(initem+1) +
+     &   bkt*(hthht(index)*httmp(initem) - htqost(index) -
+     &   qradlr(index)) + (ggo + hte(index))*httmp(initem)
+         if (iand(htopt(hindex),2048).ne.0 .and. iand(print,64).ne.0)
+     &   then
+           htf(index+1) = -bkt*hthhff(index)
+           htf(index+2) = -bkt*hthhgg(index)
+           htf(index+3) = -bkt*(hthhft(index) + hthhgt(index))
+           htf(index+4) = -bkt*hthhgp(index)
+         endif
+$if def,selap,1
+         if (htsrt(hindex) .lt. 0) htf(index) = htf(index) + fpsfbs(jx)
+       endif
+c  Coefficients for internal cells.
+       indi = initem + 1
+       idx = idxo + htgskp
+       inde = index + htscrp
+       qdo = 0.0
+       qdi = 0.0
+       if (nn .ge. 2) then
+c  If metal-water flag = 1 then call qmwr to get qdo,qdi, otherwise
+c  set them to 0.
+         if (iand(imw(hindex),16384) .ne.0) then
+c  succes = 0, then save current values.
+           if (succes .eq. 0) then
+             oxtio(hindex) = oxti(hindex)
+             oxtoo(hindex) = oxto(hindex)
+             h2geno(hindex) = h2gen(hindex)
+           endif
+           call qmwr (hindex,qdi,qdo,dtime)
+         else
+           qdo = 0.0
+           qdi = 0.0
+         endif
+         do i = 2,nn
+           htb(inde) = htvhc(inde-htscrp)*htlvwt(idx-htgskp) +
+     &     htvhc(inde)*htrvwt(idx)
+           htf(inde) = powin*htsrc(idx) - hte(inde)*httmp(indi-1) -
+     &     hte(inde+htscrp)*httmp(indi+1) + (htb(inde) + hte(inde) +
+     &     hte(inde+htscrp))*httmp(indi)
+           htb(inde) = htb(inde) - hte(inde) - hte(inde+htscrp)
+           idx = idx + htgskp
+           inde = inde + htscrp
+           indi = indi + 1
+         enddo
+         iicl = iand(imw(hindex),511)
+         if (iicl.gt.0 .and. iicl.lt.nn) then
+           i = index + (iicl - 1)*htscrp
+           htf(i) = htf(i) + qdi
+         endif
+       endif
+c  Coefficients for right boundry cell.
+       ggn = htvhc(inde-htscrp)*htrvwt(idx-htgskp)
+       if (htflag(index+1) .le. 1) then
+c  Case 1  surface temperature = cn.
+         htf(inde) = htqost(index+1)
+         htb(inde) = 1.0
+         hte(inde+htscrp) = 0.0
+       else
+c  Case 2  surface flux = cn, same coding as case 3.
+c  Case 3  convective bc.
+         bkt = arean(idxo)*dtime
+         hte(inde+htscrp) = hte(inde)
+         htb(inde) = ggn + bkt*hthht(index+1) - hte(inde)
+         htf(inde)= powin*htsrc(idx) - hte(inde)*httmp(indi-1) +
+     &   bkt*(hthht(index+1)*httmp(indi) - htqost(index+1) -
+     &   qradlr(index+1)) + qdo + (ggn + hte(inde))*httmp(indi)
+         if (iand(htopt(hindex),1024).ne.0 .and. iand(print,64).ne.0)
+     &   then
+           htf(inde+5) = -bkt*hthhff(index+1)
+           htf(inde+6) = -bkt*hthhgg(index+1)
+           htf(inde+7) = -bkt*(hthhft(index+1) + hthhgt(index+1))
+           htf(inde+8) = -bkt*hthhgp(index+1)
+         endif
+       endif
+cc
+       if (help.ne.0 .and. iand(ihlppr(1),ishft(1,8)).ne.0) then
+         i1 = index
+         if (iand(htopt(hindex),2048).ne.0 .and. iand(print,64).ne.0)
+     &   then
+           write (output,7777) ncount,htstno(hindex),htb(i1),hte(i1),
+     &     (htf(i1+ic),ic=0,4)
+         else
+           write (output,7777) ncount,htstno(hindex),htb(i1),hte(i1),
+     &     htf(i1)
+         endif
+ 7777  format (' ht1tdp01',i6,i10,1p/16x,7e16.8)
+         i1 = i1 + htscrp
+         if (nn .ge. 2) then
+           do ii = 2,nn
+             write (output,7776) hte(i1),htb(i1),hte(i1+htscrp),htf(i1)
+ 7776  format (1p,4e16.8)
+             i1 = i1 + htscrp
+           enddo
+         endif
+         if (iand(htopt(hindex),1024).ne.0 .and. iand(print,64).ne.0)
+     &   then
+           write (output,7770) hte(i1+htscrp),htb(i1),htf(i1),
+     &     (htf(i1+ic),ic = 5,8)
+         else
+           write (output,7770) hte(i1+htscrp),htb(i1),htf(i1)
+         endif
+ 7770  format (1p,2e16.8,16x,5e16.8)
+       endif
+cc
+c
+c  Solution of 1-d conduction matrix.
+c  Forward elimination.
+       inde = index
+       htb(inde) = 1.0/htb(inde)
+       htf(inde) = htf(inde)*htb(inde)
+       htee(inde) = hte(inde)*htb(inde)
+       inde = inde + htscrp
+       if  (nn .ge. 2) then
+         do i = 2,nn
+           htb(inde) = 1.0/(htb(inde) - hte(inde)*htee(inde-htscrp))
+           htf(inde) = (htf(inde) - hte(inde)*htf(inde-htscrp))*
+     &     htb(inde)
+           htee(inde) = hte(inde+htscrp)*htb(inde)
+           inde = inde + htscrp
+         enddo
+       endif
+cc
+c      if (help.ne.0 .and. iand(ihlppr(1),ishft(1,8)).ne.0 .and.
+c    & iand(print,64).ne.0) then
+c        i1 = index
+c        write (output,7775) htb(i1),hte(i1),htee(i1),htf(i1)
+c7775  format (' ht1tdp02'1p/6e16.8)
+c        i1 = i1 + htscrp
+c        if (nn .ge. 2) then
+c          do ii = 2,nn
+c            write (output,7776) htb(i1),hte(i1+1),htee(i1),
+c    &       htf(i1)
+c            i1 = i1 + htscrp
+c          enddo
+c        endif
+c        write (output,7757) hte(i1+1),htb(i1),htf(i1)
+c7757  format (1p,2e16.8,16x,e16.8)
+c      endif
+cc
+c  Back substitution.
+       indt = temidx + nn
+       indh = inde
+       htb(inde) = 1.0/(htb(inde) - hte(inde+htscrp)*htee(inde-htscrp))
+       httmp(indt) = (htf(inde) - hte(inde+htscrp)*htf(inde-htscrp))*
+     & htb(inde)
+       do i = 1,nn
+         indt = indt - 1
+         inde = inde - htscrp
+         httmp(indt) = htf(inde) - htee(inde)*httmp(indt+1)
+       enddo
+cc
+       if (help.ne.0 .and. iand(ihlppr(1),ishft(1,8)).ne.0 .and.
+     & iand(print,64).ne.0) then
+         write (output,7774)
+ 7774  format (' ht1tdp03'1p)
+         i2 = temidx
+         i1 = initem
+         do ii = 1,cols
+           write (output,7776) httmp(i1),httmp(i2)
+           i2 = i2 + 1
+           i1 = i1 + 1
+         enddo
+       endif
+cc
+       if (iand(print,64) .ne. 0) then
+         if (iand(htopt(hindex),2048) .ne. 0) then
+           htf(index+1) = htf(index+1)*htb(index)
+           htf(index+2) = htf(index+2)*htb(index)
+           htf(index+3) = htf(index+3)*htb(index)
+           htf(index+4) = htf(index+4)*htb(index)
+           inde = index + htscrp
+           if (nn .ge. 2) then
+             do i = 2,nn
+               bkt = -hte(inde)*htb(inde)
+               htf(inde+1) = bkt*htf(inde+1-htscrp)
+               htf(inde+2) = bkt*htf(inde+2-htscrp)
+               htf(inde+3) = bkt*htf(inde+3-htscrp)
+               htf(inde+4) = bkt*htf(inde+4-htscrp)
+               inde = inde + htscrp
+             enddo
+           endif
+           bkt = -hte(inde+htscrp)*htb(inde)
+           htf(inde+1) = bkt*htf(inde+1-htscrp)
+           htf(inde+2) = bkt*htf(inde+2-htscrp)
+           htf(inde+3) = bkt*htf(inde+3-htscrp)
+           htf(inde+4) = bkt*htf(inde+4-htscrp)
+cc
+c          if (help.ne.0 .and. iand(ihlppr(1),ishft(1,8)).ne.0 .and.
+c          iand(print,64).ne.0) then
+c            write (output,7773)
+c7773  format (' ht1tdp04'1p)
+c            i2 = index
+c            do ii = 1,cols
+c              write (output,7776) (htf(i2+ic),ic=1,4)
+c              i2 = i2 + htscrp
+c            enddo
+c          endif
+cc
+           do i = 1,nn
+             inde = inde - htscrp
+             htf(inde+1) = htf(inde+1) - htee(inde)*htf(inde+1+htscrp)
+             htf(inde+2) = htf(inde+2) - htee(inde)*htf(inde+2+htscrp)
+             htf(inde+3) = htf(inde+3) - htee(inde)*htf(inde+3+htscrp)
+             htf(inde+4) = htf(inde+4) - htee(inde)*htf(inde+4+htscrp)
+           enddo
+cc
+c          if (help.ne.0 .and. iand(ihlppr(1),ishft(1,8)).ne.0 .and.
+c    &     iand(print,64).ne.0) then
+c            write (output,7772)
+c7772  format (' ht1tdp05')
+c            i2 = index
+c            do ii = 1,cols
+c              write (output,7776) (htf(i2+ic),ic=1,4)
+c              i2 = i2 + htscrp
+c            enddo
+c          endif
+cc
+         endif
+         if (iand(htopt(hindex),1024) .ne. 0) then
+           htf(indh+5) = htf(indh+5)*htb(indh)
+           htf(indh+6) = htf(indh+6)*htb(indh)
+           htf(indh+7) = htf(indh+7)*htb(indh)
+           htf(indh+8) = htf(indh+8)*htb(indh)
+           do i = 1,nn
+             indh = indh - htscrp
+             htf(indh+5) = -htee(indh)*htf(indh+5+htscrp)
+             htf(indh+6) = -htee(indh)*htf(indh+6+htscrp)
+             htf(indh+7) = -htee(indh)*htf(indh+7+htscrp)
+             htf(indh+8) = -htee(indh)*htf(indh+8+htscrp)
+           enddo
+cc
+           if (help.ne.0 .and. iand(ihlppr(1),ishft(1,8)).ne.0 .and.
+     &     iand(print,64).ne.0) then
+             write (output,7771)
+ 7771  format (' ht1tdp06')
+             i2 = index
+             do ii = 1,cols
+               write (output,7776) (htf(i2+ic),ic=5,8)
+               i2 = i2 + htscrp
+             enddo
+           endif
+cc
+         endif
+       endif
+       irup = ishft(iand(imw(idxtop),512),-9)
+c  If the rod is not ruptured get the heatup rate.
+       if (iplas.eq.1 .and. irup.eq.0) then
+         iicl = iand(imw(hindex),511)
+         hetrat(hindex) = (httmp(temidx+iicl-1) + httmp(temidx+cols-1) -
+     &   httmp(initem+iicl-1) - httmp(initem+cols-1))*0.5/dtime
+       endif
+c  Compute volume averaged temperature.
+       htvatp(hindex) = 0.0
+       idx = idxo
+       indt = temidx
+       do i = 1,cols
+         htvatp(hindex) = htvatp(hindex)  + htavwt(idx)*httmp(indt)
+         idx = idx + htgskp
+         indt = indt + 1
+       enddo
+c  Compute and store heat transfer information.
+       htdtmo(hindex) = httmp(temidx) - httmp(initem)
+c  Left boundry.
+       if (htflag(index) .gt. 2) then
+         htrnro(hindex) = hthht(index)*htdtmo(hindex) +
+     &   htqost(index)
+         htrgno(hindex) = (hthhgg(index) + hthhgt(index) +
+     &   hthhgp(index))*htdtmo(hindex) + htqosg(index)
+       else
+         if (htflag(index) .eq. 2) then
+           htrnro(hindex) = htqost(index)
+         else
+           htrnro(hindex) = (httc(index)*htsrwt(idxo)*dtovr2*
+     &     (httmp(initem+1) - httmp(initem) + httmp(temidx+1) -
+     &     httmp(temidx)) + powin*htsrc(idxo) - ggo*htdtmo(hindex))/
+     &     (areao(idxo)*dtime)
+         endif
+         htrgno(hindex) = 0.5*htrnro(hindex)
+         hthhff(index) = 0.0
+         hthhft(index) = 0.0
+         hthhgg(index) = 0.0
+         hthhgt(index) = 0.0
+         hthhgp(index) = 0.0
+       endif
+       if (htbvc(hindex) .gt. 0) then
+         indi = htbvo(hindex)
+         qdi = max(satt(indi) - tempf(indi),0.0001)
+         qdo = max(abs(ggas(indi)) + abs(gliq(indi)),0.001)
+         stanto(hindex) = (htrnro(hindex) - htrgno(hindex))/
+     &   (qdo*csubpf(indi)*qdi)
+         peclo(hindex) = qdo*hthdmo(hindex)*csubpf(indi)/thconf(indi)
+       endif
+       indi = temidx + nn
+       inde = initem + nn
+       htdtmn(hindex) = httmp(indi) - httmp(inde)
+c  Right boundry.
+       if (htflag(index+1) .gt. 2) then
+         htrnrn(hindex) = hthht(index+1)*htdtmn(hindex) +
+     &   htqost(index+1)
+         htrgnn(hindex) = (hthhgg(index+1) + hthhgt(index+1) +
+     &   hthhgp(index+1))*htdtmn(hindex) + htqosg(index+1)
+       else
+         if (htflag(index+1) .eq. 2) then
+           htrnrn(hindex) = htqost(index+1)
+         else
+           htrnrn(hindex) = (httc(index+htscrp*(nn-1))*
+     &     htsrwt(idx-2*htgskp)*dtovr2*(httmp(inde-1) - httmp(inde) +
+     &     httmp(indi-1) - httmp(indi)) + powin*htsrc(idx-htgskp) -
+     &     ggn*htdtmn(hindex))/(arean(idxo)*dtime)
+         endif
+         htrgnn(hindex) = 0.5*htrnrn(hindex)
+         hthhff(index+1) = 0.0
+         hthhft(index+1) = 0.0
+         hthhgg(index+1) = 0.0
+         hthhgt(index+1) = 0.0
+         hthhgp(index+1) = 0.0
+       endif
+       if (htbvc(hindex+1) .gt. 0) then
+         indi = htbvo(hindex+1)
+         qdi = max(satt(indi) - tempf(indi),0.0001)
+         qdo = max(abs(ggas(indi)) + abs(gliq(indi)),0.001)
+         stantn(hindex) = (htrnrn(hindex) - htrgnn(hindex))/
+     &   (qdo*csubpf(indi)*qdi)
+         pecln(hindex) = qdo*hthdmn(hindex)*csubpf(indi)/thconf(indi)
+       endif
+c
+       htimeo(hindex) = time
+       htdtmo(hindex) = httmp(temidx)
+       htdtmn(hindex) = httmp(indi)
+       if (errsw .eq. 0) return
+       htopt(hindex) = ior(htopt(hindex),2)
+       return
+       end

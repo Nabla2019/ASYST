@@ -1,0 +1,159 @@
+*mlist
+       subroutine ivelst
+c  Sets initial conditions for single junctions, time dependent
+c  junctions, pumps, branches, tees, and pipes.
+c
+c  Cognizant engineer: rjw.
+c
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'cons.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'statec.h'
+       include 'trpblk.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables
+       integer i,iq,j,k1,kk,kx,l,l1,lx,ly,nc
+       real ain,rhou,xv(3),xv1,xv2
+$if def,mmfld,2
+       integer lz
+       real xv3
+       logical wflow,err
+       character chwrd*8
+       external fabend,polat
+c
+       i =  filndx(3)
+       j =  filndx(5)
+       do 1010 kk = 1,ncmps(i)
+         if (cmptyp(i) .eq. 0) go to 1000
+         nc = cmpnum(i)
+         wflow = iand(cmpopt(i),1) .ne. 0
+         if (njc(i) .eq. 0) go to 1000
+c  Loop for each junction.
+         do 100 l = 1,njc(i)
+           if (iand(jc(j),128) .ne. 0) then
+             mflowj(j) = 0.0
+             mflowfj(j) = 0.0
+             mflowgj(j) = 0.0
+             if (ij1vn(j).eq.0 .or. ij2vn(j).eq.0) then
+               ajun(j) = 1.0
+               athrot(j) = 1.0
+               velfj(j) = 0.0
+               velgj(j) = 0.0
+               go to 90
+             endif
+             k1 = (ij1vn(j) - 1)*ivskp + filndx(4)
+             kx = k1 + iand(ishft(jcex(j),-13),3)
+             l1 = (ij2vn(j) - 1)*ivskp + filndx(4)
+             lx = l1 + iand(ishft(jcex(j),-10),3)
+             go to (14,1000,11,11,11,11,14,11,13,1000,11,11,11,11,11,
+     &       14,14), cmptyp(i)
+             call fabend
+   13        write (chwrd,'(a8)') nctalf(i)
+             if (ncttrp(i) .eq. 0) go to 323
+             ain = trptm(ncttrx(i) + filndx(18))
+             if (ain .lt. 0.0) go to 324
+             if (chwrd .ne. ' ') go to 325
+             ain = timehy - ain
+             go to 324
+  323        if (chwrd .ne. ' ') go to 325
+             ain = timehy
+             go to 324
+  325        iq = nctpc(i+1) + filndx(nctpc(i))
+  326        ain = fa(iq)
+  324        call polat (cmptbl(i-3),cmptbl(i),ain,xv,err)
+             if (err) then
+               write (output,2004) nc
+ 2004  format ('0******** Time dependent tables associated with componen
+     &t',i4,' are incorrect.')
+               velfj(j) = 0.0
+               velgj(j) = 0.0
+$if def,mmfld,1
+               velmj(j) = 0.0
+               fail = .true.
+             else
+               velfj(j) = xv(1)
+               velgj(j) = xv(2)
+$if def,mmfld,1
+               if (nonmf .ne. 0) velmj(j) = xv(3)
+             endif
+c  Loop for volumes on each side of junction.
+   11        if (ajun(j) .eq. 0.0) ajun(j) = min(avol(kx),avol(lx))
+             if (diamj(j) .eq. 0.0) diamj(j) = 2.0*sqrt(ajun(j)/pi)
+             if (iand(jc(j),256) .eq. 0) then
+               athrot(j) = 1.0
+             else
+               rhou = ajun(j)
+               ajun(j) = min(avol(kx),avol(lx))
+               athrot(j) = rhou/ajun(j)
+               if (rhou .gt. ajun(j)) then
+                 write (output,2006) nc
+ 2006  format ('0******** Component',i4,' junction area is greater than
+     &minimum of adjacent volume areas for an abrupt area change.')
+                 fail = .true.
+               endif
+             endif
+   14        xv1 =  velfj(j)
+             xv2 =  velgj(j)
+             lx =  k1
+             if (xv1 .lt. 0.0) lx = l1
+             ly =  k1
+             if (xv2 .lt. 0.0) ly =  l1
+$if def,mmfld
+             if (nonmf .ne. 0) then
+               xv3 = velmj(j)
+               lz = k1
+               if (xv3 .lt. 0.0) lz = l1
+             endif
+$endif
+c  Set the junction flag to zero at bit pos. 25,26
+c  Store the input mass flow in velfjo and velgjo temporarily
+c  for hse model and separator
+             jcex(j) = iand(jcex(j),not(ishft(1,24)))
+             jcex(j) = iand(jcex(j),not(ishft(1,25)))
+             if (wflow) then
+               velfj(j) = 0.0
+               if (voidf(lx) .ne. 0.0) velfj(j) = xv1/(voidf(lx)*
+     &         rhof(lx)*ajun(j))
+               velgj(j) =  0.0
+               if (voidg(ly) .ne. 0.0) velgj(j) = xv2/(voidg(ly)*
+     &         rhog(ly)*ajun(j))
+               if ((iand(jc(j),65536) .eq. 0) .or.
+     &         (cmptyp(i) .eq. 8)) then
+                 velfjo(j) = xv1
+                 velgjo(j) = xv2
+c  Set flag for mass flow input
+                 if (cmptyp(i) .ne. 8)
+     &           jcex(j) = ior(jcex(j), ishft(1,24))
+               endif
+$if def,mmfld,5
+               if (nonmf .ne. 0) then
+                 velmj(j) = 0.0
+                 if (voidm(lz) .ne. 0.0) velmj(j) = xv3/(voidm(lz)*
+     &           rhomt(lz)*ajun(j))
+               endif
+             endif
+c  Set flag for initial velocity calculation for hse model
+             if (iand(jc(j),65536) .eq. 0)
+     &       jcex(j) = ior(jcex(j), ishft(1,25))
+             if (xv1*xv2 .ge. 0.0) then
+               if (voidf(lx) .eq. 0.0) velfj(j) = velgj(j)
+               if (voidg(ly) .eq. 0.0) velgj(j) = velfj(j)
+             endif
+             if ((iand(jc(j),65536) .ne. 0) .and.
+     &       (cmptyp(i).ne.8)) then
+               velfjo(j) = velfj(j)
+               velgjo(j) = velgj(j)
+             endif
+           endif
+   90      j = j + ijskp
+  100    continue
+ 1000    i = i + cmplen(i)
+ 1010  continue
+       return
+       end

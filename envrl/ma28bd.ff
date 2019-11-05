@@ -1,0 +1,122 @@
+       subroutine ma28bd (n,nz,a,licn,ivect,jvect,icn,ikeep,iw,w,
+     & iflag)
+!  Subroutine factorizes a matrix of a similar sparsity pattern to that
+!  previously factorized by ma28ad.
+       use ma28mod
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer iflag,licn,n,nz
+       real(kr) a(:),w(:)
+       integer icn(:),ikeep(:,:),ivect(:),iw(:,:),jvect(:) 
+!
+! n      Order of matrix  not altered by subroutine.
+! nz     Number of non-zeros in input matrix. Not altered by subroutine.
+! a      Length licn. Holds non-zeros of matrix on entry and non-zeros
+!        of factors on exit. Reordered by ma28dd and altered by
+!        subroutine ma30bd.
+! licn   Length of arrays a and icn. Not altered by subroutine.
+! ivect,jvect  Arrays of length nz. Hold row and column indices of
+!        non-zeros respectively. Not altered by subroutine.
+! icn    Length licn. Same array as output from ma28ad. Unchanged by
+!        ma28bd.
+! ikeep  Length 5*n. Same array as output from ma28ad. Unchanged by
+!        ma28bd.
+! iw     Length 5*n. Used as workspace by ma28dd and ma30bd.
+! w      Length n. Used as workspace by ma28dd, ma30bd, and (optionally)
+!        mc24ad.
+! iflag  Error flag with positive or zero value indicating success.
+!
+       interface
+!
+       subroutine ma28dd (n,a,licn,ivect,jvect,nz,icn,lenr,lenrl,
+     & lenoff,ip,iq,iw1,iw,w1,iflag)
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer iflag,licn,n,nz
+       real(kr) a(:), w1, aa
+       integer icn(:),ip(:),iq(:),ivect(:),iw(:,:),iw1(:,:),
+     & jvect(:),lenoff(:),lenr(:),lenrl(:)
+       end subroutine ma28dd
+!
+       subroutine ma30bd (n,icn,a,licn,lenr,lenrl,idisp,ip,iq,w,iw,
+     & iflag)
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer iflag,licn,n
+       real(kr) a(:),w(:)
+       integer icn(:),idisp(:),ip(:),iq(:),iw(:),lenr(:),lenrl(:)
+       end subroutine ma30bd
+!
+       subroutine mc24ad (n,icn,a,licn,lenr,lenrl,w)
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer licn,n
+       real(kr) a(:),w(:)
+       integer icn(:),lenr(:),lenrl(:)
+       end subroutine mc24ad
+!
+       end interface
+!
+       integer i1,idup,iend
+!
+!  Check to see if elements were dropped in previous ma28ad call.
+       if (ndrop.ne.0) then
+         iflag = -15
+         write (6,
+     &   "(' Error return from ma28bd with iflag=',i4,i7,' entries dropp
+     &ed from structure by ma28ad')") iflag,ndrop
+         return
+       endif
+       iflag = 0
+       meps = eps
+       nlp = lp
+!  Simple data check on variables.
+       if (n.le.0) then
+         iflag = -11
+         if (lp.ne.0) write (lp,"(36x,'n out of range =',i10)") n
+         go to 60
+       endif
+       if (nz.le.0) then
+         iflag = -10
+         if (lp.ne.0) write (lp,"(36x,'nz non positive =',i10)") nz
+         go to 60
+       endif
+       if (licn.lt.nz) then
+         iflag = -9
+         if (lp.ne.0) write (lp,"(36x,'licn too small =',i6)") licn
+         go to 60
+       endif
+!
+       call ma28dd (n,a,licn,ivect,jvect,nz,icn,ikeep(:,1),ikeep(:,4),
+     & ikeep(:,5),ikeep(:,2),ikeep(:,3),iw(:,3:8),iw,w(1),iflag)
+!  themax is largest element in matrix.
+       themax = w(1)
+       if (lbig) big1 = themax
+!  idup equals one if there were duplicate elements, zero otherwise.
+       idup = 0
+       if (iflag.eq.(n+1)) idup = 1
+       if (iflag.lt.0) go to 60
+!
+!  Perform row-gauss elimination on the structure received from ma28dd.
+       call ma30bd (n,icn,a,licn,ikeep(:,1),ikeep(:,4),idispc,
+     & ikeep(:,2),ikeep(:,3),w,iw(:,1),iflag)
+!
+!  Transfer common block information.
+       if (lbig) big1 = big
+       rmin = mrmin
+       if (iflag.lt.0) then
+         iflag = -2
+         if (lp.ne.0) write (lp,"(36x,'+error return from ma30bd.')")
+         go to 60
+       endif
+!
+!  Optionally calculate the growth parameter.
+       i1 = idispc(1)
+       iend = licn - i1 + 1
+       if (grow) call mc24ad (n,icn,a(i1:),iend,ikeep(:,1),ikeep(:,4),w)
+!  Increment estimate by largest element in input matrix.
+       if (grow) w(1) = w(1) + themax
+       if (grow .and. n.gt.1) w(2) = themax
+!  Set flag if the only error is due to duplicate elements.
+       if (idup.eq.1 .and. iflag.ge.0) iflag = -14
+       return
+   60  if (lp.ne.0) write (lp,"('+error return from ma28bd because')")
+       return
+       end

@@ -1,0 +1,218 @@
+*mlist
+*if def,selap
+       subroutine cladf (caad,cacd,card,cep,cepp,ceps,cfcp,
+     & cfap,cfrp,cfnck,cfncn,ccwkf,ccwnf,
+     & cflux,cladt,cladt0,carea,dxcfri,dtemp,deltcc,
+     & edot,etru,hopmax,jiter,naz,pcool,ii,
+     & pgas,rci,rco,rmin,epplas,depp,hoopmn)
+!  cladf calculates the axisymmetric cladding deformation at each
+!  component node of an average fuel rod in each fuel rod group.
+! 
+!  Cognizant engineer: ewc (vxs ghb).
+! 
+!  Calling subroutines: clddfm.
+!  Subroutines called: caniso, caneal, cstrni, cthexp.
+! 
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+!
+       include 'scddat.h'
+       include 'farays.h'
+       include 'cons.h'
+       include 'contrl.h'
+       include 'ufiles.h'
+! 
+! Local variables.
+       integer jiter,naz,ii
+       real(kr) elimx
+       real(kr) caad,cacd,card,cep,cepp,ceps,cfcp,cfap,cfrp,cfnck,cfncn,
+     * ccwkf,ccwnf,cflux,cladt,cladt0,carea,dxcfri,dtemp,deltcc,
+     * edot,etru,hoopmx,pcool,pgas,rci,rco,rmin,epplas,depp,hoopmn,
+     # hopmax
+      dimension  caad  ( ndax ), cacd  ( ndax ), card  ( ndax ),
+     +           ccwkf ( ndax ), ccwnf ( ndax ), cep   ( ndax ),
+     +           cfcp  ( ndax ), cfnck ( ndax ), cfncn ( ndax ),
+     +           cladt ( ndax ), dxcfri( ndax ), dtemp ( ndax ),
+     +           edot  ( ndax ), etru  ( ndax ), cfap  ( ndax ),
+     +           rci   ( ndax ), rco   ( ndax ), cfrp  ( ndax ),
+     +           depp  (ndax,3), cepp  (ndax,3), ceps  (ndax,3),
+     +           epplas( ndax ), csig(3) ,alfdt(3)
+! 
+       integer i,j
+       real(kr) alfdt,caae,caas,cace,cacs,care,cars,cath0,cath1,ccth0,
+     & ccth1,cnvg,cosfi2,costh2,crth0,crth1,csig,dep,dpovsg,ee,etru0,g,
+     & rmin1,sigeff,struy,twovr2,v
+       real(kr) celmod,celmodr,cshear,cshearr
+       integer ndbg
+       data cnvg/1.0e-10/
+!
+         ndbg=0
+cljs   if(timehy.ge.300.0.and.timehy.le.400.0)ndbg=1
+         if(ndbg.eq.1)then
+         write(output,9005)timehy,icomp,pgas,pcool,hopmax,hoopmn
+9005     format(' CLADF entered; timehy=',e10.4,' icomp=',i5,
+     &   ' pgas=',e10.4,' pcool=',e10.4,' hopmax=',e10.4,
+     &   ' hoopmn=',e10.4)
+         write(output,9007)elimx,ii,cladt(14)
+9007     format(' CLADF; elimx=',e10.4,' ii=',i5,' cladt(14)=',e10.4)
+         end if
+       elimx=elim
+! do for each component node
+! limit strain,T. Haste, Winfrith, Sept., 1989.
+      do 10 i=1,naz
+        if(ceps(i,1).ge.elimx)then
+          ceps(i,1)=elimx
+          go to 30
+        end if
+   10 continue
+      hoopmx=hopmax
+      if(elimx.lt.hoopmx)hoopmx=elimx
+      do 20 i = 1,naz
+        if(i .eq. ii) go to 20
+        if ( ceps(i,1).lt.hoopmx .and.
+     #   (ceps(i,1).gt.hoopmn .or. pgas-pcool.gt.0.0) ) then
+! perform equilibrium equations to determine stresses
+! calculate circumferential stress
+          csig(1)=(rci(i)*pgas-rco(i)*pcool)/(rco(i)-rci(i))
+! calculate axial stress
+          csig(2)=((rci(i)**2)*pgas-(rco(i)**2)*pcool)/
+     #      (rco(i)**2-rci(i)**2)
+! calculate radial stress
+            if(ndbg.eq.1.and.i.eq.14)then
+            write(output,9011)i,csig(1)
+9011        format(' CLADF; i=',i5,' csig(1)=',e10.4)
+            end if
+          csig(3)=-0.5*(pcool+pgas)
+          if(csig(1).lt.(-1.e+12).and.cladt(i).gt.800.0)then
+! model not applicable for compressive load on cladding.
+            csig(1)=0.0
+            csig(2)=0.0
+            csig(3)=0.0
+          end if
+! calculate change in effective fluence and effective cold
+! work during a time step
+          call caneal(cflux, deltcc, cladt(i), dtemp(i), cfnck(i),
+     #      cfncn(i), ccwkf(i), ccwnf(i))
+! calculate effective stress
+! determine temperature effects in *caniso*.
+          call caniso (depp(i,1), depp(i,2), depp(i,3), cladt(i),
+     #      cfcp(i), cfap(i), cfrp(i), cacd (i), caad(i),
+     +    card(i), cacs , caas , cars , cace , caae , care )
+! find true effective stress
+          sigeff=sqrt(cacs*((csig(1)-csig(2))**2)+caas
+     +    * ((csig(2)-csig(3))**2)+cars*((csig(3)-
+     +    csig(1))**2) )
+          if(sigeff.lt.0.001)sigeff=0.001
+! calculate young's modulus e
+          if (chngno(70)) then
+            ee = celmodr(cladt(i),cfnck(i),ccwkf(i),dxcfri(i))
+          else
+            ee = celmod(cladt(i),cfnck(i),ccwkf(i),dxcfri(i))
+          endif
+! calculate true effective yield stress
+          struy = 0.0011
+             if(ndbg.eq.1.and.i.eq.14)then
+             write(output,9015)i,sigeff,struy
+9015         format(' CLADF; i=',i5,' sigeff=',e10.4,' struy=',e10.4)
+             end if
+cljs   struy is artificially very small
+cljs      if ( sigeff .lt. struy ) then
+cljs  if compressive stress on cladding, do not call ballooning model
+          if (csig(1).lt.0.0)then
+            dep = 0.0
+            depp(i,1) = 0.0
+            depp(i,2) = 0.0
+            depp(i,3) = 0.0
+            edot( i ) = 0.0
+            etru(i) = cep(i) + sigeff / ee
+          else
+! find deformation during time step
+            etru0 = etru(i)
+            dep = 0.0
+! calculate effective strain
+            call cstrni ( deltcc, cladt( i ), dxcfri( i ), cfnck( i ),
+     +      cfncn( i ), ccwkf( i ), ccwnf( i ), sigeff, etru( i ))
+            if (etru(i) .ge. etru0) dep = etru( i ) - etru0
+            edot( i ) = dep / deltcc
+            dpovsg = dep / sigeff
+              if(ndbg.eq.1.and.i.eq.14)then
+              write(output,9017)i,dep,csig(1),csig(2)
+9017          format(' CLADF after CSTRNI; i=',i5,' dep=',e10.4,
+     &        ' csig(1)=',e10.4,' csig(2)=',e10.4)
+              end if
+            if((csig(1)-csig(2)).gt.0.0)then
+              depp( i, 1) = dpovsg * ( cace * ( csig(  1) - csig(  2)) +
+     +        care * ( csig(  1) - csig(  3)))
+              depp( i, 2) = dpovsg * ( caae * ( csig(  2) - csig(  3)) +
+     +        cace * ( csig(  2) - csig(  1)))
+              depp( i, 3) = dpovsg * ( care * ( csig(  3) - csig(  1)) +
+     +        caae * ( csig(  3) - csig(  2)))
+            else
+! compressive loading - simplified solution made.
+              depp(i,1)=0.0
+              depp(i,2)=0.0
+              depp(i,3)=0.0
+            end if
+! find true effective plastic strain
+            epplas(i) = etru(i) - sigeff / ee
+          end if
+! calculate thermal strain
+          costh2 = .71
+          cosfi2 = .69
+          if (chngno(70)) then
+            call cthexpr (costh2,cosfi2,cladt(i),294.0,ccth1,cath1,
+     &      crth1)
+            call cthexpr (costh2,cosfi2,cladt0,294.0,ccth0,cath0,crth0)
+          else
+            call cthexp (costh2,cosfi2,cladt(i),294.0,ccth1,cath1,crth1)
+            call cthexp (costh2,cosfi2,cladt0,294.0,ccth0,cath0,crth0)
+          endif
+          alfdt(  1) = ccth1 - ccth0
+          alfdt(  2) = cath1 - cath0
+          alfdt(  3) = crth1 - crth0
+!  Calculate poisson ration (v=e/2g-1).
+           if (chngno(70)) then
+             g = cshearr(cladt(i),cfnck(i),ccwkf(i),dxcfri(i))
+           else
+             g = cshear( cladt(i),cfnck(i),ccwkf(i),dxcfri(i))
+           endif
+          v = ee/g*0.5 - 1.0
+! calculate total true strains
+          ceps( i, 1) = ( csig(1) - v * ( csig(2) + csig(3))) / ee +
+     +    cepp( i, 1) + depp( i, 1) + alfdt(  1)
+! 
+          ceps( i, 2) = ( csig(2) - v * ( csig(1) + csig(3))) / ee +
+     +    cepp( i, 2) + depp( i, 2) + alfdt(  2)
+! 
+          ceps( i, 3) = ( csig(3) - v * ( csig(1) + csig(2))) / ee +
+     +    cepp( i, 3) + depp( i, 3) + alfdt(  3)
+! 
+! check if cladding is constrained by adjacent rods
+          if ( (ceps( i, 1) .le. hoopmx ) .and. (ceps( i, 1) .ge.
+     +    hoopmn ) ) then
+            cepp( i, 1) = cepp( i, 1) + depp( i, 1)
+            cepp( i, 2) = cepp( i, 2) + depp( i, 2)
+            cepp( i, 3) = cepp( i, 3) + depp( i, 3)
+            cep( i ) = cep( i ) + dep
+          else if (ceps( i, 1) .gt. hoopmx) then
+            ceps( i, 1) = hoopmx
+            cepp( i, 1) = ceps( i, 1)
+          else
+            ceps( i, 1) = hoopmn
+          endif
+! cladding already constrained by adjacent fuel rods
+        else if (ceps( i, 1) .ge. hoopmx) then
+          ceps( i, 1) = hoopmx
+        else
+          ceps( i, 1) = hoopmn
+        endif
+! recompute radii
+        rmin1 = rmin * exp( ceps( i, 1))
+        twovr2 = carea / ( 4. 0* pi * rmin1 )
+        rco( i ) = rmin1 + twovr2
+        rci( i ) = rmin1 - twovr2
+   20 continue
+   30 continue
+      return
+      end
+*endif

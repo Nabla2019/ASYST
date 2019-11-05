@@ -1,0 +1,200 @@
+*mlist
+       subroutine hydro
+c
+c  Controls the advancement of the hydrodynamic calculation.
+c
+c  Cognizant engineer: hxc,rar.
+c
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+$if def,makemap,1
+       include 'makmap.h'
+       include 'scntl.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'tsctlc.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer i,ix,m,mm
+       real dsmass,errmav,errmsq,scaler
+c
+c  Temporary loop to compute qwf for use in hydrodynamic advancement.
+       i = filndx(4)
+       do m = 1,nvols(i)
+         qwf(i) = q(i) - qwg(i)
+         i = i + ivskp
+       enddo
+c
+c  Set up loop over systems.
+       succes = 0
+       lhtsol = 0
+       errmax = 0.0
+       dtmass = 0.0
+       tmass = 0.0
+       emass = 0.0
+       totvol = 0.0
+       totvsq = 0.0
+       emassx = 0.0
+       emassq = 0.0
+       totnum = 0.0
+       tmassq = 0.0
+       do issys = 1,nloops
+c  If current system contains a different fluid from the last one,
+c  call stcset.
+         if (volmat(lpdat(issys)%liv) .ne. nfluid)
+     &   call  stcset (volmat(lpdat(issys)%liv))
+         ixvff = vctrls(lpdat(issys)%liv)
+         ixjff = jcnxs(lpdat(issys)%lij)
+c  Compute junction areas and loss factors for valves.
+         if (lvvalv(lpdat(issys)%llvect) .ne. 0) then
+           call valve(.false.)
+         endif
+c  Compute avg. vol. terms in scratch storage, reset arat terms for
+c  valve effects.
+  210    call volvel
+c  Apply thermal front tracking model.
+         call tfront
+c  Get interphase drag and heat transfer.
+$if def,makemap,1
+         if (targmp.eq.2 .and. targcn.eq.ncount) call phantvd
+  200    call phantv
+$if def,makemap,1
+         if (targmp.eq.1 .and. targcn.eq.ncount) call phantjd
+         call phantj (0)
+c  Get wall frictions.
+         call fwdrag
+c  Get head loss & extra interphase drag term due to abrupt area change.
+         ix = ixjff
+         do mm = 1,lpdat(issys)%lijn
+           fidxup(ix) = 0.0
+           ix = ix + scskp
+         enddo
+         if (lvabrp(lpdat(issys)%llvect) .ne. 0) call hloss
+c  Pick which time advancement scheme is desired.
+         if (iand(print,128) .eq. 0) then
+c
+c  Semi-implicit time advancement scheme.
+c  Get explicit velocities.
+       i = lpdat(issys)%liv
+           call vexplt
+           call jchoke
+           call ccfl
+c  Get new donered properties.
+           call jprop(1)
+c  Get  pressures and final velocities (also reset lsuces to 0).
+           call vfinl
+c  Get final equations.
+$if def,mmfld,1
+           if (lnonmf(issys) .eq. 0) then
+             call eqfinl
+             if (lpdat(issys)%lsuces .eq. 5) then
+               call mover (.false.)
+               i = lpdat(issys)%liv
+               do mm = 1,lpdat(issys)%livn
+                 vctrl(i) = iand(vctrl(i),not(524032))
+                 i = i + ivskp
+               enddo
+               lpdat(issys)%lsuces = -1
+               go to 200
+             endif
+$if def,mmfld,8
+           else
+             call eqfinm
+             if (lpdat(issys)%lsuces .eq. 4) then
+               call mover (.false.)
+               lpdat(issys)%lsuces = -1
+               go to 200
+             endif
+           endif
+         else
+c
+c  Nearly implicit advancement scheme.
+c  Get implicit velocities.
+           lpdat(issys)%lpackr = 0
+           call vimplt
+c  Get pressures and sources for scalar equations.
+           call pimplt
+           if(lpdat(issys)%lsuces .eq. 5) then
+             call mover (.false.)
+             i = lpdat(issys)%liv
+             do mm = 1,lpdat(issys)%livn
+               vctrl(i) = iand(vctrl(i),not(524032))
+               i = i + ivskp
+             enddo
+             lpdat(issys)%lsuces = 0
+             go to 210
+           endif
+c  Get final implicit masses and energies.
+           lpdat(issys)%lsuces = 0
+           if( iand(imdctl(1),1).ne.0 ) call jprop(0)
+           call simplt
+         endif
+         if (chngno(23)) call brntrn
+         if (nmechk .or. lpdat(issys)%lsuces.le.0 .or. help.ne.0) then
+c  Get new-time thermodynamic quantities.
+           call state (1)
+c  Get new-time thermodynamic quantities.
+           if (nmechk .or. lpdat(issys)%lsuces.le.0) then
+c  Apply level tracking model.
+             call level(0)
+c  Get donered properties (include stratified void fraction)
+c  and volume average velocity.
+             call jprop (0)
+             call vlvela
+$if def,hydrolod,1
+            call hydrolod
+           endif
+         endif
+         if (lpdat(issys)%lsuces .eq. 0)  lpdat(issys)%lsuces = -1
+         succes = max(succes,lpdat(issys)%lsuces)
+         lhtsol = max(lhtsol,lpdat(issys)%lpackr)
+       enddo
+       if (succes.ne.2 ) then
+         if (iand(print,64) .ne. 0) then
+           if (filid(8) .ne. 0.0) call htfinl
+$if def,selap,1
+           if (scntrl(1)) call scfinl
+         endif
+       endif
+       if( succes.ne.2 ) then
+         if (totvol .gt. 0.0) then
+           emassx = emassx/tmass
+           emassq = sqrt(emassq/tmassq)
+           scaler = sqrt(3.8416*totnum/max(1.0, (totnum - 1.0)))
+           safe1  = max(safe1, scaler*emassq, abs(emassx))
+         endif
+         errmax = max(errmax, safe1)
+         if (errmax.ge.errhi .and. lhtsol.eq.0) succes = max(succes,1)
+c
+$if def,dbgprnt
+         if (help .ne. 0 .and. iand(ihlppr(1),ishft(1,14)).ne.0) then
+           call helphd('ms err t',13)
+           dsmass = emass - emasso
+           errmav = 0.0
+           errmsq = 0.0
+           if (totvol .gt. 0.0) then
+             errmav = emassx*tmass/totvol
+             errmsq = emassq*tmassq/totvsq
+           endif
+           write(output,2003) dtmass,dsmass,errmav,errmsq,emassx,emassq,
+     &     safe1,errmax
+ 2003  format(1x,93('-')/1x,'Total mass error increment for this time st
+     &ep',35('-'),1p,g13.5/1x,'Mass + flow in - flow out mass error incr
+     &ement',34('-'),g13.5/1x,'Mean mass error increment',55('-'),
+     &g13.5/1x,'Rms mass error increment',56('-'),g13.5/1x,'Mean mass er
+     &ror fraction',56('-'),g13.5/1x,'Rms mass error fraction',
+     &57('-'),g13.5/1x,'Max. system or overall global mass error toleran
+     &ce',30('-'),g13.5/1x,'Controlling errmax',62('-'),g13.5)
+         endif
+$endif
+       endif
+       return
+       end

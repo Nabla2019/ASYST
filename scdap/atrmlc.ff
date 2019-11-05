@@ -1,0 +1,154 @@
+*mlist
+*if def,selap
+      subroutine atrmlc( jp,unuc,qfoxt,oxdhci,tzr,tzro,
+     +  xcldi,xcldo,tual,effcp,effk,effgen )
+c
+c
+c  subroutine to track material layers, radial nodalization, and the
+c  effective material properties for 2d conduction
+c
+c  Cognizant engineer: ewc.
+c
+c argument list:
+c      input--
+c           ndrd - maximum radial node number
+c           ndax - maximum axial node number
+c           jp - current component number
+c           unuc - nuclear heat generation (w/m)
+c           oxdhci - inner surface oxidation heat (w/m)
+c           qfoxt - fuel oxidation heat (w/m)
+c      output--
+c           tzro - outer unoxidized al thickness (m)
+c           tzr - inner unoxidized al thickness
+c           tual - fuel thickness (m)
+c           effegn - effectve energy generation in a node (w/m3)
+c           effcp - effective heat capacitance (j/m3-k)
+c           effk - effective heat conduction (w/m-k)
+       implicit none
+*call scddat
+*call nrcom
+*call intcom
+*call scdout
+*call scdcom
+c
+c  Local variables.
+      integer i,jp,icmat,icomat,ifmat,kx
+       real unuc,qfoxt,oxdhci,tzr,tzro,effcp,effk,effgen,xcldo,xcldi,
+     * tual,volcdo,volcdi,volfu,area,tave,tave1
+      real altcon,aotcon,cpal,cpalo,ucpnr,uthcon,fnro,fncp,fnk
+      external altcon,aotcon,cpal,cpalo,ucpnr,uthcon,fnro,fncp,fnk
+      dimension unuc(ndax),qfoxt(ndax),oxdhci(ndax),tzr(ndax),
+     + tzro(ndax),effcp(ndrd,ndax),effk(ndrd,ndax),effgen(ndrd,ndax)
+      dimension xcldo(ndax),xcldi(ndax),tual(ndax),volcdo(ndax),
+     +  volcdi(ndax),volfu(ndax)
+c  icmat = material number for clad
+c  icomat = material number for clad oxide
+c  ifmat = material number for fuel
+c  kx    = dummy for call to function fnk, since fuel cracking
+c          conduction multiplier not used for atr fuel
+      icmat=imater(1,jp)
+      ifmat=imater(2,jp)
+      if (icmat .eq. 15) then
+        icomat=16
+      else
+        icomat=icmat
+      endif
+      kx = 0
+      do 100 i = 1,naz1(jp)
+        area = dzcnd2(i,jp)*slbwd(jp)
+c  outer clad
+        tave = 0.5*(tcond3(1,i,jp)+tcond3(2,i,jp))
+        if (tave .lt. 300.) tave = 300.
+        oxdeoo(i,jp) = mascoo(i,jp)/(area*fnro(icomat,tave))
+        tzro(i) = mascao(i,jp)/(area*fnro(icmat,tave))
+        xcldo(i) = oxdeoo(i,jp) + tzro(i)
+        volcdo(i) = xcldo(i)*area
+        xcond3(2,i,jp) = oxdeoo(i,jp) + tzro(i)
+        if (xcldo(i).le.1.0e-6) then
+          effgen(1,i) = 0.0
+        else
+          effgen(1,i) = oxdhco(i,jp)/(slbwd(jp)*xcldo(i))
+        endif
+        if (oxdeoo(i,jp).gt.1.0e-10 .and. tzro(i).gt.1.0e-10) then
+          effcp(1,i) = (fncp(icmat,tave)*mascao(i,jp)+fncp(icomat,tave)*
+     +                  mascoo(i,jp)) / volcdo(i)
+          effk(1,i) = (fnk(icmat,tave,kx)*mascao(i,jp)+fnk(icomat,tave,
+     +                 kx)*mascoo(i,jp)) / mascdo(i,jp)
+        else if (tzro(i).gt.1.0e-10) then
+          effcp(1,i) = fncp(icmat,tave)*fnro(icmat,tave)
+          effk(1,i) = fnk(icmat,tave,kx)
+        else if (oxdeoo(i,jp).gt.1.0e-10) then
+          effcp(1,i) = fncp(icomat,tave)*fnro(icomat,tave)
+          effk(1,i) = fnk(icomat,tave,kx)
+        else
+          effcp(1,i) = fncp(icmat,tave)*fnro(icmat,tave)
+          effk(1,i) = 1.0e2
+        endif
+c  fueled section
+        tave=.25*tcond3(2,i,jp)+.5*tcond3(3,i,jp)+.25*tcond3(4,i,jp)
+        if (tave .lt. 300.) tave = 300.
+        volfu(i) = masfa(i,jp)/fnro(15,tave) +
+     +       masfao(i,jp)/fnro(16,tave) + masfu(i,jp)/fnro(ifmat,tave)
+        tual(i) = volfu(i)/area
+        xcond3(3,i,jp) = xcond3(2,i,jp) + 0.5*tual(i)
+        xcond3(4,i,jp) = xcond3(2,i,jp) + tual(i)
+        tave  = 0.5*(tcond3(2,i,jp)+tcond3(3,i,jp))
+        tave1 = 0.5*(tcond3(3,i,jp)+tcond3(4,i,jp))
+        if (tual(i).gt.1.0e-10) then
+          effcp(2,i) =(fncp(15,tave)*masfa(i,jp)+
+     +          fncp(16,tave)*masfao(i,jp) +
+     +          fncp(ifmat,tave)*(masfu(i,jp)+masfuo(i,jp))) /
+     +                  volfu(i)
+          effk(2,i) = (fnk(15,tave,kx)*masfa(i,jp)+fnk(16,tave,kx)*
+     +                 masfao(i,jp)+fnk(ifmat,tave,kx)*(masfu(i,jp)+
+     +                 masfuo(i,jp))) / masful(i,jp)
+          effgen(2,i) = (unuc(i)+qfoxt(i))/(slbwd(jp)*tual(i))
+          effcp(3,i) = ( fncp(15,tave1)*masfa(i,jp) +
+     +             fncp(16,tave1)*masfao(i,jp) +
+     +             fncp(ifmat,tave1)*(masfu(i,jp)+
+     +                    masfuo(i,jp)) ) / volfu(i)
+          effk(3,i)=(fnk(15,tave1,kx)*masfa(i,jp)+fnk(16,tave1,kx)*
+     +            masfao(i,jp)+fnk(ifmat,tave1,kx)*(masfu(i,jp)+
+     +                  masfuo(i,jp))) / masful(i,jp)
+          effgen(3,i) = effgen(2,i)
+        else
+          effcp(2,i) = fncp(15,tave)*fnro(15,tave)
+          effk(2,i) = 1.0e2
+          effgen(2,i) = 0.0
+          effcp(3,i) = effcp(2,i)
+          effk(3,i) = effk(2,i)
+          effgen(3,i) = effgen(2,i)
+        endif
+c  inner clad
+        tave = 0.5*(tcond3(4,i,jp)+tcond3(5,i,jp))
+        if (tave .lt. 300.) tave = 300.
+        oxdeo2(i,jp) = mascoi(i,jp)/(area*fnro(icomat,tave))
+        tzr(i) = mascai(i,jp)/(area*fnro(icmat,tave))
+        xcldi(i) = oxdeo2(i,jp) + tzr(i)
+        volcdi(i) = xcldi(i)*area
+        xcond3(5,i,jp) = xcond3(4,i,jp) + tzr(i) + oxdeo2(i,jp)
+        tave = 0.5*(tcond3(4,i,jp)+tcond3(5,i,jp))
+        if (xcldi(i).le.1.0e-6) then
+          effgen(4,i) = 0.0
+        else
+          effgen(4,i) = oxdhci(i)/(slbwd(jp)*xcldi(i))
+        endif
+        if (oxdeo2(i,jp).gt.1.0e-10 .and. tzr(i).gt.1.0e-10) then
+          effcp(4,i) = (fncp(icmat,tave)*mascai(i,jp)+fncp(icomat,tave)*
+     +                  mascoi(i,jp)) / volcdi(i)
+          effk(4,i) = (fnk(icmat,tave,kx)*mascai(i,jp)
+     +               +fnk(icomat,tave,kx)*mascoi(i,jp))/mascdi(i,jp)
+        else if (tzr(i).gt.1.0e-10) then
+          effcp(4,i) = fncp(icmat,tave)*fnro(icmat,tave)
+          effk(4,i) = fnk(icmat,tave,kx)
+        else if (oxdeo2(i,jp).gt.1.0e-10) then
+          effcp(4,i) = fncp(icomat,tave)*fnro(icomat,tave)
+          effk(4,i) = fnk(icomat,tave,kx)
+        else
+          effcp(4,i) = fncp(icmat,tave)*fnro(icmat,tave)
+          effk(4,i) = 1.0e2
+        endif
+  100 continue
+      return
+      end
+*endif

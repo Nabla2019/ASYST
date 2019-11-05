@@ -1,0 +1,137 @@
+*mlist
+*if def,selap
+       subroutine tinr (twall, vzira, azira, snrem, fpvap, tcool,
+     1                 pcool, snrelr, l, ierr, iwarn)
+c
+c
+c  tinr calculates the rate of tin vapor release from zircaloy reactor
+c  fuel it is based on the model developed by don hagrman.
+c
+c  Cognizant engineer: ewc (gaj).
+c
+c     argument list -
+c        twall  = zircaloy wall temperature (k).
+c        vzira  = zircaloy volume, unoxidized zircaloy only (m**3).
+c        azira  = zircaloy surface area (m**2).
+c        snrem  = tin remaining in zircaloy (kg).
+c        fpvap  = tin vapor in coolant volume (kg).
+c        tcool  = coolant temperature (k).
+c        pcool  = coolant pressure (pa).
+c        snrelr = tin vapor release rate from zircaloy (kg/s).
+c        l      = coolant volume index.
+c        ierr   = error flag (0=no; >0=yes)
+c                        1: twall  <  300.
+c                        2: azira  <= 0.
+c                        4: fpvap  <  0.
+c                        8: tcool  <  300.
+c                       16: pcool  <= 0.
+c                       32  : l      <= 0
+c        iwarn  = warning flag (0=no; >0=yes)
+c                        1: more sn remains than is possible in
+c                           volume vzira.  sn conc. set to 1.0
+c                        2: reynolds no > remax.
+c     arguments changed by this subroutine itself -
+c        snrelr
+c        ierr
+c        iwarn
+c
+       implicit none
+*call fast
+*call ufiles
+*call voldat
+       integer l,ierr,iwarn
+       real twall,vzira,azira,snrem,fpvap,tcool,pcool,snrelr
+c
+c     f = 6550 * 118.69 / 91.22 = rhozr * awsn / awzr
+c
+c  Local variables.
+       real dr,dsnc,e,g,hw,re,sc,snceq,sncza,vzr
+       integer idebug
+       real f,remax
+c
+c  Data statements.
+      data  f, remax / 8522.467661, 35000.0 /
+      data  idebug / 0 /
+c
+      ierr = 0
+      iwarn = 0
+      ierr = 0
+      snrelr = 0.0
+      if (idebug .eq. 1) then
+         write (output,10) twall,vzira,azira,snrem,fpvap,tcool,l
+   10    format ('0tinr - twall,vzira,azira,snrem,fpvap,tcool,l =',
+     1                     f8.1, 4e13.5, f8.1, i6)
+      end if
+      if (snrem    .lt. 1.0e-09) go to 100
+      if (vzira    .lt. 1.0e-12) go to 100
+c *** if (voidg(l) .lt. 1.0e-06) go to 100
+      if (twall  .lt. 300.0) ierr = ierr +  1
+      if (azira  .le.   0.0) ierr = ierr +  2
+      if (fpvap  .lt.   0.0) ierr = ierr +  4
+       if(tcool.lt.0.0)ierr=ierr+8
+      if (pcool  .le.   0.0) ierr = ierr + 16
+      if (l      .le.   0  ) ierr = ierr + 32
+      if (ierr .gt. 0) go to 100
+c    calculate the correction terms dependent on wall t and coolant p.
+      g = 118.69 / (8310.0*twall + 0.0163*pcool)
+      e = exp(-28470.0/twall + 4.548*log(twall) - 14.31)
+c     calculate tin concentration in zircaloy.
+      vzr = vzira - snrem/7280.0
+      if (vzr .ge. 0.0) then
+         sncza = snrem / (snrem + f*vzr)
+      else
+         iwarn = iwarn + 1
+         if (idebug .eq. 1) then
+            write (output,20)
+   20       format (' tinr **** warning - tin remaining is more than ',
+     1           'possible in zircaloy volume.  tin conc. set to 1.0')
+         end if
+         sncza = 1.0
+      end if
+c     calculate tin vapor concentration in coolant at wall surface.
+      snceq = e * g * sncza
+      v(l) = max(v(l),1.0e-10)
+      voidg(l) = max(voidg(l),1.0e-10)
+      dsnc = snceq - fpvap / (v(l)*voidg(l))
+      if (idebug .eq. 1) then
+         write (output,30) g, e, sncza, snceq
+   30    format ('    g, e, sncza, snceq  =', 5e13.5)
+      end if
+      if (dsnc .le. 0.0) go to 100
+c     calculate diffusion coef., reynolds no., and schmidt no.
+      dr = 0.000098 * (0.5*(tcool+twall))**1.75 / pcool
+       if(idebug.eq.1)then
+       write (output,901)rhog(l),velg(l),diamv(l),viscg(l)
+  901  format (' rhog=',e10.4,' velg=',e10.4,' diamv=',e10.4,
+     # ' viscg=',e10.4)
+       end if
+       re = diamv(l) * rhog(l) * velg(l) / viscg(l)
+       sc = viscg(l) / (rhog(l) * dr)
+c     calculate mass transfer coef.
+       hw = dr / diamv(l)
+      if (re .lt. 2000.0) then
+         hw = 3.656 * hw
+      else
+         hw = 0.023 * re**0.83 * sc**0.44 * hw
+      end if
+      if (re .gt. remax) then
+         iwarn = iwarn + 2
+         if (idebug .eq. 1) then
+            write (output,50) re
+   50       format (' tinr **** warning - reynolds no. =', e13.5)
+         end if
+      end if
+c     get final result, tin release rate.
+      snrelr = hw * azira * dsnc
+      if (idebug .eq. 1) then
+         write (output,60)       dr, re, sc, hw
+   60    format ('          dr, re, sc, hw =', 4e13.5)
+      end if
+  100 continue
+      if (idebug .eq. 1) then
+         write (output,120) snrelr
+  120    format ('       snrelr =', e13.5)
+      end if
+      return
+      end
+*endif

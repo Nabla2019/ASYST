@@ -1,0 +1,541 @@
+*mlist
+       subroutine rgntbl
+*in32 iscr
+*in32end
+!
+!  Processes general table data.
+!
+!  Cognizant engineer: rjw.
+!
+       use gentblc
+       use ufilef
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+!  Local variables.
+       integer, allocatable :: gtnumt(:)
+       type (gens), allocatable :: gent(:)
+       type (gtptrs), allocatable :: gtptrt(:)
+       real(kr) scr(6),tbout(4)
+       integer l3a(12),l3b(9),iscr(6)
+       integer i,inp10,inp9,itype,ix,k,j,
+     & m,n3,n4,nt
+       real(kr) :: chden=16.0184625057_kr,chspht=1292.22223403_kr,
+     & chtc=20441.74802800856_kr,chthcnd=1.60497032373e-4_kr,
+     & chtr=1.135652669e4_kr,cmw=1.0e6_kr,degf1=0.5555555555555_kr,
+     & degf2=255.3722222222_kr,f1
+       logical lphlp,terr,terr2
+       equivalence (scr(1),iscr(1))
+       character tbltyp(10)*8,chwrd*8
+       character uden(2)*8,uhtctm(2)*18,upow(2)*7,urate(2)*13,
+     & uspheat(2)*13,utemp(2)*6,uthcnd(2)*15
+!  Data statements.
+       data l3a/2*0,1,6,0,1,-1,0,1,1,1,0/
+       data l3b/2*0,2,20000,0,1,2,1,1/
+       data tbltyp/'power','htc-t','htrnrate','htc-temp','temp',
+     & 'reac-t','normarea','sp-heat','density','th-cond'/
+       data uden/'(kg/m3)','(lb/ft3)'/
+       data upow/'(Watts)','(MW)'/
+       data uhtctm/'(Watts/m2-K)','(Btu/sec-ft2-degF)'/
+       data urate/'(Watts/m2)','(Btu/sec-ft2)'/
+       data uspheat/'(J/kg-K)','(Btu/lb-degF)'/
+       data utemp/'(K)','(degF)'/
+       data uthcnd/'(W/m-K)','(Btu/s-ft-degF)'/
+!
+!  Check for presence of general tables.
+       if (.not.allocated(gen)) then
+         ngtbls = 0
+         ngtblf = .false.
+       endif
+!  Check for input data for general tables.
+       nt = 1
+       l3a(1) = 20200100
+       call inplnk (l3a(1),ix,n3,n4,fa(filndx(1)))
+       if (n4.ne.0 .or. (ix.ne.-1 .and. ix.le.20299999)) then
+!  Input present, allocate temporary storage.
+         allocate (gtnumt(999),gent(999),gtptrt(999))
+         gtnumt = 0
+         do i = 1,999
+           nullify (gtptrt(i)%gtbl)
+         enddo
+         if (allocated(gen)) then
+!  Move data from compacted storage to noncompacted form.
+           do i = 1,ngtbls
+             gtnumt(gtnum(i)) = gtnum(i)
+             gent(gtnum(i)) = gen(i)
+             gtptrt(gtnum(i))%gtbl => gtptr(i)%gtbl
+           enddo
+!  Deallocate compacted storage.
+           deallocate (gtnum,gen,gtptr)
+         endif
+         if (iand(ihlppr(2),ishft(1,22)) .ne. 0)
+     &   write (output,"('0',30x,'Edit of general table input')")
+         do
+!  Check status of card search.
+           if (n4 .eq. 0) then
+!  See if first card is missing, but other cards are entered.
+             if (ix .eq. -1) exit
+             if (ix .gt. l3a(1) + 99) then
+               nt = (ix - 20200000)/100
+             else
+               write (output,"('0******** Card',i8,' is missing.')")
+     &         l3a(1)
+               fail = .true.
+               l3b(1) = l3a(1) + 1
+               l3b(2) = l3a(1) + 99
+               i = inp10(fa(filndx(1)),l3b(1),l3b(2))
+               nt = nt + 1
+             endif
+           else
+!  Get 202nnn00 card.
+             if (iand(ihlppr(2),ishft(1,22)) .ne. 0)
+     &       write (output,"('0',29x,'General table no.',i4)") nt
+             iscr(2) = 0
+             l3a(6) = 1
+             call inp2 (fa(filndx(1)),iscr,l3a)
+             if (l3a(6) .le. 0) then
+               fail = .true.
+               l3b(1) = l3a(1) + 1
+               l3b(2) = l3a(1) + 99
+               i = inp10(fa(filndx(1)),l3b(1),l3b(2))
+             else
+!  Set whether general table is to be evaluated for use in minor edits
+!  etc.
+               gent(nt)%gteval = .false.
+               if (l3a(6) .eq. 6) then
+                 if (iscr(6).lt.0 .or. iscr(6).gt.1) then
+                   write (output,
+     & "('0******** General table evaluation flag is out of range.')")
+                   fail = .true.
+                 else
+                   if (iscr(6) .ne. 0) gent(nt)%gteval = .true.
+                 endif
+                 l3a(6) = 5
+                 do i = 5,3,-1
+                   if (scr(i) .ne. -1.0_kr) exit
+                   l3a(6) = l3a(6) - 1
+                 enddo
+               endif
+!  Check table type.
+               write (chwrd,'(a8)') scr(1)
+               if (chwrd .eq. 'delete') then
+                 if (gtnumt(nt) .ne. 0) then
+                   gtnumt(nt) = 0
+                   ngtbls = ngtbls - 1
+                   if (associated(gtptrt(nt)%gtbl))
+     &             deallocate (gtptrt(nt)%gtbl)
+                   write (output,
+     & "(' General table has been deleted.')")
+                 else
+                   write (output,
+     & "('0******** Illegal delete attempt, either new problem or table 
+     &is not present.')")
+                   fail = .true.
+                 endif
+                 if (ix .ne. -1) then
+                   if (ix .lt. l3a(1) + 99) then
+                     write (output,
+     & "('0******** Table cards entered with delete command.')")
+                     fail = .true.
+                     l3b(1) = l3a(1) + 1
+                     l3b(2) = l3a(1) + 99
+                     i = inp10(fa(filndx(1)),l3b(1),l3b(2))
+                   endif
+                 endif
+               else
+                 gtnumt(nt) = nt
+                 lphlp = .false.
+                 do itype = 1,10
+                   if (chwrd .eq. tbltyp(itype)) then
+                     lphlp = .true.
+                     exit
+                   endif
+                 enddo
+                 if (.not.lphlp) then
+                   write (output,
+     & "('0******** Table type for general table',i4,' is not recognizab
+     &le.')")
+     &             nt
+                   fail = .true.
+                   itype = 0
+                 endif
+                 if (l3a(6) .ne. 1) then
+                   if (iscr(2) .ne. 0) then
+                     if (iand(ihlppr(2),ishft(1,22)) .ne. 0)
+     &               write (output,"('0Table trip number is',i4,'.')")
+     &               iscr(2)
+                     if (itype.eq.4 .or. (itype.ge.7 .and. itype.le.10))
+     &               then
+                       write (output,"('0******** Trip with the table ty
+     &pe in table',i4,' is not allowed.')")
+                       fail = .true.
+                       iscr(2) = 0
+                     endif
+                     if (iscr(2).lt.0 .or. iscr(2).gt.2000) then
+                       iscr(2) = 0
+                       write (output,
+     & "('0******** Table trip number in table',i4,' is out of range, se
+     &t to zero.')")
+                       fail = .true.
+                     endif
+                   endif
+                 endif
+                 gent(nt)%gttrp = iscr(2)
+                 if (itype .eq. 0) then
+                   if (l3a(6) .gt. 2) then
+                     if (iand(ihlppr(2),ishft(1,22)) .ne. 0) then
+                       write (output,
+     & "(' Conversion factors are', 3es14.6)")
+     &                 scr(3:l3a(6))
+                       write (output,
+     & "('+',42x,', but factors not applied in table list below.')")
+                     endif
+                   endif
+                 else
+                   terr = .false.
+                   terr2 = .false.
+                   lphlp = .false.
+                   select case (itype)
+                   case (1:3,6,7)
+                     if (l3a(6) .le. 2) then
+                       lphlp = .true.
+                     elseif (l3a(6) .ne. 4) then
+                       terr2 = .true.
+                     else
+                       if (scr(3) .eq. 0.0) then
+                         scr(3) = 1.0
+                         terr = .true.
+                       endif
+                       if (scr(4) .eq. 0.0) then
+                         scr(4) = 1.0
+                         terr = .true.
+                       endif
+                     endif
+                     if (lphlp) then
+                       scr(3) = 1.0
+                       scr(4) = 1.0
+                     endif
+                   case (4,8:10)
+                     if (l3a(6) .le. 2) then
+                       lphlp = .true.
+                     elseif (l3a(6) .ne. 5) then
+                       terr2 = .true.
+                     else
+                       if (scr(3) .eq. 0.0) then
+                         scr(3) = 1.0
+                         scr(4) = 0.0
+                         terr = .true.
+                       endif
+                       if (scr(5) .eq. 0.0) then
+                         scr(5) = 1.0
+                         terr = .true.
+                       endif
+                     endif
+                     if (lphlp) then
+                       scr(3) = 1.0
+                       scr(4) = 0.0
+                       scr(5) = 1.0
+                     endif
+                   case (5)
+                     if (l3a(6) .le. 2) then
+                       lphlp = .true.
+                     elseif (l3a(6) .ne. 5) then
+                       terr2 = .true.
+                     else
+                       if (scr(3) .eq. 0.0) then
+                         scr(3) = 1.0
+                         terr = .true.
+                       endif
+                       if (scr(4) .eq. 0.0) then
+                         scr(4) = 1.0
+                         scr(5) = 0.0
+                         terr = .true.
+                       endif
+                     endif
+                     if (lphlp) then
+                       scr(3) = 1.0
+                       scr(4) = 1.0
+                       scr(5) = 0.0
+                     endif
+                   end select
+                   if (terr) then
+                     write (output,
+     & "('0******** Zero entered for multiplier factor in table',i4,
+     & ' , set to default value.')")
+     &               nt
+                     fail = .true.
+                   endif
+                   if (terr2) then
+                     write (output,
+     & "('0******** Incorrect number of conversion factors entered for 
+     &table',i4,', default values used.')")
+     &               nt
+                     fail = .true.
+                   endif
+                 endif
+                 if (iand(ihlppr(2),ishft(1,22)) .ne. 0) then
+                   select case (itype)
+                   case (1)
+                     write (output,
+     & "('0Table is power vs. time, time factor is',es14.6,', power fact
+     &or is',es14.6,'.')")
+     &               scr(3:4)
+                   case (2)
+                     write (output,
+     & "('0Table is heat transfer coefficient vs. time, time factor is',
+     & es14.6,', heat transfer coefficient factor is',es14.6,'.')")
+     &               scr(3:4)
+                   case (3)
+                     write (output,
+     & "('0Table is heat transfer rate vs. time, time factor is',
+     & es14.6,', heat transfer rate factor is',es14.6,'.')")
+     &               scr(3:4)
+                   case (4)
+                     write (output,
+     & "('0Table is heat transfer coefficient vs. temperature,'/
+     & ' temperature factors are',2(es14.6,','),' heat transfer coeffici
+     &ent factor is',es14.6,'.')")
+     &               scr(3:5)
+                   case (5)
+                     write (output,
+     & "('0Table is temperature vs. time'/' time factor is',
+     & es14.6,', temperature factors are',es14.6,',',es14.6,'.')")
+     &               scr(3:5)
+                   case (6)
+                     write (output,
+     & "('0Table is reactivity versus time, time factor is',
+     & es14.6,', reactivity factor is',es14.6,'.')")
+     &               scr(3:4)
+                   case (7)
+                     write (output,
+     & "('0Table is normalized area versus normalized length, norm. leng
+     &th factor is',es14.6,', norm. area is',es14.6,'.')")
+     &               scr(3:4)
+                   case (8)
+                     write (output,
+     & "('0Table is specific heat vs. temperature,'/
+     & ' temperature factors are',2(es14.6,','),' specific heat factor i
+     &s',es14.6,'.')")
+     &               scr(3:5)
+                   case (9)
+                     write (output,
+     & "('0Table is density vs. temperature,'/
+     & ' temperature factors are',2(es14.6,','),' density factor is',
+     & es14.6,'.')") scr(3:5)
+                   case (10)
+                     write (output,
+     & "('0Table is thermal conductivity vs. temperature,'/
+     & ' temperature factors are',2(es14.6,','),' thermal conductivity f
+     &actor is',es14.6,'.')")
+     &               scr(3:5)
+                   end select
+                 endif
+                 if (associated(gtptrt(nt)%gtbl)) then
+                   deallocate (gtptrt(nt)%gtbl)
+                 else
+                   ngtbls = ngtbls + 1
+                 endif
+!  Process and edit table entries.
+                 l3b(1) = l3a(1) + 1
+                 l3b(2) = -l3b(1) - 98
+                 l3b(6) = 0
+                 call inp2 (fa(filndx(1)),scr(6),l3b)
+                 if (l3b(6) .gt. 0) then
+                   if (mod(l3b(6),2) .ne. 0) then
+                     write (output,
+     & "('0******** Number of entries in table',i4,' is not a multiple o
+     &f 2.')")
+     &               nt
+                     fail = .true.
+                   endif
+                   allocate (gtptrt(nt)%gtbl(l3b(6)))
+                   l3b(6) = 1
+                   call inp2 (fa(filndx(1)),gtptrt(nt)%gtbl,l3b)
+                   gent(nt)%gttyp = itype
+                   gent(nt)%gtinfo(1) = 2
+                   gent(nt)%gtinfo(2) = l3b(6)
+                   gent(nt)%gtinfo(3) = 1
+                   scr(1) = gtptrt(nt)%gtbl(1)
+                   if (unito) then
+                     m = 1
+                   else
+                     m = 2
+                   endif
+                   if (iand(ihlppr(2),ishft(1,22)) .ne. 0) then
+                     select case (itype)
+                     case (0)
+                       write (output,
+     & "('0    argument',9x,'function'/'   (as input)',7x,'(as input)')"
+     & )
+                     case (1)
+                       write (output,
+     & "('0    time',13x,'power',12x,'time',13x,'power'/
+     & '     (as input)',7x,'(as input)',7x,'(sec)',12x,a)")
+     &                 upow(m)
+                       f1 = cmw
+                     case (2)
+                       write (output,
+     & "('0    time',13x,'heat tranf.coef. time',13x,'heat tranf.coef.'/
+     & '     (as input)',7x,'(as input)',7x,'(sec)',12x,a)")
+     &                 uhtctm(m)
+                       f1 = chtc
+                     case (3)
+                       write (output,
+     & "('0    time',13x,'heat tranf.rate  time',13x,'heat tranf.rate' /
+     & '     (as input)',7x,'(as input)',7x,'(sec)',12x,a)")
+     &                 urate(m)
+                       f1 = chtr
+                     case (4)
+                       write (output,
+     & "('0    temperature',6x,'heat tranf.coef.  temperature',5x,
+     &'heat tranf.coef.'/
+     & '     (as input)',7x,'(as input)',7x,a6,11x,a)")
+     &                 utemp(m),uhtctm(m)
+                       f1 = chtc
+                     case (5)
+                       write (output,
+     & "('0    time',13x,'temperature',6x,'time',13x,'temperature'/
+     & '     (as input)',7x,'(as input)',7x,'(sec)',12x,a)")
+     &                 utemp(m)
+                     case (6)
+                       write (output,
+     & "('0    time',13x,'reactivity',7x,'time',13x,'reactivity'/
+     & 5x,'(as input)',7x,'(as input)',7x,'(sec)',12x,'(dollars)')")
+                     case (7)
+                       write (output,
+     & "('0    norm. length',5x,'norm. area',7x,'norm. length',5x
+     & ,'norm. area'/5x,'(as  input)',7x,'(as input)')")
+                     case (8)
+                       write (output,
+     & "('0    temperature',6x,'specific heat    temperature',6x,
+     &'specific heat'/
+     & '     (as input)',7x,'(as input)',7x,a6,11x,a)")
+     &                 utemp(m),uspheat(m)
+                       f1 = chspht
+                     case (9)
+                       write (output,
+     & "('0    temperature',6x,'density',10x,'temperature',6x,
+     &'density'/
+     & '     (as input)',7x,'(as input)',7x,a6,11x,a)")
+     &                 utemp(m),uden(m)
+                       f1 = chden
+                     case (10)
+                       write (output,
+     & "('0    temperature',6x,'th.conductivity  temperature',6x,
+     &'th.conductivity'/
+     & '     (as input)',7x,'(as input)',7x,a6,11x,a)")
+     &                 utemp(m),uthcnd(m)
+                       f1 = chthcnd
+                     end select
+                   endif
+                   if (itype .eq. 0) then
+                     j = 2
+                   else
+                     j = 4
+                   endif
+                   lphlp = .false.
+                   do k = 1,l3b(6),2
+                     if (gtptrt(nt)%gtbl(k) .lt. scr(1)) lphlp =
+     &               .true.
+                     scr(1) = gtptrt(nt)%gtbl(k)
+                     tbout(1) = gtptrt(nt)%gtbl(k)
+                     tbout(2) = gtptrt(nt)%gtbl(k+1)
+                     select case (itype)
+                     case (1,2,3)
+                       gtptrt(nt)%gtbl(k) =
+     &                 gtptrt(nt)%gtbl(k)*scr(3)
+                       gtptrt(nt)%gtbl(k+1) =
+     &                 gtptrt(nt)%gtbl(k+1)*scr(4)
+                       if (.not.uniti) gtptrt(nt)%gtbl(k+1) = 
+     &                 gtptrt(nt)%gtbl(k+1)*f1
+                       tbout(3) = gtptrt(nt)%gtbl(k)
+                       tbout(4) = gtptrt(nt)%gtbl(k+1)
+                       if (.not.terr .and. .not.unito)
+     &                 tbout(4) = tbout(4)/f1
+                     case (4,8:10)
+                       gtptrt(nt)%gtbl(k) =
+     &                 gtptrt(nt)%gtbl(k)*scr(3) + scr(4)
+                       gtptrt(nt)%gtbl(k+1) =
+     &                 gtptrt(nt)%gtbl(k+1)*scr(5)
+                       if (.not.uniti) then
+                         gtptrt(nt)%gtbl(k) =
+     &                   gtptrt(nt)%gtbl(k)*degf1 + degf2
+                         gtptrt(nt)%gtbl(k+1) =
+     &                   gtptrt(nt)%gtbl(k+1)*f1
+                       endif
+                       tbout(3) = gtptrt(nt)%gtbl(k)
+                       tbout(4) = gtptrt(nt)%gtbl(k+1)
+                       if (.not.terr .and. .not.unito) then
+                         tbout(3) = (tbout(3) - degf2)*1.8_kr
+                         tbout(4) = tbout(4)/f1
+                       endif
+                     case (5)
+                       gtptrt(nt)%gtbl(k) =
+     &                 gtptrt(nt)%gtbl(k)*scr(3)
+                       gtptrt(nt)%gtbl(k+1) =
+     &                 gtptrt(nt)%gtbl(k+1)*scr(4) + scr(5)
+                       if (.not.uniti) gtptrt(nt)%gtbl(k+1) =
+     &                 gtptrt(nt)%gtbl(k+1)*degf1 + degf2
+                       tbout(3) = gtptrt(nt)%gtbl(k)
+                       tbout(4) = gtptrt(nt)%gtbl(k+1)
+                       if (.not.terr .and. .not.unito)
+     &                 tbout(4) = (tbout(4) - degf2)*1.8_kr
+                     case (6,7)
+                       gtptrt(nt)%gtbl(k) =
+     &                 gtptrt(nt)%gtbl(k)*scr(3)
+                       gtptrt(nt)%gtbl(k+1) =
+     &                 gtptrt(nt)%gtbl(k+1)*scr(4)
+                       tbout(3) = gtptrt(nt)%gtbl(k)
+                       tbout(4) = gtptrt(nt)%gtbl(k+1)
+                     end select
+                     if (iand(ihlppr(2),ishft(1,22)) .ne. 0)
+     &               write (output,"(4es17.6)") tbout(1:j)
+                   enddo
+                   gent(nt)%gtarg = gtptrt(nt)%gtbl(1)
+                   gent(nt)%gtval = gtptrt(nt)%gtbl(2)
+                   if (lphlp) then
+                     write (output,
+     & "('0******** Table arguments are not in ascending order.')")
+                     fail = .true.
+                   endif
+                 else
+                   fail = .true.
+                 endif
+               endif
+             endif
+             nt = nt + 1
+           endif
+!  See if there can be more tables.
+           if (nt .ge. 1000) exit
+           l3a(1) = nt*100 + 20200000
+           call inplnk (l3a(1),ix,n3,n4,fa(filndx(1)))
+         enddo
+!  Delete input cards.
+         filsiz(1) = inp9(fa(filndx(1)))
+         call ftbsft (2.0,filsiz(1),1,filndx(1))
+!  If any tables entered, set number of tables and modify pointers.
+         if (ngtbls .ne. 0) then
+           allocate (gtnum(ngtbls),gen(ngtbls),gtptr(ngtbls))
+           nt = 0
+           do i = 1,999
+             if (gtnumt(i) .ne. 0) then
+               nt = nt + 1
+               gtnum(nt) = i
+               gen(nt) = gent(i)
+               gtptr(nt)%gtbl => gtptrt(i)%gtbl
+             endif
+           enddo
+         endif
+         if (nt .ne. ngtbls) then
+           write (output,"('0******** Programming error in rgntbl.')")
+           call fabend
+         endif
+         deallocate (gtnumt,gent,gtptrt)
+!  Set flag to cause evaluation of some general tables for minor edits
+!  etc.
+         ngtblf = any(gen%gteval)
+       endif
+       return
+       end

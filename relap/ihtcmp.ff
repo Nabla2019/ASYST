@@ -1,0 +1,1084 @@
+*mlist
+       subroutine ihtcmp
+*in32 ierr
+*in32 ipx
+*in32end
+c
+c  Checks and performs referrals on geometry, compositions, source
+c  distributions, and initial temperatures between heat structures,
+c  checks composition numbers, checks heat transfer types, and calls
+c  subroutine for steady state initialization of specified heat
+c  structures.
+c
+c  Cognizant engineer: rjw.
+c
+       use gentblc
+$if def,rk3d,1
+       use rkinc
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'convarc.h'
+       include 'fpfast.h'
+       include 'htscr.h'
+       include 'htsrcm.h'
+       include 'machls.h'
+       include 'mtbls.h'
+       include 'rkinc.h'
+       include 'scddat.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer i,ierr(10),ipx(17),ir,isfdes,it,iun,iv,j,jj,jlim,htopta,
+     & jv,jx,jy,k,l,l1,l2,lcontg,ll,lpx,lx,ly,lz,m,n,n1,n2,nerr,nn,num
+$if def,selap,2
+       integer isrf,isrf1,isrfk,isrfn,isys,isys1,isysk,isysn,ivol,
+     & ivol1,ivolk,ivoln,jsrfno,nsrf
+       character*8 yesnol,yesnor
+       character lb1a(2)*9,lb2a(2)*9,lb2b(2)*4,lb3a(2)*9,lb3b(2)*9,
+     & lb10(2)*6,labl(2,3)*7,lr(2)*5
+       real aleft,aright,btupsc,cv2,cv3,cvr(3),degf1,degf2,fidx,
+     & ftbnid,px(17),tout(1),idans
+$if def,selap,1
+       real arsum
+       logical frst,gptblx,last,ldkht,lhed,lpxc,onres,tfail,unres
+$if def,rk3d,1
+       logical lphlp
+       equivalence (ipx(1),px(1),tout(1),ierr(1))
+       external fabend,ftbdel,ftbmov,ftbnid,ftbrsv,ht1sst,isfdes,lcontg
+c
+c  Data statements.
+       data iun/1/
+       data lr/'Left','Right'/
+       data degf1/1.8/, degf2/255.3722222222/
+       data btupsc/9.478171200e-4/, cv2/8.805509186e-5/,
+     & cv3/4.891949546e-5/
+       data cvr/0.3048,0.09290304,2.8316846592e-2/
+       data lb1a/'(Watt)','(Btu/sec)'/,
+     & lb2a/'(Watt/m2)','(Btu/sec-'/, lb2b/' ','ft2)'/,
+     & lb3a/'(Watt/m2-','(Btu/sec-'/, lb3b/'K)','ft2-degF)'/,
+     & lb10/'(K)','(degF)'/,
+     & labl/' (m).',' (ft).',' (m2).',' (ft2).',' (m3).',' (ft3).'/
+       include 'machlf.h'
+c
+       l = lcontg(1)
+       fidx = ftbnid(1)
+       iv = filndx(4)
+       lx = filndx(8)
+       lz = filndx(8) + nhtstr(filndx(8)) - 1
+c  Resolve geometry temperature referrals between heat strucutures.
+       nerr = 0
+       frst = .true.
+       last = .false.
+   11  unres = .false.
+       onres = .false.
+       do 12 i = lx,lz
+         ly = ihtptr(i) + filndx(8)
+         if (iand(htopt(ly),2) .ne. 0) go to 12
+         ir = htstno(ly)/1000
+         lpx = htnusr(ly)
+c  Check geometry reference.
+         if (iand(htopt(ly),8) .eq. 0) go to 13
+         if (frst) htopt(ly) = iand(htopt(ly),not(16))
+         if (iand(htopt(ly),16) .ne. 0) go to 13
+         it = htgmr(ly)
+         if (lpx.eq.0 .or. it.ne.ir) go to 33
+         fail = .true.
+         htopt(ly) = ior(htopt(ly),2)
+         if (nerr .ge. 10) go to 13
+         if (nerr .eq. 0) go to 34
+         do j = 1,nerr
+           if (ierr(j) .eq. it) go to 13
+         enddo
+   34    nerr = nerr + 1
+         ierr(nerr) = it
+         write (output,2037) it
+ 2037  format ('0******** Geometry reference in heat structure-geometry'
+     & ,i5,' refers to itself.')
+         go to 13
+   33    do j = lx,lz
+           jy = ihtptr(j) + filndx(8)
+           if (htstno(jy)/1000 .eq. it) go to 15
+         enddo
+   18    unres = .true.
+         if (.not.last) go to 13
+         fail = .true.
+         htopt(ly) = ior(htopt(ly),2)
+         if (nerr .ge. 10) go to 13
+         if (nerr .ne. 0) then
+           do j = 1,nerr
+             if (ierr(j) .eq. it) go to 13
+           enddo
+         endif
+         nerr = nerr + 1
+         ierr(nerr) = it
+         write (output,2001) ir,it
+ 2001  format ('0******** Geometry reference in heat structure-geometry'
+     & ,i5,' refers to heat structure-geometry',i5,' which is not descri
+     &bed.')
+         go to 13
+   15    if (iand(htopt(jy),2) .ne. 0) then
+           if (last) htopt(ly) = ior(htopt(ly),2)
+           go to 13
+         endif
+         if (iand(htopt(jy),8).ne.0 .and. iand(htopt(jy),16).eq.0) go to
+     &   18
+         htopt(ly) = ior(htopt(ly),16)
+         htgom(ly) = htgom(jy)
+         httots(ly) = httots(jy)
+         htrado(ly) = htrado(jy)
+         htradn(ly) = htradn(jy)
+         onres = .true.
+         if (ishft(htopt(ly),-24).eq.ishft(htopt(jy),-24) .and.
+     &   htnmpt(ly).eq.htnmpt(jy)) go to 13
+         write (output,2005) it,ir
+ 2005  format ('0******** Heat structure-geometrys',i5,' and',i5,
+     & ' do not have compatible geometry for geometry reference.')
+         fail = .true.
+         htopt(ly) = ior(htopt(ly),2)
+c  Check initial temperature reference.
+   13    if (iand(htopt(ly),32) .eq. 0) go to 12
+         it = htsrt(ly+1)
+         if (lpx.eq.0 .or. it.ne.ir) go to 37
+         fail = .true.
+         htopt(ly) = ior(htopt(ly),2)
+         if (nerr .ge. 10) go to 12
+         if (nerr .ne. 0) then
+           do j = 1,nerr
+             if (ierr(j) .eq. it) go to 12
+           enddo
+         endif
+         nerr = nerr + 1
+         ierr(nerr) = it
+         write (output,2038) it
+ 2038  format ('0******** Temperature reference in heat structure-geomet
+     &ry ',i5,' refers to itself.')
+   37    do j = lx,lz
+           jy = ihtptr(j) + filndx(8)
+           if (htstno(jy)/1000 .eq. it) go to 45
+         enddo
+   40    unres = .true.
+         if (.not.last) go to 12
+         fail = .true.
+         htopt(ly) = ior(htopt(ly),2)
+         if (nerr .ge. 10) go to 12
+         if (nerr .ne. 0) then
+           do j = 1,nerr
+             if (ierr(j) .eq. it) go to 12
+           enddo
+         endif
+         nerr = nerr + 1
+         ierr(nerr) = it
+         write (output,2007) ir,it
+ 2007  format ('0******** Temperature reference in heat structure-geomet
+     &ry',i5,' refers to heat structure-geometry',i5,' which is not desc
+     &ribed.')
+         go to 12
+   45    if (iand(htopt(jy),2) .ne. 0) then
+           if (last) htopt(ly) = ior(htopt(ly),2)
+           go to 12
+         endif
+         if (iand(htopt(jy),32) .ne. 0) go to 40
+         htopt(ly) = iand(htopt(ly),not(32))
+         onres = .true.
+         if (htnmpt(ly) .ne. htnmpt(jy)) then
+           write (output,2008) it,ir
+ 2008  format ('0******** Heat structure-geometrys',i5,' and',i5,
+     & ' do not have compatible geometry for initial temperature referen
+     &ce.')
+           fail = .true.
+           htopt(ly) = ior(htopt(ly),2)
+         else
+           ly = htxft(ly) + filndx(8)
+           l = htxft(jy) + filndx(8)
+           call ftbmov (httmp(l),httmp(ly),htnmpt(jy))
+         endif
+   12  continue
+       if (.not.last) then
+         if (.not.unres) go to 43
+         frst = .false.
+         if (onres) go to 11
+         last = .true.
+         go to 11
+       endif
+       if (nerr .ge. 10) write (output,2002)
+ 2002  format ('0******** Error messages concerning heat structure-geome
+     &try referrals suppressed after ten occurences.')
+c  Check and set pointers for interconnections between heat structure
+c  block, material property block, and general table block.
+   43  if (filid(9) .eq. 0.0) then
+         write (output,2023)
+ 2023  format ('0******** Thermal property data for heat structures has
+     &not been entered or is all incorrect.')
+         fail = .true.
+       endif
+       ldkht = .false.
+       do 50 i = lx,lz
+         ly = ihtptr(i) + filndx(8)
+         if (iand(htopt(ly),2) .ne. 0) go to 50
+         unres = .false.
+         ir = htstno(ly)
+c  Check source type and set pointers.
+         j = htsrt(ly)
+         if (j .eq. 0) go to 60
+$if def,selap
+         if (j .eq. -1) then
+           if (filid(34) .eq. 0.0) then
+             htsrt(ly) = 0
+             if (.not.ldkht) then
+               ldkht = .true.
+               fail = .true.
+               write (output,'(1h0,a)')
+     & '******** One or more heat structures specify aerosol decay heat
+     &but no aerosol data are entered.'
+             endif
+           else
+             lpx = 0
+             isysk = fpsysk(filndx(34))
+             isys1 = filndx(34) + fpsyso(filndx(34))
+             isysn = isys1 + (fpnsys(filndx(34))-1)*isysk
+             ivolk = fpvolk(filndx(34))
+             isrfk = fpsrfk(filndx(34))
+             do isys = isys1,isysn,isysk
+               ivol1 = filndx(34) + fpvolo(isys)
+               ivoln = ivol1 + (fpnvol(isys)-1)*ivolk
+               do ivol = ivol1, ivoln, fpvolk(filndx(34))
+                 nsrf = fpnsrf(ivol)
+                 if (nsrf .gt. 0) then
+                   isrf1 = filndx(34) + fpsrfo(ivol)
+                   isrfn = isrf1 + (nsrf-1)*isrfk
+                   do isrf = isrf1,isrfn,isrfk
+                     jsrfno = fpsrfn(isrf)
+                     if (jsrfno .eq. htstno(ly)) then
+                       lpx = lpx + 1
+                       if (lpx.eq.1 .or. fpsflr(isrf).eq.0)
+     &                 htsrt(ly+1) = isrf - filndx(34)
+                     endif
+                   enddo
+                 endif
+               enddo
+             enddo
+             if (lpx .eq. 0) then
+               htsrt(ly) = 0
+               if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &         write (output,'(1h0,a,i10,a)')
+     & '$$$$$$$$ Heat structure', ir, ' specifies aerosol heating but do
+     &es not connect to an aerosol volume.'
+             endif
+           endif
+           go to 60
+         endif
+$endif
+         jj = j - 1000
+         if (jj .lt. 0) then
+           if (ngtbls .ne. 0) then
+             do k = 1,ngtbls
+               if (j .eq. gtnum(k)) go to 59
+             enddo
+           endif
+           write (output,
+     & "('0******** Source table for heat structure',i8,
+     & ' is missing or has an error.')")
+     &     ir
+           unres = .true.
+           go to 60
+   59      if (gen(k)%gttyp .ne. 1) then
+             write (output,
+     & "('0******** Heat structure',i8,' source code references a table 
+     &that is not a power table.')")
+     &       ir
+             unres = .true.
+             go to 60
+           endif
+           htsrt(ly+1) = k
+           go to 60
+         endif
+         if (jj .lt. 1000) then
+           if (filid(21) .eq. 0.0) then
+             write (output,2039) ir
+ 2039  format ('0******** Heat structure',i8,' refers to reactor power b
+     &ut no reactor kinetics data entered, changed to no source.')
+             unres = .true.
+             go to 60
+           endif
+           it = jj/10
+           jj = jj - 10*it
+           if (jj .gt. 4) then
+             write (output,2101)
+ 2101  format ('0******** The units digit which specifies the type of ki
+     &netics power value is out of range.')
+             fail = .true.
+             jj = 0
+           endif
+           if (iand(rkopt(filndx(21)),128) .eq. 0) then
+             if (it .ne. 0) then
+               write (output,2102)
+ 2102  format ('0******** Region field in source type for point kinetics
+     & must be zero.')
+               fail = .true.
+             endif
+             htsrt(ly+1) = locf(rkpow(filndx(21)+jj)) -
+     &       locf(fa(filndx(21)))
+           endif
+           go to 60
+         endif
+         jj = j - 10000
+         if (jj .lt. 10000) then
+           jx = filndx(27)
+           do k = 1,cnvnum(jx)
+             if (jj .eq. cnvpnm(jx)) go to 107
+             jx = jx + cnvlen(jx)
+           enddo
+           write (output,2036) ir,jj
+ 2036  format ('0******** Heat structure',i8,' refers to control variabl
+     &e',i5,' which is not defined.')
+           unres = .true.
+           go to 60
+  107      htsrt(ly+1) = jx - filndx(27)
+           go to 60
+         endif
+         jj = j - 100000
+$if def,rk3d
+         if (jj .eq. 0) then
+           if (.not.allocated(rk4)) then
+             write (output,"('0******** Heat structure',i8,' refers to
+     & reactor power from multi-dimensional reactor kinetics but no such
+     &data entered, changed to no source.')") ir
+             unres = .true.
+             go to 60
+           endif
+           lphlp = .false.
+           do k = 1,size(rk4o)
+             if (rk4o(k)%htsno .eq. ir) then
+               lphlp = .true.
+               exit
+             endif
+           enddo
+           if (lphlp) then
+             htsrt(ly+1) = k
+           else
+             write (output,"('Programming error or input error--ihtcmp
+     &',i10)") ir
+           endif
+           go to 60
+         endif
+$endif
+         if (jj.gt.0 .and. jj.lt.100000) then
+           if (filid(21) .eq. 0.0) then
+             write (output,2039) ir
+             unres = .true.
+             go to 60
+           endif
+           it = jj/10
+           jj = jj - 10*it
+           if (jj .gt. 4) then
+             write (output,2101)
+             fail = .true.
+             jj = 0
+           endif
+           k = filndx(21) - rknum(filndx(21))
+           jx = rkonn(filndx(21)) + k
+           k = rkonn(filndx(21)+4) + k
+           do j = 1,rkonz(filndx(21))
+             if (it .eq. rkozid(jx)) go to 80
+             do m = 1,rkonvr(filndx(21))
+               jx = jx + 4 + 5*rkofbv(jx)
+             enddo
+             do m = 1,rkonsr(filndx(21))
+               jx = jx + 2 + 3*rkofbs(jx)
+             enddo
+             jx = jx + 1
+             k = k + 5 + rkonmg(filndx(21))
+           enddo
+           write (output,2103)
+ 2103  format('0******** Zone number in source type for nodal kinetics i
+     &s not valid.')
+           fail = .true.
+           unres = .true.
+           go to 60
+   80      htsrt(ly+1) = locf(rkoztp(k+jj)) - locf(fa(filndx(21)))
+           go to 60
+         endif
+         write (output,2014) ir
+ 2014  format ('0******** Illegal source code for heat structure',i8,
+     & '.')
+         unres = .true.
+c  Check compositions.
+   60    if (htnusr(ly).ne.0) then
+           lpxc = .false.
+           if (filid(9) .ne. 0.0) then
+             j = htgom(ly) + filndx(8)
+             jj = htnmpt(ly) - 1
+             lpx = 0
+             gptblx = gpintp(j).le.0.0
+             do k = 1,jj
+               if (htcmp(j) .ne. 0) then
+                 num = htcmp(j)
+                 jx = filndx(9)
+                 do l = 1,nmtbls(jx)
+                   jy = mtbptr(jx+1) + filndx(9)
+                   if (mtbnum(jy) .eq. num) go to 162
+                   jx = jx + 1
+                 enddo
+                 lpx = 1
+                 go to 166
+  162            htcmp(j+1) = l
+                 if (mtblen(jy) .lt. 0) unres = .true.
+                 if(.not.gptblx) gptblx = mtbl(jy) .eq. 2
+               endif
+  166          j = j + htgskp
+             enddo
+             if (.not.gptblx) then
+               write (output,2040)
+ 2040  format('0******** When a gap deformation model is used, a table c
+     &ontaining gas component name and mole fraction must be entered.')
+               lpxc = .true.
+               unres = .true.
+             endif
+             if (lpx .ne. 0) then
+               write (output,2027) ir
+ 2027  format ('0******** Composition in heat structure',i8,' is not inc
+     &luded in composition data (20100100-20199999 cards).')
+               lpxc = .true.
+               unres = .true.
+             endif
+           else
+             lpxc = .true.
+             unres = .true.
+           endif
+         else
+           if (lpxc) unres = .true.
+         endif
+c  Do boundary related checks.
+         do k = 1,2
+           htbnts(ly+k-1) = 0
+           if (htbvc(ly+k-1) .lt. 0) then
+c  Check reference to general tables for temperature.
+             j = -htbvc(ly+k-1)
+             do jy = 1,ngtbls
+               if (j .eq. gtnum(jy)) go to 102
+             enddo
+             write (output,2019) lr(k),ir
+             unres = .true.
+             go to 51
+  102        if (gen(jy)%gttyp .ne. 5) then
+               write (output,2020) lr(k),ir
+               unres = .true.
+             else
+               htbvo(ly+k-1) = jy
+             endif
+c  Check reference to boundary volumes.
+           elseif (htbvc(ly+k-1) .gt. 0) then
+             if (filid(4) .ne. 0.0) then
+               num = (htbvc(ly+k-1)/10)*10
+               tfail = .false.
+               iv = filndx(4)
+               do 53 j = 1,nvols(iv)
+                 if (num .eq. volno(iv)) then
+                   htbvo(ly+k-1) = iv
+                   num = htbvc(ly+k-1) - num
+                   tfail = num.gt.7 .or. (iand(num,4).ne.0 .and.
+     &             iand(imap(iv),16384).eq.0) .or. (iand(num,2).ne.0
+     &             .and. iand(imap(iv+1),16384).eq.0) .or.
+     &             (iand(num,1).ne.0 .and. iand(imap(iv+2),16384).eq.0)
+                   if (num.eq.3 .or. num.gt.4) then
+                     htbnts(ly+k-1) = ior(ishft(num,12),2048)
+                     tfail = .true.
+                   else
+                     if (num.eq.0 .or. num.eq.4) then
+                       num = 0
+                     elseif (num .eq. 2) then
+                       num = 1
+                     else
+                       num = 2
+                     endif
+                     htbnts(ly+k-1) = ishft(num,12)
+                   endif
+                   htopta = htbnt(ly+k-1)
+                   if (htopta .eq. 110 .or. htopta .eq. 111) then
+                     if (htpovd(ly+k-1) .gt. 1.6) then
+                       htpovd(ly+k-1) = 1.6
+                     write (output,2048) lr(k),ir,htpovd(ly+k-1)
+ 2048 format('0$$$$$$$$',a7,' boundary of heat structure',i8
+     &,' pitch/diameter is reset to: ',1pe13.6,/
+     &,' 1.6 is the upper limit of the Inyatov Data. As the pitch'
+     &,' increases above 1.6, at some point the bundle effect must'
+     &,' diminish. Try to get data above 1.6. ')
+                     endif
+                     if (htpovd(ly+k-1) .lt. 1.1) then
+                       htpovd(ly+k-1) = 1.1
+                       write (output,2049) lr(k),ir,htpovd(ly+k-1)
+ 2049 format('0$$$$$$$$',a7,' boundary of heat structure',i8
+     &,' pitch/diameter is reset to: ',1pe13.6)
+                     endif
+                   endif
+                   if (htlncf(ly+k-1) .eq. 0.0) then
+                     htlncf(ly+k-1) = diamv(htbvo(ly+k-1))
+                   endif
+                   if (hthdmo(ly+k-1) .eq. 0.0) then
+                     hthdmo(ly+k-1) = diamv(htbvo(ly+k-1))
+                   elseif (hthdmo(ly+k-1) + 0.001 .lt.
+     &             diamv(htbvo(ly+k-1))) then
+                     if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &               write (output,2025) lr(k),ir,hthdmo(ly+k-1),
+     &               diamv(htbvo(ly+k-1))
+ 2025 format('0$$$$$$$$ ',a7,' boundary of heat structure',i8,' has heat
+     &ed equivalent diameter (',1pe13.6,').lt.hydraulic diameter (',
+     & e13.6,').')
+                   endif
+                   idans = iand(ishft(imap(iv+num),-27),1)
+                   if (idans .ne. 1 .and.
+     &             htbnt(ly+k-1) .eq. 102) then
+               write (output,2004) lr(k),ir,htbvc(ly+k-1)
+ 2004  format ('0******** ',a7,' boundary of heat-structure',i8,
+     & ' does not have pitch and span set but parallel plate option set'
+     & ,/,' add them. Put a 2 for the b flag on component ',i9)
+                     unres = .true.
+                   endif
+                   go to 52
+                 endif
+                 iv = iv + ivskp
+   53          continue
+               tfail = .true.
+             else
+               tfail = .true.
+             endif
+   52        if (tfail) then
+               write (output,2003) lr(k),ir
+ 2003  format ('0******** ',a7,'boundary of heat-structure',i8,
+     & ' has illegal volume connection.')
+               unres = .true.
+             endif
+           endif
+c  Check pg chfr specific data.
+   51      if (pgopti(ly+k-1) .gt. 0) then
+             if (htivfc(ly+k-1) .gt. 0) then
+               if (filid(4) .ne. 0.0) then
+                 num = (htivfc(ly+k-1)/10)*10
+                 tfail = .false.
+                 iv = filndx(4)
+                 do j = 1,nvols(iv)
+                   if (num .eq. volno(iv)) then
+                     htivfo(ly+k-1) = iv
+                     go to 520
+                   endif
+                   iv = iv + ivskp
+                 enddo
+                 tfail = .true.
+               else
+                 tfail = .true.
+               endif
+  520          if (tfail) then
+                 write (output,3003) lr(k),ir,num
+ 3003  format ('0******** ',a7,' boundary of heat structure',i8,
+     & ' specifies illegal heated channel inlet volume; num= ',i9)
+                 unres = .true.
+               endif
+             else
+               write (output,3004) lr(k),ir
+ 3004  format ('0******** ',a7,' boundary of heat structure',i8,
+     & ' references non-existent volume for heated channel inlet.')
+             endif
+             if (htivrc(ly+k-1) .gt. 0) then
+               if (filid(4) .ne. 0.0) then
+                 num = (htivrc(ly+k-1)/10)*10
+                 tfail = .false.
+                 iv = filndx(4)
+                 do j = 1,nvols(iv)
+                   if (num .eq. volno(iv)) then
+                     htivro(ly+k-1) = iv
+                     go to 521
+                   endif
+                   iv = iv + ivskp
+                 enddo
+                 tfail = .true.
+               else
+                 tfail = .true.
+               endif
+  521          if (tfail) then
+                 write (output,3013) lr(k),ir,num
+ 3013  format ('0******** ',a7,' boundary of heat structure',i8,
+     & ' specifies illegal heated channel outlet volume; num= ',i9)
+                 unres = .true.
+               endif
+             else
+               write (output,3014) lr(k),ir
+ 3014  format ('0******** ',a7,' boundary of heat structure',i8,
+     & ' references non-existent volume for heated channel inlet.')
+             endif
+           endif
+c  Check boundary condition type.
+           j = htbnt(ly+k-1)
+           onres = .false.
+           if (j .le. 0) then
+             if (htbvc(ly+k-1) .ne. 0) then
+               write (output,2015) lr(k),ir
+ 2015  format ('0******** ',a7,' boundary of heat structure',i8,
+     & ' specifies insulated boundary and a boundary volume.')
+               go to 73
+             endif
+             jx = 0
+             jy = 0
+             go to 79
+           endif
+           if (j .ge. 1000) go to 74
+             jx = j
+           if (j .lt. 100) then
+             jy = j
+             j = 1
+           elseif (j .eq. 100) then
+             jy = 1
+             j = 1
+           else
+             jy = j/100
+             j = j -jy*100
+           endif
+           if (jy .gt. 1) then
+             write (output,2016) lr(k),ir,jx
+ 2016  format ('0******** ',a7,' boundary of heat structure',i8,
+     & ' specifies unavailable heat transfer package= ',i5)
+             onres = .true.
+           endif
+           if (j .eq. 3) then
+             write (output,2041) lr(k),ir,jx,'102'
+ 2041  format ('0$$$$$$$$ ',a7,' boundary of heat structure',i8,
+     & ' specifies unavailable heat transfer package= ',i5,
+     & ' reset to ',a,'.')
+             j = 2
+           elseif (j .gt. 3 .and. j .lt. 10 .or. j .eq. 14) then
+             write (output,2041) lr(k),ir,jx,'101'
+             j = 1
+           elseif (j .eq. 12) then
+             write (output,2041) lr(k),ir,jx,'110'
+             j = 10
+           elseif (j .eq. 13) then
+             write (output,2041) lr(k),ir,jx,'111'
+             j = 11
+           elseif (j .gt. 19 .and. j .lt. 34) then
+             write (output,2041) lr(k),ir,jx,'130'
+             j = 30
+           elseif (j .gt. 34 .and. j .lt. 38) then
+             write (output,2041) lr(k),ir,jx,'134'
+             j = 34
+           elseif (j.ge.3 .and. j.ne.10 .and. j.ne.11
+     &     .and. j.ne.34 .and. j.ne.51 .and. j.ne.53) then
+             write (output,2047) lr(k),ir,jx
+ 2047  format ('0******** ',a7,' boundary of heat structure',i8,
+     & ' specifies unavailable heat transfer package= ',i5,'.')
+             onres = .true.
+           endif
+           jx = 1
+           jy = ior(ishft(jy,7),j)
+           if (htbvc(ly+k-1) .le. 0) then
+             write (output,2031) lr(k),ir
+ 2031  format ('0******** ',a7,' boundary of heat structure',i8,
+     & ' does not specify hydrodynamic volume with heat transfer package
+     & 1.')
+             onres = .true.
+           else
+             htopt(ly) = ior(htopt(ly),1024*(3-k))
+           endif
+           if (iand(vctrl(htbvo(ly+k-1)),1) .ne. 0) then
+             if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &       write (output,2011) lr(k),ir
+ 2011  format ('0$$$$$$$$ ',a7,' boundary of heat structure',i8,
+     & ' connects to a time dependent volume.  Infinite energy sink.')
+           endif
+           if (iand(htopt(ly),128*k) .eq. 0) then
+             write (output,2024) lr(k),ir
+ 2024  format ('0******** ',a7,' boundary of heat structure',i8,
+     & ' does not have chf-heat transfer correlation data entered.')
+             go to 73
+           endif
+           if (.not.onres) go to 79
+           go to 73
+   74      if (j .eq. 1000) then
+             jx = 2
+             jy = 0
+             go to 79
+           endif
+           if (ngtbls .eq. 0) go to 82
+           if (j .lt. 2000) then
+             j = j - 1000
+             do jy = 1,ngtbls
+               if (j .eq. gtnum(jy)) go to 84
+             enddo
+             go to 82
+   84        if (gen(jy)%gttyp .ne. 5) go to 85
+             jx = 3
+             go to 79
+           endif
+           if (j .ge. 3000) go to 86
+           j = j - 2000
+           if (j .eq. 0) go to 81
+           do jy = 1,ngtbls
+             if (j .eq. gtnum(jy)) go to 88
+           enddo
+           go to 82
+   88      if (gen(jy)%gttyp .ne. 3) go to 85
+           jx = 4
+           go to 79
+   86      if (j .ge. 4000) go to 89
+           j = j - 3000
+           if (j .eq. 0) go to 81
+           do jy = 1,ngtbls
+             if (j .eq. gtnum(jy)) go to 66
+           enddo
+           go to 82
+   66      if (gen(jy)%gttyp .ne. 2) go to 85
+           jx = 5
+           go to 79
+   89      if (j .ge. 5000) go to 81
+           j = j - 4000
+           if (j .eq. 0) go to 81
+           do jy = 1,ngtbls
+             if (j .eq. gtnum(jy)) go to 93
+           enddo
+           go to 82
+   93      if (gen(jy)%gttyp .ne. 4) go to 85
+           jx = 6
+   79      htbnts(ly+k-1) = ior(htbnts(ly+k-1),jy)
+           htbntr(ly+k-1) = jx
+           cycle
+   81      write (output,2018) lr(k),ir
+ 2018  format ('0******** ',a7,'boundary of heat structure',i8,
+     & ' has illegal boundary condition code.')
+           go to 73
+   82      write (output,2019) lr(k),ir
+ 2019  format ('0******** ',a7,' boundary of heat structure',i8,
+     & ' references missing or erroneous table.')
+           go to 73
+   85      write (output,2020) lr(k),ir
+ 2020  format ('0******** ',a7,' boundary of heat structure',i8,
+     & ' references wrong type of table.')
+   73      unres = .true.
+         enddo
+         if (htnusr(ly) .ne. 0) then
+           jv = htgom(ly) + filndx(8)
+           if (gpintp(jv) .ne. 0.0) then
+             if (filid(4) .ne. 0.0) then
+               j = filndx(4)
+               do m = 1,nvols(j)
+                 if (htgap(ly) .eq. volno(j)) then
+                   htgap(ly+1) = j
+                   go to 304
+                 endif
+                 j = j + ivskp
+               enddo
+             endif
+             write (output,"('0******** Heat structure',i8,
+     & ' has an incorrect gap conductance reference volume number.')")
+     &       ir
+             unres = .true.
+           endif
+         endif
+  304    if (unres) then
+           htopt(ly) = ior(htopt(ly),2)
+           fail = .true.
+         endif
+   50  continue
+c  Set addresses for trips in general tables.
+       do i = 1,ngtbls
+         if (gen(i)%gttrp(1) .ne. 0) gen(i)%gttrp(2) =
+     &   gen(i)%gttrp(2) + filndx(18)
+       enddo
+c  Call steady state heat conduction subroutine for initialization for
+c  transient solution and for steady state temperatures for those
+c  structures specifying it.
+       jlim = lcontg(1)
+       if (jlim .ne. 0) call ftbrsv (fidx,jlim,1,jx)
+       num = 0
+       lhed = .false.
+       do 100 i = lx,lz
+         ly = ihtptr(i) + filndx(8)
+         if (iand(htopt(ly),2) .eq. 0) then
+           jv = htgom(ly) + filndx(8)
+           num = num + htnmpt(ly)
+           if (iand(htopt(ly),4) .ne. 0) then
+             lhed = .true.
+             ir = htstno(ly)
+             if (htstyp(ly) .ne. 0) then
+               htsrfo(ly) = htrnro(ly)*areao(jv)
+             else
+               if (areao(jv) .eq. 0.0) then
+                 if (htsrfo(ly) .ne. 0.0) then
+                   write (output,2034) ir
+ 2034  format ('0******** Left surface of heat structure',i10.7,
+     & ' is non-zero but geometry implies a zero area.')
+                   fail = .true.
+                 endif
+               else
+                 htrnro(ly) = htsrfo(ly)/areao(jv)
+               endif
+             endif
+             if (htstyp(ly+1) .ne. 0) then
+               htsrfn(ly) = htrnrn(ly)*arean(jv)
+             else
+               htrnrn(ly) = htsrfn(ly)/arean(jv)
+             endif
+             tout(1) = htrnro(ly) + htrnrn(ly)
+             if (tout(1) .eq. 0.0) then
+               write (output,2035) ir
+ 2035  format ('0******** Both left and right surface areas of heat stru
+     &cture',i10.7,' are zero.')
+               fail = .true.
+             else
+               if (areao(jv).ne.0.0 .and. abs((htrnro(ly) - htrnrn(ly))/
+     &         tout(1)) .gt. 1.0e-5) then
+                 write (output,2017) ir
+ 2017  format ('0******** Left and right heat transfer surface areas are
+     & inconsistent with geometry of structure',i10,'.')
+                 fail = .true.
+               endif
+             endif
+             if (httots(ly) .ne. 0.0) htfctr(ly) = htfctr(ly)/
+     &       (httots(ly)*htrnrn(ly))
+             l = ly + 5
+             do jj = ly,l
+               htbcao(jj) = 0.0
+             enddo
+             htpown(ly) = 0.0
+             htchfo(ly) = 0.0
+             htchfn(ly) = 0.0
+             htimeo(ly) = 0.0
+             chfmuo(ly) = 0.
+             chfmun(ly) = 0.
+             htrnro(ly) = 0.0
+             htrnrn(ly) = 0.0
+             htdtmo(ly) = 0.0
+             htdtmn(ly) = 0.0
+             htmod(ly) = 0.0
+             htmod(ly+1) = 0.0
+c  Gap deformation model initialization.
+             if (htnusr(ly).ne.0 .and. gpintp(jv).ne.0.0) then
+               gpintp(jv) = gpintp(jv)/max(satt(htgap(ly+1)),
+     &         tempg(htgap(ly+1)))
+             endif
+c
+             if (filid(6).ne.0.0 .or. (htbntr(ly).ne.1 .and.
+     &       htbntr(ly+1).ne.1)) then
+               if (jlim .lt. htscrp*htnmpt(ly) + htsxrp) then
+                 write (output,2006) ir
+ 2006  format ('0******** Insufficient storage for steady state initiali
+     &zation of heat structure',i8.7,'.')
+                 fail = .true.
+               else
+                 ierr(1) = iand(htopt(ly),1)
+                 call ht1sst (i,jx,timeht,ierr(1))
+                 fail = fail .or. ierr(1).ne.0
+               endif
+             endif
+           endif
+         endif
+  100  continue
+       if (lhed) then
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+         write (output,2000)
+ 2000  format('0',33x,'Edit of heat structures after input processing')
+         write (output,2029) nhtstr(filndx(8)),num
+ 2029  format ('0   Number of heat structures =',i5,', total number of m
+     &esh points =',i5,'.')
+         j = 1
+         if (.not.unito) j = 2
+         write (output,2026) lb10(j),lb1a(j),(lb2a(j),i=1,2),lb3a(j),
+     &   (lb1a(j),i=1,2),lb10(j),(lb2b(j),i=1,2),lb3b(j)
+ 2026  format ('0 Str.no.',2x,'side',5x,'bdry.vol.',2x,'surface',2x,
+     & 'heat trf.',4x,'heat flux',4x,'critical',5x,'mode',2x,
+     & 'heat trf.',4x,'int. heat',4x,'net heat',5x,'vol.ave.'/23x,
+     & 'number',2x,'temp.',4x,'rate',22x,'heat flux',10x,'coef.',8x,
+     & 'source',7x,'loss',9x,'temp.'/31x,a6,3x,3(a9,4x),6x,3(a9,4x),a6/
+     & 58x,2(a4,9x),1x,a9)
+         do i = lx,lz
+           j = ihtptr(i) + filndx(8)
+           if (iand(htopt(j),2).eq.0 .and. iand(htopt(j),4) .ne. 0) then
+             htopt(j) = iand(htopt(j),not(4))
+             jj = htstno(j)
+             ipx(1) = jj/1000
+             ipx(2) = jj - ipx(1)*1000
+             l = 0
+             n = 0
+             if (htbvc(j) .ge. 0) l = htbvc(j)
+             if (htbvc(j+1) .ge. 0) n = htbvc(j+1)
+             ll = htxft(j) + filndx(8)
+             nn = ll + htnmpt(j) - 1
+             l1 = l/1000000
+             l2 = l - l1*1000000
+             n1 = n/1000000
+             n2 = n - n1*1000000
+             px(3) = httmp(ll)
+             px(12) = httmp(nn)
+             px(4) = htsrfo(j)*htrnro(j)
+             px(13) = htsrfn(j)*htrnrn(j)
+             px(5) = htrnro(j)
+             px(14) = htrnrn(j)
+             px(6) = htchfo(j)
+             px(15) = htchfn(j)
+             ipx(7) = htmod(j)
+             ipx(16) = htmod(j+1)
+             px(8) = htbcao(j)
+             px(17) = htbcan(j)
+             px(9) = htpown(j)*htfctr(j)*httots(j)*htsrfn(j)/
+     &       arean(htgom(j)+filndx(8))
+             px(10) = px(4) + px(13) - px(9)
+             px(11) = htvatp(j)
+             if (.not.unito) then
+               px(3) = (px(3) - degf2)*degf1
+               px(12) = (px(12) - degf2)*degf1
+               px(4) = px(4)*btupsc
+               px(13) = px(13)*btupsc
+               px(5) = px(5)*cv2
+               px(14) = px(14)*cv2
+               px(6) = px(6)*cv2
+               px(15) = px(15)*cv2
+               px(8) = px(8)*cv3
+               px(17) = px(17)*cv3
+               px(9) = px(9)*btupsc
+               px(10) = px(10)*btupsc
+               px(11) = (px(11) - degf2)*degf1
+             endif
+             write (output,2012) ipx(1),ipx(2),lr(1),l1,l2,(px(k),
+     &       k=3,6),ipx(7),(px(k),k=8,11),lr(2),n1,n2,(px(k),k=12,15),
+     &       ipx(16),px(17)
+ 2012  format (i5,'-',i3.3,2x,a7,i4,'-',i6.6,f9.2,1p,3g13.5,i5,1x,
+     & 3g13.5,0p,f9.2/11x,a7,i4,'-',i6.6,f9.2,1p,3g13.5,i5,1x,g13.5)
+           endif
+         enddo
+c
+         j = 1
+         if (.not.unito) j = 2
+         write (output,2009) labl(j,2),lb10(j)
+ 2009  format('0 Str.no.  surface areas',a6,5x,' bundle  bundle',
+     & '  mesh point temperatures',
+     & a10/12x,'left',8x,'right',7x,'left    right')
+         do 411 i = lx,lz
+           j = ihtptr(i) + filndx(8)
+           if (iand(htopt(j),2) .eq. 0) then
+             yesnol = '  no    '
+             yesnor = '  no    '
+             if (htbvc(j) .gt. 0) then
+               if (iand(vctrl(htbvo(j)),ishft(1,30)) .ne. 0)
+     &         yesnol = '  yes   '
+             endif
+             if (htbvc(j+1) .gt. 0) then
+               if (iand(vctrl(htbvo(j+1)),ishft(1,30)) .ne. 0)
+     &         yesnor = '  yes   '
+             endif
+             aleft  = htsrfo(j)
+             aright = htsrfn(j)
+             jj = htstno(j)
+             ipx(1) = jj/1000
+             ipx(2) = jj - ipx(1)*1000
+             ll = htxft(j) + filndx(8)
+             nn = ll + htnmpt(j) - 1
+             if (unito) then
+               write (output,2032) ipx(1),ipx(2),aleft,aright,yesnol,
+     &         yesnor,(fa(m),m=ll,nn)
+ 2032  format (i5,'-',i3.3,2x,1p,2g12.5,2a8,6g12.5,8(/51x,6g12.5))
+             else
+               k = ll
+  413          jy = min(k+7,nn)
+               aleft = aleft/cvr(2)
+               aright = aright/cvr(2)
+               it = 2
+               do 414 m = k,jy
+                 it = it + 1
+                 px(it) = (fa(m) - degf2)*degf1
+  414          continue
+               if (k .le. (ll+7)) then
+                 write (output,2010) ipx(1),ipx(2),aleft,aright,(px(m),
+     &           m=3,it)
+ 2010  format (i5,'-',i3.3,2x,1p,10g12.5)
+               else
+                 write (output,2033) (px(m),m=3,it)
+ 2033  format (35x,1p,8g12.5)
+               endif
+               k = jy + 1
+               if (k .le. nn) go to 413
+             endif
+           endif
+  411    continue
+         endif
+       endif
+       iv = filndx(4)
+       do j = 1,nvols(iv)
+cc       q(iv) = 0.0
+         vctrln(iv) = 0
+         iv = iv + ivskp
+       enddo
+       do i = lx,lz
+         ly = ihtptr(i) + filndx(8)
+         htopt(ly) = iand(htopt(ly),not(4))
+         if (iand(htopt(ly),2) .eq. 0) then
+           if (htgap(ly+1) .ne. 0) htgap(ly+1) = htgap(ly+1) - filndx(4)
+           do j = 0,1
+             if (htbvc(ly+j) .gt. 0) then
+               k = htbvo(ly+j)
+               htbvo(ly+j) = htbvo(ly+j) - filndx(4)
+               if (vctrln(k) .eq. 0) then
+                 vctrln(k) = 1
+                 q(k) = 0.0
+               endif
+               q(k) = q(k) + htrnro(ly+j)*htsrfo(ly+j) +
+     &         htpown(ly)*htftro(ly+j)
+               qwg(k) = qwg(k) + htrgno(ly+j)*htsrfo(ly+j) +
+     &         htpown(ly)*htftro(ly+j)*quals(k)
+             endif
+           enddo
+           do j = 0,1
+             if (htivfc(ly+j) .gt. 0) then
+               htivfo(ly+j) = htivfo(ly+j) - filndx(4)
+             endif
+             if (htivrc(ly+j) .gt. 0) then
+               htivro(ly+j) = htivro(ly+j) - filndx(4)
+             endif
+           enddo
+         endif
+       enddo
+c  Restore offsets in trip pointers in general tables.
+       do i = 1,ngtbls
+         if (gen(i)%gttrp(1) .ne. 0) gen(i)%gttrp(2) =
+     &   gen(i)%gttrp(2) - filndx(18)
+       enddo
+       if (isfdes(fidx).ne.0) call ftbdel (fidx)
+$if def,selap
+c  Supply heat transfer surface area to fission product data if needed.
+       if (filid(34) .ne. 0.0) then
+         isysk = fpsysk(filndx(34))
+         isys1 = filndx(34) + fpsyso(filndx(34))
+         isysn = isys1 + (fpnsys(filndx(34))-1)*isysk
+         ivolk = fpvolk(filndx(34))
+         isrfk = fpsrfk(filndx(34))
+         do isys=isys1,isysn,isysk
+           ivol1 = filndx(34) + fpvolo(isys)
+           ivoln = ivol1 + (fpnvol(isys)-1)*ivolk
+           do ivol=ivol1,ivoln,ivolk
+             nsrf = fpnsrf(ivol)
+             if (nsrf .gt. 0) then
+               isrf1 = filndx(34) + fpsrfo(ivol)
+               isrfn = isrf1 + (nsrf-1)*isrfk
+               arsum=0.0
+               do isrf=isrf1,isrfn,isrfk
+                 jsrfno = fpsrfn(isrf)
+                 do i = lx,lz
+                   ly = ihtptr(i) + filndx(8)
+                   if (jsrfno .eq. htstno(ly)) go to 174
+                 enddo
+                 call fabend
+  174            ly = ly + fpsflr(isrf)
+                 fpsfar(isrf) = htsrfo(ly)
+                 arsum=arsum+fpsfar(isrf)
+                 onres = .true.
+               enddo
+c  Calculate relative heat structure surface areas.
+               do isrf=isrf1,isrfn,isrfk
+                 fpsfra(isrf)=fpsfar(isrf)/arsum
+               enddo
+             endif
+           enddo
+         enddo
+       endif
+$endif
+       return
+       end

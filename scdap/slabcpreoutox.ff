@@ -1,0 +1,335 @@
+*mlist
+*if def,selap
+       subroutine slabc
+c
+c  Drive the scdap slab component analysis.
+c
+c  Cognizant engineer: ewc.
+c
+cljs  RELAP5 table lookup data
+       use gentblc
+       use scdmod
+       implicit none
+       include 'contrl.h'
+       include 'comctl.h'
+       include 'fast.h'
+       include 'scddat.h'
+       include 'voldat.h'
+       include 'buntim.h'
+       include 'matdat.h'
+       include 'plndat.h'
+       include 'solcom.h'
+       include 'nbtim.h'
+       include 'cmptim.h'
+       include 'iocom.h'
+       include 'trnot1.h'
+       include 'cmatp.h'
+       include 'slbcom.h'
+       include 'ptscom.h'
+       include 'fpfast.h'
+       include 'fpnonv.h'
+       include 'miscon.h'
+       include 'effprp.h'
+       include 'tblsp.h'
+       include 'debout.h'
+       include 'intcom.h'
+       include 'ndxara.h'
+       include 'nhtara.h'
+       include 'fpdkht.h'
+       include 'scdads.h'
+       include 'scdcom.h'
+       include 'scdout.h'
+       include 'trnot2.h'
+       include 'nrcom.h'
+       include 'uoxcom.h'
+       include 'fecom.h'
+       include 'ufiles.h'
+       include 'bconds.h'
+       include 'oxairv.h'
+       include 'dbacct.h'
+!
+       real avir(ndrd,ndax),avoidl(ndax),effcp(ndrd,ndax), effcpc(ndax),
+     & effgen(ndrd,ndax),effk(ndrd,ndax),effkc(ndax),hremov(ndax),
+     & oxdhf(ndax),qtm(20),tcrshr(ndax),tzr(ndax),wzrshr(ndax),
+     & oxdhc(ndax),oxdwz(ndax),tsur(ndax),effkf(ndax)
+      integer j,mz,n
+      integer mltshi(ndax)
+c Local variables.
+       integer i,i34,ib,ierr,ih,il1,in1,ir,isp,ispo,iwarn,
+     & kk,kki,kx,mdyn,nelm,nsj,nsn,nvolin,jj,jm1,nsw
+      real azira,dum,dum1,estimd,fnsigl,haddbt,rathsr,snrelr,snrem,
+     & tcld,timdbf,vzira
+       integer ivol
+       real acond1,afuel1
+       real poxndt
+       real thk1
+       integer kmid1
+       integer ldum,mdum
+       integer mm
+       real pwrtotl(1),timen,tempn
+       real itab,l
+       logical err
+!
+c  Following replace call statement variables.
+       j = icomp
+       mz = ndax*(icomp - 1) + 1
+       n = ndrd*ndax*(icomp - 1) + 1
+       naxpz(j) = naz
+c  Override fragmentation due to quench until debris models are
+c  implemented in scdsimp.
+c  For slab outer radius equals thickness of slab.
+       afuel1 = rco(mz)*slbwd(icomp)
+       do i = 1,naz
+         ifrag(mz-1+i) = 0
+         afuel(mz+i-1) = afuel1
+         do kki = 1,nrodes(mz+i-1)
+           effgen(kki,i) = 0.0
+           tcnd03(kki,i,j) = tcond3(kki,i,j)
+         enddo
+       enddo
+       idsrup(j) = 0
+c  Set slab component id for heat conduction model.
+       estimd = 0.0
+       timdbf = timdb + deltdb
+       timec = timdb
+       nsj = nsout(j)
+       ib = (nsj-1)*ndax + 1
+       call csdata
+       do kk = 1,naz
+         tsur(kk) = tcond3(nrods2(kk,icomp),kk,icomp)
+       enddo
+c  Calculate heat flux at outer shroud boundary for current time.
+       if (islbot(j) .ne. 0) then
+         do kk = 1,nqtim(icomp)
+           nsj = nsout(icomp)
+           qtm(kk) = qtime(kk,nsj)
+         enddo
+         call slabql (naz,ndax,timec,hout(ib),qslabt(1,ib),qtm,
+     &   nqtim(icomp))
+       endif
+c  Get power for this Scdap component.
+       call tspowr
+c  Save current surface temps for convergence test.
+       do i = 1,naz
+         nsj = nsout(j)
+         ih = (nsj - 1)*ndax + i
+         if (islbot(j) .eq. 0) then
+           il1 = (ndcomp + nsj - 1)*ndax + i
+           in1 = nvad(il1) + filndx(4)
+           qouts(ih) = hfixf(il1)*(tcond3(1,i,j) - tempf(in1)) +
+     &     hfixg(il1)*(tcond3(1,i,j) - tempg(in1))
+         endif
+       enddo
+       call nheat(afuel(mz),ncrust(j),dum)
+c  If lower component number is also shroud, assume failure time of
+c  insulation only applicable for it.
+       nsw = 0
+       if (j .gt. 1) then
+         jm1 = j - 1
+         do jj = jm1,1,-1
+           if (idcomp(jj) .eq. 2) nsw = 1
+         enddo
+       endif
+       if (nsw.eq.0 .and. timehy.gt.tfshrd .and. int(brchv(1,j)).eq.0 
+     & .and. modidx(3).ne.1)
+     & then
+         do i = 1,naz
+           brchv(i,j) = 1.0
+         enddo
+       endif
+       do i = 1,naz
+         ivol = nvad((j-1)*ndax+i) + filndx(4)
+c  Model double-sided oxidation during reflood.
+       enddo
+       do i = 1,naz
+         if (wremsr(mz-1+i) .gt. 1.e-10) noxide(mz-1+i) = 2
+       enddo
+       ih = (nsout(j)-1)*ndax + 1
+       call oxidiz (oxdeo(mz),alfao(mz),oxdwc(mz),oxdwc0,oxdhc,oxdhf,
+     & rnoxd(mz),rnalf(mz),nfrslg(mz),tzr,oxdwz,daxdis(1,j),
+     & noxide(mz))
+       do i = 1,naz
+       oxdhcc(i,icomp) = oxdhc(i)
+       oxdhfc(i,icomp) = oxdhf(i)
+c  Set crust radius out if less than cladding radius.
+         rocrst(mz-1+i) = max(rocrst(mz-1+i),rco(mz-1+i))
+         ivol = nvad((j-1)*ndax+i) + filndx(4)
+c     if reflood and option defined to shatter oxide layer in 
+c     event of reflood, then define shattering at current node.
+c shatter coding deactivated because it may cause too much local
+c oxidation of shroud during reflood, and oxidation of shattered
+c shroud only increases hydrogen production for CORA-13 by 4 grams.
+c***       if(voidf(ivol).ge.0.0001 .and. modidx(2).eq.1)then
+c***       shtflg(i,icomp) = 1
+c        effoxd(icomp,i) = effective oxide thickness of shattered
+c                          oxide (m)
+c        effoxw(icomp,i) = effective weight gain of shattered oxide
+c                          layer (kg of O2/m2 of surface area)
+c***       effoxd(icomp,i) = 2.55e-7
+c***       effoxw(icomp,i) = zoxden*(32.0/(32.0 + 91.22))*
+c*** &                       effoxd(icomp,i)
+c***       end if
+       enddo
+       wdtqlp(icomp) = 0.0
+       call liqshr (dt,dzcond(mz),naz,rl(j),oxdeo(mz),tzr,
+     & rftemp, tsur,tsur0,zcond(mz),ndisrp(mz),tcrshr,wbotsr
+     & (j), wfrosr(mz),wremsr(mz),hadd(mz),haddbt,hremov,wzrshr,
+     & mltshi,timec, avoidl,vladeb(mz),dzfrcl(mz),slbwd(j),oxdwf(mz),
+     & oxdwz)
+       wdtqlp(icomp) = float(nsigl(j))*haddbt
+c  Calculate a crust radius for debris models and save surface
+c  temperature for sstate.
+       do i = 1,naz
+         rocrst(mz-1+i) = rco(mz-1+i) + tcrshr(i)
+       enddo
+       call sstate (tcrshr,unuc)
+       icoht(j) = 0
+       icohb(j) = 0
+       do i = 1,naz
+         naxn = i
+         kmid1 = naz/2 + 1
+c  Recalculate radial mesh.
+         call meshgn (nrcldi(mz-1+i),nrodes(mz-1+i),rci(mz-1+i),
+     &   rco(mz-1+i),xcond3(1,i,j))
+c  Check to see whether shroud has failed.
+         nsw = 0
+         if (j .gt. 1) then
+           jm1 = j - 1
+           do jj = jm1,1,-1
+             if (idcomp(jj) .eq. 2) nsw = 1
+           enddo
+         endif
+         if (nsw.eq.0 .and. ifshrd.eq.0) then
+           if (timec .gt. tfshrd) then
+             ifshrd = 1
+           endif
+         endif
+         inaz = i
+         kx = mz + i - 1
+c  Rathsr = ratio of effective surface area for convective heat
+c  transfer to actual area.
+         rathsr = 1.0
+         dum1 = 1.
+         acond1 = 0.0
+         if(modidx(1).ne.1)then
+         call effht (0.0,oxdhc(i),rcoi(mz),rci(kx),rci(kx),unuc(i),
+     &   effcp(1,i),effcpc(i),effgen(1,i),effk(1,i),effkc(i),effkf(i),
+     &   dum1,acond1,kx)
+         else
+         call effhts(oxdhc(i),unuc(i),
+     &   effcp(1,i),effgen(1,i),effk(1,i),kx)           
+         end if
+         if(i.eq.kmid1)then
+c     store effective properties and heat generation rate at mid-plane
+c     axial node
+           do mm = 1,numelm2(i,j)
+           effgn1(mm,j) = effgen(mm,i)
+           effk1(mm,j) = effk(mm,i)
+           effcp1(mm,j) = effcp(mm,i)
+           end do
+         end if
+       enddo
+       if(j.ne.ncmths)then
+       if (irfld .eq. 1) call heatc2 (j,effk,effcp,effgen,nvirn)
+       else
+cljs  obtain temperature of component from RELAP5 table
+       itab=ntbths
+       timen = timehy
+       if(timen.ne.gen(itab)%gtarg)then
+       call gtpolat(gen(itab)%gtinfo,gtptr(itab)%gtbl,timen,
+     &  pwrtotl(1:1),err)
+         tempn = pwrtotl(1)
+         gen(itab)%gtarg = timen
+         gen(itab)%gtval(1) = tempn
+         else
+         tempn=gen(itab)%gtval(1)
+         end if
+          do i =1,naz
+            do l=1,nrodes(mz+i-1)
+             tcond3(l,i,j) = tempn
+             tcnd03(l,i,j) = tempn
+            end do
+          end do
+       end if
+       do i = 1,naz
+         if(tcond3(nrodes(mz+i-1),i,j).ge.tmpfal)then
+         ishrem(i,j) = 1
+         end if
+         nelm = numelm(mz+i-1)
+         do ir = 1,nelm
+           avir(ir,i) = slbwd(j)*(xcond3(ir+1,i,j)-xcond3(ir,i,j))*
+     &     dzcond(mz+i-1)
+         enddo
+       enddo
+       do i = 1,naz
+         nelm = numelm(mz+i-1)
+         do ir = 1,nelm
+           qstor(j) = qstor(j) + effcp(ir,i)*avir(ir,i)*0.5*
+     &     ((tcond3(ir+1,i,j) + tcond3(ir,i,j)) - (tcnd03(ir+1,i,j) +
+     &     tcnd03(ir,i,j)))*nsigl(j)
+           qedt(j) = qedt(j) + effgen(ir,i)*avir(ir,i)*dt*nsigl(j)
+         enddo
+         qodt(j) = qodt(j) + (oxdhc(i) + oxdhf(i))*dzcond(mz+i-1)*dt*
+     &   nsigl(j)
+         qndt(j) = qndt(j) + unuc(i)*dzcond(mz+i-1)*nsigl(j)*dt
+         qsdt(j) = qodt(j) + qndt(j)
+       enddo
+       if (qstor0(j) .eq. 0.0) then
+c  Calculate initial stored energy.
+         do i = 1,naz
+           do ir = 1,numelm(mz+i-1)
+             qstor0(j) = qstor0(j) + effcp(ir,i)*avir(ir,i)*
+     &       (tcnd03(ir+1,i,j) + tcnd03(ir,i,j))
+           enddo
+         enddo
+         qstor0(j) = qstor0(j)*0.5*nsigl(j)
+       endif
+c  Remove grid spacers which have exceeded melt temperature.
+       call gridsc
+       timec = timec + dt
+c  Compute average thermal properties and stored energy for compone.
+       call efprop (effcp,effk,effgen,naz,ngeom(j),numelm(mz),
+     & tcond(n),xcond(n),6,10,ifrag(mz),efrcpa(1,icomp),
+     & effka(1,icomp),efgena(1,icomp),efstor(1,icomp),efstr0(1,icomp),
+     & tcond0(n) )
+       if (filid(34) .eq. 0.0) return
+c  Calculate tin release for shroud.
+       call fpspix ('Sn  ', nsn)
+       if (nsn .eq. 0) return
+       i34 = filndx(34)
+       ispo = i34 + (nsn-1)*fpspvk(i34)
+c  Calculate release of tin from cladding.
+       do i = 1, naz
+         mdyn = ndax*(j-1)+i
+         tcld = tcond3(nrodes(mz-1+i),i,j)
+         if (tcld .lt. 1000.) cycle
+         if (wremzr(mdyn) .gt. 1.e-10) cycle
+         if (fpstt(j,i,1) .lt. 1.e-12) cycle
+c  Calculate volume of oxidized cladding.
+         vzira = dzcond(mdyn)*slbwd(j)*(rnoxd(mdyn) - rci(mdyn))
+         azira = dzcond(mdyn)*slbwd(j)
+         snrem = fpstt(j,i,1)
+         isp = nvhydf(j,i) + ispo
+c  Calculate relap5 volume index.
+         nvolin = nvad((j-1)*ndax+i) + filndx(4)
+c  Get concentration of tin in vapor state in coolant.
+         call tinr (tcld,vzira,azira,snrem,fpvap(isp),tcolc(mdyn),
+     &   pcool,snrelr,nvolin,ierr,iwarn)
+         if (ierr .gt. 0) then
+c  Print to check indexes.
+           write (output,9040) ierr
+ 9040 format('0Error in subroutine tinr, ierr=',i5)
+           write (output,9050) scd1(icomp)%cmpno,i,timec,tcld,
+     &     tcolc(mdyn),pcool
+ 9050  format(' For slabc,j=',i3,' i=',i3,' timec=',e10.4, ' tcld=',
+     & e10.4,' tcolc=',e10.4,' pcool=',e10.4)
+           fail = .true.
+         endif
+c Update inventory to account for release.
+         fpstt(j,i,1) = fpstt(j,i,1) - snrelr*dt
+         fnsigl = float(nsigl(j))
+         fpsrc(isp) = fnsigl*snrelr + fpsrc(isp)
+       enddo
+       return
+       end
+*endif

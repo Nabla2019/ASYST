@@ -1,0 +1,1710 @@
+*deck sthyxg
+      program sthyxg
+c
+c * * * * * * * * *         prologue
+c
+c***Title= sthyxg -- program to generate hydrogen property tables
+c
+c    Author-- E. D. Hughes, J. E. Tolli, G. L. Singer
+c
+c    Purpose--
+c
+c    sthyxg is a program to generate hydrogen property tables for
+c    use in the RELAP5 and Athena codes.
+c
+c    History--
+c
+c    The routines to generate the tables were written by Dan Hughes;
+c    these include the routine hydtbl and the routines called by hydtbl.
+c    The routines to transform the card image file 'bigtbl' created
+c    by hydtbl to the the binary format used by RELAP5 was done by
+c    J. E. Tolli;  this includes the routine gentpf.
+c    The hydtbl and gentpf routines were formerly separate programs.
+c    They were combined into the single program sthyxg by G. L. Singer
+c    to simplify maintenance and generation of the tables.
+c    In addition to the additon of this main routine, the only changes
+c    made to the separate program was to change them to subrouitines,
+c    eliminate the pause statements, and change the non-error
+c    associated STOP statements to RETURN statements.
+c    Also, the file name tpfile was changed to sthyxt.
+c
+c*** Files usage:
+c
+c    No input files are need to run sthyxg since the input data is
+c    hardwired into the code.
+c
+c    A card image file named bigtbl is created on unit 11.
+c    An unformatted file named tpfile is created on unit 12 using
+c    buffer out to be compatible with the format used by RELAP5
+c    to read the file.
+c
+c*** change identifier (pcl) = sa4
+c
+c    For rbic: na2, na3, and na4 are associated with this update
+c    to the environmental routines.
+c
+c * * * * * * * * *         execution
+c
+       implicit none
+       external hydtbl,gentpf
+c
+      call hydtbl
+c
+      close (11,status='KEEP')
+c
+      call gentpf
+c
+      stop
+      end
+       subroutine hydtbl
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+       implicit integer (i-n)
+       save
+c
+c  builds table for lookup
+c
+      dimension pl(40),   tl(50),  rhostr(50)
+      dimension ts(21),pschk(21),rhosat(21)
+      dimension  c(15), dcdt(15), d2cdt(15),hi(15),dhdro(15)
+      dimension  a(32),  ai(15),  gi(17)
+      common /functs/ c,dcdt,d2cdt,hi,dhdro,ai,gi
+      common /sats/   ts,pschk,rhosat,rhostr
+c
+c
+      parameter( rcon  = 4124.299539,
+     1           pcrit = 1.2838e6,
+     1           tcrit = 32.938,
+     3           tlow  = 13.80,
+     4           plow  = 7042.09,
+     5           rhoc  = 31.36,
+     6           xmol  = 100.20,
+     7           tzero = 300.0,
+     8           tone  = 35.0,
+     9           ttwo  = 400.0)
+c
+c       open output file
+c
+      open( unit=11,file='bigtbl',status='unknown')
+c
+      write(*,*) '                table '
+      write(*,*) '  '
+c
+      write(11,*) 'record 1'
+      write(*,*) 'record 1'
+c
+c  get temperature and pressure
+c
+      call tsetup(tl,ntemp)
+      call psetup(pl,npes)
+c
+      write(11,'(i2)') ntemp
+      write(11,'(i2)') npes
+      write(*,*) ntemp
+      write(*,*) npes
+      ntsats = 20
+      npsats = 18
+      write(11,'(i2)') ntsats
+      write(11,'(i2)') npsats
+      write(*,*) ntsats
+      write(*,*) npsats
+c
+      write(11,*) 'record 2'
+      write(*,*) 'record 2'
+      do 800 iout = 1,ntemp
+      write(11,'(1pe22.15)') tl(iout)
+c     write(*,'(1pe22.15)') tl(iout)
+  800 continue
+c
+      do 810 iout = 1,npes
+      write(11,'(1pe22.15)') pl(iout)
+c     write(*,'(1pe22.15)') pl(iout)
+  810 continue
+c
+c     call saturation table builder
+c
+      call sattbl
+c
+c     make a table for finding saturation temp
+c
+c     ts(1)    = 13.0
+c     do 900 i=2,21
+c     ts(i)  = ts(i-1) + 1.0
+c900  continue
+c
+c      hit fixed point
+c
+c     ts(1)  = 13.80
+c     ts(9)  = 20.28
+c     ts(21) = 32.937
+c
+c     do 4 i = 1,21
+c     tschk = ts(i)
+c     pschk(i) = psoft(tschk)
+c   4 continue
+c
+      it = 1
+      iflag = 0
+      do 10 i=1,npes
+      pres  = pl(i)
+      icall = 0
+c
+c      get tsat at press for density first guess
+c
+      tsat = tcrit
+      if ( pres .lt. pcrit ) then
+      call satt(pres,tsat)
+      endif
+c
+c
+      istrt = 1
+      do 5  j=1,ntemp
+      temp  = tl(j)
+c      t(it) = tl(j)
+c      p(it) = pl(i)
+c
+      iphase = 1
+      if( temp .ge. tsat ) iphase = 2
+c
+      dum   = csubv(temp)
+      call cioft(c,dcdt,d2cdt,temp,a)
+      call densty(pres, temp,rho,tsat,iphase, icall, rho1,
+     1            v,    u,   s,  cp,  tkappa, beta,  iflag,j)
+      rho1    = rho
+      rhostr(istrt) = rho
+c
+      write(11,9998) v,u,tkappa,beta,cp,s
+c     write(*, 9998) v,u,tkappa,beta,cp,s
+c
+      it  = it + 1
+      istrt = istrt+1
+    5 continue
+      iflag = 1
+   10 continue
+c
+ 9998 format(1pe22.15,5(/1pe22.15) )
+c
+      write(*,*) ' this is the end. '
+c     write(*,*) '  '
+c     write(*,*) '  '
+cgls  pause '      hit <return> to continue. '
+      return
+      end
+c
+c
+      subroutine psetup(pps,npes)
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+      implicit integer (i-n)
+      save
+c
+c  set up pressures for table.
+c
+      dimension pps(40)
+c
+      do 5 iout=1,40
+      pps(iout) = 0.0
+    5 continue
+c
+      npes    =  40
+c
+      pps(1)  =  0.0070421e6
+      pps(2)  =  0.008e6
+      pps(3)  =  0.009e6
+      pps(4)  =  0.010e6
+      pps(5)  =  0.020e6
+      pps(6)  =  0.030e6
+      pps(7)  =  0.040e6
+      pps(8)  =  0.050e6
+      pps(9)  =  0.060e6
+      pps(10) =  0.080e6
+c
+      pps(11) =  0.100e6
+      pps(12) =  0.200e6
+      pps(13) =  0.400e6
+      pps(14) =  0.600e6
+      pps(15) =  0.800e6
+      pps(16) =  1.000e6
+      pps(17) =  1.200e6
+      pps(18) =  1.2837e6
+      pps(19) =  1.500e6
+      pps(20) =  2.000e6
+c
+      pps(21) =  2.500e6
+      pps(22) =  3.000e6
+      pps(23) =  3.500e6
+      pps(24) =  4.000e6
+      pps(25) =  4.500e6
+      pps(26) =  5.000e6
+      pps(27) =  5.500e6
+      pps(28) =  6.000e6
+      pps(29) =  7.000e6
+      pps(30) =  8.000e6
+c
+      pps(31) =  9.000e6
+      pps(32) = 10.000e6
+      pps(33) = 15.000e6
+      pps(34) = 20.000e6
+      pps(35) = 25.000e6
+      pps(36) = 30.000e6
+      pps(37) = 35.000e6
+      pps(38) = 40.000e6
+      pps(39) = 45.000e6
+      pps(40) = 50.000e6
+c
+      return
+      end
+c
+      subroutine tsetup(ttl,ntemp)
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+      implicit integer (i-n)
+      save
+c
+c  sets temperature array with values used in table
+c  values are set in rankine and converted to kelvin.
+c
+       dimension ttl(50)
+c
+      do 5 iout=1,50
+      ttl(iout) = 0.0
+    5 continue
+c
+      ntemp = 50
+c
+      ttl(1)  =   13.8
+      ttl(2)  =   15.
+      ttl(3)  =   16.
+      ttl(4)  =   17.
+      ttl(5)  =   18.
+      ttl(6)  =   19.
+      ttl(7)  =   20.
+      ttl(8)  =   21.
+      ttl(9)  =   22.
+      ttl(10) =   23.
+c
+      ttl(11)  =  24.
+      ttl(12)  =  25.
+      ttl(13)  =  26.
+      ttl(14)  =  27.
+      ttl(15)  =  28.
+      ttl(16)  =  29.
+      ttl(17)  =  30.
+      ttl(18)  =  31.
+      ttl(19)  =  32.
+      ttl(20)  =  32.937
+c
+      ttl(21)  =  33.
+      ttl(22)  =  34.
+      ttl(23)  =  35.
+      ttl(24)  =  36.
+      ttl(25) =   37.
+      ttl(26) =   38.
+      ttl(27) =   39.
+      ttl(28) =   40.
+      ttl(29) =   45.
+      ttl(30) =   50.
+c
+      ttl(31) =   55.
+      ttl(32) =   60.
+      ttl(33) =   70.
+      ttl(34) =   80.
+      ttl(35) =   90.
+      ttl(36) =  100.
+      ttl(37) =  200.
+      ttl(38) =  300.
+      ttl(39) =  400.
+      ttl(40) =  500.
+c
+      ttl(41) =  600.
+      ttl(42) =  700.
+      ttl(43) =  800.
+      ttl(44) =  900.
+      ttl(45) = 1000.
+      ttl(46) = 1100.
+      ttl(47) = 1200.
+      ttl(48) = 1400.
+      ttl(49) = 1600.
+      ttl(50) = 1800.
+c
+      return
+      end
+c
+c
+      subroutine densty ( p,t,rho,tsat,iphase,icall,rho1,
+     1                    v,u,s,  cp,  tkappa,beta, iflag,jtemp)
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+      implicit integer (i-n)
+      save
+c
+      dimension ts(21),pschk(21),rhosat(21),rhostr(50)
+      dimension c(15),dcdt(15),d2cdt(15),hi(15),dhdro(15),ai(15),gi(17)
+      common /functs/ c,dcdt,d2cdt,hi,dhdro,ai,gi
+      common /sats/ ts,pschk,rhosat,rhostr
+c
+      parameter( rcon  = 4124.299539,
+     1           pcrit = 1.2838e6,
+     1           tcrit = 32.938,
+     3           tlow  = 13.80,
+     4           plow  = 7042.09,
+     5           rhoc  = 31.36,
+     6           xmol  = 100.20,
+     7           tzero = 300.0,
+     8           tone  = 35.0,
+     9           ttwo  = 400.0)
+c
+      u  = 0.0
+      v  = 0.0
+      s  = 0.0
+      h  = 0.0
+c
+      tkappa = 0.0
+      gamma  = 0.0
+      beta   = 0.0
+      betas  = 0.0
+      cp     = 0.0
+      cv     = 0.0
+c
+c     iterate to get density at (p,t)
+c
+c      if( icall.eq.1 ) then
+c      rho0 = rho1
+c      go to 12
+c      endif
+c
+      iedh = 2
+      if(iedh.eq.1) then
+      go to 16
+      endif
+c
+      iter  = 0
+      iter1 = 0
+      if( p.le.pcrit .and. t.lt.tsat ) then
+      rho0 = rolsat(tsat)
+c      if( icall .eq. 1) rho0 = rho1
+      go to 12
+      endif
+c
+      if( p.le.pcrit .and. t.ge.tsat ) then
+      rho0 = p/(rcon*t)
+c      if( icall .eq. 1) rho0 = rho1
+      go to 12
+      endif
+c
+      if( p.gt.pcrit ) then
+      rho0 = p/(rcon*t)
+      go to 12
+      endif
+c
+c      use van der waal for first guess
+c
+   12 continue
+      pred   = p/pcrit
+      tred   = t/tcrit
+      vred0  = rhoc/rho0
+      rho0   = rhoc/vred0
+   14 continue
+      iter1 = iter1 + 1
+      vred2 = vred0*vred0
+      vred3 = vred2*vred0
+      term1 = pred+8.0*tred
+      fncvdw = 3.0*pred*vred3 - term1*vred2
+      fncvdw = fncvdw + 9.0*vred0 - 3.0
+      dfnc   = 9.0*pred*vred2 - 2.0*term1*vred0 + 9.0
+c
+      delvr = fncvdw/dfnc
+      vred  = vred0 - delvr
+      rho0  = rhoc/vred
+      ratio = delvr/vred
+c
+       if( abs(delvr) .lt. 1.e-06 ) go to 18
+c
+      vred0   = vred
+      if( iter .lt. 30 ) go to 14
+c     write(*,*) ' '
+      write(*,*) ' van der waal iteration did not converge.'
+      write(*,*) ' program will stop.'
+c     write(*,*) ' '
+      write(*,*) ' at the last iteration.'
+      write(*,*) ' iter1    = ',iter1
+      write(*,*) ' function = ',fncvdw
+      write(*,*) ' delvr    = ',delvr
+      write(*,*) ' vred     = ',vred
+c     write(*,*) ' '
+cgls  pause ' hit <return> to continue. program will stop. '
+c     write(*,*) ' '
+      stop
+c
+   18 continue
+c
+c 2001 continue
+c      rho0 = rho
+c
+   16 continue
+      iter = 0
+   15 continue
+      iter = iter+1
+      call prth2(rho0,  t,  pp,  dpdt,  dpdrho)
+      fnc    =  p - pp
+      delrho = fnc/dpdrho
+      rho    = rho0 + delrho
+      ratio  = delrho/rho
+c
+       if( abs(delrho) .lt. 1.e-05 ) go to 20
+c
+      rho0   = rho
+      if( iter .lt. 500 ) go to 15
+c     write(*,*) ' '
+      write(*,*) ' density iteration did not converge.'
+      write(*,*) ' program will stop.'
+      write(*,*) ' '
+      write(*,*) ' at the last iteration.'
+      write(*,*) ' iter     = ',iter
+      write(*,*) ' function = ',fnc
+      write(*,*) ' delrho   = ',delrho
+      write(*,*) ' rho      = ',rho
+c     write(*,*) ' '
+cgls  pause ' hit <return> to continue. program will stop '
+c     write(*,*) ' '
+      stop
+   20 continue
+c
+      u  = sie(rho,t)
+      h  = u + p/rho
+      v  = 1.0/rho
+      s  = entrop(rho,t)
+c
+c     eos derivative properties
+c
+      beta   = dpdt/(rho*dpdrho)
+      tkappa = 1.0/(rho*dpdrho)
+      cv     = csubv(t)
+      cp     = cv + (t*v*beta*beta)/(tkappa)
+      gamma  = cp/cv
+      betas  = cp/(cv*tkappa)
+      csnd   = sqrt(v*betas)
+c
+      icall = 1
+      return
+      end
+c
+c
+      subroutine satt( p,tsat )
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+$if def,in32,1
+      implicit integer (i-n)
+      save
+c
+      dimension ts(21),pschk(21),rhosat(21),rhostr(50)
+      common /sats/ ts,pschk,rhosat,rhostr
+c
+c     get first guess for tsat
+c
+      tsat0 = 13.80
+      do 25 i = 1,20
+      if( p .ge. pschk(i) .and. p .le. pschk(i+1) ) then
+      tsat0 = ts(i+1)
+      endif
+   25 continue
+c
+      iter = 0
+   30 continue
+      iter  = iter + 1
+      ppsat = psoft(tsat0)
+      fnc   = p - ppsat
+       if( abs(fnc) .le. 1.e-4 ) go to 40
+      delts = fnc/dpsat(p,tsat0)
+      tsat  = tsat0 + delts
+      ratio = delts/tsat
+c
+       if( abs(delts) .lt. 1.e-08 ) go to 40
+      tsat0 = tsat
+      if( iter .lt. 30 ) go to 30
+c
+c     write(*,*) ' '
+      write(*,*) ' tsat(p) iteration did not converge. '
+      write(*,*) ' '
+      write(*,*) ' at the last iteration.'
+      write(*,*) ' iter     = ',iter
+      write(*,*) ' function = ',fnc
+      write(*,*) ' deltsat  = ',delts
+      write(*,*) ' tsat     = ',tsat
+      write(*,*) ' '
+      write(*,*) ' program will stop.'
+      stop
+c
+   40 continue
+c
+      return
+      end
+c
+      function psoft(t)
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+      implicit integer (i-n)
+      real psoft
+      save
+c
+c       this function returns psat(t) for hydrogen (eq s-3)
+c
+      f1    =  3.05300134164
+      f2    =  2.80810925813
+      f3    = -6.55461216567e-1
+      f4    =  1.59514439374
+c
+      alfa  = 1.5814454428
+      tt    = 13.8
+      tcrit = 32.938
+      pt    = 7042.09
+      pcrit = 1.2838e6
+c
+c     check for t>tcrit
+c
+      if(t .ge. tcrit) then
+      psoft = pcrit
+      go to 11
+      endif
+      xt    = (1.0-tt/t)/(1.0 - tt/tcrit)
+c
+      rhs   = xt*(f1 + xt*(f2 + f3*xt)) + f4*xt*((1.0 - xt)**alfa)
+   10 continue
+   11 continue
+      psoft = pt*exp( rhs )
+      return
+      end
+c
+      function dpsat(pres,t)
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+      implicit integer (i-n)
+      real dpsat
+      save
+c
+c       this function returns dpsat/dt for hydrogen (eq s-3)
+c
+      f1    =  3.05300134164
+      f2    =  2.80810925813
+      f3    = -6.55461216567e-1
+      f4    =  1.59514439374
+c
+      alfa  = 1.5814454428
+      tt    = 13.8
+      tcrit = 32.938
+      pt    = 7042.09
+      pcrit = 1.2838e6
+c
+      xt    = (1.0-tt/t)/(1.0 - tt/tcrit)
+      dxtdt = (1.0/(1.0 - tt/tcrit))*tt/(t**2)
+c
+      rhs   = f1 + 2.0*f2*xt + 3.0*f3*xt**2
+      rhs   = rhs - f4*xt*alfa*((1.0 - xt)**(alfa-1.0))
+      rhs   = rhs + f4*((1.0 - xt)**alfa)
+      rhs   = rhs*dxtdt
+      dpsat = pres*rhs
+c
+   10 continue
+      return
+      end
+c
+c
+      function rolsat(t)
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+      implicit integer (i-n)
+      real rolsat
+      save
+c
+c       this function returns rhols for hydrogen (eq d-4)
+c
+      d1    =  4.8645813003e1
+      d2    = -3.4779278180e1
+      d3    =  4.0776538192e2
+      d4    = -1.1719787304e3
+      d5    =  1.6213924400e3
+      d6    = -1.1531096683e3
+      d7    =  3.3825492039e2
+c
+      alfa  = 0.3479
+      tcrit = 32.938
+      rhoc  = 31.36
+      pcrit = 1.2838e6
+c
+      xt    = (1.0 - t/tcrit)
+      yt    = xt**0.33333333333333
+      term1 = rhoc + d1*xt**alfa
+      term2 =   d2*xt+d3*xt**1.3333333333+d4*xt**1.66666666667
+     1        + d5*xt** 2.0 + d6*xt**2.333333333333
+     2        + d7*xt**2.66666666666667
+      rolsat = term1 + term2
+c
+      return
+      end
+c
+c
+      function csubv(t)
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+      implicit integer (i-n)
+      real csubv
+      save
+c
+      dimension c(15),dcdt(15),d2cdt(15),hi(15),dhdro(15),ai(15),gi(17)
+      common /functs/ c,dcdt,d2cdt,hi,dhdro,ai,gi
+c
+c      csubv for hydrogen (eq c-5)
+c
+      gi(1)    = 6.1934792e3
+      gi(2)    = 2.9490437e2
+      gi(3)    =-1.5401979e3
+      gi(4)    =-4.9176101e3
+      gi(5)    = 6.8957165e4
+      gi(6)    =-2.2282185e5
+      gi(7)    = 3.7990059e5
+      gi(8)    =-3.7094216e5
+      gi(9)    = 2.1326792e5
+      gi(10)   =-7.1519411e4
+c
+      gi(11)   = 1.2971743e4
+      gi(12)   =-9.8533014e2
+      gi(13)   = 1.0434776e4
+      gi(14)   =-3.9144179e2
+      gi(15)   = 5.8277696e2
+      gi(16)   = 6.5409163e2
+      gi(17)   =-1.8728847e2
+c
+      t0    = 13.8
+      t1    = 35.0
+      t2    = 400.0
+c
+      u0    = 3.9275114e5
+c
+      if( t .le. t1 ) then
+      csubv = gi(1)
+      return
+      endif
+c
+      if( t .le. t2 ) then
+      arg   = log(t/t1)
+      csubv = gi(1)
+      csubv = csubv + arg*(gi(2)+arg*(gi(3)+arg*(gi(4)+arg*(gi(5)
+     1              + arg*(gi(6)+arg*(gi(7)+arg*(gi(8)+arg*(gi(9)
+     2              + arg*(gi(10)+arg*(gi(11)+gi(12)*arg) )))))))))
+      return
+      endif
+c
+c     t gt t2
+c
+      arg   = log(t/t2)
+      csubv = gi(13)
+      csubv = csubv + arg*(gi(14)+arg*(gi(15)
+     1              + arg*(gi(16)+gi(17)*arg) ))
+c
+      return
+      end
+c
+c
+      function sie(rho,t)
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+      implicit integer (i-n)
+      real sie
+      save
+c
+      dimension cvi(17)
+      dimension c(15),dcdt(15),d2cdt(15),hi(15),dhdro(15),ai(15),gi(17)
+      common /functs/ c,dcdt,d2cdt,hi,dhdro,ai,gi
+c
+c     specific internal energy for hydrogen
+c
+      t0    = 13.8
+      t1    = 35.0
+      t2    = 400.0
+      u0    = 3.9275114e5
+c
+c     integral of drho part
+c
+       sierho = 0.0
+       do 10 i = 2,15
+         sierho = sierho + (c(i) - t*dcdt(i))*ai(i)
+   10  continue
+c
+c     integral of csubv part for (t .le. t
+c
+      if( t .le. t1 ) then
+      siecbv = gi(1)*(t - t0)
+      go to 90
+      endif
+c
+c     integral of csubv part for (t1 .le. t .le. t2)
+c
+      tovt1  = t/t1
+      tovt2  = t/t2
+      t2ovt1 = t2/t1
+c
+      if( t .gt. t1 .and. t .le. t2) then
+      cvi0   = tovt1 - 1.0
+      term   = log(tovt1)
+      cvi(1) = tovt1*term - cvi0
+c
+      do 20 i = 2,11
+      cvi(i)  = tovt1*(term**i) - float(i)*cvi(i-1)
+   20 continue
+c
+c     add to siecbv
+c
+      siecbv = gi(1)*(t1-t0) + gi(1)*(t-t1)
+      do 25 i = 2,12
+      siecbv  = siecbv + gi(i)*t1*cvi(i-1)
+   25 continue
+      go to 90
+      endif
+c
+c     integral of csubv part for (t .gt. t2)
+c
+      siecbv  = gi(1)*(t1-t0) + gi(1)*(t2-t1) + gi(13)*(t-t2)
+c
+      cvi0    = t2ovt1 - 1.0
+      term    = log(t2ovt1)
+      cvi(1)  = t2ovt1*term - cvi0
+c
+      do 30 i = 2,11
+      cvi(i)  = t2ovt1*(term**i) - float(i)*cvi(i-1)
+   30 continue
+c
+c      add this to sie
+c
+      do 40 i = 2,12
+      siecbv = siecbv + gi(i)*t1*cvi(i-1)
+   40 continue
+c
+c      get the final part from t2 to temp
+c
+      cvi0    = tovt2 - 1.0
+      term    = log(tovt2)
+      cvi(14) = tovt2*term - cvi0
+c
+      do 50 i = 15,17
+      cvi(i)  = tovt2*(term**(i-13)) - float(i-13)*cvi(i-1)
+   50 continue
+c
+c      add this to sie
+c
+      do 60 i = 14,17
+      siecbv = siecbv + gi(i)*t2*cvi(i)
+   60 continue
+c
+c     add up the pieces
+c
+   90 continue
+      sie    = sierho + siecbv + u0
+c
+      return
+      end
+c
+c
+      function entrop(rho,t)
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+      implicit integer (i-n)
+      real entrop
+      save
+c
+      dimension c(15),dcdt(15),d2cdt(15),hi(15),dhdro(15),ai(15),gi(17)
+      common /functs/ c,dcdt,d2cdt,hi,dhdro,ai,gi
+c
+c     specific entropy for hydrogen
+c
+      rcon  = 4124.299539
+      t0    = 13.8
+      t1    = 35.0
+      t2    = 400.0
+      s0    = 2.3900333e4
+c
+c     integral of drho part
+c
+      svrho  = -rcon*log(rho)
+      do 10 i = 2,15
+      svrho = svrho - ai(i)*dcdt(i)
+   10 continue
+c
+c     integral of csubv part for  (t .le. t1)
+c
+      if( t .le. t1 ) then
+      svcbv = gi(1)*log(t/t0)
+      go to 90
+      endif
+c
+c     integral of csubv part for ( t1 .gt. t .le. t2 )
+c
+      if( t .gt. t1 .and. t .le. t2 ) then
+      svcbv = gi(1)*log(t1/t0)+gi(1)*log(t/t1)
+      term  = log(t/t1)
+      do 20 i = 1,11
+      svcbv  = svcbv + gi(i+1)*(term**(i+1))/float(i+1)
+   20 continue
+      go to 90
+      endif
+c
+c     integral of csubv part for temp > t2
+c
+      t1ovt0 = t1/t0
+      tovt2  = t/t2
+      t2ovt1 = t2/t1
+c
+      svcbv = gi(1)*log(t1/t0)+gi(1)*log(t2/t1)
+     1       +gi(13)*log(t/t2)
+c
+      term  = log(t2/t1)
+      do 70 i = 1,11
+      svcbv = svcbv + gi(i+1)*(term**(i+1))/float(i+1)
+   70 continue
+c
+      term  = log(t/t2)
+      do 80 i =  14,17
+      svcbv  = svcbv + gi(i)*(term**(i-12))/float(i-12)
+   80 continue
+c
+c     add up the parts
+c
+   90 continue
+      entrop = svrho + svcbv + s0
+c
+      return
+      end
+c
+      subroutine prth2(rho,  t,   pres, dpdt, dpdrho)
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+      implicit integer (i-n)
+      save
+c
+      dimension a(32)
+      dimension c(15),dcdt(15),d2cdt(15),hi(15),dhdro(15),ai(15),gi(17)
+      common /functs/ c,dcdt,d2cdt,hi,dhdro,ai,gi
+c
+c       this subroutine evaluates the prt equation for hydrogen
+c
+      rcon   = 4124.299539
+c
+c     get the c's,dcdt's,hi's,dhdro's,ai's,gi's
+c
+      dum = csubv(t)
+      call cioft(c,dcdt,d2cdt,t,a)
+      call hofrho(hi,dhdro,ai,rho,t)
+c
+      pres   = 0.0
+      do 10 i = 1,15
+      pres = pres + c(i)*hi(i)
+  10  continue
+c
+      dpdt   = 0.0
+      do 20 i = 1,15
+      dpdt = dpdt + dcdt(i)*hi(i)
+  20  continue
+c
+      dpdrho = 0.0
+      do 30 i = 1,15
+      dpdrho = dpdrho + c(i)*dhdro(i)
+  30  continue
+c
+      return
+      end
+c
+c
+      subroutine cioft(c,dcdt,d2cdt,t,a)
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+      implicit integer (i-n)
+      save
+c
+      dimension a(32),c(15),dcdt(15)
+c
+c     evaluates csubi and derivatives for hydrogen
+c
+       rcon  =  4124.299539
+       a(1)  =  1.150470519352900e1
+       a(2)  =  1.055427998826072e3
+       a(3)  = -1.270685949968568e4
+       a(4)  =  7.287844527295619e4
+       a(5)  = -7.448780703363973e5
+       a(6)  =  2.328994151810363e-1
+       a(7)  = -1.635308393739296e1
+       a(8)  =  3.730678064960389e3
+       a(9)  =  6.299667723184813e5
+       a(10) =  1.210920358305697e-3
+       a(11) =  1.753651095884817
+       a(12) = -1.367022988058101e2
+       a(13) = -6.869936641299885e-3
+       a(14) =  3.644494201750974e-2
+       a(15) = -2.559784772600182
+       a(16) = -4.038855202905836e-4
+       a(17) =  1.485396303520942e-6
+       a(18) =  4.243613981060742e-4
+       a(19) = -2.307910113586888e-6
+       a(20) = -6.082192173879582e5
+       a(21) = -1.961080967486886e6
+       a(22) = -5.786932854076408e2
+       a(23) =  2.799129504191752e4
+       a(24) = -2.381566558300913e-1
+       a(25) =  8.918796032452872e-1
+       a(26) = -6.985739539036644e-5
+       a(27) = -7.339554179182899e-3
+       a(28) = -5.597033440289980e-9
+       a(29) =  8.842130160884514e-8
+       a(30) = -2.655507264539047e-12
+       a(31) = -4.544474518140164e-12
+       a(32) =  9.818775257001922e-11
+c
+       tm1  = 1.0/t
+       tm2  = tm1/t
+       tm3  = tm2/t
+       tm4  = tm3/t
+       c(1) = rcon*t
+       c(2) = a(1)*t + a(2)*sqrt(t) + a(3) + a(4)*tm1
+     1       + a(5)*tm2
+       c(3) = a(6)*t + a(7) + a(8)*tm1 + a(9)*tm2
+       c(4) = a(10)*t + a(11) + a(12)*tm1
+       c(5) = a(13)
+       c(6) = a(14)*tm1 + a(15)*tm2
+       c(7) = a(16)*tm1
+       c(8) = a(17)*tm1 + a(18)*tm2
+       c(9) = a(19)*tm2
+       c(10) = a(20)*tm2 + a(21)*tm3
+       c(11) = a(22)*tm2 + a(23)*tm4
+       c(12) = a(24)*tm2 + a(25)*tm3
+       c(13) = a(26)*tm2 + a(27)*tm4
+       c(14) = a(28)*tm2 + a(29)*tm3
+       c(15) = a(30)*tm2 + a(31)*tm3 + a(32)*tm4
+c
+c      derivatives of coft
+c
+       tm1 = 1.0/t
+       tm2 = tm1/t
+       tm3 = tm2/t
+       tm4 = tm3/t
+       tm5 = tm4/t
+       dcdt(1)  = rcon
+       dcdt(2)  = a(1) + 0.5*a(2)/sqrt(t) - a(4)*tm2 - 2.0*a(5)*tm3
+       dcdt(3)  = a(6) - a(8)*tm2 - 2.0*a(9)*tm3
+       dcdt(4)  = a(10) - a(12)*tm2
+       dcdt(5)  = 0.0
+       dcdt(6)  = -a(14)*tm2 - 2.0*a(15)*tm3
+       dcdt(7)  = -a(16)*tm2
+       dcdt(8)  = -a(17)*tm2 - 2.0*a(18)*tm3
+       dcdt(9)  = -2.0*a(19)*tm3
+       dcdt(10) = -2.0*a(20)*tm3 - 3.0*a(21)*tm4
+       dcdt(11) = -2.0*a(22)*tm3 - 4.0*a(23)*tm5
+       dcdt(12) = -2.0*a(24)*tm3 - 3.0*a(25)*tm4
+       dcdt(13) = -2.0*a(26)*tm3 - 4.0*a(27)*tm5
+       dcdt(14) = -2.0*a(28)*tm3 - 3.0*a(29)*tm4
+       dcdt(15) = -2.0*a(30)*tm3 - 3.0*a(31)*tm4
+     1           - 4.0*a(32)*tm5
+c
+       return
+       end
+c
+c
+      subroutine hofrho(hi,dhdro,ai,rho,t)
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+      implicit integer (i-n)
+      save
+c
+      dimension hi(15),dhdro(15),ai(15)
+c
+c     evaluates hofrho, derivatives and integrals for hydrogen
+c
+c
+       gamma = 1.008854772e-3
+c
+       hi(1) = rho
+       do 10 i=2,9
+         hi(i) = hi(i-1)*rho
+   10  continue
+       ce3 = gamma*hi(2)
+       hi(10) = hi(3)/exp(ce3)
+       do 20 i=11,15
+         hi(i) = hi(i-1)*hi(2)
+   20  continue
+c
+c      get derivatives of hofrho wrt rho
+c
+       dhdro(1) = 1.0
+       do 30 i=2,9
+         dhdro(i) = rho*dhdro(i-1)*float(i)/float(i-1)
+   30  continue
+       ce1 = hi(2)/exp(ce3)
+       ce2 = 2.0*gamma*hi(2)
+       aj = 3.0
+       do 40 i=10,15
+         dhdro(i) = ce1*(aj - ce2)
+         aj = aj + 2.0
+         ce1 = ce1*hi(2)
+   40  continue
+c
+c      get the integral of hofrho
+c
+       ai(1) = 0.0
+       ai(2) = rho
+       do 50 i=3,9
+         ai(i) = ai(i-1)*rho*float(i-2)/float(i-1)
+   50  continue
+c
+       const1 = 1.0/(2.0*gamma)
+       const2 = 1.0/exp(gamma*rho*rho)
+       ai(10) = const1*(1.0 - const2)
+c
+       const3 = const1*const2
+       const4 = 0.0
+       expt   = 0.0
+       do 60 i=11,15
+         const4 =  const4 + 2.0
+         expt   =  expt + 2.0
+         term1  = -const3 * (rho**expt)
+         term2  =  const4/(2.0*gamma)
+         ai(i)  =  term1 + term2*ai(i-1)
+   60  continue
+c
+      return
+      end
+c
+c
+      subroutine sattbl
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+      implicit integer (i-n)
+      save
+c
+c  builds saturation tables for lookup
+c
+      dimension pvals(21), tvals(21)
+c
+      dimension    ts(21),pschk(21),rhosat(21), a(32)
+      dimension rhostr(50)
+      dimension     c(15), dcdt(15), d2cdt(15),hi(15)
+      dimension dhdro(15),   ai(15),    gi(17)
+      common /functs/ c,dcdt,d2cdt,hi,dhdro,ai,gi
+      common /sats/   ts,pschk,rhosat ,rhostr
+c
+c
+      parameter( rcon  = 4124.299539,
+     1           pcrit = 1.2838e6,
+     1           tcrit = 32.938,
+     3           tlow  = 13.80,
+     4           plow  = 7042.09,
+     5           rhoc  = 31.36,
+     6           xmol  = 100.20,
+     7           tzero = 300.0,
+     8           tone  = 35.0,
+     9           ttwo  = 400.0)
+c
+      call tsats(tvals,ntemp)
+      call psats(pvals,npres)
+c
+c     make a table for finding saturation temp
+c
+      ts(1)    = 13.0
+      do 10 i=2,21
+      ts(i)  = ts(i-1) + 1.0
+  10  continue
+c
+c      hit fixed point
+c
+      ts(1)  = 13.80
+      ts(9)  = 20.28
+      ts(21) = 32.937
+c
+      do 15 i = 1,21
+      tschk = ts(i)
+      pschk(i) = psoft(tschk)
+   15 continue
+c
+      do 20 i=1,ntemp
+c
+c     build the psat of temperature table
+c
+      tsat   = tvals(i)
+      psat   = psoft(tsat)
+      dpsatt = dpsat(psat,tsat)
+c
+c     get the vapor density
+c
+      rho1  = psat/(rcon*tsat)
+      dum   = csubv(tsat)
+      call cioft(c,dcdt,d2cdt,tsat,a)
+      call densat(psat,tsat,rhogs,rho1,dpdt,dpdrho)
+c
+      ugs = sie(rhogs,tsat)
+      hgs = ugs + psat/rhogs
+      vgs = 1.0/rhogs
+      sgs = entrop(rhogs,tsat)
+c
+c      get delta sat properties
+c
+      rhols  = rolsat(tsat)
+      vgls   = 1./rhogs - 1./rhols
+      hgls   = tsat*vgls*dpsat(psat,tsat)
+      sgls   = hgls/tsat
+c
+      hls    = hgs - hgls
+      uls    = hls - psat/rhols
+      sls    = sgs - sgls
+      vls    = 1.0/rhols
+c
+c     vapor derivative properties
+c
+      betags = dpdt/(rhogs*dpdrho)
+      tkapgs = 1./(rhogs*dpdrho)
+      cvgs   = csubv(tsat)
+      cpgs   = cvgs + (tsat*vgs*betags*betags)/tkapgs
+      gamags = cpgs/cvgs
+      betasg = cpgs/(cvgs*tkapgs)
+      csndg  = sqrt(vgs*betasg)
+c
+c     liquid derivative properties
+c
+      call prth2(rhols,tsat,dum, dpdtl, dpdrol)
+      betals = dpdtl/(rhols*dpdrol)
+      tkapls = 1./(rhols*dpdrol)
+      cvls   = csubv(tsat)
+      cpls   = cvls + (tsat*vls*betals*betals)/tkapls
+      gamals = cpls/cvls
+      betasl = cpls/(cvls*tkapls)
+      csndl  = sqrt(vls*betasl)
+c
+      write(11,9998) psat,vls,uls,tkapls,betals,cpls,sls
+c     write(*, 9998) psat,vls,uls,tkapls,betals,cpls,sls
+c
+      write(11,9999) vgs,ugs,tkapgs,betags,cpgs,sgs
+c     write(*, 9999) vgs,ugs,tkapgs,betags,cpgs,sgs
+c
+   20 continue
+c
+ 9998 format(1pe22.15,6(/1pe22.15) )
+ 9999 format(1pe22.15,5(/1pe22.15) )
+c
+c     build the tsat of pressure table
+c
+      do 30 j=1,npres
+      psat = pvals(j)
+c
+      call satt(psat,tsat)
+c
+c     get vapor density at psat,tsat
+c
+      rho1 = psat/(rcon*tsat)
+      dum   = csubv(tsat)
+      call cioft(c,dcdt,d2cdt,tsat,a)
+      call densat(psat,tsat,rhogs,rho1,dpdt,dpdrho)
+c
+      ugs = sie(rhogs,tsat)
+      hgs = ugs + psat/rhogs
+      vgs = 1.0/rhogs
+      sgs = entrop(rhogs,tsat)
+c
+c      get delta sat properties
+c
+      rhols = rolsat(tsat)
+      vgls  = 1./rhogs - 1./rhols
+      hgls  = tsat*vgls*dpsat(psat,tsat)
+      sgls  = hgls/tsat
+c
+      hls   = hgs - hgls
+      uls   = hls - psat/rhols
+      sls   = sgs - sgls
+      vls   = 1.0/rhols
+c
+c     vapor derivative properties
+c
+      betags = dpdt/(rhogs*dpdrho)
+      tkapgs = 1./(rhogs*dpdrho)
+      cvgs   = csubv(tsat)
+      cpgs   = cvgs + (tsat*vgs*betags*betags)/tkapgs
+      gamags = cpgs/cvgs
+      betasg = cpgs/(cvgs*tkapgs)
+      csndg  = sqrt(vgs*betasg)
+c
+c     liquid derivative properties
+c
+      call prth2(rhols,tsat,dum, dpdtl, dpdrol)
+      betals = dpdtl/(rhols*dpdrol)
+      tkapls = 1./(rhols*dpdrol)
+      cvls   = csubv(tsat)
+      cpls   = cvls + (tsat*vls*betals*betals)/tkapls
+      gamals = cpls/cvls
+      betasl = cpls/(cvls*tkapls)
+      csndl  = sqrt(vls*betasl)
+c
+      write(11,9998) tsat,vls,uls,tkapls,betals,cpls,sls
+c     write(*, 9998) tsat,vls,uls,tkapls,betals,cpls,sls
+c
+      write(11,9999) vgs,ugs,tkapgs,betags,cpgs,sgs
+c     write(*, 9999) vgs,ugs,tkapgs,betags,cpgs,sgs
+c
+   30 continue
+c
+  999 continue
+      return
+      end
+c
+c
+      subroutine psats(pps,npres)
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+      implicit integer (i-n)
+      save
+c
+c  set up pressures for table.
+c
+      dimension pps(21)
+c
+      do 5 iout=1,21
+      pps(iout) = 0.0
+    5 continue
+c
+      npres    =  18
+c
+      pps(1)  =  0.0070421e6
+      pps(2)  =  0.008e6
+      pps(3)  =  0.009e6
+      pps(4)  =  0.010e6
+      pps(5)  =  0.020e6
+      pps(6)  =  0.030e6
+      pps(7)  =  0.040e6
+      pps(8)  =  0.050e6
+      pps(9)  =  0.060e6
+      pps(10) =  0.080e6
+c
+      pps(11) =  0.100e6
+      pps(12) =  0.200e6
+      pps(13) =  0.400e6
+      pps(14) =  0.600e6
+      pps(15) =  0.800e6
+      pps(16) =  1.000e6
+      pps(17) =  1.200e6
+      pps(18) =  1.2837e6
+c
+      return
+      end
+c
+      subroutine tsats(ttl,ntemp)
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+      implicit integer (i-n)
+      save
+c
+c  sets temperature array with values used in table
+c  values are set in rankine and converted to kelvin.
+c
+       dimension ttl(21)
+c
+      do 5 iout=1,21
+      ttl(iout) = 0.0
+    5 continue
+c
+      ntemp = 20
+c
+      ttl(1)  =   13.8
+      ttl(2)  =   15.
+      ttl(3)  =   16.
+      ttl(4)  =   17.
+      ttl(5)  =   18.
+      ttl(6)  =   19.
+      ttl(7)  =   20.
+      ttl(8)  =   21.
+      ttl(9)  =   22.
+      ttl(10) =   23.
+c
+      ttl(11) =   24.
+      ttl(12)  =  25.
+      ttl(13)  =  26.
+      ttl(14)  =  27.
+      ttl(15)  =  28.
+      ttl(16)  =  29.
+      ttl(17)  =  30.
+      ttl(18)  =  31.
+      ttl(19)  =  32.
+      ttl(20)  =  32.937
+c
+      return
+      end
+c
+c
+      subroutine densat ( p,t,rho,rho1,dpdt,dpdrho )
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+      implicit integer (i-n)
+c      logical ifirst
+      save
+c
+      dimension ts(21),pschk(21),rhosat(21)
+      dimension rhostr(50)
+      dimension c(15),dcdt(15),d2cdt(15),hi(15),dhdro(15),ai(15),gi(17)
+      common /functs/ c,dcdt,d2cdt,hi,dhdro,ai,gi
+      common /sats/ ts,pschk,rhosat ,rhostr
+c
+      parameter( rcon  = 4124.299539,
+     1           pcrit = 1.2838e6,
+     1           tcrit = 32.938,
+     3           tlow  = 13.80,
+     4           plow  = 7042.09,
+     5           rhoc  = 31.36,
+     6           xmol  = 100.20,
+     7           tzero = 300.0,
+     8           tone  = 35.0,
+     9           ttwo  = 400.0)
+c
+c     iterate to get density at (p,t)
+c
+c      use van der waal for first guess
+c
+      iter   = 0
+      rho0   = rho1
+      pred   = p/pcrit
+      tred   = t/tcrit
+      vred0  = rhoc/rho0
+      rho0   = rhoc/vred0
+   14 continue
+      iter  = iter + 1
+      vred2 = vred0*vred0
+      vred3 = vred2*vred0
+      term1 = pred+8.0*tred
+      fncvdw = 3.0*pred*vred3 - term1*vred2
+      fncvdw = fncvdw + 9.0*vred0 - 3.0
+      dfnc   = 9.0*pred*vred2 - 2.0*term1*vred0 + 9.0
+c
+      delvr = fncvdw/dfnc
+      vred  = vred0 - delvr
+      rho0  = rhoc/vred
+      ratio = delvr/vred
+c
+       if( abs(delvr) .lt. 1.e-06 ) go to 18
+c
+      vred0   = vred
+      if( iter .lt. 30 ) go to 14
+c     write(*,*) ' '
+      write(*,*) ' van der waal iteration did not converge.'
+      write(*,*) ' program will stop.'
+      write(*,*) ' '
+      write(*,*) ' at the last iteration.'
+      write(*,*) ' iter1    = ',iter1
+      write(*,*) ' function = ',fncvdw
+      write(*,*) ' delvr    = ',delvr
+      write(*,*) ' vred     = ',vred
+      write(*,*) ' '
+cgls  pause ' hit <return> to continue. program will stop. '
+c     write(*,*) ' '
+      stop
+c
+   18 continue
+      iter = 0
+   15 continue
+      iter = iter+1
+      call prth2(rho0,  t,  pp,  dpdt,  dpdrho)
+      fnc    =  p - pp
+      delrho = fnc/dpdrho
+      rho    = rho0 + delrho
+      ratio  = delrho/rho
+c
+       if( abs(delrho) .lt. 1.e-06 ) go to 20
+c
+      rho0   = rho
+      if( iter .lt. 30 ) go to 15
+c     write(*,*) ' '
+      write(*,*) ' density iteration did not converge.'
+      write(*,*) ' program will stop.'
+      write(*,*) ' '
+      write(*,*) ' at the last iteration.'
+      write(*,*) ' iter     = ',iter
+      write(*,*) ' function = ',fnc
+      write(*,*) ' delrho   = ',delrho
+      write(*,*) ' rho      = ',rho
+c     write(*,*) ' '
+cgls  pause ' hit <return> to continue. program will stop '
+c     write(*,*) ' '
+      stop
+   20 continue
+c
+      return
+      end
+       subroutine gentpf
+$if def,in32,1
+      implicit real*8(a-h,o-z)
+c
+c      gentpf  - generate thermodynamic properties file from bigtbl
+c                data
+c
+c      Author:   J. E. Tolli, EG&G Idaho, Inc.
+c      Date:     3/89
+c      Language: FORTRAN 77
+c
+c                gentpf
+c
+c      Parameters:
+c
+c                none
+c
+c      Files:
+c
+c              sthyxt: hydrogen thermodynamic properties as
+c                binary tables  (output)
+c
+c                unit5;  thermodynamic tables data in bigtbl card image
+c                format  (standard input)
+c
+c                unit6 (message file);  tabular list of thermodynamic
+c                properties (standard output)
+c
+c
+       parameter (maxlen=20000)
+       parameter (nprops=6)
+c
+c
+       dimension  a(maxlen),is(4)
+       equivalence  (nt,is(1)), (np,is(2)), (ns,is(3)), (ns2,is(4))
+       character*12  p
+       character*11  state,stype
+       character*10  date
+c
+c
+       data  next /1/
+       data  stype /' hydrogen  '/
+c
+c
+c--open binary file for tables
+c
+       open (unit=2,file='sthyxt',form='unformatted')
+c
+C
+C--OPEN FILE FOR INITIAL FILE FORMAT, BIGTBL
+C
+      open(unit=5,file='bigtbl',status='old',iostat=istatx)
+      if (istatx .ne. 0) then
+         write(6,*) ' ******** fatal error opening file bigtbl'
+         write(6,*) '          check if file exists.'
+      endif
+c--display table heading
+c
+       call  clock (htime)
+c      write (6,1000) date(),htime,stype
+c
+c--read and display number of temperatures and pressures
+c
+       read (5,1100)
+       read (5,*) nt
+       read (5,*) np
+       read (5,*) ns
+       read (5,*) ns2
+       write (6,*) ' ',nt,np,ns,ns2
+c
+c--read and display temperature values
+c
+       read (5,1100)
+       nl = (nt+9)/10
+       l = next
+       do 10 i=1,nl-1
+         read (5,*) ( a(j), j=l,l+9 )
+         write (6,*) ' ',( a(j), j=l,l+9)
+         l = l + 10
+   10  continue
+       read (5,*) ( a(i), i=l,nt )
+       write (6,*) ' ',( a(i), i=l,nt )
+       next = next + nt
+c
+c--read and display pressure values
+c
+       nl = (np+5)/6
+       l = next
+       do 20 i=1,nl-1
+         read (5,*) ( a(j), j=l,l+5 )
+         write (6,*) ' ',( a(j), j=l,l+5 )
+         l = l + 6
+   20  continue
+       read (5,*) ( a(i), i=l,next+np-1 )
+       write (6,*) ' ',( a(i), i=l,next+np-1 )
+       next = next + np
+c
+c--calculate number of words in binary table
+c
+       ntot = nt + np + ( 1 + 2*nprops ) * ns + ( 1 + 2*nprops ) * ns2
+     *           + nprops * nt * np
+       if (ntot.gt.maxlen) then
+         write (6,1200) ntot,maxlen
+         stop
+       endif
+c
+c--display table statistics
+c
+       write (6,1300) nt,np,ns,ns2,ntot
+c
+c--write binary file statistics
+c
+       write(2) is(1),is(2),is(3),is(4)
+c
+c--generate tables of thermodynamic properties
+c
+c
+c--get saturation properties for t v. p table
+c
+       write (6,1400) stype,'(temperature v. pressure)','temperature',
+     *                ' pressure  '
+       do 40 i=1,ns
+c
+c--place values in binary table
+c
+         do 30 j=0,2*nprops
+           read (5,*) a(next+j)
+   30    continue
+c
+c--interchange beta and kappa values
+c
+         x = a(next+3)
+         a(next+3) = a(next+4)
+         a(next+4) = x
+         x = a(next+9)
+         a(next+9) = a(next+10)
+         a(next+10) = x
+c
+c--display values
+c
+         last = next + 2*nprops
+         write (6,1500) a(i),(a(j),j=next,last)
+c
+         next = last + 1
+c
+   40  continue
+c
+c--get saturation properties for p v. t table
+c
+       write (6,1400) stype,'(pressure v. temperature)',' pressure  ',
+     *                'temperature'
+       do 60 i=nt+1,nt+ns2
+c
+c--place values in binary table
+c
+         do 50 j=0,2*nprops
+           read (5,*) a(next+j)
+   50    continue
+c
+c--interchange beta and kappa values
+c
+         x = a(next+3)
+         a(next+3) = a(next+4)
+         a(next+4) = x
+         x = a(next+9)
+         a(next+9) = a(next+10)
+         a(next+10) = x
+c
+c--display values
+c
+         last = next + 2*nprops
+         write (6,1500) a(i),(a(j),j=next,last)
+c
+         next = last + 1
+c
+   60  continue
+c
+c--get thermodynamic properties for single phase states
+c
+       state = '     -     '
+c
+       do 90 i=nt+1,nt+np
+c
+c--display page heading
+c
+         write (6,1600) stype
+         nline = 0
+c
+         do 80 j=1,nt
+c
+c--place values in binary table
+c
+           do 70 k=0,nprops-1
+             read (5,*) a(next+k)
+   70      continue
+c
+c--interchange beta and kappa values
+c
+           x = a(next+2)
+           a(next+2) = a(next+3)
+           a(next+3) = x
+c
+c--display values
+c
+           last = next + nprops - 1
+           nline = nline + 1
+           if (nline.gt.55) then
+             write (6,1600) stype
+             nline = 1
+           endif
+           if (nline.eq.1) then
+             write (p,'(1p,e12.5)') a(i)
+           else
+             p = '          '
+           endif
+           write (6,1700) p,a(j),state,(a(ij),ij=next,last)
+c
+           next = last + 1
+c
+   80    continue
+c
+   90  continue
+c
+c--check number of words stored in binary tables
+c
+       if (next-1.ne.ntot) then
+         write (6,1800) next-1,ntot
+         stop
+       endif
+c
+c--write out binary tables
+c
+       write(2) (a(iwtxx),iwtxx=1,ntot)
+c
+ 1000  format ('1 gentpf',20x,a10,10x,a8//
+     *         '  program to generate ',a,' thermodynamic',
+     *           ' properties tables in s.i. units'/
+     *         '1 input data:'/)
+ 1100  format ()
+ 1200  format ('0*****error - number of words required for binary ',
+     *           'tables =',i6/
+     *         '              maximum allowed =',i6/
+     *         '0*****execution stopped')
+ 1300  format (///////////////
+     *         '  table statistics:'//
+     *         '  number of temperatures            =',i6/
+     *         '  number of pressures               =',i6/
+     *         '  number of saturation temperatures =',i6/
+     *         '  number of saturation pressures    =',i6/
+     *         '  number of words in binary tables  =',i6)
+ 1400  format ('1table of saturation properties for ',a,' ',a,
+     *           ':'//
+     *         1x,a,3x,a,'      state       specific  ',
+     *           '    internal       thermal     isothermal ',
+     *           '    specific       entropy'/
+     *         '                                             volume   ',
+     *           '     energy       expansion     compress.       heat'/
+     *         ' -----------   -----------   -----------   -----------',
+     *           '   -----------   -----------   -----------',
+     *           '   -----------   -----------'/)
+ 1500  format (1p,2(e12.5,2x),4x,'liquid',4x,6(e12.5,2x)/32x,'vapor',
+     *         5x,6(e12.5,2x))
+ 1600  format ('1thermodynamic properties of ',a,':'//
+     *         '  pressure     temperature      state       specific  ',
+     *           '    internal       thermal     isothermal ',
+     *           '    specific       entropy'/
+     *         '                                             volume   ',
+     *           '     energy       expansion     compress.       heat'/
+     *         ' -----------   -----------   -----------   -----------',
+     *           '   -----------   -----------   -----------',
+     *           '   -----------   -----------'/)
+ 1700  format (1p,a,2x,e12.5,3x,a,2x,6(e12.5,2x))
+ 1800  format ('1*****error - number of words stored in binary ',
+     *           'tables =',i6/
+     *         '              number of words expected =',i6)
+c
+c
+       return
+       end

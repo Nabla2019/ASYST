@@ -1,0 +1,388 @@
+*mlist
+       subroutine vlvela
+c
+c   Calculates average volume velocities from the average volumetric
+c   flowrate normalized to the volume flow area.  The average volumetric
+c   flowrate is calculated as the mean of the mass inflow and outflow
+c   normalized to the mean inlet, outlet phasic (void * density).
+c   The physical junction areas and stream tube ratios are utilized
+c   to calculate mean values.  This form satisfies the continuity sum
+c   and difference equations for all conditions and accounts for the
+c   effects of valves in varying junction areas.
+c
+c  Also reference subroutine volvel.
+c
+c  Cognizant engineer:  dmk/hxc.
+c
+       use invtbl
+       use lpdatc
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables
+       real af,ag,ajf,ajt,avf,avg,dumf,dumg,signaj
+       real ggasa,gliqa,xflow,hliq,hvap,hmix
+       integer i,ii,ivf,ix,j,jx,kx,l,ll,loop,lx,m
+$if def,mmfld,1
+       real dumm,am,avm
+       character ivs*1,iiflag*8
+c
+c
+       ix = ixvff
+       do m = 1,lpdat(issys)%livn
+         vvfx(ix) = 0.0
+         vvfx(ix+1) = 0.0
+         vvgx(ix) = 0.0
+         vvgx(ix+1) = 0.0
+         vrhof(ix) = 0.0
+         vrhof(ix+1) = 0.0
+         vrhog(ix) = 0.0
+         vrhog(ix+1) = 0.0
+         areav(ix) = 0.0
+         areav(ix+1) = 0.0
+         ix = ix + scskp
+       enddo
+       jx = ixvff
+       l = lpdat(issys)%liv
+       do kx = 1,2
+         ix = jx
+         i = l
+         do m = 1,lpdat(issys)%livn
+c The following if test is deactivated temporarily.  This should
+c be removed after imap 16384 is straighten out.
+cc         if (iand(imap(i+1),16384) .ne. 0) then
+             vvfx(ix+2) = 0.0
+             vvfx(ix+3) = 0.0
+             vvgx(ix+2) = 0.0
+             vvgx(ix+3) = 0.0
+             vrhof(ix+2) = 0.0
+             vrhof(ix+3) = 0.0
+             vrhog(ix+2) = 0.0
+             vrhog(ix+3) = 0.0
+             areav(ix+2) = 0.0
+             areav(ix+3) = 0.0
+cc         endif
+           ix = ix + scskp
+           i = i + ivskp
+         enddo
+         jx = jx + 2
+         l = l + 1
+       enddo
+$if def,mmfld
+       if (lnonmf(issys) .ne. 0) then
+         ix = ixvff
+         do m = 1,lpdat(issys)%livn
+           vmx(ix) = 0.0
+           vmx(ix+1) = 0.0
+           vrhom(ix) = 0.0
+           vrhom(ix+1) = 0.0
+           ix = ix + scskp
+         enddo
+       endif
+$endif
+       ll = lvjusr(lpdat(issys)%llvect)
+       if (lvptr(ll) .ne. 0) then
+         do ii = 1,lvptr(ll)
+           ll = ll + 1
+           do m = 1,lvptr(ll)
+             ll = ll + 1
+             j = lvptr(ll)
+             jx = jcnxs(j)
+             kx = jcnx1(j)  + iand(ishft(jcex(j),-12),7)
+             lx = jcnx1(j+1) + iand(ishft(jcex(j),-9),7)
+             ajf = ajun(j)
+             ajt = ajun(j)
+             avf = max(1.0e-15,voidfj(j))
+             avg = max(1.0e-15,voidgj(j))
+             dumf = 1.0
+             if (velfj(j) .eq. 0.0 .or. athrot(j) .eq. 0.0) dumf = 0.0
+             dumg = 1.0
+             if (velgj(j) .eq. 0.0 .or. athrot(j) .eq. 0.0) dumg = 0.0
+$if def,mmfld,6
+             if (lnonmf(issys) .ne. 0) then
+               avm = max(1.0e-15,voidmj(j))
+               dumm = 1.0
+               if (velmj(j).eq.0.0 .or. athrot(j).eq.0.0) dumm = 0.0
+               arhom(jx) = rhomj(j)*avm*dumm
+             endif
+             arhof(jx) = rhofj(j)*avf*dumf
+             arhog(jx) = rhogj(j)*avg*dumg
+             avg = max(1.0e-15,athrot(j))
+             avf = ajf*avg
+             areav(kx) = areav(kx) + avf*dumf
+$if def,mmfld,2
+             if (lnonmf(issys) .ne. 0) vrhom(kx) = vrhom(kx) +
+     &       avf*arhom(jx)
+             vrhof(kx) = vrhof(kx) + avf*arhof(jx)
+             vrhog(kx) = vrhog(kx) + avf*arhog(jx)
+             avf = ajt*avg
+             areav(lx) = areav(lx) + avf*dumf
+$if def,mmfld,2
+             if (lnonmf(issys) .ne. 0) vrhom(lx) = vrhom(lx) +
+     &       avf*arhom(jx)
+             vrhof(lx) = vrhof(lx) + avf*arhof(jx)
+             vrhog(lx) = vrhog(lx) + avf*arhog(jx)
+             avg = ajf
+             if (iand(jc(j),4) .ne. 0) avg = -avg
+             af = arhof(jx)*velfj(j)
+             avf = avg*af
+             vvfx(kx) = vvfx(kx) + avf
+             ag = arhog(jx)*velgj(j)
+$if def,mmfld,5
+             if (lnonmf(issys) .ne. 0) then
+               am = arhom(jx)*velmj(j)
+               avf = avg*am
+               vmx(kx) = vmx(kx) + avf
+             endif
+             avf = avg*ag
+             vvgx(kx) = vvgx(kx) + avf
+             avg = ajt
+             if (iand(jc(j),8) .ne. 0) avg = -avg
+             avf = avg*af
+             vvfx(lx) = vvfx(lx) + avf
+$if def,mmfld,4
+             if (lnonmf(issys) .ne. 0) then
+               avf = avg*am
+               vmx(lx) = vmx(lx) + avf
+             endif
+             avf = avg*ag
+             vvgx(lx) = vvgx(lx) + avf
+           enddo
+         enddo
+       endif
+       ll = ll + 1
+       if (lvptr(ll) .ne. 0) then
+cdir$ nextscalar
+         do m = 1,lvptr(ll)
+           ll = ll + 1
+           j = lvptr(ll)
+           jx = jcnxs(j)
+           kx = jcnx1(j) + iand(ishft(jcex(j),-12),7)
+           lx = jcnx1(j+1) + iand(ishft(jcex(j),-9),7)
+           ajf = ajun(j)
+           ajt = ajun(j)
+           avf = max(1.0e-15,voidfj(j))
+           avg = max(1.0e-15,voidgj(j))
+           dumf = 1.0
+           if (velfj(j) .eq. 0.0 .or. athrot(j) .eq. 0.0) dumf = 0.0
+           dumg = 1.0
+           if (velgj(j) .eq. 0.0 .or. athrot(j) .eq. 0.0) dumg = 0.0
+$if def,mmfld,6
+           if (lnonmf(issys) .ne. 0) then
+             avm = max(1.0e-15,voidmj(j))
+             dumm = 1.0
+             if (velmj(j).eq.0.0 .or. athrot(j).eq.0.0) dumm = 0.0
+             arhom(jx) = rhomj(j)*avm*dumm
+           endif
+           arhof(jx) = rhofj(j)*avf*dumf
+           arhog(jx) = rhogj(j)*avg*dumg
+           avg = max(1.0e-15,athrot(j))
+           avf = ajf*avg
+           areav(kx) = areav(kx) + avf*dumf
+$if def,mmfld,2
+           if (lnonmf(issys) .ne. 0) vrhom(kx) = vrhom(kx) +
+     &     avf*arhom(jx)
+           vrhof(kx) = vrhof(kx) + avf*arhof(jx)
+           vrhog(kx) = vrhog(kx) + avf*arhog(jx)
+           avf = ajt*avg
+           areav(lx) = areav(lx) + avf*dumf
+$if def,mmfld,2
+           if (lnonmf(issys) .ne. 0) vrhom(lx) = vrhom(lx) +
+     &     avf*arhom(jx)
+           vrhof(lx) = vrhof(lx) + avf*arhof(jx)
+           vrhog(lx) = vrhog(lx) + avf*arhog(jx)
+           avg = ajf
+           if (iand(jc(j),4) .ne. 0) avg = -avg
+           af = arhof(jx)*velfj(j)
+           avf = avg*af
+           vvfx(kx) = vvfx(kx) + avf
+           ag = arhog(jx)*velgj(j)
+$if def,mmfld,5
+           if (lnonmf(issys) .ne. 0) then
+             am = arhom(jx)*velmj(j)
+             avf = avg*am
+             vmx(kx) = vmx(kx) + avf
+           endif
+           avf = avg*ag
+           vvgx(kx) = vvgx(kx) + avf
+           avg = ajt
+           if (iand(jc(j),8) .ne. 0) avg = -avg
+           avf = avg*af
+           vvfx(lx) = vvfx(lx) + avf
+$if def,mmfld,4
+           if (lnonmf(issys) .ne. 0) then
+             avf = avg*am
+             vmx(lx) = vmx(lx) + avf
+           endif
+           avf = avg*ag
+           vvgx(lx) = vvgx(lx) + avf
+         enddo
+       endif
+c
+       ix = ixvff
+       i = lpdat(issys)%liv
+       do m = 1,lpdat(issys)%livn
+         af = 1.0/(avol(i)*max(1.0e-65,vrhof(ix) + vrhof(ix+1)))
+         velf(i) = (vvfx(ix)*areav(ix) + vvfx(ix+1)*areav(ix+1))*af
+         ag = 1.0/(avol(i)*max(1.0e-65,vrhog(ix) + vrhog(ix+1)))
+         velg(i) = (vvgx(ix)*areav(ix) + vvgx(ix+1)*areav(ix+1))*ag
+         af = 0.5/avol(i)
+         gliq(i) = (vvfx(ix) + vvfx(ix+1))*af
+         ggas(i) = (vvgx(ix) + vvgx(ix+1))*af
+         ggasa = abs(ggas(i))
+         gliqa = abs(gliq(i))
+c  Minimun velocity use 1 cm/sec to obtain flow quality.
+         if (ggas(i) .gt. 0.) then
+           ag = abs(vvgx(ix+1))
+           af = abs(vvfx(ix+1))
+         else
+           ag = abs(vvgx(ix))
+           af = abs(vvfx(ix))
+         endif
+         xflow = (ag + 0.01*voidg(i)*rhog(i)*avol(i))/(ag
+     &   + af + 0.01*rho(i)*avol(i))
+         hliq = uf(i) + p(i)/rhof(i)
+         hvap = hsteam(i)
+         if (p(i) .lt. pcrit) then
+           hmix = hliq + xflow*(hvap-hliq)
+           quale(i) = (hmix - sathf(i))/(sathg(i)-sathf(i))
+         else
+           quale(i) = quals(i)
+         endif
+         i = i + ivskp
+         ix = ix + scskp
+       enddo
+c
+       j = lpdat(issys)%liv
+       jx = ixvff
+       do kx = 1,2
+         i = j
+         ix = jx
+         do m = 1,lpdat(issys)%livn
+           if (iand(imap(i+1),16384) .ne. 0) then
+             af = 1.0/(avol(i+1)*max(1.0e-65,vrhof(ix+2) + vrhof(ix+3)))
+             velf(i+1) = (vvfx(ix+2)*areav(ix+2) + vvfx(ix+3)*
+     &       areav(ix+3))*af
+             ag = 1.0/(avol(i+1)*max(1.0e-65,vrhog(ix+2) + vrhog(ix+3)))
+             velg(i+1) = (vvgx(ix+2)*areav(ix+2) + vvgx(ix+3)*
+     &       areav(ix+3))*ag
+             af = 0.5/avol(i+1)
+             gliq(i+1) = (vvfx(ix+2) + vvfx(ix+3))*af
+             ggas(i+1) = (vvgx(ix+2) + vvgx(ix+3))*af
+           endif
+           i = i + ivskp
+           ix = ix + scskp
+         enddo
+         j = j + 1
+         jx = jx + 2
+       enddo
+$if def,mmfld
+       if (lnonmf(issys) .ne. 0) then
+         ix = ixvff
+         i = lpdat(issys)%liv
+         do m = 1,lpdat(issys)%livn
+           am = 1.0/(avol(i)*max(1.0e-65,vrhom(ix)+vrhom(ix+1)))
+           velmt(i) = (vmx(ix)*areav(ix) +vmx(ix+1)*areav(ix+1))*am
+           i = i + ivskp
+           ix = ix + scskp
+         enddo
+       endif
+$endif
+c
+c  Debug printout.
+$if def,dbgprnt
+       if (help.ne.0 .and. iand(ihlppr(2),ishft(1,9)).ne.0) then
+         call helphd ('vlvela',12)
+         write (output,2001)
+ 2001  format('0Volume inlet and outlet terms'/1x,115('=')/
+     & 8x,'volno(i)',13x,'invcnt(i)'/8x,'avol(i)',5x,'iiflag',
+     & 3x,'loop',1x,'jx',4x,'junno(jx)',2x,'ivf',1x,'ajun(jx)',5x,
+     & 'voidfj(jx)',3x,'rhofj(jx)',4x,'velfj*ivf',4x,'arat(jx)'/55x,
+     & 'athrot(jx)',3x,'voidgj(jx)',3x,'rhogj(jx)',4x,'velgj*ivf',4x,
+     & 'arat(jx+1)'/1x,115('='))
+         i = lpdat(issys)%liv
+         do m = 1,lpdat(issys)%livn
+           l = invfnd(i)
+           if (invcnt(i) .ne. 0) then
+             if (iand(vctrlx(i),1).ne.0) then
+               write (output,2002) volno(i),invcnt(i),avol(i)
+ 2002  format (7x,i10.9,9x,i4/6x,1p,g13.5)
+               if (iand(imap(i+1),16384).ne.0) write (output,2007)
+     &         avol(i+1)
+ 2007  format (6x,1p,g13.5)
+               if (iand(imap(i+2),16384).ne.0) write (output,2007)
+     &         avol(i+2)
+               ivs = '+'
+               do loop = 1,invcnt(i)
+                 jx = invj(l)%invvnx
+                 iiflag = 'inlet'
+                 if (iand(invj(l)%invjun,2) .ne. 0) iiflag = 'outlet'
+                 ivf = 1
+                 if (iand(invj(l)%invjun,1) .ne. 0) ivf = -ivf
+                 signaj = ivf
+                 write (output,2003) ivs,iiflag,loop,junno(jx),ivf,
+     &           ajun(jx),voidfj(jx),rhofj(jx),velfj(jx)*signaj,
+     &           arat(jx),athrot(jx),voidgj(jx),rhogj(jx),
+     &           velgj(jx)*signaj,arat(jx+1)
+ 2003  format (a1,19x,a6,i4,9x,i10.9,i3,1x,1p,5g13.5/53x,5g13.5)
+                 ivs = ' '
+                 l = l + 1
+               enddo
+             endif
+           endif
+           i = i + ivskp
+         enddo
+         write (output,2004)
+ 2004  format('0Volume average terms'/1x,93('=')/8x,
+     & 'volno(i)',3x,'velf(i)',6x,'vvfx(ix)',5x,'vvfx(ix+1)',3x,
+     & 'vrhof(ix)',4x,'vrhof(ix+1)',2x,'areav(ix)'/19x,
+     & 'velg(i)',6x,'vvgx(ix)',5x,'vvgx(ix+1)',3x,'vrhog(ix)',4x,
+     & 'vrhog(ix+1)',2x,'areav(ix+1)'/1x,93('='))
+         ix = ixvff
+         i = lpdat(issys)%liv
+         do m = 1,lpdat(issys)%livn
+           if (iand(vctrlx(i),1).ne.0) then
+             write (output,2005) volno(i),velf(i),vvfx(ix),vvfx(ix+1),
+     &       vrhof(ix),vrhof(ix+1),areav(ix),velg(i),vvgx(ix),
+     &       vvgx(ix+1),vrhog(ix),vrhog(ix+1),areav(ix+1)
+ 2005  format(7x,i10.9,1p,6g13.5/17x,6g13.5)
+             if (iand(imap(i+1),16384).ne.0) write (output,2006)
+     &       velf(i+1),vvfx(ix+2),vvfx(ix+3),vrhof(ix+2),vrhof(ix+3),
+     &       areav(ix+2),velg(i+1),vvgx(ix+2),vvgx(ix+3),vrhog(ix+2),
+     &       vrhog(ix+3),areav(ix+3)
+ 2006  format(17x,1p,6g13.5/17x,6g13.5)
+             if (iand(imap(i+2),16384).ne.0) write (output,2006)
+     &       velf(i+2),vvfx(ix+4),vvfx(ix+5),vrhof(ix+4),vrhof(ix+5),
+     &       areav(ix+4),velg(i+2),vvgx(ix+4),vvgx(ix+5),vrhog(ix+4),
+     &       vrhog(ix+5),areav(ix+5)
+           endif
+           ix = ix + scskp
+           i = i + ivskp
+         enddo
+       endif
+$endif
+$if def,nanscr
+c  Nan out vvfx(6),vvgx(6),vrhof(6),vrhog(6)
+       call nanscv(1,24)
+$if def,mmfld
+c  Nan out vmx(2),vrhom(2)
+       call nanscv(27,30)
+c  Nan out arhom(2)
+       call nanscj(31,31)
+$endif
+c  Nan out areav(6)
+       call nanscv(71,76)
+c  Nan out arhof(6),arhog(6)
+       call nanscv(89,100)
+$endif
+       return
+       end

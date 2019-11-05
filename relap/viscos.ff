@@ -1,0 +1,276 @@
+*mlist
+       subroutine viscos (ifluid,ihld,ixhld,nh,iscskp,temp,pres,rho,
+     & satt,state,visc,err)
+c
+c
+c  Computes dynamic viscosity for a given fluid.
+c
+c  Cognizant engineer: jet.
+c
+*in32 ihld
+*in32 ixhld
+*in32end
+c
+c      Author:   J. E. Tolli, EG&G Idaho, Inc.
+c      Date:     7/89
+c      Modified: 2/90  (helium,nitrogen,sodium,NaK)
+c      Modified: 3/91  (lithium-lead)
+c      Language: FORTRAN77
+c
+c      Calling sequence:
+c
+c                call  viscos (ip1,ip2,ip3,ip4,ip5,rp6,rp7,rp8,rp9,cp10,
+c                              rp11,lp12)
+c
+c      Parameters:
+c
+c                ip1  = ifluid = fluid number (input)
+c
+c                ip2  = ihld   = primary list vector holding subscripts
+c                                for required arrays (input)
+c
+c                ip3  = ixhld  = secondary list vector (uses values
+c                                stored in ip2 for subscripts)
+c                                containing pointers to needed values in
+c                                alternate data base (input)
+c
+c                ip4  = nh     = vector length (input)
+c
+c                ip5  = iscskp = skip factor for ip2 and ip3 (input)
+c
+c                rp6  = temp   = array containing temperatures (input)
+c
+c                rp7  = pres   = array containing pressures (input)
+c
+c                rp8  = rho    = array containing fluid densities
+c                                (input)
+c
+c                rp9  = satt   = array containing saturation
+c                                temperatures corresponding to rp7
+c                                (input)
+c
+c                cp10 = state  = fluid state (input)
+c                                'liquid' = liquid state
+c                                'vapor'  = vapor state
+c
+c                rp11 = visc   = array containing viscosities (output)
+c
+c                lp12 = err    = error flag (output)
+c
+c
+$if def,iua
+       use uncdata
+$endif
+       implicit none
+       save
+c
+c  Arguments.
+       real pres(*),rho(*),satt(*),temp(*),visc(*)
+       integer ifluid,ihld(*),iscskp,ixhld(*),nh
+       logical err
+       character*(*) state
+c
+c  Local variables.
+       real term,tm6,tm7
+       integer i,ih,ix,m
+       real crtr,a0g,a1g,a2g,b1g,c1g,d1g,e1g,g1g,g2g,g3g,g4g,t1,t2,
+     & f1g,f2g,f3g,f4g,psat,templ,fr,fr1,tflim,tempx,tglim,th,tt
+       real a(9),b(6)
+c
+c  Common blocks:
+       include 'ufiles.h'
+c
+c   Data  statements:
+       data  tm6 /1.0e-6/, tm7 /1.0e-7/
+c
+       data   a   /-7.691234564,   -26.08023696,-168.1706546,
+     &              6.423285504e1,-1.189646225e2, 4.167117320,
+     &              2.097506760e1, 1.e9,          6.0/
+c
+       data  b /0.42325045e+01,0.28363668e+01,-0.32995982e+01,
+     &          0.54697999e+01,-0.39023042e+01,0.11637261e+01/
+c
+       data  a0g/3.53e-8/, a1g/6.765e-11/, a2g/1.021e-14/,
+     & b1g/0.407e-7/, c1g/10.4e-6/, d1g/1.858e-7/, e1g/5.9e-10/,
+     & g1g/176./,   g2g/-1.6/,   g3g/.0048/,   g4g/-.474074074e-5/
+     & t1/573.15/, t2/648.15/
+       data f1g/-.2885e-5/, f2g/.2427e-7/, f3g/-.6789333e-10/,
+     & f4g/0.6317037037e-13/
+c
+c  note:  1.544878727e-3 = 1.0/647.3
+       data crtr /1.544878727e-3/
+c
+c  Execution:
+c
+c--initialize error flag
+c
+       err = .false.
+c
+c--check for valid state specifier
+c
+       if (state.ne.'liquid' .and. state.ne.'vapor') then
+         err = .true.
+         go to 999
+       endif
+c
+c--initialize pointer index
+c
+       ih = 1
+c
+c--branch to correlation for given fluid
+c
+       go to (10,20), ifluid
+       err = .true.
+       go to 999
+c
+c--light water
+c
+   10  continue
+       if (state.eq.'liquid') then
+         go to 11
+       else
+         go to 13
+       endif
+c
+c--saturated or subcooled liquid;  correlation from
+c--The American Society Of Mechanical Engineers,
+c--Thermodynamic And Transport Properties Of Steam,
+c--United Engineering Center, 345 East 47-th Street,
+c--New York, N.Y., 10017, (1967);
+c--Springer-Verlag New York Inc., 1969
+c--Properties of water and steam in SI-units
+c--Prepared by Ernst Schmidt
+c--FORTRAN coding by R. J. Wagner and J. E. Tolli, EG&G Idaho, Inc.
+c
+   11  continue
+       do 12 m = 1,nh
+         i = ihld(ih)
+         ix = ixhld(i)
+         psat = pres(i)
+         templ = temp(i)
+         if (psat .lt. 2.212e+7) templ=max(273.16,min(templ,satt(i)))
+         if (templ .lt. 647.3) then
+           fr = templ * crtr
+           fr1 = 1.0 - fr
+           psat = 2.212e+7*exp((((((a(5)*fr1 + a(4))*fr1 + a(3))*fr1 +
+     &     a(2))*fr1 + a(1))*fr1)/(((a(7)*fr1 + a(6))*fr1 + 1.0)*fr) -
+     &     fr1/(a(8)*fr1*fr1 + a(9)))
+         endif
+         tflim = max(573.15,min(647.3,templ))
+         visc(i) = (647.3 - tflim)*exp(570.58059/(templ - 140.))*
+     &          (3.2555630478758e-7 + 3.4088115981118e-18*
+     &          max((pres(i) - psat), 0.)*(templ - 305.)) +
+     &          (tflim - 573.15)*(1.0842886041807e-7 +
+     &          5.488873904248e-10*(templ - 273.15) + rho(ix)*
+     &          (4.7606203631266e-10 + rho(ix)*(9.1233984665203e-13 +
+     &          rho(ix)*1.3769386378961e-16)))
+         ih = ih + iscskp
+   12  continue
+       go to 999
+c
+c--saturated or superheated vapor;  correlation from
+c--The American Society Of Mechanical Engineers,
+c--Thermodynamic And Transport Properties Of Steam,
+c--United Engineering Center, 345 East 47-th Street,
+c--New York, N.Y., 10017, (1967);
+c--Springer-Verlag New York Inc., 1969
+c--Properties of water and steam in SI-units
+c--Prepared by Ernst Schmidt
+c--FORTRAN coding by R. J. Wagner and J. E. Tolli, EGG Idaho, Inc.
+c
+   13  do 14 m = 1,nh
+         i = ihld(ih)
+         ix = ixhld(i)
+c  Check for sub-critical state.
+         if (pres(i) .ge. 2.212e+7) then
+           psat = pres(i)
+           templ = temp(i)
+           if (psat .lt. 2.212e+7) templ=max(273.16,min(templ,satt(i)))
+           if (templ .lt. 647.3) then
+             fr = templ * crtr
+             fr1 = 1.0 - fr
+             psat = 2.212e+7*exp((((((a(5)*fr1+a(4))*fr1+a(3))*fr1 +
+     &       a(2))*fr1+a(1))*fr1)/(((a(7)*fr1+a(6))*fr1+1.0)*fr) -
+     &       fr1/(a(8)*fr1*fr1+a(9)))
+           endif
+           tflim = max(573.15,min(647.3,templ))
+           visc(i) = (647.3 - tflim)*exp(570.58059/(templ - 140.))*
+     &            (3.2555630478758e-7 + 3.4088115981118e-18*
+     &            max((pres(i) - psat), 0.)*(templ - 305.)) +
+     &            (tflim - 573.15)*(1.0842886041807e-7 +
+     &            5.488873904248e-10*(templ - 273.15) + rho(ix)*
+     &            (4.7606203631266e-10+rho(ix)*(9.1233984665203e-13 +
+     &            rho(ix)*1.3769386378961e-16)))
+         else
+           tempx  = max(temp(i),satt(i)) - 273.15
+c  Vapor viscosity at pres = 1 bar.
+           term = 4.07e-8*tempx + 8.04e-6
+           if (pres(i).ne.1.0e+5 .or. tempx.lt.100.0) then
+c  Saturated and superheated vapor viscosity.
+             tglim = max(340.0,min(365.0,tempx))
+             term = term + rho(ix)*((tglim - 340.0)*(1.412e-9 +
+     &       rho(ix)*(2.706e-12 + rho(ix)*4.084e-16)) -
+     &       (365.0 - tglim)*(7.432e-9 - 2.36e-11*tempx))
+           endif
+           visc(i) = term
+         endif
+         ih = ih + iscskp
+   14  continue
+       go to 999
+c
+c--heavy water
+c
+   20  if (state.eq.'liquid') then
+         go to 21
+       else
+         go to 23
+       endif
+c
+c--liquid dynamic viscosity;  correlation from Flowtran program
+c--(Savannah River);  FORTRAN coding by R. J. Wagner, C. S. Miller,
+c--and J. E. Tolli, EG&G Idaho, Inc.
+c
+   21  do 22 m=1,nh
+         i = ihld(ih)
+         th = 643.89 / temp(i) - 1.0
+         term = b(1)+(b(2)+(b(3)+(b(4)+(b(5)+b(6)*th)*th)*th)*th)*th
+         visc(i) = exp (term) * tm6
+         ih = ih + iscskp
+   22  continue
+       go to 999
+c
+c--saturated or superheated vapor;  correlation from J. M. Sicilian
+c--and R. P. Harper, "Heavy Water Properties for the Transient Reactor
+c--Analysis Code (TRAC)", FSI-85-14-Q6-1, Appendix A, Flow Science Inc.,
+c--December 1985;  FORTRAN coding by R. J. Wagner, C. S. Miller, and
+c--J. E. Tolli, EG&G Idaho, Inc.
+c
+c--note:  c1g = 8.04e-6 + 2.36e-6
+c
+   23  do 24 m=1,nh
+         i = ihld(ih)
+         ix = ixhld(i)
+         tt = max ( temp(i) - 273.15, tm6 )
+         if (temp(i).le.t1) then
+           term = (b1g*tt+c1g)-rho(ix)*(d1g-e1g*(tt))
+         else  if (temp(i).lt.t2) then
+           term = b1g*tt+c1g+(f1g+f2g*tt+f3g*tt**2+f4g*tt**3)*rho(ix)
+     &     +rho(ix)*(g1g+g2g*tt+g3g*tt**2+g4g*tt**3)
+     &     *(a0g+a1g*rho(ix)+a2g*rho(ix)**2)
+         else
+           term = b1g*tt+c1g+rho(ix)*(a0g+a1g*rho(ix)+a2g*rho(ix)**2)
+         endif
+         visc(i) = max (term, tm7)
+         ih = ih + iscskp
+   24  continue
+       go to 999
+c
+  999  continue
+$if def,iua
+       if (.not.err) then
+         if (uncmode) call appwtvis (ifluid,state,ihld,nh,visc
+     &,iscskp)
+       endif
+$endif
+       return
+       end

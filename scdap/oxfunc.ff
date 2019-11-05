@@ -1,0 +1,232 @@
+*mlist
+*if def,selap
+       subroutine oxfunc (ydot,n,y,t)
+!  Builds the differential equation matrix for differential equation
+!  solver.
+!
+!  Cognizant engineer: cma.
+!
+!     calling subroutines:  dsgedr
+!     subroutines called: ccp,ccpr,coxthk,coxwtk,fnfunc,gnfunc,rcfunc,
+!                         snfunc,zocp
+!     engineer/programmer:  c. m. allison
+!
+!     input variables                  description
+!        c              intercept of time dependent coefficients used in
+!                         function oxfunc
+!        jiter0         duplicate of jiter
+!        n              number of differential equations
+!        rcio           duplicate of rci (m)
+!        s              slope of time dependent coefficients used in
+!                         function oxfunc
+!        t              time used by differential equation solver
+!        thzta          weighted ratio of zircaloy density to zro2
+!                         density defined by equation 2.1.12
+!        wtlim          weight gain limit (kg/m2)
+!        y              dependent variable array
+!
+!     output variables                 description
+!        ydot           time rate of change of dependent variable array
+!
+!     local variables                  description
+!        a0             see equation c.2.1
+!        a1             see equation c.2.2
+!        b0             see equation c.2.12
+!        g              heat conductance from fuel to cladding
+!        h              heat conductance from cladding to coolant
+!        htgen          heat generation in the fuel
+!        oxlis          oxidation steam starvation rate limit per
+!                         unit surface area (kg/m2-s)
+!        oxrat          oxidation rate limit ratio
+!        phi            see equation 2.2.12
+!        rcol           cladding outer radius
+!        rhocp          fuel effective heat
+!        rnalf          inner alpha layer radius
+!        rnoxd          inner oxide layer radius
+!        t0             coolant temperature
+!
+! -------------------------oxfunc outline-------------------------
+! :declare variable types as required for equation solver - dsgedr
+! :common blocks to pass data from oxtran to oxfunc and back
+! :set data
+! :define functions for coordinate relationships
+! :define time independent equation coefficients
+! :if: time dependent interpolation flag is set
+!     :then:
+!        :define time dependent equation coefficients using
+!         interpolation functions
+!     :else:
+!        :define time dependent equation coefficients with
+!         initial values
+! :define current oxide coordinates
+! :if: weight gain is .ge. weight gain limit .or.
+!       inner oxide radius is .le. inner cladding radius
+!     :then:
+!        :set d(weight gain)/dt to zero
+!        :set d(oxide thickness)/dt to zero
+!     :else:
+!        :compute maximum d(weight gain)/dt
+!        :compute maximum d(oxide thickness)/dt
+! :endif:
+! :if: inner alpha radius is .gt. inner cladding radius
+!      :then:
+!          :compute maximum d(alpha thickness)/dt
+!      :else:
+!          :set d(alpha thickness)/dt to zero
+! :endif:
+! :multiply d(weight gain)/dt by oxygen avail. limit ratio
+! :multiply d(oxide thickness)/dt by oxygen avail. limit
+!  ratio
+! :multiply d(alpha thickness)/dt by oxygen avail. limit
+!  ratio
+! :if: d(weight gain)/dt .gt. steam starvation limits
+!     :then:
+!        :limit rates to steam starvation limits
+! :endif:
+! :compute d(tfuel0)/dt
+! :compute oxide dependent coefficients
+! :compute d(tclad0)/dt
+! :return
+!
+       use scdmod
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+!
+       include 'cons.h'
+       include 'contrl.h'
+       include 'scddat.h'
+       include 'effprp.h'
+       include 'tblsp.h'
+       include 'trnot1.h'
+       include 'buntim.h'
+       include 'cmatp.h'
+       include 'oxcom1.h'
+       include 'oxcom2.h'
+       include 'miscon.h'
+       include 'scdcom.h'
+       include 'scdout.h'
+       include 'fast.h'
+       include 'ufiles.h'
+       integer n
+       real ydot(n), y(n), t, effwc,atol,oxdeol
+!  Local variables.
+       integer ib,kdyni
+       real(kr) acpnew,acpold,arout,b0,gf1,h,hrout,htgen,g,
+     & oxlis,oxrat,phi,qdtnew,qdtold,rathsr,rnalf,rhocp,
+     & rnoxd,sn1,to,trout,vfuel,zrcp,rcol
+       real(kr) ccp,ccpr,coxthk,coxthkr,coxwtk,coxwtkr,gnfunc,rcfunc,
+     & snfunc,zocp
+!
+      if(jitero.gt.1) then
+        htgen = so(1) *t + c(1)
+        rhocp = so(3)*t + c(3)
+        g = so(4)*t + c(4)
+        h = so(5)*t + c(5)
+        to = so(6)*t + c(6)
+        oxrat = so(7)*t + c(7)
+        oxlis = so(8)*t + c(8)
+      else
+        htgen = c(1)
+        rhocp = c(3)
+        g = c(4)
+        h = c(5)
+        to = c(6)
+        oxrat = c(7)
+        oxlis = c(8)
+      endif
+      if(htgen.gt.0.5e+9)then
+! limit heat generation to maximum that is physically possible taking
+! diffusion limits into account.
+! when resources available, apply mass transfer equation here.
+        htgen=0.5e+9
+        oxrat=1.0
+        oxlis=0.1336e-1
+      end if
+      if (rhocp .le. 1.0e-07)  then
+        g = 1.0e-07
+        rhocp = 1.0e-07
+      end if
+      if(oxrat.lt.0.0) oxrat=0.0
+      rnoxd = rcfunc(ngeom(icomp),y(3), rcoi2(kaxndb,icomp))
+       if (chngno(70)) then
+         zrcp = ccpr(y(1))
+       else
+         zrcp = ccp(y(1))
+       endif
+      phi = zoxden * zocp(y(1)) / (zrden * zrcp)
+      rcol = y(3) + rnoxd
+      rnalf = rnoxd - y(5)
+!     ydot(4) = coxwtk(y(1)) * 0.5 / y(4)
+      oxdeol=effoxd(icomp,kaxndb)
+      effwc=y(4)-(y(3)-effoxd(icomp,kaxndb))*zoxden*(32./(129.22))
+      atol=1.52e-04
+      effwc=max(effwc,atol)
+       if (chngno(70)) then
+         ydot(4) = coxwtkr(y(1))*0.5/effwc
+         ydot(3) = coxthkr(y(1),1)*0.5/oxdeol
+       else
+         ydot(4) = coxwtk(y(1))*0.5/effwc
+         ydot(3) = coxthk(y(1),1)*0.5/oxdeol
+       endif
+       if (rnalf .gt. rcio) then
+         if (chngno(70)) then
+           ydot(5) = coxthkr(y(1),2)*0.5/y(5)
+         else
+           ydot(5) = coxthk(y(1),2)*0.5/y(5)
+         endif
+       else
+         ydot(5) = 0.0
+       endif
+      ydot(4) = ydot(4) * oxrat
+      ydot(3) = ydot(3) * oxrat
+      ydot(5) = ydot(5) * oxrat
+      if( ydot(4) .le. 0.0) then
+        ydot(4) = 0.0
+        ydot(3) = 0.0
+        ydot(5) = 0.0
+      else
+        if(ydot(4) .gt. oxlis) then
+          ydot(3) = ydot(3) * oxlis / ydot(4)
+          ydot(5) = ydot(5) * oxlis / ydot(4)
+          ydot(4) = oxlis
+        endif
+      endif
+      b0=(91.22/32.0)*zrheat*ydot(4)*snfunc(ngeom(icomp),
+     #    rcoi2(kaxndb,icomp),1.0,1.0)
+      gf1=gnfunc(ngeom(icomp),rnoxd, 1.0, 1.0, rcio, rcol, phi)
+      kdyni=(icomp-1)*ndax+kaxndb
+! ydot(1) calculated lumping together fuel and cladding.
+      sn1=snfunc(ngeom(icomp),rcol,1.0,1.0)
+! rpel00(icomp) = as-fabricated outer radius of fuel pellet
+! or inner radius of control rod cladding.
+      vfuel=pi*rpel00(icomp)*rpel00(icomp)
+! shroud is slab with assumed thickness of 1 m.
+      if(ngeom(icomp).eq.1)vfuel=rcio
+! acpold = old way of calculating lumped heat capacitance.(j/k)
+      acpold=zrden*zrcp*gf1+rhocp*vfuel
+      if(ngeom(icomp).eq.1)acpold=efrcpa(kaxndb,icomp)
+      acpnew=efrcpa(kaxndb,icomp)
+! qdtold = old way of calculating lumped nuclear heat generation. (w)
+      qdtold=htgen*vfuel
+      qdtnew=efgena(kaxndb,icomp)
+! for fuel rods and control rods, use acpold.
+      acpnew=acpold
+      qdtnew=qdtold
+      if(ngeom(icomp).gt.1)then
+        arout=0.0
+        hrout=0.0
+        trout=0.0
+      else
+        ib = (nsout(icmp)-1)*ndax + kaxndb
+        trout = tcols(ib)
+        hrout = hout(ib)
+        arout=1.
+      endif
+       rathsr = rathsa(kaxndb,icomp)
+       ydot(1) = (1.0/acpnew)*(b0 + qdtnew -
+     & sn1*(rathsr*hcnvec(kdyni)*(y(1) -to) -
+     & scd22(kaxndb,icomp,1,1)%qrdsur) - arout*hrout*(y(1) - trout))
+       ydot(2) = ydot(1)
+       return
+       end
+*endif

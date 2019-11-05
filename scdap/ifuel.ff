@@ -1,0 +1,446 @@
+*mlist
+*if def,selap
+       subroutine ifuel(nptim,timp,ptim,ttpptemp)
+c
+c  Initialize data needed in fuel rod analysis.
+c
+c  Modified by H.Madokoro
+c
+       implicit none
+       include 'contrl.h'
+       include 'scddat.h'
+       include 'cmatp.h'
+       include 'cora.h'
+       include 'scdcom.h'
+       include 'scdout.h'
+       include 'scdpow.h'
+       include 'trnot2.h'
+       include 'debout.h'
+       include 'tblsp.h'
+       include 'grscgr.h'
+       include 'cons.h'
+       include 'miscon.h'
+       include 'intcom.h'
+       include 'fgrcom.h'
+       include 'fpmas.h'
+       include 'fpnonv.h'
+       include 'ndxara.h'
+       include 'nhtara.h'
+       include 'ufiles.h'
+c  parameters
+      integer nptim
+      real timp(50),ptim(50),ttpptemp(50,3+ndax)
+c  Local variables.
+      integer i,j,k,knt,unt
+      real snfrac,rhozr,psum
+      real sum1,sum2,sum3,sum4,mconv,vconv
+      integer inpflg,ione,ir,isp,itm1,itm2,itran,izero,ka,m,n,
+     * nn4,nn5,nn6,nn15,nn16,nstp
+      real deltc,fhprs,fourkf,gasms,
+     * powmin,ppower,qfd,qovr4k,qrsq2k,ratio,rpsq,stpmax,
+     * stpmin,tcl,timbc,timec,twokc,zero
+       real trbun1,gs1bn1,gs2bn1,gs3bn1,gs4bn1,gs5bn1,gs6bn1
+       real fistot
+      character specnm(17)*8
+      character vunit(2)*3,munit(2)*2
+      external zelvf,pol8,fgrelg,fgrelh
+      real pol8
+cljs  flag call from ifuel
+      integer ifuelcl
+      integer mmm
+      integer ndbg
+      data munit/ 'kg','lb' /
+      data vunit / 'm3 ' , 'ft3' /
+      data fourkf/12.0/ ,twokc/12.0/ ,ione/1/ ,zero/0.0/ ,izero/0/
+      data  stpmax/1.0e+06/ ,stpmin/100.0/ ,powmin/35000.0/ ,itran/0/
+      data rhozr/6560./
+      data specnm/'xe','kr','cs','i','te-pgrss','zr','sn','fe',
+     # 'ru','zr*','ba','sb','te','ag','cs*','i*','he'/
+c
+        ndbg=0
+         if(ndbg.eq.1)then
+         write(output,9005)ptim(1),timp(1)
+9005     format(' IFUEL entered; ptim(1)=',e10.4,' ttim(1)=',e10.4)
+         end if
+      ifuelcl = 1
+      fistot = 0.0
+      if (unito) then
+        unt = 1
+      else
+        unt = 2
+      endif
+      trbun1=0.0
+      gs1bn1=0.0
+      gs2bn1=0.0
+      gs3bn1=0.0
+      gs4bn1=0.0
+      gs5bn1=0.0
+      gs6bn1=0.0
+      rl(icomp)=0.0
+cljs   initialize fuel inventory array
+      do i = 1,naz
+      fgstot0(i,icomp) = 0.0
+      fgstot(i,icomp) = 0.0
+      end do
+      do i=1,naz
+        rl(icomp)=rl(icomp)+dzcnd2(i,icomp)
+      enddo
+      vplen(icomp) = vpleni(icomp)
+c  calculate total rod lenth
+      rdlnth(icomp) = rl(icomp) + pllnth(icomp)
+      write(output,3000)'0Total Rod length  ',rdlnth(icomp)
+      do i = 1,naz
+        if (acond2(i,icomp).lt.5 .and. nvirn.le.2)
+     &  call keff (acond2(i,icomp),nvirn,burnup2(i,icomp))
+      enddo
+c  initialize temperature conditions   (not necessary)
+      tfuel(icomp) = 0.0
+      tclad(icomp) = 0.0
+      rcos(icomp)=rco2(1,icomp)
+      rcii(icomp)= rci2(1,icomp)
+      ifplg(icomp) = 0
+      vfueli(icomp) = 0.0
+c  calculate mass of tin at each axial node.
+c  assume mass of tin is 1.5 % of mass of cladding.
+      snfrac=0.015
+c  loop through axial nodes initializing associated component variables
+      psum=0.0
+      do 50 i = 1,naz
+        rcrst2(i,icomp)=rco2(i,icomp)
+cljs  set initial values for gap thickness and gap conductance to
+cljs  zero to control printout
+      thkgp2(i,icomp)=0.0
+      htcgap(i,icomp)=0.0 
+c  material interface radii
+        radmt3(1,i,icomp) = 0.0
+        if(idcomp(icomp).eq.6)then
+cljs add on default oxide layer on outer surface, reset in 
+cljs subroutine fstate.
+        nmater2(i,icomp)=nmater2(i,icomp)+1
+          radmt3(2,i,icomp) = rhwire(i,icomp)
+          if (modidx(6) .eq. 0) then
+            radmt3(3,i,icomp) = rpel2(i,icomp)
+            radmt3(4,i,icomp) = rci2(i,icomp)
+            radmt3(5,i,icomp) = rco2(i,icomp)-2.5e-6
+            radmt3(6,i,icomp) = rco2(i,icomp)
+cljs      imatr3(5,i,icomp)=5
+            imatr3(5,i,icomp)=1
+          else
+            radmt3(3,i,icomp) = rpeli2(i,icomp)	
+	    radmt3(4,i,icomp) = rpel2(i,icomp)
+	    radmt3(5,i,icomp) = rci2(i,icomp)
+	    radmt3(6,i,icomp) = rco2(i,icomp)-2.5e-6
+	    radmt3(7,i,icomp) = rco2(i,icomp)
+	    imatr3(6,i,icomp)=1	
+          endif
+ccma check for electrodes and new input
+ccmaend
+        else
+cljs fuel rod
+cljs  add on default oxide layer on outside cladding.
+          nmater2(i,icomp)=nmater2(i,icomp)+1
+          radmt3(2,i,icomp) = rpel2(i,icomp)
+          radmt3(3,i,icomp) = rci2(i,icomp)
+          radmt3(4,i,icomp) = rco2(i,icomp)-2.5e-6
+          radmt3(5,i,icomp) = rco2(i,icomp)
+cljs      imatr3(4,i,icomp)  = 5
+          imatr3(4,i,icomp) = 1
+        endif
+c  cladding hoop strain
+        hoop((icomp-1)*ndax+i) = 0.0
+c  set initial number of radial elements
+        numelm((icomp-1)*ndax+i) = nrodes((icomp-1)*ndax+1)-1
+c  set initial t effective and initial outer cladding radii
+        rcoi2(i,icomp) = rcos(icomp)
+        teff((icomp-1)*ndax+i) = rci2(i,icomp)-rpel2(i,icomp)
+c  save initial surface temperature for bundle timestep routine
+        tsur2(i,icomp) = tcond3(nrods2(i,icomp),i,icomp)
+c  Initialize heat fluxes.
+        qclad((icomp-1)*ndax+i) = 0.0
+        qout2(i,icomp,1) = 0.0
+        qout2(i,ndcomp+icomp,1) = 0.0
+c  fpstt stores initial inventory of tin per axial node per rod.
+       fpstt(icomp,i,1)=dzcnd2(i,icomp)*snfrac*rhozr*pi*
+     & (rco2(1,icomp)**2-rci2(1,icomp)**2)
+c  Calculate fuel volume, void volume,  and masses at beginning of
+c  analysis for each node in this component.
+        vfvod((icomp-1)*ndax+i) = (rci2(i,icomp)**2-rpel2(i,icomp)**2)
+     *    *pi*dzcnd2(i,icomp)
+        afuel2(i,icomp) = pi*rpel2(i,icomp)**2
+ccma    compute fuel volume subtracting out electrode for simulator
+c       add in after debugging
+c       if(idcomp(icomp).eq.6) then
+c          if (i.le.ielec .or. i.gt.itp) then
+c             afuel2(i,icomp) = pi*(rpel2(i,icomp)**2 - relec**2)
+c          else
+c             afuel2(i,icomp) = pi*(rpel2(i,icomp)**2 - rhwire**2)
+c          endif
+c       endif
+ccmeend
+        vfuel((icomp-1)*ndax+i) =afuel((icomp-1)*ndax+i)*dzcnd2(i,icomp)
+        wuobng((icomp-1)*ndax+i) = vfuel((icomp-1)*ndax+i) * denuo2
+        wzrbng((icomp-1)*ndax+i) = (rco2(i,icomp)**2-rci2(i,icomp)**2)
+     *   *pi*zrden*dzcnd2(i,icomp)
+        wzobng((icomp-1)*ndax+i) = 0.0
+        vfvodi((icomp-1)*ndax+i)=vfvod((icomp-1)*ndax+i)/dzcnd2(i,icomp)
+        vfueli(icomp) = vfueli(icomp) + vfuel((icomp-1)*ndax+i)
+        psum = psum + ( paxpz((2*i)-1,nshapz(icomp),icomp) *
+     +       dzcnd2(i,icomp) )/rl(icomp)
+   50 continue
+       if (abs(psum-1.0) .gt. 0.01)write(output,9060)
+     # 'peaking factor normalization is off by more than 1 %.'
+ 9060 format('0$$$$$$$$$ Warning - ',a)
+c ***************************************
+      write (output,'(1h1,25x,2a)') 'fission product initialization'
+     #  ,' input and beginning inventories'
+      do 10 i = 1,16
+        ggivy(i,icomp) = 0.0
+        fpary(i,icomp)=0.0
+        fparyc(i,icomp)=0.0
+        do 10 j=1,ndax
+   10     fpivy3(j,i,icomp)=0.0
+      do 11 i=1,5
+        fgr(i,icomp) =0.0
+        do 11 j=1,ndax
+          fpivrt3(i,j,icomp)=0.0
+   11     fgrj((j-1)*ndax+i,icomp)=0.0
+      fhprs = pgas(icomp)
+c     if (tshtdn(icomp) .gt. 100.0) then
+c transient begins prior to the end of period covered by timp
+c (it is assumed that timp accounts for all
+c  of the time prior to scdap time zero)
+      if(ptim(1).lt.powmin)ptim(1)=powmin
+c set default surface temperature
+      do 100  ka = 1,naz
+        tcnd03(nrods2(ka,icomp),ka,icomp) = tsur2(ka,icomp)
+ 100  continue
+c check if time temperature pressure profile used
+      if (ttpptemp(1,1) .ne. -1.0) then
+        inpflg=1
+        timbc=ttpptemp(1,1)
+        fhprs=ttpptemp(1,naz+2)
+        do 110 k=1,naz
+  110     tcnd03(nrods2(k,icomp),k,icomp)=ttpptemp(1,k+1)
+      else
+        inpflg=0
+        timbc = 0.0
+      end if
+      m = ndax*( icomp - 1 ) + 1
+      n = ndrd*ndax*( icomp - 1 ) + 1
+      nn4 = 4 * ndax*( icomp - 1 ) + 1
+      nn5=5*ndax*(icomp-1)+1
+      nn15=15*ndax*(icomp-1)+1
+      nn16=16*ndax*(icomp-1)+1
+      nn6 =  6*ndax*( icomp - 1 ) + 1
+c if no fuel then no gas release
+      if (afuel(1) .lt. 1.0e-07)  then
+         fpivyi(icomp) = 0.0
+         return
+      end if
+c if input initial inventory, skip paragrass calculations.
+      if(ininv.eq.1)then
+      write (output,'(/t5,a/4x)')
+     +  'user input initial fission gas inventory,
+     +  fission product initial inventory and gap inventory will
+     +  be printed at the first time step of the transient.'
+        return
+      endif
+      timec = 0.0
+c loop over user supplied power time step
+      do 400  itm1 = 1,nptim
+c set time step and inner time loop count.
+         deltc = timp(itm1) - timec
+         if (deltc .gt. stpmax)  then
+            nstp = int(deltc/stpmax) + 1
+            deltc = deltc/float(nstp)
+         else if (deltc .lt. stpmin) then
+            nstp = 1
+            deltc = stpmin
+         else
+            nstp = 1
+         end if
+c calculate temperature profile based on input power and
+c surface temperature (fuel thermal conductivity = 3 w/mk)
+c (clad/gap thermal conductivity = 6 w/mk)
+         do 200  ka = 1 , naz
+          rpsq = xcond3(nrcond2(ka,icomp),ka,icomp)**2
+          ratio =xcond3(nrods2(ka,icomp),ka,icomp)/
+     #       xcond3(nrcond2(ka,icomp),ka,icomp)
+          qovr4k = paxpz2(1,ka,1,icomp) * ptim(itm1) / fourkf
+          qrsq2k = paxpz2(1,ka,1,icomp) * ptim(itm1) * rpsq / twokc
+          tcl=qrsq2k*log(ratio)+tcnd03(nrods2(ka,icomp),ka,icomp)
+     #       +qovr4k*rpsq
+            do 200  ir = 1 , nrods2(ka,icomp)-1
+             if ( ir .le. nrcond2(ka,icomp) )  then
+               tcnd03(ir,ka,icomp)=tcl-qovr4k*xcond3(ir,ka,icomp)**2
+             else
+               tcnd03(ir,ka,icomp)=tcnd03(nrods2(ka,icomp),ka,icomp)
+     #            + qrsq2k*log(xcond3(nrods2(ka,icomp),ka,icomp)
+     #            / xcond3(ir,ka,icomp) )
+             end if
+ 200     continue
+           if(ndbg.eq.1)then
+           write(output,9097)
+9097       format(' IFUEL before FGRELH')
+           end if
+c loop over subdivided user time step
+         do 400  itm2 = 1,nstp
+c calculate fission product release from fuel.
+       ppower = pol8 (ptim(itm1),timp(itm1),timec,1,ione)
+          if(ndbg.eq.1)then
+          write(output,9041)itm2,nstp,ptim(itm1),timp(itm1),ppower
+9041      format(' IFUEL; itm2=',i5,' nstp=',i5,' ptim=',e10.4,
+     &    ' timp=',e10.4,' ppower=',e10.4)
+          end if
+       call fgrelh (deltc,   naz,       tcnd03(1,1,icomp),
+     #   xcond3(1,1,icomp),  nrcond2(1,icomp), fpivy3(1,1,icomp),
+     #   fpivrt3(1,1,icomp), fparyc(1,icomp),  fgrj(1,icomp),
+     #   fgr(1,icomp),       fpary(1,icomp),   nzero,
+     #   dzcnd2(1,icomp),    fulden(icomp),    fhprs,
+     #   rci2(1,icomp),      rci2(1,icomp),    zzero,
+     #   zzero,              ppower,           paxpz(1,1,icomp),
+     #   ione,               afuel2(1,icomp),
+     +   grain(n),ci(nn15),acae(m),prf(m),gsg(nn5),gou(nn6)
+     +   ,dis(nn16),sv(nn4),dlmo(nn4),ato(nn4),tliqs(m),tcap(m)
+     +   ,grira(nn5),hh(m),tkgs(m),vlm(m),kraph(icomp),itran,buk(m)
+     +   ,rxd(nn4),fgrmgo(m),iliq(m),cc(nn5),noxide2(1,icomp),
+cljs    modidx(5) = 1 = user control of bypassing fission gas release
+cljs                    calculations
+     &   modidx(5),ifuelcl,fistot)
+c sum up gap inventory.
+       qfd = 0.0
+       call fgrelg (deltc,dzcnd2(1,icomp),fpary(1,icomp),izero
+     #  ,izero,izero,naz,zero,rci2(1,icomp),rdlnth(icomp),
+     #   zero,zero,ggivy(1,icomp),ggrel(1,icomp),gasms, ggrelh,
+     #   ggrelr, gsrelh, gsrelr, qfd, timec, zero, zero, ione,
+     #   zero, zero, dkgrel, dksrel,trbun1,
+     #   gs1bn1,gs2bn1,gs3bn1,gs4bn1,gs5bn1,gs6bn1)
+c reset time step release to zero.
+          do 290 k = 1,16
+             fpary(k,icomp) = 0.0
+  290     continue
+             if(ndbg.eq.1)then
+             write(output,9032)timec,fpivy3(5,1,icomp),
+     &       fpivy3(5,2,icomp),itm2,nstp
+9032         format(' IFUEL; timec=',e10.4,' fpivy3(1)=',e10.4,
+     &       ' fpivy3(2)=',e10.4,' itm2=',i5,' nstp=',i5)
+             end if
+            timec = timec + deltc
+c if inpflg = 1 and current boundary conditions are not valid
+c  then read new boundary conditions and recalculate
+c  the temperature distribution
+            if ( (inpflg .eq. 1) .and. (timec .gt. timbc) )   then
+             timbc=ttpptemp(1,1)
+             fhprs=ttpptemp(1,naz+2)
+             do 115 k=1,naz
+  115          tcnd03(nrods2(k,icomp),k,icomp)=ttpptemp(1,k+1)
+             write (output,2004) 'timbc =' ,timbc ,'    fhprs =',fhprs
+ 2004  format (/t5,3(a,1p,e10.3))
+             write (output,2005) 'tsurf =',
+     #        (tcnd03(nrods2(k,icomp),k,icomp),k=1,naz)
+ 2005  format (t5,a,1p,10e10.3)
+              if (itm2 .lt. nstp) then
+               do 300  ka = 1 , naz
+                rpsq = xcond3(nrcond(ka),ka,icomp)**2
+                ratio = xcond3(nrods2(ka,icomp),ka,icomp)/
+     #             xcond3( nrcond2(ka,icomp),ka,icomp )
+               qovr4k = paxpz2(1,ka,1,icomp) * ptim(itm1) / fourkf
+                qrsq2k = paxpz2(1,ka,1,icomp)*ptim(itm1)*rpsq/twokc
+                tcl = qrsq2k*log(ratio) +
+     #            tcnd03(nrods2(ka,icomp),ka,icomp)+qovr4k*rpsq
+               do 300  ir = 1 , nrods2(ka,icomp)-1
+                if ( ir .le. nrcond2(ka,icomp) )  then
+                 tcnd03(ir,ka,icomp)=tcl-qovr4k*xcond3(ir,ka,icomp)**2
+                else
+                 tcnd03(ir,ka,icomp)=tcnd03(nrods2(ka,icomp),ka,icomp)
+     #              + qrsq2k * log(xcond3(nrods2(ka,icomp),ka,icomp)
+     #              / xcond3(ir,ka,icomp) )
+                  end if
+ 300           continue
+              end if
+            end if
+ 400  continue
+c calculate total initial inventory
+      fpivyi(icomp) = 0.0
+      do 500 isp = 1,16
+         fpivyi(icomp) = fpivyi(icomp) + fparyc(isp,icomp)
+         do 500  ka = 1,naz
+            fpivyi(icomp) = fpivyi(icomp) + fpivy3(ka,isp,icomp)
+ 500  continue
+      write (output,2006)
+     #   'internal gas pressure is ',pgas(icomp) , ' (n/m2)'
+ 2006  format (/t5,a,1p,e10.4,a)
+c
+      write (output,'(/t5,a)')'FISSION GAS INVENTORY (kg)'
+      knt=min(naz,10)
+      write(output,4000)'Cumlat.','Gap',
+     #   'Inventory within fuel matrix at each axial node'
+ 4000 format(/,12x,a7,7x,a3,2x,a)
+      write(output,4010)'specie','release','gas',(i,i=1,knt)
+ 4010 format(3x,a6,3x,a7,7x,a3,10i10)
+      do 600 j=1,16
+  600 write(output,4020)specnm(j),fparyc(j,icomp),ggivy(j,icomp),
+     #     (fpivy3(i,j,icomp),i=1,knt)
+ 4020 format(1x,a8,1x,12e10.2)
+       write (output,2009) 'total fission product inventory =',
+     #  fpivyi(icomp),' (kg)'
+ 2009  format (/t5,a,1p,e10.4,a )
+      write(output,4030)vunit(unt),vunit(unt),munit(unt),munit(unt)
+ 4030 format(6x,4hFuel,7x,  4hVoid,7x,  3hUO2,8x, 2hZr/
+     #       6x,6hVolume,5x,6hVolume,5x,4hMass,7x,4hMass/
+     # 1x,4hNode,3x,a3,4h/rod,4x,a3,4h/rod,4x,a2,4h/rod,4x,
+     #  a2,4h/rod)
+      sum1=0.
+      sum2=0.
+      sum3=0.
+      sum4=0.
+      if(unito)then
+        vconv=1.
+        mconv=1.
+      else
+        vconv=0.3048*0.3048*0.3048
+        mconv=0.45359237
+      endif
+      do 610 i=1,naz
+        write(output,4040)i,
+     #                    vfuel((icomp-1)*ndax+i)/vconv,
+     #                    vfvod((icomp-1)*ndax+i)/vconv,
+     #                    wuobng((icomp-1)*ndax+i)/mconv,
+     #                    wzrbng((icomp-1)*ndax+i)/mconv
+      sum1=sum1+vfuel((icomp-1)*ndax+i)/vconv
+      sum2=sum2+vfvod((icomp-1)*ndax+i)/vconv
+      sum3=sum3+wuobng((icomp-1)*ndax+i)/mconv
+  610 sum4=sum4+wzrbng((icomp-1)*ndax+i)/mconv
+ 4040 format(2x,i2,2x,1p,4(e10.4,1x))
+      write(output,4050)
+ 4050 format(6x,4(10h----------,1x))
+      write(output,4060)sum1,sum2,sum3,sum4
+ 4060 format(1x,3hSum,2x,1p,4(e10.4,1x))
+c
+ 2050 format('0$$$$$$$$ Warning, ',a,' of component',i2,
+     # ' is outside the range of normal use.')
+        if(ndbg.eq.1)then
+        write(output,9099)icomp,rcos(icomp)
+9099    format(' IFUEL at end, icomp=',i5,' rcos=',e10.4)
+        write(output,9098)fpivy3(5,1,icomp)
+9098    format(' IFUEL at end, fpivy3(5,1,icomp)=',e10.4)
+        end if
+cljs  store initial and current volatile fission gas inventory
+        do i=1,naz
+          fgstot(i,icomp) = 0.0
+          do mmm = 1,5
+          fgstot(i,icomp) = fgstot(i,icomp) + fpivy3(i,mmm,icomp)
+            if(ndbg.eq.1)then
+            write(output,9031)i,icomp,mmm,fpivy3(i,mmm,icomp),
+     &      fgstot(i,icomp)
+9031        format(' IFUEL; i=',i5,' icomp=',i5,' mmm=',i5,
+     &      ' fpivy3=',e10.4,' fgstot=',e10.4)
+            end if
+          end do
+        fgstot0(i,icomp) = fgstot(i,icomp)
+        end do
+      return
+ 3000 format (a,e10.4)
+ 3001 format (a,i5)
+      end
+*endif

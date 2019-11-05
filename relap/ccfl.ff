@@ -1,0 +1,142 @@
+*mlist
+       subroutine ccfl
+c
+c  Determines if countercurrent flow limiting occurs, and if it
+c  does, a flooding correlation of the Wallis-Kutateladze type is
+c  used instead of the difference momentum equation.
+c
+c  Cognizant engineer: rar,jat
+c
+       use lpdatc
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'jundat.h'
+       include 'scrtch.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer i,idg,implt,is,iskip,ix,k,kx,l,lx,m,nmapk,nmapl
+       real cf,cg,clplac,delzk,delzl,det,difff,difgg,difld,dxxx,rhofga,
+     & rdenom,sigmaa,sumff,sumgg,sumld,velgjc,velfjc,vlfjmx,w
+c
+c  Set flag for semi-implicit scheme or nearly-implicit scheme.
+       implt = 0
+       if (iand(print,128) .ne. 0) implt = 1
+c  Initialize flag for diagnostic printout header.
+       iskip = 0
+c
+c  Junction loop.
+       is = 1
+       i = lpdat(issys)%lij
+       ix = ixjff
+       do m = 1,lpdat(issys)%lijn
+c  Perform preliminary calculations.
+         if (iand(jcex(i),4) .eq. 0) go to 1990
+         jcex(i) = iand(jcex(i),not(2))
+         if (iand(jc(i),2).ne.0 .or. velfj(i)*velgj(i).ge.0.0)
+     &   go to 1990
+         k = ij1nx(i)
+         kx = k + iand(ishft(jcex(i),-13),3)
+         l = ij2nx(i)
+         lx = l + iand(ishft(jcex(i),-10),3)
+         nmapk = iand(imap(kx),63)
+         nmapl = iand(imap(lx),63)
+         if (nmapk.eq.2 .or. nmapl.eq.2) go to 1990
+         delzk = hydzc(kx)
+         if (iand(jc(i),4) .ne. 0) delzk = -delzk
+         delzl = hydzc(lx)
+         if (iand(jc(i),8) .ne. 0) delzl = -delzl
+         if (delzk*delzl .le. 0.0) go to 1990
+         if (delzk.gt.0.0 .and. velfj(i).ge.0.0) go to 1990
+         if (delzk.lt.0.0 .and. velfj(i).le.0.0) go to 1990
+         if ((1.0-voidgo(k)).eq.0.0 .or. (1.0-voidgo(l)).eq.0.0 .or.
+     &   voidgo(k).eq.0.0 .or. voidgo(l).eq.0.0 .or.
+     &   velgjo(i).eq.0.0)  go to 1990
+         if (voidgj(i).eq.0.0 .or. voidfj(i).eq.0.0)  go to 1990
+c  Compute terms needed for Wallis-Kutateladze type ccfl correlation
+c  which is of the following form:
+c  (cg*abs(velgj))**0.5 + constm*(cf*abs(velfj))**0.5 = constc
+         dxxx = 1.0/(dxkx(ix) + dxlx(ix))
+         sigmaa = (sigma(k)*dxkx(ix) + sigma(l)*dxlx(ix))*dxxx
+         rhofga = max(1.0e-7,rhofj(i)-rhogj(i))
+         clplac = sqrt(sigmaa/(gravcn*rhofga))
+         w = diamj(i)**(1.0-betacc(i))*clplac**betacc(i)
+         rdenom = 1.0/(sqrt(gravcn*w*rhofga))
+         cg = voidgj(i)*sqrt(rhogj(i))*rdenom
+         cf = voidfj(i)*sqrt(rhofj(i))*rdenom
+         vlfjmx = max(0.0, constc(i) - sqrt(cg*abs(velgj(i))))**2/
+     &   (cf*constm(i)*constm(i))
+c  Diagnostic printout.
+$if def,dbgprnt
+         if (help .ne. 0) then
+           if (iand(ihlppr(1),4).ne.0) then
+             if (iand(jcex(i),ishft(1,20)).ne.0) then
+               if (iskip .eq. 0) then
+                 iskip = 1
+                 call helphd ('ccfl',8)
+                 write (output,5000)
+ 5000    format ('0Junction data'/' ',132('=')/7x,'junno(i)',3x,
+     &   'vlfjmx',7x,'velfj(i)',5x,'cf',11x,'betacc(i)',4x,'diamj(i)',
+     &   5x,'constc(i)',4x,'voidfj(i)',4x,'rhofj(i)',5x,'sigmaa'/
+     &   31x,'velgj(i)',5x,'cg',11x,'w',12x,'clplac',7x,'constm(i)',4x,
+     &   'voidgj(i)',4x,'rhogj(i)'/' ',132('='))
+               endif
+               write (output,5001) junno(i),vlfjmx,velfj(i),cf,
+     &         betacc(i),diamj(i),constc(i),voidfj(i),rhofj(i),sigmaa,
+     &         velgj(i),cg,w,clplac,constm(i),voidgj(i),rhogj(i)
+ 5001    format (6x,i10,1p,9g13.5/29x,7g13.5)
+             endif
+           endif
+         endif
+$endif
+c  Determine if countercurrent flow limiting occurs.
+         if (abs(velfj(i)) .le. vlfjmx) go to 1990
+c  Compute common terms.
+         difff = sign(1.0,velfj(i))*cf*constm(i)*constm(i)
+         difgg = sign(1.0,velgj(i))*(constc(i)*sqrt(cg/abs(velgjo(i))) -
+     &   cg)
+         difld = constc(i)*constc(i) - constc(i)*sqrt(cg*abs(velgjo(i)))
+         velgjc = constc(i)*constc(i)/cg
+         velfjc = constc(i)*constc(i)/(cf*constm(i)*constm(i))
+         if (velgj(i) .ge. velgjc) then
+           difff = 1.0
+           difgg = 0.0
+           difld = 0.0
+         endif
+         if (velfj(i) .ge. velfjc) then
+           difff = 0.0
+           difgg = 1.0
+           difld = 0.0
+         endif
+         if (implt .eq. 0) then
+c  Compute terms needed for semi-implicit scheme.
+           sumff = fwfxaf(ix)
+           sumgg = fwfxag(ix)
+           sumld = pfinrg(ix)
+           det = 1.0/(sumff*difgg - sumgg*difff)
+           velfj(i) = (difgg*sumld - sumgg*difld)*det
+           velgj(i) =-(difff*sumld - sumff*difld)*det
+           det = det*dt
+           vfdpk(ix) = difgg*det
+           vgdpk(ix) =-difff*det
+           vfdpl(ix) = vfdpk(ix)
+           vgdpl(ix) = vgdpk(ix)
+         else
+c  Compute terms needed for nearly-implicit scheme.
+           idg = jcnxd(i+1)
+           coefp(idg-1) = difff
+           coefp(idg) = difgg
+           sourcp(is+1) = difld
+           difdpk(ix) = 0.0
+           difdpl(ix) = 0.0
+         endif
+         jcex(i) = ior(jcex(i),2)
+ 1990    ix = ix + scskp
+         is = is + 2
+         i = i + ijskp
+       enddo
+       return
+       end

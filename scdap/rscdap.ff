@@ -1,0 +1,351 @@
+*mlist
+*if def,selap
+       subroutine rscdap
+c
+c  Process input data for scdap structures.
+c
+c  Cognizant engineer: E. W. Coryell
+c
+*in32 idat
+*in32end
+c
+       use scdmod
+       implicit none
+       include 'contrl.h'
+       include 'fast.h'
+       include 'comctl.h'
+       include 'ufiles.h'
+       include 'scddat.h'
+       include 'blageo.h'
+       include 'bwgeom.h'
+       include 'effprp.h'
+       include 'fecom.h'
+       include 'intcom.h'
+       include 'iocom.h'
+       include 'matdat.h'
+       include 'ndxara.h'
+       include 'radata.h'
+       include 'rgacct.h'
+       include 'scdcom.h'
+       include 'scdout.h'
+       include 'scntl.h'
+       include 'tblsp.h'
+       include 'cpmdat.h'
+       include 'coupl.h'
+       include 'slumpv.h'
+cljs
+       include 'scdpow.h'
+c
+c  Local variables.
+       real cmpn(2),ptch1,ptim(50),timp(50),ttpptmp(50,3+ndax)
+       real frcpow1
+       logical rrad
+       integer i,icfnd,idbuna(20,20),idat(ndax),ife,jcmp,knt1,l4a(8),
+     & nclmns,next,nexto,nfield,nptim,nrows,rdat(ndax),where
+       equivalence (rdat(1),idat(1))
+       character cmpa*8,psep*80
+       integer ndbg
+       data l4a/0,0,1,2,0,1,-1,-1/
+c
+c  Find number of Scdap components and allocate storage.
+          ndbg=0
+            if(ndbg.eq.1)then
+            write(output,9003)
+9003        format(' RSCDAP entered')
+            end if
+       if (.not.scntrl(7)) then
+         jcmp = 1
+         icfnd = 0
+         do
+           l4a(1) = jcmp*10000 + 40000000
+           call inplnk (l4a(1),next,where,nfield,fa(filndx(1)))
+           if (nfield .ne. 0) then
+             icfnd = icfnd + 1
+             jcmp = jcmp + 1
+             if (jcmp .gt. 99) exit
+           else
+             if (next.ne.-1 .and. next.lt.41000000) then
+               jcmp = (next - 40000000)/10000
+             else
+               exit
+             endif
+           endif
+         enddo
+         if (icfnd .ne. 0) then
+           if (icfnd .gt. ndcomp) then
+             write (output,9001) icfnd,ndcomp
+ 9001  format('0******** Number of SCDAP components',i3,'exceeds maximum
+     & code limit',i3)
+             fail = .true.
+             go to 70
+           endif
+           allocate (scd1(icfnd))
+         endif  
+       endif
+c
+       do i = 1,80
+         psep(i:i) = '-'
+       enddo
+       write (output,"('0',a)") psep
+c  Initialize code physical constants.
+       call scdcon
+c  Initialize restart sensitive variables.
+       if (.not.scntrl(7)) call preint
+       call rbundl
+       if (.not.allocated(scd2)) allocate (scd2(naz,icfnd),
+     & scd21(naz,icfnd,2),scd22(naz,icfnd,2,2))
+       call ropt
+       call rusrmt
+       ife = 0
+       nfa = 0
+c  Read first card of component input (type & name).
+       jcmp = 1
+   10  l4a(1) = jcmp*10000 + 40000000
+       call inplnk (l4a(1),next,where,nfield,fa(filndx(1)))
+       if (nfield .eq. 0) then
+         if (next.ne.-1 .and. next.lt.41000000) then
+           jcmp = (next - 40000000)/10000
+           go to 10
+         endif
+       else
+         if (scntrl(7)) then
+c  This is a restart problem.
+           do i = 1,ncomp
+             if (jcmp .eq. scd1(i)%cmpno) then
+               icomp = i
+               go to 22
+             endif
+           enddo
+           fail = .true.
+           write (output,9010) jcmp
+ 9010  format('0******** Data for component',i3,' cannot be processed.')
+           go to 70
+   22      write (output,9002) jcmp
+ 9002  format ('0Data for component',i3,' entered on RESTART')
+           if (idcomp(icomp) .eq. 0) then
+             call rfuel (nptim,timp,ptim,ttpptmp)
+           elseif (idcomp(icomp) .eq. 1) then
+             call rcylin
+           elseif (idcomp(icomp) .eq. 2) then
+             call rshrod
+           elseif (idcomp(icomp) .eq. 3) then
+             call rbwr
+           elseif (idcomp(icomp) .eq. 4) then
+             call rfuele
+           elseif (idcomp(icomp) .eq. 6) then
+             call rfuel (nptim,timp,ptim,ttpptmp)
+           elseif (idcomp(icomp) .eq. 8) then
+             call rbla
+           endif
+         else
+c This is a new problem.
+           l4a(6) = 1
+           call inp2 (fa(filndx(1)),cmpn,l4a)
+           if (l4a(6) .le. 0) then
+             write (output,9010) jcmp
+             fail = .true.
+             jcmp = jcmp + 1
+             go to 10
+           endif
+           write (cmpa,'(a8)') cmpn(2)
+           if (cmpa.eq.'fuel' .or. cmpa.eq.'control' .or.
+     &     cmpa.eq.'shroud' .or. cmpa.eq.'bwr' .or. cmpa.eq.'atr' .or.
+     &     cmpa.eq.'cora' .or. cmpa.eq.'bladebox') then
+             ncomp = ncomp + 1
+             icomp = ncomp
+             icmp = icomp
+             write (output,"('0',a)") psep
+             scd1(icomp)%cmpno = jcmp
+             do knt1 = 1,naz
+               dzcnd2(knt1,icomp) = dzcnd2(knt1,1)
+               if (knt1.eq.1) then
+                 zcond2(knt1,icomp) = dzcnd2(knt1,icomp)/2.0
+               else
+                 zcond2(knt1,icomp) = zcond2(knt1-1,icomp) +
+     &           dzcnd2(knt1-1,icomp)/2.0 + dzcnd2(knt1,icomp)/2.0
+               endif
+             enddo
+             if (icomp .gt. 1) then
+               do i = 1,ngrid
+                 zgrid(i,icomp) = zgrid(i,1)
+               enddo
+               do i = 1,naz
+                 igrdsp(i,icomp) = igrdsp(i,1)
+                 igrinc(i,icomp) = igrinc(i,1)
+                 wincl(i,icomp) = wincl(i,1)
+                 thincl(i,icomp) = thincl(i,1)
+                 thkgpl(i,icomp) = thkgpl(i,1)
+                 retabg(i,icomp) = retabg(i,1)
+               enddo
+             endif
+c Fuel Rod.
+             if (cmpa .eq. 'fuel') then
+               idcomp(icomp) = 0
+               write (output,9060) jcmp
+ 9060  format ('0',29x,'Input data for component',i4)
+               write (output,9070) scd1(icomp)%cmpno,'fuel rod'
+ 9070  format (t5,'Component ',i3,' is a ',a)
+               ngeom(icomp) = 2
+               call rfuel (nptim,timp,ptim,ttpptmp)
+               if (.not.fail) call ifuel (nptim,timp,ptim,ttpptmp)
+c  Control rod.
+             elseif (cmpa.eq.'control') then
+               idcomp(icomp) = 1
+               write (output,9060) jcmp
+               write (output,9070) scd1(icomp)%cmpno,'control rod'
+               ngeom(icomp) = 2
+               call rcylin
+               if (.not.fail) call icylin
+c  Shroud.
+             elseif (cmpa.eq.'shroud') then
+               idcomp(icomp) = 2
+               write (output,9060) jcmp
+               write (output,9070) scd1(icomp)%cmpno,'shroud'
+               nsh = nsh + 1
+               nsout(icomp) = nsh
+               idsh(nsh) = icomp
+               ife = ife + 1
+               nfe(nfa) = ife
+               idfe(ife,nfa) = nsh
+               ife = 0
+               nfa = nfa + 1
+               ngeom(icomp) = 1
+               call rshrod
+               if (.not.fail) call ishrod
+c  BWR control rod.
+             elseif (cmpa.eq.'bwr') then
+               idcomp(icomp) = 3
+               write (output,9060) jcmp
+               write (output,9070) scd1(icomp)%cmpno,'B4C control rod'
+               nbwr = nbwr + 1
+               ngeom(icomp) = 2
+               call rbwr
+               if (.not.fail) call ibwr
+c  Fuel Element.
+             elseif (cmpa.eq.'atr') then
+               idcomp(icomp) = 4
+               write (output,9060) jcmp
+               write (output,9070) scd1(icomp)%cmpno,'Fuel element'
+               nsh = nsh + 1
+               nsout(icomp) = nsh
+               idsh(nsh) = icomp
+               ife = ife + 1
+               nfe(nfa) = ife
+               idfe(ife,nfa) = nsh
+               ngeom(icomp) = 1
+               call rfuele
+               if (.not.fail) call ifuele
+c  Simulator (cora).
+             elseif (cmpa.eq.'cora') then
+               idcomp(icomp)=6
+               write (output,9060) jcmp
+               write (output,9070) scd1(icomp)%cmpno,'Simulator'
+               ngeom(icomp) = 2
+               call rfuel (nptim,timp,ptim,ttpptmp)
+               if (.not.fail) call ifuel (nptim,timp,ptim,ttpptmp)
+c  BWR control blade and channel box.
+             elseif (cmpa.eq.'bladebox') then
+               idcomp(icomp) = 8
+               write (output,9060) jcmp
+               write (output,9070) scd1(icomp)%cmpno,
+     &         'BWR control blade/channel box'
+               ngeom(icomp) = 1
+               nsh = nsh + 1
+               nsout(icomp) = nsh
+               idsh(nsh) = icomp
+               nblabx = nblabx + 1
+               iblabx(icomp) = nblabx
+               icbla(nblabx) = icomp
+               call rbla
+             endif
+           else
+             fail = .true.
+c  Error message if not recognized.
+             write (output,9020)cmpa,l4a(1)
+ 9020 format ('0******** Component ',a8,' on card ',i8,' is illegal.')
+           endif
+           jcmp = jcmp + 1
+         endif
+         if (jcmp .le. 99) go to 10
+       endif
+c  Core component input is complete.
+       if (.not.scntrl(7)) then
+        if (ncomp .eq. 0) write (output,"('0********* At least one SCDAP
+     & component must be defined.')")
+        call dainit
+        rrad = .false.
+      endif
+c  Lets not worry about non-core components on restart yet.
+       if (scntrl(7)) goto 70
+       knt1 = 1
+       i = 0
+       do
+         l4a(1) = knt1*10000 + 49000000
+         call inplnk (l4a(1),nexto,where,nfield,fa(filndx(1)))
+         if (nfield .ne. 0) i = i + 1
+         if (nexto.lt.0 .or. nexto.ge.50000000) exit
+         knt1 = knt1 + 1
+       enddo
+       allocate (snc1(i))
+c  Handle non-core components.
+       if (next .lt. 50000000) jcmp = (next - 40000000)/10000
+   60  l4a(1) = jcmp*10000 + 40000000
+       call inplnk (l4a(1),next,where,nfield,fa(filndx(1)))
+       if (nfield .gt. 0) then
+         if (jcmp.ge.100 .and. jcmp.le.199) then
+             if(ndbg.eq.1)then
+             write(output,9009)jcmp
+9009         format(' RSCDAP before RSLPHS; jcmp=',i5)
+             end if
+           call rslphs
+         elseif (jcmp.ge.800 .and. jcmp.le.899) then
+           call rups
+           jcmp = 899
+         elseif (jcmp.ge.900 .and. jcmp.le.999) then
+           if(.not.rrad) write(output,9030)
+ 9030 format ('0Radiation Heat Transfer Input')
+           rrad = .true.
+           call rradia (jcmp,idbuna,ptch1,nrows,nclmns)
+           if(.not.fail) call iradia (idbuna,ptch1,nrows,nclmns)
+         endif
+         jcmp = jcmp + 1
+         go to 60
+       else
+         if (next.lt.0 .or. next.ge.50000000) then
+           if (.not.rrad) then
+             write (output,"('0******** No radiation input.')")
+             fail = .true.
+           endif
+        else
+          jcmp = max((next - 40000000)/10000,jcmp + 1)
+          go to 60
+        endif
+       endif
+       if (rrad .and. .not.fail) then
+         write (output,9080)
+ 9080  format('0Enclosure Summary')
+         do i = 1,ncomp
+           if (scd1(i)%ngrupe.ne.0) write (output,9090) scd1(i)%cmpno,
+     &     1,scd1(i)%ngrupe
+ 9090  format ('  component',i3,', surface',i2,' is in enclosure',i3)
+           if (scd1(i)%ngrupi.ne.0) write (output,9090) scd1(i)%cmpno,
+     &     2,scd1(i)%ngrupi
+         enddo
+       endif
+   70  continue
+cljs check whether power fractions defined for fuel components sum
+cljs to 1.0
+       frcpow1 = 0.0
+       do i = 1, ncomp
+         if(idcomp(i).eq.0)then
+         frcpow1 = frcpow1 + pfrtot(i)
+         end if
+       end do
+         if(frcpow1.lt.0.999.or.frcpow1.gt.1.001)then
+         write(output,9093)frcpow1
+9093     format(' RSCDAP Warning; power fractions on Card',
+     &   ' 40cc1100 should sum to 1.0 but sum to ',f6.4)
+         end if
+       return
+       end
+*endif

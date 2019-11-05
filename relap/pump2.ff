@@ -1,0 +1,106 @@
+*mlist
+       subroutine pump2 (w,h,t,ps,i,ir,im)
+c  Interpolate pump homologous curves.
+c
+c  Cognizant engineer: rjw.
+c
+c     w      = flow, m3/sec                            input
+       implicit none
+c
+       integer i,ir,im
+       real w,h,t,ps
+c     h      = pump head, m                                     output
+c     t      = pump torque                                      output
+c     ps     = pump head versus flow slope                      output
+c     i      = pump component index
+c     ipx    = pump homologous curve index
+c     ir     = error indicator (0 = no error)                   output
+c  im=1 if entry for single phase table, =2 if for two phase table.
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'pumpblk.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       character mesg(2)*8
+       integer ix,ixp,ixx,j
+       real aa,eta,hd,ht,slope,td,tt,voa
+       external polat,polatr
+c
+c  Data statements.
+       data mesg/' single ',' two '/
+c
+       h = 0.0
+       t = 0.0
+       ps = 0.0
+       ir = 0
+       ht = pmpold(i)/pmprsp(i)
+       aa = ht*ht
+       tt = w/pmprfl(i)
+c  Determination of curve type.
+       if (ht) 145,60,70
+c  Pump stopped.
+   60  if (tt) 140,300,120
+c  Positive pump speed ratio.
+   70  voa = tt/ht
+       eta = 0.0
+       if (tt .lt. 0.0) go to 125
+       if (voa .gt. 1.0) go to 120
+       j = 1
+       go to 200
+  120  j = 2
+       go to 190
+  125  if (voa .lt. -1.0) go to 140
+       j = 3
+       go to 200
+  140  j = 4
+       go to 190
+c  Negative pump speed ratio.
+  145  voa = tt/ht
+       eta = 0.0
+       if (tt .gt. 0.0) go to 165
+       if (voa .gt. 1.0) go to 160
+       j = 5
+       go to 200
+  160  j = 6
+       go to 190
+  165  if (voa .lt. -1.0) go to 180
+       j = 7
+       go to 200
+  180  j = 8
+  190  voa = ht/tt
+       eta = 2.0
+       aa = tt*tt
+c  Calculation of head from appropriate curve.
+  200  if (im .eq. 1) then
+         ixp = iputdi(i+1) + 2*j - 2 + filndx(3)
+         ixx = iputdi(i+2) + filndx(3)
+       else
+         ixp = ipu2di(i+1) + 2*j - 2 + filndx(3)
+         ixx = ipu2di(i+2) + filndx(3)
+       endif
+       ix = ipmtbl(ixp)
+       if (ix .eq. 0) then
+         write (output,2001) cmpnum(i),mesg(im),j
+ 2001  format ('0******** Component',i4,' referenced empty',a,'phase hom
+     &ologous curve type',i3,'.')
+         fail = .true.
+         return
+       endif
+       ix = ix + ixx
+       call polatr (pmptbl(ix),pmptbl(ix+3),voa,hd,slope,ir)
+c  Calculation of torque from appropriate curve.
+       ix = ipmtbl(ixp+1) + ixx
+       call polat (pmptbl(ix),pmptbl(ix+3),voa,td,ir)
+       cmpopt(i) = ior(iand(cmpopt(i),not(ishft(15,24))),ishft(j,24))
+       h = pmprhd(i)*aa*hd
+       t = pmprtk(i)*aa*td
+       if (ht .eq. 0.0 .and. w .eq. 0.0) return
+c  Calculation of head versus flow slope.
+       ps = (pmprhd(i)/pmprfl(i))*(eta*tt*hd + (1.0 - eta)*ht*slope)
+  300  return
+       end

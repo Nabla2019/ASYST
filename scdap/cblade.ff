@@ -1,0 +1,536 @@
+*mlist
+*if def,selap
+      subroutine cblade(i,j,dtm,cond,ph2o,ph2,pres,tbko,kt)
+c
+c
+c     CBLADE models the bwr control blade heatup and oxidation.
+c     The control blades are described by lumped parameter models for
+c     both stainless sheaths sheaths and the b4c absorber;
+c     thus, heat transfer in the b4c, gap and sheaths are modeled,
+c     individual nodal b4c and sheaths temperatures are calculated.
+c
+c     The reactions of stainless steel/steam ,b4c/steam ,and
+c     b4c/stainless steel are included in the material and energy
+c     nodal balances.
+c
+c  Cognizant engineer: ewc.
+c
+      implicit none
+c
+*call scddat
+cljs change
+*call scdcom
+*call cons
+      real            amb4c , ams1uo, ams2uo, amssox, arods , awing ,
+     *                amw(18)       , b4ccom, cond  ,
+     *                cpb4c , acp   , scp   , cpss2 , cpss3 ,
+     *                dh21  , dh22  , dh23  , dh2o2i, dh2o2o, dh2o3i,
+     *                dh2o3o, dlb4c , dlssi , dlsso , drod  , dtm   ,
+     *                dwscb , dz    , emiss , faintr, fb4csv, ffe   ,
+     *                ffeo  , fraci , fraco , fwsscr, fwssfe, fwssni,
+     *                hrgap , hrx   , kb4c  , athcon, sthcon, kss2  ,
+     *                kss3  , l1i   , li2   , l2i   , li3   , l3s   ,
+     *                lssb4c, ph2   , ph2o  ,  pres  , qrx   ,
+     *                qrxb4c, qrxs2i, qrxs2o, qrxs3i, qrxs3o, qrxss2,
+     *                qrxss3, radst , rb4c  , rssi  , rsso  , rstgap,
+     *                ssicom, stms2i, stms2o, stms3i, stms3o, sum2  ,
+     *                sum3  , sum4  , sum5  , tbko  , tcsab4, tcsasi,
+     *                tfluid, tfreea, tk    , tkk   ,
+     *                tx    , waro  ,
+     *                wfeo2i, wfeo2o,
+     *                wfeo3i, wfeo3o, wh2oo , who   ,
+     *                wso   , xdels2, xdels3, xfb4nu, xlcbwg,
+     *                xooo  , xoxss , xthcm , yin(18)       , yout(18)
+c
+      integer         i     , iflag , ij    , j     , jk    ,
+     *                kt    , l
+c
+*call axtrns
+*call bcs
+*call blinit
+*call blkage
+*call cboilx
+*call cr2
+c
+c
+      data amw/  2.016, 18.015, 28.011, 16.043, 44.010, 69.620, 87.636,
+     1          43.818, 13.835, 27.670, 27.818, 15.999, 31.999, 55.255,
+     2          69.620, 10.811, 12.011, 39.948/
+c
+      data fwsscr,fwssfe,fwssni/0.18,0.74,0.08/
+c
+c
+c *** statement functions
+c
+c
+c-**-emissivity of stainless steel
+c
+      tk(tx)=(tx+459.67)/1.8
+      emiss(tx)=min((0.188789+tk(tx)*(-4.973569e-04+tk(tx)*
+     *(2.013559e-06+tk(tx)*(-2.074722e-09+8.275058e-13*tk(tx))))),0.995)
+c
+c-**-cross-sectional area (sq.ft.) of b4c on 1/2 symmetry
+c
+      tcsab4=float(nabrod(j))*piovr4*diab4c(j)**2/2.0
+c
+c    csa of absorber rod sheath on 1/2 symmetry
+c
+      tcsasi=piovr4*((2.0*thkssi(j)+diab4c(j))**2-diab4c(j)**2)*
+     #  float(nabrod(j))/2.0
+c
+c-**-determine the free area inside a control blade
+c
+      drod=diab4c(j)+2.0*thkssi(j)
+      xlcbwg=float(nabrod(j))*(drod+thkgap(j))+thkgap(j)+2.0*thksso(j)
+      awing=piovr4*(thkcb(j)-2.0*thksso(j))**2+
+     1      (xlcbwg-thkcb(j))*(thkcb(j)-2.0*thksso(j))
+      arods=float(nabrod(j))*piovr4*drod**2
+      tfreea=awing-arods
+      faintr=2.0*xboxcb(j)*cbl(j)*float(nabrod(j))+boxl(2,j)*
+     #  (thkcb(j)+2.0*xboxcb(j))
+      fraci=tfreea/(faintr+tfreea)
+      fraco=1.0-fraci
+c
+c-**-construct an idealized model of the control blade
+c    (this model does not preserve the control blade geometry-
+c     ie rods inside a sheath ;rather, the control blade is
+c     represented by a slab (planar) geometry.
+c     this idealized model conserves stainless steel and b4c masses
+c     within the core and the effect on the surface phenomena
+c     (heat transfer and/or oxidation) should be negligible
+c     but the thermal transport within the control blade may differ
+c     from the actual response because of the geometry differences)
+c
+c    given cbl and the cross-sectional areas, determine the
+c    slab geometries (ie, internal dimensions)
+c
+      dlb4c=tcsab4/xlcbwg
+      dlssi=tcsasi/xlcbwg
+      lssb4c=(dlb4c+dlssi)*30.48
+c
+c    b4c
+c
+      rb4c  =dlb4c
+      b4ccom=dlb4c/2.0
+c
+c    inner sheath
+c
+      ssicom=rb4c+dlssi/2.0
+      rssi  =rb4c+dlssi
+c
+c    gap + outer sheath
+c
+      dlsso =csasso(j)/cbl(j)
+      rsso  =rssi+thkgap(j)+dlsso
+c
+c    thermal transfer dimensions
+c
+      l1i   =rb4c-b4ccom
+      li2   =ssicom-rb4c
+      l2i   =rssi-ssicom
+      li3   =dlsso/2.0
+      l3s   =li3
+c
+      if(kt.eq.1)go to 50
+      csab4c(j)=dlb4c*cbl(j)
+      csassi(j)=dlssi*cbl(j)
+c
+c    the following variables will be used in the blockage calculations
+c    in the relocation phase of the simulation
+c
+      alm(1,j)=l1i
+      alpp(1,j)=l1i
+      alm(2,j)=li2
+      alpp(2,j)=l2i
+      alm(3,j)=li3
+      alpp(3,j)=l3s
+      alm(4,j)=xboxcb(j)/2.0
+      alpp(4,j)=alm(4,j)
+      alm(5,j)=csabox(1,j)/boxl(1,j)/2.0
+      alpp(5,j)=alm(5,j)
+c
+      sum4=alm(1,j)+alpp(1,j)+alm(2,j)+alpp(2,j)+
+     &     alm(3,j)+alpp(3,j)+alm(4,j)+alpp(4,j)
+      wf(1,j)=(alm(1,j)+alpp(1,j))/sum4
+      wf(2,j)=(alm(2,j)+alpp(2,j))/sum4
+      wf(3,j)=(alm(3,j)+alpp(3,j))/sum4
+      wf(4,j)=(alm(4,j)+alpp(4,j))/sum4
+c
+c-**-initialize s.s. control blade mass arrays
+c
+      do 10 ij=1,ndz(j)
+         dz=hdz(ij,j)
+         xoxss=xcbdo(j)/30.48
+         if(scb(ij,j).ne.0.0)then
+            amssox=2.0*xoxss*dz*cbl(j)*rhoss
+            ams1uo=(dlsso-2.0*xoxss)*dz*cbl(j)*rhoss
+            ams2uo=(dlssi-xoxss)*dz*cbl(j)*rhoss
+            wsscbi(ij,j,1)=dlsso*dz*cbl(j)*rhoss
+            wsscbi(ij,j,2)=dlssi*dz*cbl(j)*rhoss
+            wsscb(ij,j,1,1)=ams1uo*fwssfe
+            wsscb(ij,j,2,1)=ams1uo*fwsscr
+            wsscb(ij,j,3,1)=ams1uo*fwssni
+            wsscb(ij,j,1,2)=ams2uo*fwssfe
+            wsscb(ij,j,2,2)=ams2uo*fwsscr
+            wsscb(ij,j,3,2)=ams2uo*fwssni
+            wsscb(ij,j,5,1)=amssox*fwssfe*231.54/55.847/3.0
+            wsscb(ij,j,6,1)=amssox*fwsscr*152.02/51.996/2.0
+            wsscb(ij,j,7,1)=amssox*fwssni*74.71/58.70
+            wsscb(ij,j,5,2)=amssox/2.0*fwssfe*231.54/55.847/3.0
+            wsscb(ij,j,6,2)=amssox/2.0*fwsscr*152.02/51.996/2.0
+            wsscb(ij,j,7,2)=amssox/2.0*fwssni*74.71/58.70
+         end if
+   10    continue
+c
+c     initialize b4c reaction parameters
+c
+      fb4cmx=min(1.0,fb4cmx)
+      fb4csv=max(1.0-fb4cmx,0.0)
+      do 30 ij=1,ndax
+         xfeb4c(ij,j)=0.0
+         ffeb4c(ij,j)=0.0
+         wb4csv(ij,j)=0.0
+   30    wb4crx(ij,j)=0.0
+      do 40 ij=1,ndz(j)
+         dz=hdz(ij,j)
+         if(scb(ij,j).ne.0.0)then
+            wb4c(ij,j)=csab4c(j)*dz*rhob4c
+            if(imwb4c.eq.0)then
+               wb4csv(ij,j)=wb4c(ij,j)
+            else
+               wb4crx(ij,j)=fb4cmx*wb4c(ij,j)
+               wb4csv(ij,j)=fb4csv*wb4c(ij,j)
+            end if
+         end if
+   40    continue
+      return
+c
+c *** determine reaction of the control blade with steam
+c     (this could be ss/water reaction and b4c/water reaction
+c      depending on the values of icb(i,k,j))
+c     and the reaction of the absorber tube (ss) with the b4c
+c     (this reaction is stopped when the absorber tube sheath fails)
+c
+c     the icb(i,k,j) value denotes the condition of the control blade
+c     for node (i,j):
+c                   where i denotes axial position and
+c                         k denotes outer sheath(3), b4c (1),or
+c                           absorber tube sheath(2) and
+c                         j denotes radial position
+c     for icb(i,k,j)=1 initial condition for all nodes, the outer sheath
+c                      and the absorber rod sheath are intact
+c         icb(i,2,j)=2 the absorber rod sheath has failed and the avail.
+c                      b4c powder can react (if steam is available)
+c         icb(i,k,j)=0 no material remains in this layer (ie,relocated)
+c
+c     for icb(i,k,j)=1 the avail. steam (for steel/steam reaction) will
+c                      be partitioned via fraci and fraco
+c         icb(i,2,j)=2 all avail. steam will be used for the b4c/steam
+c                      reaction, first; then any leftover steam can be
+c                      reacted with the steel (equally split)
+c
+c
+   50 tfluid=tbko
+      dwscb =0.0
+      dh21  =0.0
+      dh22  =0.0
+      dh23  =0.0
+      dco   =0.0
+      dco2  =0.0
+      dch4  =0.0
+      db2o3 =0.0
+      qrxb4c=0.0
+      qrxss2=0.0
+      qrxss3=0.0
+      wso   =wsoo(i)-dwso(i)
+      who   =whoo(i)+dwho(i)
+      waro  =waroo(i)
+      dz    =hdz(i,j)
+      amb4c =csab4c(j)*dz*rhob4c
+      if(voido(i).lt.voidmx)go to 150
+      if(wso.eq.0.0)go to 140
+      if(scb(i,j).eq.0.0)go to 140
+      if(iblkcb(i,1,j).eq.2)go to 140
+      if((wsscbb(i,j,1,2)+wsscbb(i,j,2,2)+wsscbb(i,j,3,2)).gt.0.0)
+     *              go to 140
+      if(tcb3o(i,j).le.1200.0)go to 140
+      if(modidx(4).ge.1)go to 140
+c
+c-**-check icb(i,k,j) for steam allocation
+c
+      if(imwb4c.eq.0)go to 90
+      if(icb(i,2,j).eq.2)then
+         if(icb(i,1,j).eq.1)then
+            go to 60
+         else
+            if(icb(i,3,j).eq.1)then
+               stms3o=wso*dtm*fraco
+               stms3i=wso*dtm*fraci/3.0
+               stms2o=stms3i
+               stms2i=stms3i
+            else
+               stms3o=0.0
+               stms3i=0.0
+               stms2o=wso*dtm/2.0
+               stms2i=stms2o
+            end if
+            go to 100
+         end if
+      else if(icb(i,2,j).eq.0)then
+         if(icb(i,3,j).eq.1)then
+            stms3o=wso*dtm*fraco
+            stms3i=wso*dtm*fraci
+            stms2o=0.0
+            stms2i=0.0
+            go to 100
+         else
+            go to 140
+         end if
+      else if(icb(i,2,j).eq.1)then
+         if(icb(i,3,j).eq.1)then
+            stms3o=wso*dtm*fraco
+            stms3i=wso*dtm*fraci/2.0
+            stms2o=stms3i
+            stms2i=0.0
+         else
+            stms3o=0.0
+            stms3i=0.0
+            stms2o=wso*dtm
+            stms2i=0.0
+         end if
+         go to 100
+      end if
+c
+c    absorber rod sheath has failed, react b4c
+c
+c
+c    advanced b4c/h2/h2o chemistry package
+c
+   60 yin(1)=who*dtm*453.6/amw(1)
+      yin(2)=wso*dtm*453.6/amw(2)
+      do 70 jk=3,13
+c        yin(jk)=zmassi(i,jk,kc)*dtm*453.6/amw(jk)
+   70    yin(jk)=0.0
+      yin(14)=waro*dtm*453.6/amw(18)
+      yin(15)=wb4crx(i,j)*453.6/amw(14)
+      yin(16)=wb2o3(i,j)*453.6/amw(15)
+      yin(17)=wb(i,j)*453.6/amw(16)
+      yin(18)=wc(i,j)*453.6/amw(17)
+      call b4cadv(tcb2o(i,j),pres,yin,yout,hrx)
+c     do 80 jk=7,13
+c  80    zmassi(i+1,jk,kc)=yout(jk)*amw(jk)/453.6/dtm
+      wb4crx(i,j)=yout(15)*amw(14)/453.6
+      wb2o3(i,j)=yout(16)*amw(15)/453.6
+      wb(i,j)=yout(17)*amw(16)/453.6
+      wc(i,j)=yout(18)*amw(17)/453.6
+      wb4c(i,j)=wb4csv(i,j)+wb4crx(i,j)
+      fcb1(i,j)=max(1.0-wb4c(i,j)/amb4c,0.0)
+      fcb1(i,j)=min(fcb1(i,j),1.0)
+      dco  =(yout(3)-yin(3))*amw(3)/453.6/dtm
+      dco2 =(yout(5)-yin(5))*amw(5)/453.6/dtm
+      dch4 =(yout(4)-yin(4))*amw(4)/453.6/dtm
+      dh21 =(yout(1)-yin(1))*amw(1)/453.6/dtm
+      db2o3=(yout(6)-yin(6))*amw(6)/453.6/dtm
+      dwscb=(yin(2)-yout(2))*amw(2)/453.6/dtm
+      qrxb4c=-hrx/dtm/1.055
+      wso=wso-dwscb
+      wso=max(wso,0.0)
+   90 if(icb(i,3,j).eq.1)then
+         stms3o=wso*dtm*fraco
+         stms3i=wso*dtm*fraci/3.0
+         stms2o=stms3i
+         stms2i=stms3i
+      else
+         stms3o=0.0
+         stms3i=0.0
+         stms2o=wso*dtm/2.0
+         stms2i=stms2o
+      end if
+c
+c----reaction of the control blade sheath stainless steel with steam
+c
+  100 if(imwss.eq.0)go to 140
+      if(wso.eq.0.0)go to 140
+      xdels3=abs(xcb3oo(i,j)+xcb3io(i,j)-xcbss3(j))
+      dh2o3o=0.0
+      qrxs3o=0.0
+      dh2o3i=0.0
+      qrxs3i=0.0
+      if(icb(i,3,j).eq.0)go to 120
+      if(xdels3.lt.0.00001)go to 120
+c
+c    outside of sheath
+c
+      xthcm=xcb3oo(i,j)+xdels3/2.0
+      wfeo3o=wsscb(i,j,4,1)/2.0
+      wfeo3i=wfeo3o
+      call ssoxdk(tcb3o(i,j),tfluid,xcb3oo(i,j),rsso,xthcm,ph2o,
+     1            ph2,dtm,dz,cbl(j),stms3o,wfe3o(i,j),wfeo3o,
+     2            xooo,iflag,dh2o3o,wh2oo,ffe,ffeo,qrx,wsscb,i,j,1)
+      xcb3oo(i,j)=xooo
+      wfe3o(i,j)=ffe
+      wfeo3o=ffeo
+      qrxs3o=(qrx-(hsrcb-hsbo(1))*dh2o3o)/dtm
+c
+c    inside of sheath
+c
+      xthcm=xcb3io(i,j)+xdels3/2.0
+      call ssoxdk(tcb3o(i,j),tfluid,xcb3io(i,j),rssi,xthcm,ph2o,
+     1            ph2,dtm,dz,cbl(j),stms3i,wfe3i(i,j),wfeo3i,
+     2            xooo,iflag,dh2o3i,wh2oo,ffe,ffeo,qrx,wsscb,i,j,1)
+      xcb3io(i,j)=xooo
+      wfe3i(i,j)=ffe
+      wfeo3i=ffeo
+      qrxs3i=(qrx-(hsrcb-hsbo(1))*dh2o3i)/dtm
+      wsscb(i,j,4,1)=wfeo3o+wfeo3i
+c
+c    total
+c
+  120 qrxss3=qrxs3o+qrxs3i
+      wso  =wso-(dh2o3o+dh2o3i)/dtm
+      wso  =max(wso,0.0)
+      dwscb=dwscb+(dh2o3o+dh2o3i)/dtm
+      dh23 =(dh2o3o+dh2o3i)/dtm*2.01594/18.01534
+c
+c----reaction of the absorber rod sheath steel with steam
+c
+      xdels2=abs(xcb2oo(i,j)+xcb2io(i,j)-xcbss2(j))
+      dh2o2o=0.0
+      qrxs2o=0.0
+      dh2o2i=0.0
+      qrxs2i=0.0
+      if(icb(i,2,j).eq.0)go to 130
+      if(xdels2.lt.0.00001)go to 130
+c
+c    outside of absorber rod sheath
+c
+      xthcm=xcb2oo(i,j)+xdels2/2.0
+      wfeo2o=wsscb(i,j,4,2)/2.0
+      wfeo2i=wfeo2o
+      call ssoxdk(tcb2o(i,j),tfluid,xcb2oo(i,j),rssi,xthcm,ph2o,
+     1            ph2,dtm,dz,cbl(j),stms2o,wfe2o(i,j),wfeo2o,
+     2            xooo,iflag,dh2o2o,wh2oo,ffe,ffeo,qrx,wsscb,i,j,2)
+      xcb2oo(i,j)=xooo
+      wfe2o(i,j)=ffe
+      wfeo2o=ffeo
+      qrxs2o=(qrx-(hsrcb-hsbo(1))*dh2o2o)/dtm
+c
+c    inside of absorber rod sheath (only if icb(i,2,j)=2)
+c
+      if(icb(i,2,j).eq.2)then
+         xthcm=xcb2io(i,j)+xdels2/2.0
+         call ssoxdk(tcb2o(i,j),tfluid,xcb2io(i,j),rb4c,xthcm,
+     1               ph2o,ph2,dtm,dz,cbl(j),stms2i,wfe2i(i,j),
+     2               wfeo2i,xooo,iflag,dh2o2i,wh2oo,ffe,ffeo,
+     3               qrx,wsscb,i,j,2)
+         xcb2io(i,j)=xooo
+         wfe2i(i,j)=ffe
+         wfeo2i=ffeo
+         qrxs2i=(qrx-(hsrcb-hsbo(1))*dh2o2i)/dtm
+      end if
+      wsscb(i,j,4,2)=wfeo2o+wfeo2i
+c
+c    total
+c
+  130 qrxss2=qrxs2o+qrxs2i
+      wso  =wso-(dh2o2o+dh2o2i)/dtm
+      wso  =max(wso,0.0)
+      dwscb=dwscb+(dh2o2o+dh2o2i)/dtm
+      dh22 =(dh2o2o+dh2o2i)/dtm*2.01594/18.01534
+  140 dh2  =dh21+dh22+dh23
+c
+c *** update steam consumation / hydrogen generation
+c
+      dwso(i)=dwso(i)+dwscb
+      dwho(i)=dwho(i)+dh2
+      dwsocb(i)=dwscb
+      dwhocb(i)=dh2
+c
+c----reaction of the absorber tube sheath (stainless steel) with the
+c    b4c absorber
+c    (P.Hofmann, et.al.,'Reaction Behaviour of B4C Absorber Material
+c     with Stainless Steel and Zircaloy in Severe LWR Accidents,'
+c     KfK 4598, July 1989)
+c
+  150 if(icb(i,2,j).eq.1)then
+         tkk=(tcb2o(i,j)+459.67)/1.8
+         if(ffeb4c(i,j).eq.1.0)go to 158
+         xfb4nu=(xfeb4c(i,j)**2+(dtm*60.0)*
+     *             8.76e+06*exp(-378000.0/(8.314*tkk)))**0.5
+         if(xfb4nu.ge.lssb4c)then
+            xfeb4c(i,j)=lssb4c
+            ffeb4c(i,j)=1.0
+         else
+            xfeb4c(i,j)=xfb4nu
+            ffeb4c(i,j)=xfeb4c(i,j)/lssb4c
+         end if
+      end if
+c
+c *** update qcb-
+c
+  158 qcb1   =qcb1+qrxb4c*60.0/dz
+      qcb2   =qcb2+qrxss2*60.0/dz
+      qcb3   =qcb3+qrxss3*60.0/dz
+      qblad1(j) =qblad1(j) +qrxb4c*60.0*4.0
+      qblad3(j) =qblad3(j) +(qrxss2+qrxss3)*60.0*4.0
+c
+c *** calculate c- coefficients
+c
+      sum3=0.0
+      sum2=0.0
+      do 160 l=1,7
+         sum2=sum2+wsscb(i,j,l,2)
+  160    sum3=sum3+wsscb(i,j,l,1)
+      sum2=sum2+wfe2o(i,j)+wfe2i(i,j)
+      sum3=sum3+wfe3o(i,j)+wfe3i(i,j)
+      sum4=0.0
+      sum5=0.0
+      do 170 l=1,11
+         sum4=sum4+wsscbb(i,j,l,1)
+  170    sum5=sum5+wsscbb(i,j,l,2)
+      if(icb(i,3,j).eq.1)then
+         sum3=sum3+sum4+sum5
+      else if(icb(i,2,j).ge.1)then
+         sum2=sum2+sum4+sum5
+      end if
+c
+c *** determine stainless steel  and b4c properties at old
+c     time temperatures
+c
+c  use conversions of k = (f + 459.67)/1.8
+c  and btu/(lbm*f) = j/(kg*k) / 4186.8
+c  and btu/h/ft/f = w/m/k / 1.730735
+      cpb4c=acp(2,(tcb1o(i,j)+459.67)/1.8)/4186.8
+      kb4c =athcon(2,(tcb1o(i,j)+459.67)/1.8)/1.730735
+      cpss2=scp((tcb2o(i,j)+459.67)/1.8)/4186.8
+      cpss3=scp((tcb3o(i,j)+459.67)/1.8)/4186.8
+      kss2 =sthcon((tcb2o(i,j)+459.67)/1.8)/1.730735
+      kss3 =sthcon((tcb3o(i,j)+459.67)/1.8)/1.730735
+c
+c *** determine gap radiative transfer coefficient and solid
+c     conduction heat transfer ressistance
+c
+c     using old sheath temperatures determine conductive and
+c     radiative resistance across the gap
+c
+      if(abs(tcb3o(i,j)-tcb2o(i,j)).le.0.01)go to 180
+      radst=1.0/(1.0/emiss(tcb3o(i,j))+1.0/emiss(tcb2o(i,j))-1.0)
+      hrgap=abs(radst*0.1713*(((tcb3o(i,j)+460.0)/100.0)**4-
+     *      ((tcb2o(i,j)+460.0)/100.0)**4)/(tcb3o(i,j)-tcb2o(i,j)))
+      go to 190
+  180 hrgap=0.0
+  190 rstgap=thkgap(j)/(cond+hrgap*thkgap(j))
+c
+c
+      c3=cbl(j)/(l2i/kss2+rstgap+li3/kss3)
+      c5=(sum3/dz)*cpss3/(dtm/60.0)
+      c1=cbl(j)/(l1i/kb4c+li2/kss2)
+      c4=(sum2/dz)*cpss2/(dtm/60.0)
+      c2=((wb4c(i,j)+wb2o3(i,j)+wb(i,j)+wc(i,j))/dz)*cpb4c/
+     1   (dtm/60.0)
+      c6=cbl(j)/(l3s/kss3+1.0/hwcb(i))
+      c7=cbl(j)/(l2i/kss2+1.0/hwcb(i))
+c
+      return
+      end
+*endif

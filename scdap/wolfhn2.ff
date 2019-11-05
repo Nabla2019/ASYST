@@ -1,0 +1,291 @@
+*mlist
+*if def,selap
+       subroutine wolfhn2 (unuc,unucd,pptim)
+!
+!  Computes axial power distribution of cora heater rods.
+!    No need for copper temperatures, def. by cards 250, 251.
+!    Allows molybdenum in scdap volume (s. fstate.F).
+!    Heater pin dimension hard wired for lwr + wwer.
+!    Includes thermal expansion of heater pins.
+!    Includes thermal feedback switched on / off.
+!    Includes material properties for matpro.
+!  Documented in FZKA-6566.
+!
+!  Cognizant engineer: Wolfgang Hering KFK-IRS June 1998.
+!
+!  Modified by H.Madokoro
+!  Resistivity calculated by each radial node	
+       use gentblc
+       use scdmod
+       implicit none
+       real unuc(*),unucd(*),pptim
+!	
+       include 'contrl.h'
+       include 'scddat.h'
+       include 'scdout.h'
+       include 'ndxara.h'
+       include 'cora.h'
+       include 'scdcom.h'
+       include 'ufiles.h'
+       include 'cons.h'
+!
+!  ielec    : Number of zones in bottom + top electrode.
+!  rhwire   : outer radius of heater element (m).
+!  relec    : Molybdenum/copper radius	for lwr and vver.
+!  aheiz(naz): Cross section area of wire materials  -  mm2.
+!  imate(naz): Radial material sequence in heater rod 1.
+!
+!  resistance:
+!  flxwid	: Resistance of flexible wiring  - ohms.
+!  rmheat	: Total resistance of heater pin - ohms.
+!  rmelec	: Total resistance of the electrode pin - ohms.
+!  rax(naz): Nodal resistance of each zone - ohms.
+!  vorwid	: Total resistance of electrodes + wiring - ohms.
+!
+!  power  :
+!  pmelec : Total power released in electrode zones - w.
+!  pmwo   : Total power released in heated lenght - w.
+!  unuc	  : Axial power relaesed in each zone - w/m.
+!  pratio : Power efficiency: power released in wo/pptim 1.
+!
+!  Local variables.
+       integer i,ic,iknt,imate(ndax),itp,j,k,imatp(ndax)
+       real :: aheiz(ndax),botz,fnexp,fnres,kf=1000.0,pax,
+     & pmelec,pmwo,pratio,rax(ndax),stsq,topz,vorwid,
+     & rmtotl,raxm(ndax),apel(ndax),rh(ndax),rp(ndax),rrv(ndax),
+     & const,height
+	real :: eps1, eps2
+       real retotln(1),timen,retotl
+       real :: tref=273.15
+       integer nstop,nazov2
+       integer ibt,iselct,itpd
+       integer itab,ntab,m
+       logical err
+!
+       save
+!
+       ic = icomp
+       iselct=1
+       if(modidx(1).ne.1)iselct=2
+       select case(iselct)
+       case(1)
+cljs identify electrode nodes as being those with different
+cljs material from middle of heater element
+       nazov2 = naz/2
+       nstop = 0
+       ielec = 0
+       do i=1,nazov2
+         if(nstop.ne.1)then
+           if(imatr3(1,i,icomp).eq.imatr3(1,nazov2,icomp))then  
+           nstop = 1
+           end if
+           if(nstop.ne.1)ielec=ielec + 1                         
+         end if
+       end do
+cljs identify axial nodes at top of simulator element that are not
+cljs part of main heater element.
+       nstop=0
+       itpd=0
+       do i=naz,nazov2,-1
+         if(nstop.ne.1)then
+           if(imatr3(1,i,icomp).eq.imatr3(1,nazov2,icomp))then
+           nstop=1
+           end if
+           if(nstop.ne.1)itpd=itpd+1
+         end if
+       end do
+       itp = naz - itpd
+!
+       do i = 1,naz
+         aheiz(i) = pi*(rhwire(i,icomp)*kf)**2
+         imate(i) = mhwire(i,icomp)
+         if (modidx(6) .ne. 0) then
+c hm 20140205 begin
+         apel(i)  = pi*((rpel2(i,icomp)*kf)**2-(rpeli2(i,icomp)*kf)**2)
+         imatp(i) = mhsim(i,icomp)
+c hm 20140205 end       
+         endif
+       enddo
+       rmelec(icomp) = 0.0
+       rmheat(icomp) = 0.0
+       do i = 1,naz
+         eps1 = fnexp(imate(i),tcond3(1,i,icomp))
+     &            *(tcond3(1,i,icomp)-tref)        
+cljs rax(i) = ohms resistance at each axial node
+         if (i.gt.ielec .and. i.le.itp .and. modidx(6).ge.2
+     & .and. imatp(i).eq.6) then
+c hm 20140205 begin
+	 eps2 = fnexp(imatp(i),tcond3(nrcondi2(i,icomp),i,icomp))
+     &            *(tcond3(nrcondi2(i,icomp),i,icomp)-tref)
+         rh(i) = fnres(imate(i),tcond3(1,i,icomp))*
+     &   dzcnd2(i,icomp)/(aheiz(i)*(1.0 + 2*eps1 + eps1*eps1)) 
+         rp(i) = fnres(imatp(i),tcond3(nrcondi2(i,icomp),i,icomp))*
+     &   dzcnd2(i,icomp)/(apel(i)*(1.0 + 2*eps2 + eps2*eps2))
+         rrv(i) = 1/rh(i)+1/rp(i)
+         rax(i) = 1/rrv(i)
+c hm 20140205 end  
+	 else
+           rax(i) = fnres(imate(i),tcond3(1,i,icomp))*
+     &     dzcnd2(i,icomp)/(aheiz(i)*(1.0 + 2*eps1 + eps1*eps1))
+         end if
+         if (i.le.ielec .or. i.gt.itp) then
+           rmelec(icomp) = rmelec(icomp) + rax(i)
+         else
+           rmheat(icomp) = rmheat(icomp) + rax(i)
+         endif
+       enddo
+c hm begin 0807 modified 20140727
+       rmtotl = rmelec(icomp) + rmheat(icomp) + flxwid(icomp)
+       if (rmflg)then       	       
+c    general table                                           !!!!!!!!!
+         if (icomp .eq. rmcmp(1))then
+           ntab = rmtab(1)
+           itab = imtab(1)
+         elseif (icomp .eq. rmcmp(2))then
+           ntab = rmtab(2)
+           itab = imtab(2)
+         endif
+c		
+         timen = timehy
+         if (timen .ne. gen(itab)%gtarg) then
+           call gtpolat(gen(itab)%gtinfo,gtptr(itab)%gtbl,timen,
+     &     retotln(1:1),err)        
+           retotl = retotln(1)
+           gen(itab)%gtarg = timen
+           gen(itab)%gtval(1) = retotl
+         else
+           retotl = gen(itab)%gtval(1)
+         endif     
+c         
+         m = 0
+         height = 0.0
+c         
+         do i=1,naz
+           height = height + dzcnd2(i,icomp)
+         enddo
+	 if (rmtotl - retotl .gt. 0.0) then
+           const = rmtotl - retotl	 
+           rmelec(icomp) = 0.0
+           rmheat(icomp) = 0.0
+           do i=1,naz
+             raxm(i) = rax(i) - const/height*dzcnd2(i,icomp)
+             if (i.le.ielec .or. i.gt.itp) then
+               rmelec(icomp) = rmelec(icomp) + raxm(i)
+             else
+               rmheat(icomp) = rmheat(icomp) + raxm(i)
+             endif
+           enddo
+           rmtotl = rmelec(icomp) + rmheat(icomp) + flxwid(icomp)
+           m = m + 1  
+         else
+           const = retotl - rmtotl
+           rmelec(icomp) = 0.0
+           rmheat(icomp) = 0.0
+           do i=1,naz
+             raxm(i) = rax(i) + const/height*dzcnd2(i,icomp)
+             if (i.le.ielec .or. i.gt.itp) then
+               rmelec(icomp) = rmelec(icomp) + raxm(i)
+             else
+               rmheat(icomp) = rmheat(icomp) + raxm(i)
+             endif
+           enddo
+           rmtotl = rmelec(icomp) + rmheat(icomp) + flxwid(icomp)
+           m = m + 1  
+          endif
+          if (m.ne.0) then
+            do i=1,naz
+              rax(i) = raxm(i)
+            enddo
+          endif      
+        endif  
+c
+c the case, in which the signal of the difference of the value changes from
+c positive to negative, is not considered, vice versa	
+c hm end 0807	
+c
+cljs vorwid = total resistivity in parts of simulator rod that
+cljs          are not part of main heating element.
+c hm vorwid = flxwid + rmelec
+cljs  stsq = total power divided by total electrical resistivity
+c hm       stsq = pptim/(vorwid + rmheat)
+c hm 0807  stsq = pptim/(flxwid(icomp)+rmelec(icomp)+rmheat(icomp))
+       stsq = pptim/rmtotl
+       pmwo = 0.0
+       pmelec = 0.0
+       do i = 1,naz
+         pax = stsq*rax(i)
+         if (i.le.ielec .or. i.gt.itp) then
+           pmelec = pmelec + pax
+         else
+           pmwo = pmwo + pax
+         endif
+         unuc(i) = pax/dzcnd2(i,icomp)
+         unucd(i) = unuc(i)
+       enddo
+cljs add up total power in component
+       if (pptim .le. 0.0) then
+         pratio = 0.0
+       else
+         pratio = pmwo/pptim*100.
+       endif
+       if (pratio .ge. 100.0) then
+         write (output,2000) pratio
+ 2000  format (/,' ********* wolfhe: pratio:',es11.4,' > 100% ')
+         fail=.true.
+       endif
+       case(2)
+       itp = naz - ielec
+       ibt = ielec + 1
+!
+       do i = 1,naz
+         if (i.le.ielec .or. i.gt.itp) then
+           aheiz(i) = pi*(relec*kf)**2
+           imate(i) = 21
+         else
+           aheiz(i) = pi*(rtungs*kf)**2
+           imate(i) = 4
+         endif
+       enddo
+       if (icrmod .le. 2) then
+         imate(1)=22
+         imate(naz)=imate(1)
+       endif
+       rmelec(icomp)	= 0.0
+       rmheat(icomp)	= 0.0
+       do i = 1,naz
+         eps1 = fnexp(imate(i),tcond3(1,i,icomp))
+           rax(i) = fnres(imate(i),tcond3(1,i,icomp))*
+     &     dzcnd2(i,icomp)/(aheiz(i)*(1.0 + 2*eps1 + eps1*eps1)) 
+         if (i.le.ielec .or. i.gt.itp) then
+           rmelec(icomp) = rmelec(icomp) + rax(i)
+         else
+           rmheat(icomp) = rmheat(icomp) + rax(i)
+         endif
+       enddo
+       stsq = pptim/(flxwid(icomp) + rmelec(icomp) + rmheat(icomp))
+       pmwo = 0.0
+       pmelec = 0.0
+       do i = 1,naz
+         pax = stsq*rax(i)
+         if (i.le.ielec .or. i.gt.itp) then
+           pmelec = pmelec + pax
+         else
+           pmwo = pmwo + pax
+         endif
+         unuc(i) = pax/dzcnd2(i,icomp)
+         unucd(i) = unuc(i)
+       enddo
+       if (pptim .le. 0.0) then
+         pratio = 0.0
+       else
+         pratio = pmwo/pptim*100.
+       endif
+       if (pratio .ge. 100.0) then
+         write (output,1000) pratio
+ 1000  format (/,' ********* wolfhe: pratio:',es11.4,' > 100% ')
+         fail=.true.
+       endif
+       end select
+       return
+       end
+*endif

@@ -1,0 +1,184 @@
+       module gentblc
+!  General table storage.
+!
+!  Cognizant engineer: rjw.
+!
+       implicit none
+       integer, parameter, private :: kr=selected_real_kind(12,200)
+       type gens
+         real(kr) gtarg,gtval(1)
+         integer gtinfo(3),gttrp(2),gttyp
+         logical gteval
+       end type gens
+!  gtarg      Independent variable of last interpolation.
+!  gtval      Dependent variable of last interpolation.
+!  gtinfo(1)  Number of items per entry.
+!  gtinfo(2)  Total number of items.
+!  gtinfo(3)  Subscript from last search.
+!  gttrp(1)  Trip number, zero if none entered.
+!  gttrp(2)  Index to trip.
+!  gttyp      Table type.
+!  gteval     Flag to evaluate general table for minor edits etc.
+!
+       type gtptrs
+         real(kr), pointer :: gtbl(:)
+       end type gtptrs
+!
+       integer ngtbls
+       logical ngtblf
+!  ngtbls  Number of general tables.
+!  ngtblf  Flag that some general tables need evaluated for minor edits
+!  etc.
+       integer,allocatable :: gtnum(:)
+!  gtnum(i) Holds table number of the i-th entered table.
+       type (gens),allocatable,target :: gen(:)
+!  gen     Holds common information for each table.
+       type (gtptrs), allocatable :: gtptr(:)
+!  gtptr(i)  Array of pointers to table values of i-th table.
+!
+       contains
+!
+       subroutine gentblclear
+!  Deallocates general table data.
+       implicit none
+       integer i
+!
+       if (allocated(gtptr)) then
+         do i = 1,size(gtptr)
+           if (associated(gtptr(i)%gtbl)) deallocate (gtptr(i)%gtbl) 
+         enddo
+         deallocate (gen,gtptr)
+       endif
+       if (allocated(gen)) deallocate (gen)
+       if (allocated(gtnum)) deallocate (gtnum)
+       return
+       end subroutine gentblclear
+!
+       subroutine gentblread (cpy,fl)
+!  Reads general table information from restart-plot file.
+       implicit none
+       logical cpy,fl
+       include 'ufiles.h'
+!
+       integer i,iwrd,len,lent
+!
+       if (fl) then
+         read (rstplt) len,iwrd
+         inquire (iolength=lent) ngtbls,ngtblf
+         read (rstplt) ngtbls,ngtblf
+         if (cpy) then 
+           write (stripf) len,iwrd
+           write (rstplt) ngtbls,ngtblf
+         endif
+         if (allocated(gtnum)) then
+           do i = 1,size(gtnum)
+             if (associated(gtptr(i)%gtbl)) deallocate (gtptr(i)%gtbl)
+           enddo
+           deallocate (gtnum,gen,gtptr)
+         endif
+         allocate (gtnum(ngtbls),gen(ngtbls),gtptr(ngtbls))
+       endif
+       if (ngtbls .eq. 0) return
+       read (rstplt) len,iwrd
+       inquire (iolength=lent) gen
+       read (rstplt) gen
+       if (fl) then
+         read (rstplt) len,iwrd
+         inquire (iolength=lent) gtnum
+         read (rstplt) gtnum
+         do i = 1,ngtbls
+           allocate (gtptr(i)%gtbl(gen(i)%gtinfo(2)))
+           read (rstplt) len,iwrd
+           inquire (iolength=lent) gtptr(i)%gtbl
+           read (rstplt) gtptr(i)%gtbl
+         enddo
+       endif
+       return
+       end subroutine gentblread
+!
+       subroutine gentblwrite (fl)
+!  Writes general table information from restart-plot file.
+       implicit none
+       logical fl
+       include 'ufiles.h'
+!
+       integer, parameter :: iwrd=4
+       integer i,len
+!
+       if (fl) then
+         inquire (iolength=len) ngtbls,ngtblf
+         write (rstplt) len,iwrd
+         write (rstplt) ngtbls,ngtblf
+       endif
+       if (ngtbls .eq. 0) return
+       ngtblf = allocated(gen)
+       inquire (iolength=len) gen
+       write (rstplt) len,iwrd
+       write (rstplt) gen
+       if (fl) then
+         inquire (iolength=len) gtnum
+         write (rstplt) len,iwrd
+         write (rstplt) gtnum
+         do i = 1,ngtbls
+           inquire (iolength=len) gtptr(i)%gtbl
+           write (rstplt) len,iwrd
+           write (rstplt) gtptr(i)%gtbl
+         enddo
+       endif
+       return
+       end subroutine gentblwrite
+!
+       subroutine gtpolat (itble,ftble,arg,val,err)
+!
+!  Performs linear interpolation.
+!
+!  Performs linear interpolation on data in ftble using arg as search
+!  arguments.  Interpolated values returned in val.
+!  itble has three words:
+!     itble(1) - the number of items per set.  If negative, error if
+!                arg is not bounded by independent variable of ftble.
+!                If positive, arg not bounded is not an error and
+!                returned values are appropriate end values in ftble.
+!     itble(2) - the total number of items.
+!     itble(3) - the last used subscript.
+!  ftble has table values.  The first word of each set in the table is
+!  the search variable.
+!
+       implicit none
+       integer itble(3)
+       real ftble(:),arg,val(:)
+       logical err
+       integer i,ie,in,ig,k
+       real r
+!
+       err = .false.
+       in = abs(itble(1))
+       ie = itble(2)
+       i = itble(3)
+       if (ie .eq. in) go to 20
+   10  if (arg - ftble(i)) 13,25,11
+   13  if (i .eq. 1) go to 20
+       i = i - in
+       go to 10
+   11  ig = i + in
+   14  if (ig .gt. ie) go to 20
+       if (ftble(ig) - arg) 17,24,12
+   17  i = ig
+       go to 11
+   12  r = (arg - ftble(i))/(ftble(ig) - ftble(i))
+       do k = 2,in
+       val(k-1) = r*(ftble(ig+k-1) - ftble(i+k-1)) + ftble(i+k-1)
+       enddo
+       go to 1000
+   20  if (itble(1) .ge. 0) go to 25
+       err = .true.
+       return
+   24  i = ig
+   25  do k = 2,in
+         val(k-1) = ftble(i+k-1)
+       enddo
+ 1000  itble(3) = i
+       return
+       end subroutine gtpolat
+!
+       end module gentblc

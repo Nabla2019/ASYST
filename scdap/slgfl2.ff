@@ -1,0 +1,747 @@
+*mlist
+*if def,selap
+       subroutine slgfl2 (dz,tliq0,denuo2,naz,stozro,
+     & rpel,ri,ro,rocrst,rocrmx,tox,tsur,thkave,tzr,z,zgrid,
+     & wbotuo, wbotzr, wfrouo, wfrozr, nfrslg,
+     & hadd  , haddbt, mltfg2, wuosum, wzrsum, woxsum,
+     & fmix  , nthksw, vladeb, ifrag , avoidl, afracl,
+     & dzfrcl,woxsol,woxzr,wremuo,wremzr,wbotox,wremzo,winliq,winfro,
+     & winrem)
+!
+!  Descriptive sentence for slgfl2 goes here.
+!
+!  Cognizant engineer: ljs (wjs erc).
+!
+!#    calling routine:     liqsol
+!#    subroutines called:  ccp   , dsgedr, fenthl, hamadd,
+!#                         hamblo, psol  , oxflow, velfcn, veljac,
+!#                         zocp  , zoden , zone  , zotcon,  cden ,
+!#                         zucon , zucp  , zuden , zufric,
+!#                         zuhfus, zusten, zuvisc
+!#    engineer/programmer: l.j.siefken/w.j.suitt/e.r.carlson
+!#    input variables:        description
+!#
+!#    dz                  height of each axial zone.
+!#    ktopf               top node from which liquid zr is removed.
+!#    naz                 number of axial nodes.
+!#    ngrid               number of grid spacers.
+!#     pcool       coolant pressure around fuel rod (n/m**2)
+!#     pgas        gas pressure inside fuel rod (n/m*2)
+!#    qin                 net thermal energy input to axial zone k per u
+!#    ri(z)               inside  radius of cladding at elevation z.
+!#    ro(z)               outside radius of cladding at elevation z.
+!#    rpel                radius to outside surface of the fuel pellets.
+!#    teff                effective annular gap for extrusion of liquid
+!#    tox(z)              thickness of zr-o2 layer on outside of claddin
+!#    tsur(z)             temperature of surface over which slug flows a
+!#    tsur0               same as tsur but for start of the time step.
+!#    tzr(k)              thickness of zr portion of cladding in zone k.
+!#    z                   elevations of axial nodes.
+!#    zgrid               elevations of the grid spacers.
+!#        vladeb(k) = volume of liquid zr-u-o which can
+!#                    be absorbed by debris bed in axial
+!#                    zone k (m**3)   (input)
+!#        ifrag(k)  = variable indicating whether or not in-
+!#                    tact fuel rod, debris bed, or void reg-
+!#                    ion exists in axial zone k.
+!#                    0 = intact fuel rod
+!#       avoidl(k) = cross-sectional area of void region
+!#                    plus cross-sectional area of solidified
+!#                    crust around fuel rod in axial zone k.
+!#                    (m**2)    (input)
+!#         afracl(k) = fraction of avoidl(k) filled with
+!#                     crust.    (input)
+!#         dzfrcl(k) = fraction of height of axial zone k
+!#                     completely filled with solidified
+!#                     zr-u-o.    (input)
+!#         woxsol(k) = mass of oxygen from oxidation in
+!#                     solidified zr-u-o in axial zone k.
+!#                     (kg)     (input/output)
+!#          flwh2(k)  = mass flow rate of hydrogen within coolant
+!#                      channel in axial zone k. (kg/s) (input)
+!#          flstm(k)  = mass flow rate of steam within coolant
+!#                      channel in axial zone k. (kg/s) (input)
+!#
+!#    i/o variables:          description
+!#    nfi                 indicator of breach at axial zone k.
+!#    nfrslg              indicator of frozen slug in axial zone k.
+!#    rocrmx              maximum outer radius of frozen zry-uo2 on outs
+!#    rocrst              average outer radius of frozen zry-uo2 on outs
+!#    ruliq               inner radius of annulus of dissolved uo2(m).
+!#    volcrs              volume of frozen zry-uo2 in axial zone k(m**3)
+!#    wbotuo              mass of uo2 which has dripped below bottom of
+!#    wbotzr              mass of zr which has dripped below bottom of f
+!#    wfrouo              mass of uo2 which has dripped into axial zone
+!#    wfrozr              mass of zr which has dripped into axial zone k
+!#    winfro              mass of inconel that slumped and froze at node
+!#    winliq              mass of liquified inconel at node k
+!#    winrem              mass of inconel removed due to slumping
+!#    wremuo              mass of uo2 removed from axial zone k by disso
+!#    wremzr              mass of zr removed from axial zone k by liquef
+!#
+!#    output variables:       description
+!#
+!#    hadd                heat added to axial zone k during time step by
+!#    haddbt              heat added to region below fuel rod during tim
+!#    hremov              heat removed from axial zone k during time ste
+!#    kfail               number of axial zone in which failure of cladd
+!#    wuo2                weight of dissolved uo2.
+!#    wzr                 weight of dissolved zr.
+!
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       include 'cons.h'
+       include 'contrl.h'
+       include 'scddat.h'
+       include 'tblsp.h'
+       include 'ufiles.h'
+       include 'vel.h'
+       include 'prnt.h'
+!
+       integer naz,mltfg2,nthksw,info
+       integer iparm,job,iwk,nfrslg,lparm,jjob,ifrag
+       real(kr) rparm,wk,tox,z,tsur,ro,tzr,ri,dz,zgrid,rpel,stozro,hadd,
+     & wfrouo,wfrozr,rocrmx,rocrst,sparm,vladeb,avoidl,afracl,
+     & dzfrcl,woxsol,wremuo,wremzr,woxzr,wremzo,winliq,winfro,winrem
+      dimension iparm(12)  , rparm(10)  , job(5)      , wk(18)     ,
+     1          tox(naz)   , z(naz)     , tsur(ndax)   , ro(naz)    ,
+     2          tzr(ndax)   , ri(naz)    , dz(naz)     ,
+     3 zgrid(ngrid),iwk(1),rpel(naz),stozro(naz),hadd(naz),nfrslg(naz),
+     * wfrouo(naz),wfrozr(naz),rocrmx(naz),rocrst(naz),lparm(12),
+     * sparm(10),jjob(5),vladeb(naz),ifrag(naz),
+     #          avoidl(ndax), afracl(ndax), dzfrcl(naz) , woxsol(naz),
+     #          wremuo(naz), wremzr(naz), woxzr(naz), wremzo(naz),
+     #          winliq(naz), winfro(naz),winrem(naz)
+       logical print0
+       external velfcn,veljac
+!
+!  Local variables.
+       integer idebri,j,k,k2,ktime,l,nvoid
+       integer kfail
+       real(kr) a,a1,afraco,afracu,afracz,afrcso,afrcsu,afrcsz,alphzo,
+     & c1,c2,condlq,condox,czr,czro,czu,delvz,delvzo,denuo2,dhydr,dm,
+     & dmaxdl,dmdl,drliq0,ds,dsmax,dt1,dt2,dtl,dts,dtz,dum1,dum2,
+     & dum3,e1,elevb,elevt,enth1,enth2,eout,fmix,fraden,frcliq,
+     & haddbt,hfus,htclam,htctrb,qc,qclad,qclad1,qclad2,qe,qenerg,
+     & qliq,qout,qt,reynum,rhozr,rhozro,riknph,rok,rokm1,rox,rhozu,
+     & s0,sc1,sc2,scp,shfus,slugl,srho,t1temp,tcrnph,thkave,tliq0,
+     & tliq1,tliq2,tmelt,tmeltd,tmelts,tnew,told,toxval,tznpoh,
+     & tzrnph,v1,v2,velchk,visc,vtran,wbotox,wbotuo,wbotzr,wfrox,
+     & wfrsox,wfrsuo,wfrszr,wfruo,wfrzr,wliqox,wliquo,wliqzr,wox,
+     & woxsum,wsum,wuo,wuosum,wzr,wzrsum,y,z1,z2,zb,zdrop1,zdrop2,
+     & znpoh
+       real(kr) ccp,ccpr,cden,fcp,fden,psol,zocp,zoden,zotcon,zucp,
+     & zuden,zufric,zufusn,zunthl,zutcon,zuvisc
+       real(kr) atol,rtol,fcomp,fotmtl,ftmelt,fhefus,awzr,awox,zrfus,
+     & zrofus,zero,one,re,rftemp
+!
+!  The following variable entered to satisfy loading requirements. See
+!  further comments where used.
+       integer lcrcb1
+!  The following two data statements are for the velocity solution in
+!  subroutine dsgedr.
+      data lparm/0,18,1,9*0/, jjob/1,1,1,1,1/
+      data sparm/10*0.0/, atol/1.0e-6/, rtol/1.0e-6/
+      data fcomp/0.0/  ,fotmtl/2.0/   ,ftmelt/3100./ ,fhefus/27.4e4/
+     1    ,awzr/91.22/ ,awox/15.9994/ ,zrfus/22.5e4/ ,zrofus/70.6e4/
+      data zero/0.0/ ,one/1.0/
+      data re/0.0/, rftemp/300./
+!
+!      fmix   = mixing factor on solidification
+!               of a mixture of flowing zr-u-o
+!               if fmix = 0, each infintesimal volume
+!               of zr-u-o that becomes subcooled immediately
+!               plates out.
+!               if fmix = 1, each infintesimal volume
+!               of zr-u-o that becomes subcooled immediately
+!               gets carried into flowing mixture by eddy
+!               diffusivity
+!       define switch which sets option for calculation
+!       of initial thickness of flowing liquid
+!       nthksw = 0 = initial thickness is average of in situ
+!                    thickness
+!       nthksw = 1 = initial thickness calculated on basis
+!                    of surface tension considerations
+      do 1 j=1,10
+         rparm(j) = sparm(j)
+    1 continue
+      do 2 j=1,12
+         iparm(j) = lparm(j)
+    2 continue
+      do 3 j=1,5
+         job(j) = jjob(j)
+    3 continue
+      print0 = printz
+      call atomfr(wuosum, wzrsum, woxsum, afracu,
+     #            afracz, afraco)
+      if (printz) then
+        write (output,905)wuosum,wzrsum,woxsum,tliq0,mltfg2
+        write (output,907)afracu,afracz,afraco
+  905  format (' wuosum=',e10.4,' wzrsum=',e10.4,' woxsum=',e10.4,
+     #          ' tliq0=',e10.4,' mltfg2=',i4)
+  907  format (' afracu=',e10.4,' afracz=',e10.4,' afraco=',e10.4)
+      end if
+!
+        wsum   = wuosum + wzrsum + woxsum
+       wfrzr=wzrsum/wsum
+       wfruo=wuosum/wsum
+       wfrox=woxsum/wsum
+       rhozu=zuden(afracu, afracz, tliq0)
+       hfus=zufusn(afracu,afracz)
+       s0=wsum/rhozu
+       if(icohpp(mltfg2,icomp).eq.1.or.irubpp(mltfg2,icomp)
+     # .eq.1)then
+!
+!       liquefied material stays at same axial node.
+!
+       s2=s0
+       idebri=mltfg2
+       tliq1=tliq0
+       go to 210
+       end if
+!
+        if(mltfg2.eq.1)then
+           wbotuo = wbotuo + wuosum
+           wbotzr = wbotzr + wzrsum
+           wbotox = wbotox + woxsum
+           haddbt = haddbt + wsum*zunthl(afracu,afracz,tliq0,rftemp)
+           go to 400
+        end if
+!
+        zb     = z(mltfg2-1)
+!        set initial iterative values.
+         drliq0 = thkave
+         slugl  = s0/(pi*((ro(mltfg2-1)+drliq0)**2-ro(mltfg2-1)**2))
+         enth1  = hfus
+         enth2  = hfus
+         s2     = s0
+         sc1    = 0.0
+         thkmlt = 0.0
+         tliq1  = tliq0
+         told   = 0.0
+         v1     = 0.0
+         zdrop1 = 0.0
+         z1     = zb
+         ktime  = 0
+         if(printz) write(output, 500) slugl
+!
+!          top of time increment loop
+   20    continue
+        printz=.false.
+!        reset time step size.
+!        locate elevation of slug.
+!        increment time and
+!        calculate the volume of the slug and
+!        the thickness of the slug and
+!        the contact area between the slug and the surface.
+         ktime  = ktime + 1
+         if ( ktime .gt. 20000 )   then
+              ktime  = 1
+               printz = .true.
+         end if
+!
+!       recalculate weight fractions to take into account
+!       addition of oxygen to flowing zr-u-o, reset material properties
+!
+        wliqzr=wfrzr*rhozu*(s0-sc1)
+        wliquo=wfruo*rhozu*(s0-sc1)
+        wliqox=wfrox*rhozu*(s0-sc1)
+        call atomfr(wliquo, wliqzr, wliqox, afracu,
+     #              afracz, afraco)
+!
+        tmeltd = psol(afraco, afracu, afracz)
+        czu    = zucp(afracu, afracz, tliq1)
+        condlq = zutcon(afracu,afracz,tliq1)
+        hfus   = zufusn(afracu, afracz)
+        call zone(naz   , z     , z1    , k     )
+        dtz    = 0.001
+        if ((told .gt. 0.4) .and. (v1 .lt. 0.10)) dtz = 10.*dtz
+        if ((told .gt. 1.0) .and. (v1 .lt. 0.10)) dtz = 50.*dtz
+        tnew   = told + dtz
+!
+      if (ifrag(k) .eq. 3)   then
+         nvoid = 1
+         roknph = .01
+      else
+         nvoid = 0
+         if (k .eq. 1) then
+            roknph=ro(k)
+         else
+            rokm1  = ro(k-1)
+            rok    = ro(k)
+            roknph = rokm1 + ((rok-rokm1) * (z1-z(k-1))) / (z(k)-z(k-1))
+         end if
+         if (roknph .lt. 1.0e-05)   roknph = 1.0e-05
+      end if
+!
+         drliq  = -roknph + sqrt(roknph**2 + s2 / (slugl * pi))
+         if (drliq .lt. 1.0e-10)  go to 400
+!
+         a      = 2.0 * pi * roknph * slugl
+         if (nvoid .eq. 1) a = 1.e-12
+!
+!        calculate the transition velocity of the slug then
+!        calculate the velocity of the slug by numerical integration
+!        then calculate the drop distance and the current axial position
+!        of the slug.
+!
+!        calculate viscosity
+       visc = zuvisc (afracu ,afracz ,tliq1)
+       if (visc .gt. 0.02) visc = 0.02
+!
+       dhydr = 4.*drliq
+       reynum = rhozu*v1*dhydr/visc
+       vtran  = re * visc / (4.0 * rhozu * drliq)
+       fric = zufric(reynum)
+       if (nvoid .eq. 1) fric = 1.e-10
+       t1temp = told
+       y      = v1
+!
+        frcliq=enth1/hfus
+        if (printz) write(output,25) frcliq,visc,reynum,fric
+   25  format (8h frcliq=,e10.4,6h visc=,e10.4,
+     #         8h reynum=,e10.4,6h fric=,e10.4)
+         call dsgedr(velfcn,1,t1temp,y,tnew,veljac,rtol,atol,rparm,
+     #     iparm,wk,iwk,job,info)
+         if(info.ne.0) then
+            write (output,3000) t1temp,tnew,info
+ 3000 format (' Matrix solver for coupled oxidation-temperature',
+     +       ' calculation was unable to find a solution, '/
+     +       ' between the time interval ',g10.4,' to ',g10.4/
+     +       ' the error flag for the matrix solver routine',
+     +       ' - dsgedr  is ',i5//)
+         endif
+         v2     = y
+         zdrop2 = zdrop1 + 0.5 * (v1 + v2) * dtz
+         z2     = zb - zdrop2
+         if(printz) then
+             write(output, 440) tliq0 , zb    , s0    , drliq0, drliq ,
+     1                       s2    , roknph, tnew  , v2    , z2
+         end if
+         if(z2 .ge. 0.0) then
+!           impact with grid spacer not considered in slgfl2
+!            calculate the heat transfer coefficient for laminar flow or
+!            for turbulent flow based on (v1 + v2) / 2.
+            velchk = 0.5 * (v1 + v2)
+!
+!            find the axial node slug is in at the time step end
+            call zone(naz   , z     , z2    , k2    )
+!
+!            find the axial node slug is in at the time step midpoint
+            k      = 0
+            do 40 l=1,naz
+                elevb  = z(l) - 0.5 * dz(l)
+                elevt  = z(l) + 0.5 * dz(l)
+                znpoh  = 0.5 * (z1 + z2)
+                if((elevb .le. znpoh) .and. (znpoh .le. elevt)) then
+                       k      = l
+                       go to 50
+                end if
+   40       continue
+   50       continue
+!
+!        if slug impacts debris region, stop flow
+!
+         idebri=0
+       if(icohpp(k2,icomp).eq.1.or.irubpp(k2,icomp).eq.1)idebri=k2
+         if(idebri.ge.1)go to 210
+!
+!      if zr-u-o slug is dropping across void, bypass
+!      heat transfer calculations.
+!
+        if (nvoid .eq. 0) go to 38
+          qliq = 0.0
+          ds = 0.0
+          sc2 = sc1+ds
+          go to 80
+   38   continue
+!
+!       find midplane elevations which bracket z2
+!
+          if (z2 .le. z(1)) then
+            tznpoh = tsur(1)
+          else if (z2 .ge. z(naz)) then
+            tznpoh = tsur(naz)
+          else if (z2 .gt. z(k2))  then
+            tznpoh = tsur(k2) + (tsur(k2+1)-tsur(k2))*(z2-z(k2))/
+     #                                (z(k2+1)-z(k2))
+          else
+            tznpoh = tsur(k2-1) + (tsur(k2)-tsur(k2-1))*(z2-z(k2-1))/
+     #                                  (z(k2)-z(k2-1))
+          end if
+!       calculate surface melting temperature
+!
+       if (nfrslg(k2) .gt. 0)   then
+          call atomfr (wfrouo(k2) ,wfrozr(k2) ,woxsol(k2) ,afrcsu
+     #                ,afrcsz ,afrcso)
+          tmelts = psol (afrcso ,afrcsu ,afrcsz)
+       else if ((tox(k2).gt.1.0e-06) .or. (tzr(k2).gt.1.0e-06)) then
+          call zoprp (stozro(k2) ,tmelts ,dum1 ,dum2 ,dum3)
+       else
+          tmelts = ftmelt
+       end if
+!
+       tmelt = tmeltd
+       if (tmelts .lt. tmeltd)  tmelt = tmelts
+        if(printz)write (output,913)tmeltd,tmelts,tmelt
+  913  format (' tmeltd=',e10.4,' tmelts=',e10.4,' tmelt=',e10.4)
+!
+!           calculate the surface heat flux due to mixing by
+!           eddy diffusivity of liquid at differential enthalpy.
+            if(velchk .lt. vtran) then
+                    htclam = 8.0 * visc * czu / drliq
+!
+         if (printz) write(output,901) visc ,czu ,drliq ,htclam
+  901  format (6h visc=,e10.4,5h czu=,e10.4,7h drliq=,e10.4,
+     #                      8h htclam=,e10.4)
+                    if(enth1 .le. hfus) then
+                      qe = fmix*  ((8.0 * visc) / drliq) * enth1
+                    else
+                      qe = fmix* ((8.0 * visc) / drliq) * hfus
+                    end if
+            else
+                    reynum = rhozu*v2*dhydr/visc
+                    fric = zufric(reynum)
+                    htctrb = 0.25 * fric * rhozu * czu * (v1 + v2)
+!
+        if (printz) write(output,903) fric ,rhozu ,v2 ,enth1 ,visc
+  903  format (6h fric=,e10.4,7h rhozu=,e10.4,4h v2=,
+     #        e10.4,7h enth1=,e10.4,6h visc=,e10.4)
+                    if(enth1 .le. hfus) then
+                     qe=fmix*  0.5 * fric * rhozu * v2 * enth1
+                    else
+                       qe=fmix*0.5 * fric * rhozu * v2 * hfus
+                    end if
+            end if
+!           calculate the surface heat flux due to mixing by
+!           eddy diffusivity of liquid at differential temperature.
+            if(tliq1 .le. tmelt) then
+                    qt     = 0.0
+            else
+                 if(velchk .lt. vtran) then
+                    qt     = htclam * (tliq1 - tmelt)
+                 else
+                    qt     = htctrb * (tliq1 - tmelt)
+                 end if
+            end if
+!           calculate the surface heat fulx due to heat conduction
+!           through the liquid.
+            if(tliq1 .le. tmelt) then
+                    qc     = 0.0
+            else
+                    qc     = 2.0 * condlq * (tliq1 - tmelt) / drliq
+            end if
+!           calculate the total heat flux on liquid side of interface
+!           between slug and surface.
+            qliq   = qe + qt + qc
+            if(printz) write(output,450) htclam,htctrb,qliq,qe,qt,qc
+!           calculate the heat flux on cladding side of interface
+!           between slug and surface.
+              if (tznpoh .lt. tmelt)  then
+                  condox = zotcon (tznpoh)
+                  czro   = zocp  (tznpoh)
+                  rhozro = zoden (tznpoh)
+                if (chngno(70)) then
+                  czr = ccpr(tznpoh)
+                else
+                  czr = ccp(tznpoh)
+                endif
+                  rhozr  =  cden (tznpoh)
+                  alphzo = condox / (rhozro * czro)
+                  dts    = tmelt - tznpoh
+                  if (dts .lt. 1.0) dts = 1.0
+                  toxval = tox(k2)
+                  if (toxval.lt.1.e-6) toxval = 1.e-6
+                  if(velchk .le. 0.001) then
+                       dtl    = dtz
+                  else
+                       dtl    = slugl / velchk
+                  end if
+                  qclad  = (1.224 * dts * condox) / sqrt(alphzo * dtl)
+                  riknph = ri(k2)
+                  if (riknph .lt. 1.e-5)  riknph = 1.e-5
+                  roknph = ro(k2)
+                  if (roknph .lt. 1.e-5)  roknph = 1.e-5
+                  tzrnph = tzr(k2)
+                  if (tzrnph .lt. 1.e-5)  tzrnph = 1.e-5
+!
+                  delvz  = pi * ((riknph + tzrnph)**2 - riknph**2)
+                  delvzo = pi * (roknph**2 - (roknph - toxval)**2)
+                  e1     = 0.5 * rhozro * delvzo * czro * dts
+                  a1     = 2.0 * pi * roknph
+                  eout   = a1 * qclad * dtl
+!
+                  if(printz) write(output, 510) tmelt , tznpoh, e1    ,
+     #                                      roknph, eout  , dtl
+                  if(eout .gt. e1) then
+                      dt1    = 0.667*alphzo*((e1/(a1*dts*condox))**2)
+                      if(dt1 .lt. dtl) then
+                          dt2    = dtl - dt1
+                          rox    = roknph - 0.5 * toxval
+                          c1 = rhozr*czr*delvz + 0.5*rhozro*czro*delvzo
+                          c2     = 2.0 * pi * rox * condox / toxval
+                          qenerg=c1*(tmelt-tznpoh)*(1.-exp(-c2*dt2/c1))
+                          qclad1 = e1 / (a1 * dt1)
+                          qclad2 = qenerg / (a1 * dt2)
+                          qclad  = (qclad1 * dt1 + qclad2 * dt2) / dtl
+                          if(printz) write(output, 1030) qclad1, qclad2,
+     #                              qclad, dt1, dt2, dtl
+                      end if
+                  end if
+              else
+                  qclad = 0.0
+                  qliq  = 0.0
+              end if
+!           calculate the amount of crust formation or surface melting
+!           and thermal energy exchange at the interface between surface
+!           and slug. a crust forms when heat removed from the slug by
+!           conduction is greater than heat put into the boundary layer
+!           by eddy diffusivity. the surface melts for the opposite.
+            if ((qclad .gt. qliq) .and. (tmelts .ge. tmeltd))   then
+!
+!             crust formation occurs: dmdl, tcrnph and ds are positive
+               dmdl =     2.*roknph*(qclad - qliq)*dtl /
+     #                 (rhozu*(hfus + czu*(tliq1 - tmeltd)))
+               ds   = pi*dmdl*velchk*dtz
+               tcrnph = sqrt(roknph**2 + dmdl) - roknph
+               dsmax = s0 - sc1
+               if (ds .gt. dsmax) ds = dsmax
+!
+!              if all remaining liquid zr-u-o solidified in current
+!              axial zone, compute increase in average crust thickness
+!              assume all of slug solidifies before traveling
+!              distance equal to its length
+!
+               if (drliq .le. 1.e-4)    ds = dsmax
+               thkmlt = 0.0
+!                           (crust formation does affect slug velocity)
+!
+!              add the mass of the new crust to the mass of the frozen
+!              zr and u-o2 in the midpoint zone.
+!              calculate the heat addition in the zone due to
+!              material addition.
+!              calculate the heat addition in the zone due to
+!              heat transfer.
+!
+               wfrozr(k) = wfrozr(k) + wfrzr * rhozu * ds
+               wfrouo(k) = wfrouo(k) + wfruo * rhozu * ds
+               woxsol(k) = woxsol(k) + wfrox * rhozu * ds
+!
+               if (printz) write (output,915)tcrnph,wfrzr,wfruo,wfrox
+  915  format (' Thickness of solidifying crust =',e10.4,
+     #             ' wfrzr=',e10.4,' wfruo=',e10.4,' wfrox=',e10.4)
+               hadd(k) = hadd(k) + rhozu * ds * zunthl (afracu ,afracz
+     #                                                 ,tliq1  ,rftemp)
+               hadd(k)   = hadd(k) + qliq * a * dtz
+            else if ((qclad .lt. qliq) .and. (tmelts .lt. tmeltd)) then
+!             surface melting occurs: dmdl, ds, dm, etc. are negative
+               if (nfrslg(k2) .gt. 0) then
+                  srho = zuden (afrcsu ,afrcsz ,tznpoh)
+                  shfus = zufusn (afrcsu ,afrcsz)
+                  scp = zucp (afrcsu ,afrcsz ,tznpoh)
+                  dmaxdl = wfrouo(k2) + wfrozr(k2) + woxsol(k2)
+                  wfrszr = wfrozr(k2) / dmaxdl
+                  wfrsuo = wfrouo(k2) / dmaxdl
+                  dmaxdl = dmaxdl / dz(k2)
+               else if (tox(k2) .gt. 1.0e-06)  then
+                  srho = rhozro
+                  shfus = zrofus
+                  scp = czro
+                  dmaxdl = pi*( roknph**2 - (roknph-tox(k2) )**2)*srho
+                  wfrszr = awzr / (awzr + stozro(k2)*awox)
+                  wfrsuo = 0.0
+                  afrcsz = 1./(1.+stozro(k2))
+                  afrcsu = 0.0
+               else if (tzr(k2) .gt. 1.0e-06)   then
+                  srho = rhozr
+                  shfus = zrfus
+                  scp = czr
+                  dmaxdl = pi*( (riknph+tzr(k2))**2 - riknph**2 )*srho
+                  wfrszr = 1.0
+                  wfrsuo = 0.0
+                  afrcsz = 1.0
+                  afrcsu = 0.0
+               else
+                  fraden = denuo2*9.11577e-05
+                  srho = fden (ftmelt ,one)
+                  shfus = fhefus
+                  scp = fcp (tznpoh ,zero ,fotmtl ,fraden)
+                  dmaxdl = pi*rpel(k2)**2*srho
+                  wfrszr = 0.0
+                  wfrsuo = 1.0
+                  afrcsz = 0.0
+                  afrcsu = 1.0
+               end if
+!
+               wfrsox = 1.0 - wfrszr - wfrsuo
+               if (wfrsox .lt. 0.0)  wfrsox = 0.0
+!
+               dmdl = 2.*pi*roknph*(qclad - qliq)*dtl /
+     #                (shfus + scp*(tmelts - tznpoh))
+               if (dmdl .lt. -dmaxdl)  dmdl = -dmaxdl
+               tcrnph = sqrt( roknph**2 + dmdl/(pi*srho) ) - roknph
+               dm = dmdl * velchk*dtz
+               ds = dm / rhozu
+               thkmlt = -tcrnph
+!
+               wsum = rhozu*s2
+               wzr = wfrzr*wsum - wfrszr*dm
+               wuo = wfruo*wsum - wfrsuo*dm
+               wox = wfrox*wsum - wfrsox*dm
+               wsum = wsum - dm
+               wfrzr   = wzr/wsum
+               wfruo   = wuo/wsum
+               wfrox   = wox/wsum
+               hadd(k) = hadd(k) - dm*zunthl(afrcsu,afrcsz,tliq1,rftemp)
+               hadd(k) = hadd(k) + qclad * a * dtz
+!
+               if (printz) then
+                    write (output,917) tcrnph ,qliq ,qclad
+                    write (output,919) dm ,wfrszr ,wfrsuo ,wfrsox
+                    write (output,530) nfrslg(k2) ,tox(k2) ,tzr(k2)
+               end if
+!
+               if (nfrslg(k2) .gt. 0) then
+                 wfrouo(k2) = wfrouo(k2) + wfrsuo*dm
+                 if (wfrouo(k2) .lt. 0.0) wfrouo(k2) = 0.0
+                 wfrozr(k2) = wfrozr(k2) + wfrszr*dm
+                 if (wfrozr(k2) .lt. 0.0) wfrozr(k2) = 0.0
+                 woxsol(k2) = woxsol(k2) + wfrsox*dm
+                 if (woxsol(k2) .lt. 0.0) woxsol(k2) = 0.0
+               else if (tox(k2) .gt. 1.0e-6)  then
+                 wremzo(k2) = wremzo(k2) - dm
+               else if (tzr(k2) .gt. 1.e-6)   then
+                 wremzr(k2) = wremzr(k2) - dm
+               else
+                 wremuo(k2) = wremuo(k2) - dm
+               end if
+!
+            else
+               tcrnph = 0.0
+               ds     = 0.0
+            end if
+!
+            if (ds .gt. 1.0e-15) nfrslg(k) = 1
+!           update the volume reduction of the slug due to crust
+!           formation.
+            sc2    = sc1 + ds
+            s2     = s0 - sc2
+            if(printz) then
+                    write(output, 460) qclad, e1, eout, ds
+                    write(output,430) k,wfrouo(k),wfrozr(k),hadd(k),
+     #                                   rocrmx(k)
+            end if
+!
+   80   continue
+            if(sc2 .lt.(s0-1.e-15))then
+!
+        qout   = a * qliq * dtz
+        enth2  = hfus
+       if (tliq1.gt.tmeltd) then
+           tliq2  = tliq1 - qout / (czu * rhozu * (s0 - sc2))
+           if (tliq2 .lt. tmeltd) tliq2 = tmeltd
+       else
+           tliq2=tmeltd
+       end if
+       if (tliq1 .eq. tmeltd) then
+          enth2  = enth1 - qout / (rhozu * (s0 - sc2))
+          if (enth2 .le. hfus) tliq2 = tmeltd
+          if (enth2 .gt. hfus) tliq2 = tmeltd + (enth2-hfus)/czu
+       end if
+               if(printz) write(output, 480) enth2 , tliq2
+!              if slug is frozen, quit.
+!              if not, reiterate.
+!
+!       if slug velocity almost zero, assume slug solidified
+!
+        if(s2.lt.1.e-15)go to 180
+        if(v2.lt.1.e-4.and.drliq.lt.1.e-4)go to 180
+               if (enth2 .gt. 1000.)  then
+                         told   = tnew
+                         sc1    = sc2
+                         zdrop1 = zdrop2
+                         z1     = z2
+                         v1     = v2
+                         tliq1  = tliq2
+                         drliq0 = drliq
+                         enth1  = enth2
+                     if(printz) write (output,200) tnew,z2,v2,sc2,
+     &               zdrop2,tliq2,drliq,enth2
+                         go to 20
+               end if
+!              slug has completely frozen. calculate the heat and
+!              mass addition to the axial zone in which the slug has
+!              frozen.
+  180    continue
+           kfail=1
+               call hamadd(drliq , dz    , naz   , ro    , rhozu ,
+     1                     s2    , tmeltd, wfruo , wfrzr , wfrouo,
+     2                     wfrozr, winliq, winfro, z     , z1    ,
+     3                     z2    , hadd  , nfrslg, rocrmx, rftemp,
+     4                     woxsol, kfail, winrem, wremzr)
+            end if
+!          slug has dropped below the bottom of the fuel rod.
+!          calculate the mass and heat addition to the region
+!          below the fuel rod.
+         else
+           call hamblo(rhozu , s2    , tmeltd , wfruo , wfrzr ,
+     1                 haddbt, wbotuo, wbotzr, rftemp, wbotox)
+         end if
+        go to 400
+  210   continue
+!
+!       flowing zr-u-o has impacted debris bed.
+!       calculate mass of zr-u-o absorbed by debris bed
+!       and mass staying above debris bed.
+       kfail=1
+! The following call is an error because hamdeb expects an
+! additional parameter after kfail which indicates whether
+! there is a molten pool at this location.
+! Leave error until determine if this routine is used
+!  Integer variable, lcrcb1, set to 1 here and added to argument list
+!  so that loader can be satisfied.
+       lcrcb1 = 1
+       call hamdeb(s2    , idebri, naz   , ifrag , rhozu ,
+     #              tliq1 , wfruo , wfrzr , wfrouo, wfrozr,
+     #              dz    , vladeb, avoidl, afracl, dzfrcl,
+     #              hadd  ,winliq,winfro,kfail,lcrcb1)
+  400   continue
+        printz=print0
+      return
+  200 format('0','time',t18,' = ',e15.6/
+     1       ' ','elevation',t18,' = ',e15.6/
+     2       ' ','velocity',t18,' = ',e15.6/
+     3       ' ','volume reduction',t18,' = ',e15.6/
+     4       ' ','drop distance',t18,' = ',e15.6/
+     5       ' ','slug temperature',t18,' = ',e15.6/
+     6       ' ','slug thickness',t18,' = ',e15.6/
+     7       ' ','enthalpy',t18,' = ',e15.6)
+  430 format('0',t5,'k',t17,'wfrouo',t38,'wfrozr',t57,'hadd',t78,
+     1           'rocrmx'/' ',t5,i2,t13,e15.6,t33,e15.6,t53,e15.6,
+     2            t73,e15.6)
+  440 format('0',t8,'tliq0',t30,'zb',t49,'s0',t68,'drliq0',t88,
+     1              'drliq'/' ',t3,e15.6,t22,e15.6,t42,e15.6,t62,
+     2               e15.6,t82,e15.6//
+     3       ' ',t10,'s2',t28,'roknph',t49,'tnew',t70,'v2',t90,'z2'/
+     4       ' ',t3,e15.6,t22,e15.6,t42,e15.6,t62,e15.6,t82,e15.6)
+  445 format('0','slug has impacted a grid spacer.')
+  450 format('0',t8,'htclam',t28,'htctrb',t49,'qliq',t70,'qe',t90,
+     1              'qt',t110,'qc'/' ',t3,e15.6,t23,e15.6,t43,e15.6,
+     2              t63,e15.6,t83,e15.6,t103,e15.6)
+  460 format('0',t8,'qclad',t30,'e1',t49,'eout',t70,'ds'/' ',t3,
+     1           e15.6,t23,e15.6,t43,e15.6,t63,e15.6)
+  480 format('0',t8,'enth2',t28,'tliq2'/' ',t3,e15.6,t23,e15.6)
+  500 format('0','slug length = ',e15.6)
+  510 format('0',t8,'tmelt ',t28,'tznpoh',t50,'e1',t68,'roknph',t89,
+     1              'eout',t109,'dtl'/' ',t3,e15.6,t23,e15.6,t43,
+     2               e15.6,t63,e15.6,t83,e15.6,t103,e15.6)
+  530 format(' nfrslg =',i3,'   tox =',e11.4,'    tzr =',e11.4)
+  917 format(' thickness of liquifying film =',e10.4,
+     #                ' qliq=',e10.4,' qclad=',e10.4)
+  919 format(' ablation occurring - dm =',e10.4,' wfrszr=',e10.4,
+     #       ' wfrsuo=',e10.4,' wfrsox=',e10.4)
+ 1030 format('0',t8,'qclad1',t28,'qclad2',t49,'qclad',t69,'dt1',t89,
+     1       'dt2',t109,'dtl'/' ',t3,e15.6,
+     2       t23,e15.6,t43,e15.6,t63,e15.6,t83,e15.6,t103,e15.6)
+      end
+*endif

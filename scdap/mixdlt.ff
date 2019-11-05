@@ -1,0 +1,371 @@
+*mlist
+*if def,selap
+        subroutine mixdlt (deltqi,wuo,wzr,wzro,wag,wss,wsso,wzuo,afru,
+     *  afrz,wbc,brnup,frpuo2,deloxy,emlt,emltmx,matmlt,tsolpl,tliqpl,
+     #  tmp1,tmp2)
+!  mixdlt calculates the temperature change of a mixture given the
+!  amount of thermal energy added to or subtracted from it.
+!
+!  Cognizant engineer: ljs.
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+!
+       integer matmlt
+       real(kr) deltqi,wuo,wzr,wzro,wag,wss,wsso,wzuo,afru,afrz,wbc,
+     & brnup,frpuo2,deloxy,emlt,emltmx,tmp1,tmp2
+       include 'ufiles.h'
+       include 'contrl.h'
+       include 'cpmdat.h'
+!
+!  engineer/programmer: l.j. siefken.
+!
+!        argument definitions:
+!       deltqi = thermal energy added to or subtracted from mixture
+!                during a time step. (j)   (input)
+!        wuo    = mass of uo2 in mixture. (kg)  (input)
+!        wzr    = mass of zr in mixture. (kg)  (input)
+!        wzro   = mass of zro2 in mixture. (kg)  (input)
+!       wag    = mass of ag-in-cd in mixture. (kg)  (input)
+!       wss    = mass of stainless steel in mixture. (kg)  (input)
+!       wsso   = mass of stainless steel oxide in mixture. (kg) (input)
+!       wzuo   = mass of zr-u-o compound in mixture. (kg)  (input)
+!       afru   = atomic fraction of u in zr-u-o compound. (input)
+!       afrz   = atomic fraction of zr in zr-u-o compound. (input)
+!       wbc    = mass of boron carbide in mixture. (kg)  (input)
+!        brnup = burnup of uo2. (mw.s/kg-u)  (input)
+!        frpuo2 = fraction of plutonium in fuel. (weight fraction)
+!        deloxy = oxygen concentration in zr (kg of oxygen/kg of zr)
+!                 (input)
+!        emlt   = thermal energy already input into material undergoing
+!                 phase change. at program initialization, this variable
+!                 must be set equal to zero. (j)  (input and output)
+!        emltmx = total amount of thermal energy required to melt
+!                 material undergoing phase change. (j)  (output)
+!        matmlt = identifier of material undergoing melting. (output)
+!                 1 = ag.in.cd
+!                 2 = stainless steel
+!                 3 = zr
+!                 4 = zr.u.o compound
+!                 5 = boron carbide
+!                 6 = zro2
+!                 7 = uo2
+!    tsolpl = solidus temperature of material in molten pool, input (K).
+!    tliqpl = liquidus temperature of material in molten pool (K),input.
+!        tmp1   = temperature of mixture at start of time step. (k)
+!                 (input)
+!        tmp2    = temperature of mixture at end of time step. (k)
+!                  (output)
+!
+*call hfuson
+!
+!  Local variables.
+       integer itcnt,itmax,nprint
+       integer nfuel
+       real afro,cag,cbc,css,csso,ctranb,ctrane,cuo,czr,czro,czuo,deltq,
+     * facmot,fotmtl,frden,sumwcp,t1,tliq,tmp20,tmpeps,tsol
+       real acp,ccp,ccpr,fcp,psol,scp,zocp,zucp
+       real tsolpl,tliqpl,t1liq
+       real cuo1,czro1
+       real wmix,wpotot
+       real atmfr(maxcon),wmixcm(maxcon)
+       real zucp1
+!
+!  Data statements.
+        data tmpeps/ 0.1/
+       data itmax/ 50/
+      nprint = 0
+       facmot=1.0
+       frden=0.95
+       fotmtl=2.0
+!
+!        set type of control rods.
+!
+         ictype=1
+         if(wbc.gt.1.e-12)then
+         ictype=2
+         end if
+        z = afrz
+        u = afru
+!
+!        calculate heat of fusions
+!
+         call qfuson
+         afro=1.-afrz-afru
+         matmlt=0
+         tmp20=tmp1
+       t1=tmp1
+        deltq=deltqi
+       itcnt=0
+        tmp2=tmp1
+       nfuel=1
+       if((wag+wbc).gt.(wuo+wzr+wzro))nfuel=0
+  100  itcnt=itcnt+1
+!     If mixture of reactor core material, then use MATPRO subroutine
+!     ZUCP1 to compute mixture heat capacity.
+       if(nfuel.eq.0)go to 105
+       wmix=wuo+wzr+wzro+wag+wss
+       wmixcm(1)=wzr
+       wmixcm(2)=0.0
+       wmixcm(3)=wss
+       wmixcm(4)=wag
+       wmixcm(5)=0.0
+       wmixcm(6)=wuo
+       wmixcm(7)=wzro
+       wmixcm(8)=0.0
+       wmixcm(9)=0.0
+       wmixcm(10)=0.0
+       wmixcm(11)=0.0
+       call calaf(wmixcm,wpotot,atmfr)
+       sumwcp=zucp1(atmfr(1),atmfr(2),atmfr(3),atmfr(4),atmfr(5),
+     # atmfr(6),atmfr(7),atmfr(8),atmfr(9),atmfr(10),atmfr(11),tmp20)
+!    multiply mixture heat capacity by mass of mixture
+       sumwcp=sumwcp*wmix
+       go to 780
+105    continue
+        cuo=0.0
+        cuo1=cuo
+        if(wuo.gt.1.e-12)then
+        cuo=fcp(t1,facmot,fotmtl,frden)
+        cuo1=cuo
+          if(t1.gt.tliqpl)then
+          t1liq=t1
+          if(t1liq.lt.3140.0)t1liq=3140.
+          cuo=fcp(t1liq,facmot,fotmtl,frden)
+          cuo1=cuo
+          end if
+          if(t1.gt.tsolpl.and.t1.lt.tliqpl)then
+!   add heat of fusion spread over temperature range to heat capacity.
+          cuo=cuo+fhefus/(tliqpl-tsolpl)
+          end if
+        end if
+        czr=0.0
+         if (wzr .gt. 1.e-12) then
+           if (chngno(70)) then
+             czr = ccpr(t1)
+           else
+             czr = ccp(t1)
+           endif
+         endif
+        czro=0.0
+        if(wzro.gt.1.e-12)then
+        czro=zocp(t1)
+        czro1=czro
+        end if
+        if(t1.gt.tsolpl.and.t1.lt.tliqpl)then
+        czro=czro+zohfus/(tliqpl-tsolpl)
+        end if
+!**      write(output,9003)t1,tsolpl,tliqpl,cuo1,cuo,czro1,czro
+!**9003    format(' in MIXDLT, t1=',e9.3,' tsolpl=',e9.3,' tliqpl=',
+!**     #  e9.3,' cuo1=',e9.3,' cuo=',e9.3,' czro1=',e9.3,
+!**     # ' czro=',e9.3)
+!**        write(output,9007)fhefus,zohfus
+!**9007    format(' in MIXDLT, fhefus=',e10.4,' zohfus=',e10.4)
+        cag=0.0
+        if(ictype.eq.1.and.wag.gt.1.e-12)then
+        cag=acp(ictype,t1)
+        end if
+        css=0.0
+        if(wss.gt.1.e-12)then
+        css=scp(t1)
+        end if
+        csso=0.0
+        if(wsso.gt.1.e-12)then
+        csso=fcp(t1,facmot,fotmtl,frden)
+        end if
+        czuo=0.0
+        if(wzuo.gt.1.e-12)then
+        czuo=zucp(afru,afrz,t1)
+        end if
+        cbc=0.0
+        if(ictype.eq.2.and.wbc.gt.1.e-12)then
+        cbc=acp(ictype,t1)
+        end if
+        if(nprint.eq.1)then
+        write(output,921)cuo,czr,czro,css,t1,itcnt
+  921  format (' In mixdlt, cuo=',e10.4,' czr=',e10.4,' czro=',e10.4,
+     # ' css=',e10.4,' t1=',e10.4,' itcnt=',i5)
+         end if
+!
+!
+!        check to see if any component is undergoing phase change.
+!
+!
+!        neutron absorber ag.in.cd
+!
+!        if ag.in.cd phase change already noted this time step, then
+!
+!        bypass.
+!
+         if(matmlt.eq.1)go to 220
+         if(ictype.ne.1)go to 220
+         if(wag.lt.1.e-12)go to 220
+         call ahyprp(ictype,tsol,tliq)
+         if(tmp1.lt.tsol.and.tmp2.lt.tsol)go to 220
+         if(tmp1.gt.tsol.and.tmp2.gt.tsol)go to 220
+         matmlt=1
+         emltmx=wag*ahefus
+         if((emlt+abs(deltq)).gt.emltmx)then
+         if(deltq.ge.0.0)then
+         deltq=deltq-(emltmx-emlt)
+         emlt=0.0
+         else
+         deltq=deltq+(emltmx-emlt)
+         emlt=0.0
+         end if
+         else
+         emlt=abs(deltq)+emlt
+         tmp2=tsol-1.e-10
+         if(deltq.lt.0.0)tmp2=tsol+1.e-10
+         go to 800
+         end if
+  220    continue
+!
+!        check for melting of stainless steel.
+!
+         if(matmlt.eq.2)go to 230
+         if(wss.lt.1.e-12)go to 230
+         call shyprp(tsol, tliq)
+         if(tmp1.lt.tsol.and.tmp2.lt.tsol)go to 230
+         if(tmp1.gt.tsol.and.tmp2.gt.tsol)go to 230
+         matmlt=2
+         emltmx=shefus*wss
+        if(nprint.eq.1)then
+        write(output,923)matmlt,tmp1,tsol,emlt,deltq,emltmx
+  923  format (' For ss,matmlt=',i3,' tmp1=',e10.4,' tsol=',e10.4,
+     # ' emlt=',e10.4,' deltq=',e10.4,' emltmx=',e10.4)
+       end if
+         if((emlt+abs(deltq)).gt.emltmx)then
+         if(deltq.ge.0.0)then
+         deltq=deltq-(emltmx-emlt)
+         emlt=0.0
+         else
+         deltq=deltq+(emltmx-emlt)
+         emlt=0.0
+         end if
+         else
+         emlt=abs(deltq)+emlt
+         tmp2=tsol-1.e-10
+         if(deltq.lt.0.0)tmp2=tsol+1.e-10
+         go to 800
+         end if
+  230    continue
+!
+!        check for melting of zircaloy.
+!
+         if(matmlt.eq.3)go to 240
+         if(wzr.lt.1.e-12)go to 240
+         if (chngno(70)) then
+           call chyprpr (deloxy,tsol,tliq,ctranb,ctrane)
+         else
+           call chyprp (deloxy,tsol,tliq,ctranb,ctrane)
+         endif
+         if(tmp1.lt.tsol.and.tmp2.lt.tsol)go to 240
+         if(tmp1.gt.tsol.and.tmp2.gt.tsol)go to 240
+         matmlt=3
+         emltmx=chefus*wzr
+         if((emlt+abs(deltq)).gt.emltmx)then
+         if(deltq.ge.0.0)then
+         deltq=deltq-(emltmx-emlt)
+         emlt=0.0
+         else
+         deltq=deltq+(emltmx-emlt)
+         emlt=0.0
+         end if
+         else
+         emlt=abs(deltq)+emlt
+         tmp2=tsol-1.e-10
+         if(deltq.lt.0.0)tmp2=tsol+1.e-10
+         go to 800
+         end if
+  240    continue
+!
+!        check for melting of zr.u.o compound.
+!
+         if(matmlt.eq.4)go to 250
+         if(wzuo.gt.wzr)go to 250
+         tsol=psol(afro,afru,afrz)
+         if(tmp1.lt.tsol.and.tmp2.lt.tsol)go to 250
+         if(tmp1.gt.tsol.and.tmp2.gt.tsol)go to 250
+         matmlt=4
+         emltmx=wzuo*zuhfus
+         if((emlt+abs(deltq)).gt.emltmx)then
+         if(deltq.ge.0.0)then
+         deltq=deltq-(emltmx-emlt)
+         emlt=0.0
+         else
+         deltq=deltq+(emltmx-emlt)
+         emlt=0.0
+         end if
+         else
+         emlt=abs(deltq)+emlt
+         tmp2=tsol-1.e-10
+         if(deltq.lt.0.0)tmp2=tsol+1.e-10
+         go to 800
+         end if
+  250    continue
+!
+!        check for melting of boron carbide.
+!
+        if(ictype.ne.2)go to 260
+         if(matmlt.eq.5)go to 260
+         if(wbc.lt.1.e-12)go to 260
+         call ahyprp(ictype, tsol, tliq)
+         if(tmp1.lt.tsol.and.tmp2.lt.tsol)go to 260
+         if(tmp1.gt.tsol.and.tmp2.gt.tsol)go to 260
+         matmlt=5
+         emltmx=wbc*ahefus
+         if((emlt+abs(deltq)).gt.emltmx)then
+         if(deltq.ge.0.0)then
+         deltq=deltq-(emltmx-emlt)
+         emlt=0.0
+         else
+         deltq=deltq+(emltmx-emlt)
+         emlt=0.0
+         end if
+         else
+         emlt=abs(deltq)+emlt
+         tmp2=tsol-1.e-10
+         if(deltq.lt.0.0)tmp2=tsol+1.e-10
+         go to 800
+         end if
+  260    continue
+!       Note.  Heat of fusions of ZrO2 and UO2 are in heat capacity
+!       terms for these compounds. Since they melt due to eutectic
+!       reaction, they are in form of slush for range of temperature.
+        if(nprint.eq.1)then
+        write(output,927)matmlt,emlt,emltmx,deltq,itcnt
+  927  format (' After melt check,matmlt=',i3,' emlt=',e10.4,
+     # ' emltmx=',e10.4,' deltq=',e10.4,' itcnt=',i4)
+        end if
+        sumwcp=wuo*cuo+wzr*czr+wzro*czro+wag*cag+wss*css+wsso*csso
+     # +wzuo*czuo+wbc*cbc
+        if(nprint.eq.1)then
+        write(output,925)sumwcp
+  925  format (' sumwcp=',e10.4)
+        end if
+780    continue
+       tmp2=(deltq+tmp1*sumwcp)/sumwcp
+       if(nprint.eq.1)then
+       write(output,913)itcnt,tmp1,tmp2,tmp20
+  913  format (' In mixdlt, itcnt=',i3,' tmp1=',e10.4,' tmp2=',e10.4,
+     # ' tmp20=',e10.4)
+       end if
+       if(abs(tmp2-tmp20).lt.tmpeps)go to 800
+        if(itcnt.ge.itmax)then
+!**     write(output,915)
+!*915  format (' Nonconvergence in subroutine mixdlt ')
+!*      write(output,917)tmp1,tmp2,tmp20,itcnt
+!*917  format (' tmp1=',e10.4,' tmp2=',e10.4,' tmp20=',e10.4,' itcnt=',
+!*   # i3)
+!*      write(output,919)
+!*919  format (' Execution continuing with last iteration value ')
+        go to 800
+        else
+        t1=0.5*(tmp1+tmp2)
+       tmp20=tmp2
+        go to 100
+        end if
+  800   continue
+        return
+        end
+*endif

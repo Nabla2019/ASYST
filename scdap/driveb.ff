@@ -1,0 +1,287 @@
+*mlist
+*if def,selap
+       subroutine driveb (ccwkf,ccwnf,etru,cfnck,cfncn,cinwid,cladt,
+     & dxcfri,dzcond,edot,ggivy,hfix,icall0,ii,naz,
+     & nrcond,oxdhc,pitch,rci,rco,rcoi,
+     &  rmin  , tcolc , tcond , timec , vplen , vfvod , xcond , zcond ,
+     &  carea , fareai, rareai, cflux , deltcc, deltc0, pcool , pgas  ,
+     &  rl    , icladf, caad  , cacd  , card  , cfap  , cfcp  , cfrp  ,
+     & rpel,qclad,qout,ceps,nbncl0,rfar,blkey,jiter,iareax,ncrum)
+c
+c  Subroutine is the drive model for far1-balon2 models.
+c
+c  Cognizant engineer: ewc (vxs ghb).
+c
+c calling subroutines:  clddfm
+c subroutines called:  cmlimt, far1
+c
+c *** modified for strain rupture criterion
+c     by T. Haste, G. Hodson, Aug. 1989.
+c *** creep variables included in common block farays
+c
+c input variables                       description
+c
+       use scdmod
+       implicit none
+*call scddat
+c
+c  Local variables.
+       integer i,i1,iareax,icall0,icladf,ii,ijk,indx,
+     & jiter,naz,nbncl0,ncrum,nlower,nrcond,nupper
+       real blkey,caad,cacd,card,carea,caxrad,caxstr,ccwkf,ccwnf,cdpres,
+     * ceps,cfap,cfcp,cflux,cfnck,cfncn,cfrp,cinwid,cladt,ctstrt,d0,
+     * d2,d3,d4,d5,d6,d7,d8,d9,d10,deldum,delf,deltc0,deltcc,
+     * deltmp,dt1,dt2,dum,dxcfri,dzcond,edot,etru,fareai,fared,
+     * g,g1,g3,g4,ggivy,gmix,hfix,oxdhc,pcool,pgas,pitch,
+     * qclad,qout,rarea,rareai,rci,rco,rcoi,rfar,rl,rmin,rpel,stan,
+     * strnue,tavri,tavrii,tcolc,tcond,timec,vfvod,vplen,xcond,yx,
+     * zcond
+       real avfunc,polate
+       external avfunc,polate
+       external cmlimt,far1,tdist
+      dimension
+     +           ccwkf ( ndax ), ccwnf ( ndax ), etru  ( ndax ),
+     +           cfnck ( ndax ), cfncn ( ndax ), cladt ( ndax ),
+     +           dxcfri( ndax ), dzcond( ndax ), yx    ( 40 )  ,
+     +          edot( ndax ), ggivy( 17 ), xcond (ndrd,ndax),
+     +           gmix(10), rpel(ndax), hfix(ndax),
+     +           nrcond( ndax ), oxdhc ( ndax ), zcond ( ndax ),
+     +           rci   ( ndax ), rco   ( ndax ), tcolc ( ndax ),
+     +           tcond ( ndrd,ndax ),            vfvod ( ndax ),
+     +           caad  ( ndax ), cacd  ( ndax ), card  ( ndax ),
+     +           cfap  ( ndax ), cfcp  ( ndax ), cfrp  ( ndax )
+     +             ,rfar(ndax),blkey(ndax),ncrum(ndax)
+c
+      dimension  qclad(ndax), qout(ndax), ceps(ndax,3)
+*call farays
+*call cons
+*call blonab
+*call ufiles
+c
+       data indx/1/
+       data caxrad,caxstr,deltmp/100.0,1.0e+06,50.0/
+c
+          nbncal = nbncl0
+          cdpres = pgas - pcool
+          if (cdpres .le. 0.0) return
+c
+c         calculate instability strain at each component node and
+c         check if it is exceeded ,also calculate failure stress at
+c         each component node and check if the cladding has failed.
+          delf   = 0.0
+          dum = 0.0
+c
+          do  100  i = 1,naz
+c              calculate maximum hoop strain
+               if  ( ceps( i,1 ) .gt. dum )   then
+                   dum = ceps( i,1 )
+                   i1 = i
+               endif
+c             calculate instability strain
+              call  cmlimt
+     +                  ( cladt(i), dxcfri( i ), cfnck( i ), cfncn( i ),
+     +                   ccwkf( i ), ccwnf( i ), cinwid   , rmin  ,
+     +                   cdpres , caxrad, caxstr, edot( i ), deltmp,
+     +                   d0, d2, strnue, d3 , d4, d5, d6, d7, d8, d9,
+     +                   d10, ctstrt )
+c             calculate true tangential component of stress
+               stan = (rci(i)*pgas - rco(i)*pcool) / (rco(i) - rci(i))
+c             check for cladding failure
+c *** strain rupture criterion T. Haste, G. Hodson, 8/89
+               if(dum.gt.erupt)then
+                   write(output,104)
+104   format(/,' driveb--------------core degradation event'
+     &,'------------------------')
+                   write(output,*)
+     &'driveb overstrain failure in driveb, event time= ',timec,
+     &    ' component= ',scd1(icomp)%cmpno,' node= ',i
+               endif
+c              if (stan .gt. ctstrt)  then
+               if (stan .gt. ctstrt.or. dum.gt.erupt )  then
+                  icladf = 1
+c  Pick failure node based on largest strain.
+                  deldum = dum
+                  if (deldum .gt. delf)  then
+                      delf = deldum
+                      ii = i
+                  end if
+               end if
+  100     continue
+           if(icladf .eq. 0) go to 101
+            write(output,104)
+            write(output,1060) ii,cladt(ii),scd1(icomp)%cmpno,timec
+           go to 370
+  101 continue
+           if(icall0 .eq. 1) go to 110
+          if  ( ii .eq. 0 )  then
+               if  ( dum .lt. 0.05 )  return
+              dt1 = 0.0
+              dt2 = 0.0
+         if(ebal2.gt.0.0001)go to 105
+c     calculate temperature gradient along axial direciton at node i1
+              if  ( i1 .gt. 1 )  then
+                  dt1 = ( cladt(i1) - cladt(i1-1)) /
+     +                       ( 50.0 * ( dzcond( i1 ) + dzcond( i1-1 )))
+              endif
+              if  ( i1 .lt. naz )  then
+                  dt2 = ( cladt(i1) - cladt( i1+1 )) /
+     +                       ( 50.0 * ( dzcond( i1 ) + dzcond( i1+1 )))
+              endif
+              if (( cladt(i1) .le. 1250. ) .and.
+     +             (( dt1 .gt. 1.0 )  .or. ( dt2 .gt. 1.0 )))  ii = i1
+              if (( cladt(i1) .gt. 1250. ) .and.
+     +            (( dt1 .gt. 10.0 )  .or.  ( dt2 .gt. 10.0 ))) ii = i1
+105    continue
+c
+c  Set call to balon2 regardless of axial temp gradient.
+c  T. Haste, Aug. 1989.
+c
+              if(dum.gt.ebal2.and.ebal2.gt.0.0001) ii=i1
+c
+              if ( ii .gt. 0 )   icall0 = 1
+          endif
+c
+c             when icall0 first set to 1, do not call **far1-balon2**
+c             for this time step and return to **clddfm**
+          return
+  110      if ((jiter .ne. 0) .or. (iareax .ne. 0))go to 370
+       if(pcool .gt. pgas)go to 370
+c     ballooning node is ii
+c     calculate the constants con1 and con2 needed in *balon2* to
+c     determine the change in the void volume due to balooning
+      con1   = 0.0
+      do  120  i = 1 , naz
+          tavri = avfunc( 2,xcond( 1,i ), tcond( 1,i ), nrcond( i ))
+          con1  = con1  +  vfvod(i) / tavri
+          if  ( i .eq. ii )   tavrii = tavri
+c         save average temperature at the balooned node ii
+  120 continue
+c     con1 = plenum vol / t plenum + sum (void vol(i)/temp(i))
+c              where t plenum is the temp at nrcond,naz + 6k
+c     con2 = delta z(ii) / temp( ii )
+c              where ii is the balooning node
+      con1   = con1 + vplen / ( tcond( nrcond( naz ) , naz ) + 6.0 )
+      con2   = dzcond( ii ) / tavrii
+c     set cladding temperature and elevation of ballooning node
+      tc0bal = cladt( ii )
+      ztmax  = zcond( ii )
+c     call subroutine **tdist** which will determine adjacent
+c             nodal temperatures and corresponding elevations
+      call tdist ( cladt , ii    , naz   , tc0bal, zcond ,
+     +              ztmax , tm1bal, tp1bal, zm1bal, zp1bal )
+c     initialize far1 input variables
+      emwbal = oxdhc(ii)
+      tgbal  = tcond( nrcond( ii ) , ii )
+      htcbal = hfix( ii )
+      tbkbal = tcolc( ii )
+      timbal = timec
+      dtbal  = deltcc
+      dtobal = deltc0
+      pcbal  = pcool
+      pgbal  = pgas
+      nncrum = ncrum(ii)
+c
+      if  ( nbncal .eq. 0 )  then
+          pdrato = pitch / (2.* rcoi)
+          rnbnt  = 1.0
+          r0bal  = rcoi
+          qbal    = 0.5 * ( qclad(ii) + qout(ii) )
+          zndbal = rl
+          rfbal  = rpel(ii)
+          rmpbal = ( rco( ii ) + rci( ii ) ) / 2.0
+          fabal  = 0.0
+          h0bal  = cinwid
+          tf0bal = tcond( nrcond( ii ) , ii )
+          zbaln  = 0.08
+          aad1   = caad(ii)
+          acd1   = cacd(ii)
+          ard1   = card(ii)
+          fap1   = cfap(ii)
+          fcp1   = cfcp(ii)
+          frp1   = cfrp(ii)
+          cwkf1  = ccwkf( ii )
+          cwnf1  = ccwnf( ii )
+          fnck1  = cfnck( ii )
+          fncn1  = cfncn( ii )
+          doxcfr = dxcfri( ii )
+          nradsh = 0
+          tshrda(1) = tc0bal
+      endif
+      do  150  i = 1,10
+          gmix( i ) = 0.0
+  150 continue
+c     helium -- gmix( 1 )
+      g1 = ggivy(17) / 4.0026
+c     krypton -- gmix( 3 )
+      g3 = ggivy( 2 ) / 88.
+c     xenon   -- gmix( 4 )
+      g4 = ggivy( 1 ) / 136.
+      g = g1 + g3 + g4
+      gmix( 1 ) = g1 / g
+      gmix( 3 ) = g3 / g
+      gmix( 4 ) = g4 / g
+      call far1
+     & ( gmix, ftemp(1,icomp),strnl(1,icomp),strnr(1,icomp),
+     & strna(1,icomp),strnc(1,icomp),rad(1,icomp),twall(1,icomp),
+     & ctemp(1,icomp),delz(1,icomp),fcp(1,icomp),frp(1,icomp),
+     & fap(1,icomp),acd(1,icomp),aad(1,icomp),ard(1,icomp),fnck,
+     +   fncn, cwkf, cwnf, dz0)
+      pgas = pgbal
+c     determine flow area reduction at each component node
+c     prepare data for interpolation
+      nbncl0 = 1
+      do 789 ijk=1,81
+      if(strnc(ijk,icomp).gt.erupt) icladf=-1
+  789 continue
+      if(icladf.eq.-1) then
+          write(output,104)
+          write(output,*)
+     1' overstrain failure from balon2, event time= ',timec
+      endif
+      if(icladf.lt.0) icladf=-icladf
+      if (ifbaln .gt. 0)  icladf = 1
+      do  300  i = 1,nodprm
+          yx( 2*i-1 ) = farbal( i )
+          yx( 2*i )   = zfarbl( i )
+  300 continue
+c     find lowest and highest node with nonzero flow area reduction
+      nlower = 1
+      nupper = 1
+      do  320  i = 1,naz
+      blkey(i) = 0.0
+          if ( zcond( i ) .le. zfarbl( 1 ))   nlower = i
+          if ( nupper .gt. 1 )   go  to  330
+          if ( zcond( i ) .ge. zfarbl( nodprm ))   nupper = i
+  320 continue
+  330 continue
+c     calculate change in inner and outer cladding radii
+      do  360  i = nlower,nupper
+          fared = polate(yx,zcond(i),nodprm,indx)
+          rarea = rareai + fareai * fared
+      rfar( i ) = sqrt(rarea/pi)
+      blkey(i) = 1.0
+  360 continue
+c     modify cladding radius at ballooning node such that volume
+c     increase due to ballooning is conserved.
+c     write (output,1100)(i,rfar(i),i=nlower,nupper)
+ 1100 format(2x,6e15.7)
+      rci(ii) = sqrt(rci(ii)**2 + dvv/(pi*dzcond(ii)))
+      rco(ii) = sqrt(carea/pi  +  rci(ii)**2)
+ 370   continue
+      return
+c
+ 1000 format  ( // ( 2x,a,i3 ) / ( 2x,a,e12.5 ))
+ 1010 format('0 in driveb',5x,'ii =',i3,7x,'cdpres =',e11.4)
+ 1020 format(/5x,'axial node number =',i3)
+ 1030 format(5x,'true tangential stress =',e13.6,5x,
+     +  'true tangential failure stress =',e13.6)
+ 1040 format(5x,'average true tangential strain =',e13.6 ,5x,
+     +   'true tangential instability strain =',e13.6)
+ 1050 format ( 5x,'ballooning node is' , i3 )
+ 1060 format ('0',21x,60('*')/21x,
+     +'**            In    subroutine    driveb',18x,'**'/21x,
+     +'** cladding failure at node ',i4,' clad temp = ',e12.5,' **'/
+     + 21x,'**',9x,'component number ',i4,7x,'event time ='
+     + ,g18.10,' **',/,21x,60('*'))
+      end
+*endif

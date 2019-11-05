@@ -1,0 +1,176 @@
+*mlist
+      subroutine katokj(vgj,c0,alpg,i,kk,velgjt,velfjt,diamjt,iflag)
+c
+c  Calculates the drift velocity and distribution coefficient
+c  using the churn turbulent bubbly flow correlation at low vapour
+c  fluxes and the kataoka-ishii correlation at medium to high
+c  vapour fluxes.
+c
+c  Cognizant engineer: rar,wlw (jmp).
+c
+      implicit none
+c
+c************************** prologue ***********************************
+c
+c    title   katokj - calcs vgj and c0 using kataoka-ishii correlation
+c                     and churn-turbulent bubbly flow correlation
+c
+c    author  j. m. putney (cerl)
+c    ------
+c
+c    purpose
+c    -------
+c
+c     this subroutine calculates the drift velocity and distribution
+c     coefficient using the churn turbulent bubbly flow correlation at
+c     low vapour fluxes and the kataoka-ishii correlation
+c     at medium to high vapour fluxes. the subroutine
+c     is called by fidisj for low flows in intermediate diameter
+c     vertical pipes (bubbly and and slug flow regimes). the drift
+c     velocity is calculated relative to an upwards directed channel.
+c
+c    documentation
+c    -------------
+c
+c     the definitions of the kataoka-ishii and churn turbulent
+c     bubbly flow correlations are taken from
+c
+c       kataoka, i. and ishii, m., 1987, drift flux model for large
+c       diameter pipe and new correlation for pool void fraction.
+c       int. j. heat mass transfer, vol 30, no 9, pp 1927-1939.
+c
+c    argument list
+c    -------------
+c     vgj    = drift velocity
+c     c0     = distribution coefficient
+c     alpg   = vapour volume fraction
+c     i      = junction index in junction block arrays
+c     kk     = donor volume index in volume block arrays
+c     velgjt = physical junction vapor velocity
+c     velfjt = physical junction liquid velocity
+c     diamjt = physical junction diameter
+c     iflag  = correlation indicator
+c
+c    direct outputs
+c    --------------
+c     vgj
+c     c0
+c
+c************************** common blocks etc **************************
+c
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'scrtch.h'
+       include 'voldat.h'
+c
+c************************** declarations *******************************
+       integer i,kk,iflag
+       real velg0
+       real jgp, jgp1, jgp2
+       real rhorat,rfg,c0,xx,yy,dstarr,visno,vgjp,vgjpol,vgjbub,
+     & alpg,vgj,velgjt,velfjt,diamjt,c0inf,gj,rey,vtb,alpt
+c
+c************************** execution **********************************
+c=======================================================================
+c distribution coefficient
+c=======================================================================
+c
+       rhorat = rhogj(i)/rhofj(i)
+       rfg = max((rhofj(i) - rhogj(i)), 1.0e-05)
+       if ( .not. chngno(78) ) then
+c  Standard code
+         gj = alpg*rhogj(i)*velgjt + (1.0 - alpg)*rhofj(i)*velfjt
+         c0inf = 1.0 + 0.2*sqrt(rhofj(i)*sqrt(gravcn*diamjt)/
+     &     (abs(gj) + 0.001))
+         c0 = c0inf - (c0inf - 1.0)*sqrt(rhorat)
+c
+c   modify c0 for subcooled boiling
+c
+         if (gammsw(vctrls(kk)) .gt. 0.0) then
+           c0 = c0*(1.0 - exp (-18.0*alpg))
+         endif
+       else
+c  else modify c0 for Reynold, void, and low flow dependence.
+         vtb = 0.35*sqrt(gravcn*diamj(i)*rfg/rhofj(i))
+         vtb = (alpg*rhogj(i)*abs(velgjt)
+     &     + (1.0 - alpg)*rhofj(i)*abs(velfjt))/(rho(kk)*vtb)
+         gj = (1.0 - alpg)*rhofj(i)*abs(velfjt)
+         rey = max(gj*diamj(i)/viscf(kk),1.0)
+c  Use Ishii's original approximation for C-infinity.
+         c0inf = min(1.2,1.393 - 0.0155*log(rey))
+c  Low flow reduction based on mean velocity relative to Taylor bubble
+c  velocity.
+         if ( vtb .lt. 1.0 ) then
+             c0inf = 1.0 + vtb*(c0inf - 1.0)
+         endif
+c  Reduce c0inf to 1.0 at the single phase liquid limit (effect of
+c  exponential function s minimal above void limit of 0.016).
+         alpt = max(voidj(i),1.0e-6)
+         if ( alpt .lt. 0.016 ) then
+           c0inf = c0inf - (c0inf - 1.0)*exp(-1000.0*alpt)
+         endif
+c  Set c0 with final value of c0inf.
+         c0 = c0inf - (c0inf - 1.0)*sqrt(rhorat)
+c
+c   modify c0 for subcooled boiling
+c
+         if (gammsw(vctrls(kk))*voidg(kk) .gt. 0.0) then
+           c0 = c0*(1.0 - exp (-18.0*alpg))
+         endif
+       endif
+c=======================================================================
+c drift velocity
+c=======================================================================
+c
+c kataoka-ishii
+c (low viscous case - appropriate for air- and steam-water systems)
+c
+      xx =  sqrt(sigma(kk)/(gravcn*rfg))
+      yy = ( sigma(kk)*gravcn*rfg/(rhofj(i)*rhofj(i)) )**0.25e0
+      dstarr = diamjt/xx
+      visno = viscf(kk)/ sqrt(rhofj(i)*sigma(kk)*xx)
+      if(dstarr.le.30.0e0) then
+        vgjp = 0.0019e0 * dstarr**0.809e0 * (rhorat)**(-0.157e0)
+     &       * visno**(-0.562e0)
+      else
+        vgjp = 0.030e0 * (rhorat)**(-0.157e0)
+     &       * visno**(-0.562e0)
+      endif
+      vgjpol = vgjp*yy
+c
+c churn turbulent bubbly
+c
+c     if (diamj(i) .gt. 0.2) then
+c       vgj = 2.5*yy
+c       iflag = 1
+c     else
+        vgjbub = 1.41*yy
+c
+c combined value
+c
+        jgp1 = 0.5
+        jgp2 = 1.768
+        velg0 = abs(velgjt)
+        jgp = alpg*velg0/yy
+        if(jgp.le.jgp1) then
+          vgj = vgjbub
+          iflag = 1
+        elseif(jgp.ge.jgp2) then
+          vgj = vgjpol
+          iflag = 3
+        else
+          vgj = vgjbub + (jgp-jgp1)*(vgjpol-vgjbub)/(jgp2-jgp1)
+          iflag = 2
+        endif
+c     endif
+c=======================================================================
+c impose physical limits at high void fraction
+c=======================================================================
+       if (alpg .gt. 0.8) then
+         c0 = 5.0*((alpg - 0.8) + (1.0 - alpg)*c0)
+         vgj = 5.0*(1.0 - alpg)*vgj
+       endif
+       return
+       end

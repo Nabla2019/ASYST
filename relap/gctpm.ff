@@ -1,0 +1,414 @@
+*mlist
+      subroutine gctpm(gc,dgcdp,hfact,error)
+c
+c
+c   Subroutine GCTPM computes the critical mass flux for a
+c   two-phase mixture using the Henry-Fauske model ("The Two-Phase
+c   Critical Flow of One-Component Mixtures in Nozzles, Orifices,
+c   and Short Tubes", ASME J. of H.T., May 1971).  Several
+c   modifications have been made to the original formulation,
+c   specifically:
+c
+c     - the difference between the vapor and liquid specific
+c       volumes that is used in the flashing part of the choking
+c       criterion is evaluated using the steam tables, whereas
+c       in the original, the vapor specific volume is calculated
+c       from an isentropic expansion.  This change makes the
+c       subcooled and two-phase models continuous across the
+c       saturation line.
+c
+c     - the provision has been made for the presence of a non-
+c       condensible gas.
+c
+c     - the non-equilibrium factor, HFACT, can be set by input
+c       to be different from its default value of 0.14.  This
+c       allows charaterization of nozzles for which data is
+c       available.
+c
+c  Cognizant engineer:jmk.
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c  arguments:
+c
+c             GC - critical mass flux based on throat area (kg/m2-s)
+c          DGCDP - derivative of GC wrt upstream pressure.
+c          HFACT - empirical constant in HF model
+c          ERROR - logical variable, true if converged.
+c
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c  input parameters:
+c
+c          CPGAS - specific heat of NC gas (J/kg/K)
+c          CPPF0 - specific heat of liquid (J/kg/K)
+c          CPPG0 - specific heat of vapor (J/kg/K)
+c          CVAO  - constant in NC gas internal energy eq.
+c          DCVA  - constant in NC gas internal energy eq.
+c          GAMMA - isentropic expansion coefficient
+c          PLOSS - pressure drop: cell center to edge
+c          PVZERO - stagnation vapor partial pressure (Pa)
+c          PZERO - stagnation pressure (Pa)
+c          RGAS  - density of NC gas (Kg/m3)
+c          RNC   - NC gas constant
+c          SGAS  - NC gas entropy (J/kg/K)
+c          SLIQ  - liquid entropy (J/kg/K)
+c          SVAP  - vapor entropy (J/kg/K)
+c          VSUBF0 - liquid specific volume (m3/kg)
+c          VSUBG0 - vapor specific volume (m3/kg)
+c          XNC   - mass fraction of NC gas in vapor/gas mixture
+c          XZERO - upstream static quality
+c
+c       NOTE: Upon entry, the above properties are defined to be at
+c             saturation temperature corresponding to the vapor
+c             partial pressure.  During the iteration for the
+c             throat pressure, some of these variables are
+c             recycled.
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+      implicit none
+c
+c   Common Blocks for RELAP5 Property Tables.
+c
+       include 'fast.h'
+       include 'stcom.h'
+       include 'stcblk.h'
+       include 'ufiles.h'
+c
+c     Local Common for Input Parameters.
+c
+      common /upstrm/ cpgas, cppf0, cppg0, cvao, dcva, gamma,
+     &                ploss, pvzero, pzero, rgas,
+     &                rnc, sgas, sliq, svap, tzero, vsubf0,
+     &                vsubg0, xnc, xzero
+c
+c   Define Local Variables.
+c
+      real coef, conv, cpgas, cpmix, cppf0, cppg0, cvao, dcva, delp,
+     &     delt, dgcdp, dgmdp, dgtdp, dndp, dpmin, dsgdp, dsldp,
+     &     dsvdp, dtdps, dxdp, dxdpl, dxdpv, dxdpv2, dxdp2,
+     &     dxeqdp, gami, gamma, gamrat, gber, gc, gt, hfact,
+     &     one, pbar, pgas, ploss, ptmax, ptmin, pnew, poly, polyi,
+     &     pterm, pthrot, pvap, pvmin, pvzero, pzero,
+     &     ratio, rgas, rnc, rthrot, rthrtp, rvap, rzero,
+     &     rzerop, sfgm, sfgm0, sgas, sliq, smix,
+     &     svap, szero, tref, tzero, vfg, vmixt, vmix0,
+     &     vsubf0, vsubg0, vthrot, vthrtp, xeq, xgas,
+     &     xmfvap, xnc, xvap, xvliq0, xzero, zero
+      real argmnt
+c
+      integer iter, n
+c
+      parameter (zero=0.0)
+      parameter (one=1.0)
+      parameter (conv=0.001)
+      parameter (tref=273.15)
+      parameter (pbar=1.0e5)
+c
+c     Hardwire for minimum vapor pressure to not exceed table.
+c
+      parameter (pvmin=612.)
+c
+c   Local Variables for RELAP5 Properties.
+c
+      real prop(36)
+      real betaa, betf, betg, cpp, cppf, cppg, hbarr, hsubf, hsubg,
+     &     kpa, kpaf, kpag, press, psatt, quall, ttt, ubarr,
+     &     usubff, usubgg, vbarr, vsubff, vsubgg
+      logical error
+c
+       equivalence          ( prop( 1), ttt   ), ( prop( 2), press ),
+     & ( prop( 3), vbarr ), ( prop( 4), ubarr ), ( prop( 5), hbarr ),
+     & ( prop( 6), betaa ), ( prop( 7), kpa   ), ( prop( 8), cpp   ),
+     & ( prop( 9), quall ), ( prop(10), psatt ), ( prop(11), vsubff),
+     & ( prop(12), vsubgg), ( prop(13), usubff), ( prop(14), usubgg),
+     & ( prop(15), hsubf ), ( prop(16), hsubg ), ( prop(17), betf  ),
+     & ( prop(18), betg  ), ( prop(19), kpaf  ), ( prop(20), kpag  ),
+     & ( prop(21), cppf  ), ( prop(22), cppg  )
+c
+c - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+c
+      error = .false.
+c
+c     ------------------------------------------------
+c     Define Needed Properties at Upstream Conditions.
+c     ------------------------------------------------
+c
+c     - Vapor Mole Fraction & Partial Pressures.
+c
+      xmfvap = pvzero / pzero
+      xmfvap = max(zero,min(one,xmfvap))
+      pvzero = max(pvmin,pvzero)
+c
+c     - Gas / Vapor Mixture Properties...
+c
+      vmix0 = one / ((one/vsubg0) + rgas)
+      cpmix = xnc*cpgas + (one - xnc)*cppg0
+      smix = xnc*sgas + (one - xnc)*svap
+      sfgm0 = svap - sliq
+c
+c     - Polytropic Expansion Coefficient...
+c
+      gami = one / gamma
+      poly = ((one - xzero)*cppf0/cpmix + one)
+     &     / ((one - xzero)*cppf0/cpmix + gami)
+c
+      polyi = one / poly
+      gamrat = gamma / (gamma - one)
+c
+c     - Two-Phase Mixture Properties...
+c
+      rzero = one / (xzero*vmix0 + (one - xzero)*vsubf0)
+      szero = xzero*smix + (one - xzero)*sliq
+c
+c     Set terms that won't change.
+c
+      xvliq0 = (one - xzero)*vsubf0
+      rzerop = one / (xvliq0 + gamrat*xzero*vmix0)
+      pterm = pzero/rzerop + ploss/rzero
+      coef = xzero * vmix0 * pzero**gami / gamma
+c
+      ptmax = max(pvmin,0.99*(pzero + min(zero,ploss)))
+c
+c     ------------------------------------------------
+c     Set Minimum Value for Throat Pressure Iteration.
+c     ------------------------------------------------
+c
+      ptmin = max(pvmin,0.7*ptmax)
+      vmixt = vmix0*(pzero/ptmin)**gami
+      vthrot =  xvliq0 + xzero*vmixt
+      vthrtp =  xvliq0 + gamrat*xzero*vmixt
+c
+      ptmin = pterm/(vthrtp + gamma*vthrot**2/(2.0*xzero*vmixt))
+c
+      do 100 n = 1,20
+c
+c     - mass flux from Bernoulli eq.
+c
+         vmixt = vmix0*(pzero/ptmin)**gami
+         rthrot = one / (xvliq0 + xzero*vmixt)
+         rthrtp = one / (xvliq0 + gamrat*xzero*vmixt)
+c
+         argmnt = pterm - ptmin/rthrtp
+         if (argmnt .le. zero) then
+            ptmax = ptmin
+            pnew = 0.9*ptmin
+            go to 90
+         endif
+c
+         gber = rthrot*sqrt(2.0*(pterm - ptmin/rthrtp))
+c
+c     - pressure at dG/dP = 0.
+c
+         pnew = (coef*gber**2)**(gamma/(gamma+one))
+c
+c     - check convergence.
+c
+ 90      if (abs(pnew - ptmin)/(pzero - pnew) .gt. conv) then
+            ptmin = min(pnew,ptmax)
+         else
+            ptmin = pnew
+            go to 110
+         endif
+c
+ 100  continue
+c
+c
+c     -----------------------------------
+c     Iteration Loop for Throat Pressure.
+c     -----------------------------------
+c
+ 110  continue
+      pthrot = max(ptmin,0.7*ptmax)
+      iter = 1
+c
+c     ---------------------------------------
+c     Step 1:  Solve Bernoulli for Mass Flux.
+c     ---------------------------------------
+c
+ 10   continue
+c
+         vmixt = vmix0 * (pzero/pthrot)**gami
+         rthrot = one / (xvliq0 + xzero*vmixt)
+         rthrtp = one / (xvliq0 + gamrat*xzero*vmixt)
+c
+         argmnt = pterm - pthrot/rthrtp
+c      - check argument & decrease PTMAX if necessary.
+         if (argmnt .le. zero) then
+            ptmax = pthrot
+            pthrot = 0.5*(ptmax + ptmin)
+            if (iter .lt. 20) then
+               iter = iter + 1
+               go to 10
+            else
+               error = .true.
+               return
+            endif
+         endif
+c
+         gt = rthrot * sqrt(2.0*argmnt)
+c
+c     Set Derivative of Mass Flux wrt Throat Pressure.
+c
+         dgtdp = (xzero*vmixt*gt**2/(gamma*pthrot) - one)
+     &           * (rthrot/gt)
+c
+c     Limit magnitude of derivative (don't let it go to zero).
+c
+         dgmdp = 0.15 * gt / max(1.0e+3,(pthrot - pzero))
+         dgtdp = min(dgtdp,dgmdp)
+c
+c
+c     --------------------------------------------
+c     Step 2:  Compute Throat Equilibrium Quality.
+c     --------------------------------------------
+c
+c     - Throat Saturation Properties:
+c        - load pressure and zero quality
+c
+         pvap = max(pvmin,xmfvap*pthrot)
+	 pgas = max(pvmin,pthrot - pvap)
+         prop(2) = pvap
+         prop(9) = zero
+c		
+         call sth2x2(fa(ndxstd),prop,error)
+c
+         rvap = one / vsubgg
+	 sliq = prop(25)
+	 svap = prop(26)
+	 dtdps = (vsubgg - vsubff) / (svap - sliq)
+c
+	 dsldp = -vsubff*betf + cppf*(dtdps/ttt)
+c
+c     - Non-Condensible Gas Properties...
+c
+         rgas = pgas / (rnc * ttt)
+	 delt = max(zero,ttt - 250.0)
+	 cpgas = cvao + dcva*delt + rnc
+	 sgas = cpgas*log(ttt/tref) - rgas*log(pgas/pbar)
+c
+c     - Gas / Vapor Mixture Properties...
+c
+         cpmix = xnc*cpgas + (one - xnc)*cppg
+c	
+	 sfgm = svap - sliq
+	 vfg = vsubgg - vsubff
+c
+c     - Mass Fraction of NC Gas (constant):
+c
+         xgas = xnc*xzero
+c
+c     - Mass Fraction of Vapor:
+c
+         xvap = (szero - xgas*sgas - (one - xgas)*sliq) / sfgm
+         xvap = max(zero,xvap)
+c
+         xeq = xvap + xgas
+         xeq = max(xzero,min(one,xeq))
+         xvap = xeq - xgas
+c
+c     Apply Non-Equilibrium Factor & set Derivative wrt Pressure.
+c
+         if (xeq .gt. hfact) then
+c
+c     - Use "Equilibrium" Option:
+c
+            dndp = zero
+            ratio = one
+c
+         elseif (hfact .lt. 1000.) then
+c
+c     - Apply Non-Equilibrium Parameter:
+c
+            dsgdp = (dtdps/ttt)*(cpgas - rgas*log(pgas/pbar))
+     &            - (rgas/pthrot)
+            dsvdp = -vsubgg*betg + cppg*(dtdps/ttt)
+c
+            dxeqdp = -xmfvap*((one - xeq)*dsldp + xvap*dsvdp
+     &             + xgas*dsgdp) / sfgm
+            dxeqdp = min(zero,dxeqdp)
+c
+            dndp = dxeqdp / hfact
+c
+            ratio = min(one,xeq/hfact)
+c
+         else
+c
+c     - Use "Frozen" Option:
+c
+            dndp = zero
+            ratio = zero
+c
+         endif
+c
+c
+c     ----------------------------
+c     Step 3:  Critical Mass Flux.
+c     ----------------------------
+c
+c     Pressure Part of Quality Derivative.
+c
+         dxdpl  = - xmfvap * dsldp / sfgm
+         dxdpv  = - cpmix * (polyi - gami) / (pthrot*sfgm0)
+c
+c     Derivative of Quality wrt Pressure.
+c
+         dxdp = (one - xzero)*ratio*dxdpl + xzero*dxdpv
+         dxdp = min(zero,dxdp)
+c
+c     Critical Mass Flux.
+c
+         gc = sqrt(one/(xzero*vmixt/(poly*pthrot) - vfg*dxdp))
+c
+c     Approximate Derivative wrt Pressure.
+c
+         dxdpv2 = - dxdpv / pthrot
+         dxdp2 = (one - xzero)*(dxdpl*dndp) + xzero*dxdpv2
+c
+         dgcdp = 0.5 * gc**3 * ((vmixt/pthrot)*(xzero*(one + gami)
+     &           /(poly*pthrot) - gami*dxdp) + vfg*dxdp2)
+c
+c
+c     ---------------------------------------------------
+c     Step 4:  Check Convergence & Update Throat Pressure.
+c     ----------------------------------------------------
+c
+c
+c     Check Convergence.
+c
+      if (abs(gt - gc)/gc .gt. 0.001) then
+c
+         delp = (gt - gc) / (dgcdp - dgtdp)
+c
+c     Set iteration limits.
+c
+         if (delp .gt. zero) then
+            ptmin = pthrot
+            pthrot = pthrot + min(delp,0.9*(ptmax - ptmin))
+         else
+            ptmax = pthrot
+            pthrot = pthrot + max(delp,0.9*(ptmin - ptmax))
+         endif
+c
+c      - check pressure range.
+c
+         dpmin = 0.5*conv*gc / max(1.0e-4,dgcdp)
+         if ((ptmax-ptmin) .gt. dpmin) then
+            iter = iter + 1
+            if (iter .lt. 20) then
+c           - continue iterating on throat pressure.
+               go to 10
+            else
+c           - solution did not converge, set error flag.
+               error = .true.
+            endif
+         endif
+c
+      endif
+c
+c     Use derivative from momentum eqn.
+c
+      dgcdp = abs(dgtdp)
+c
+      return
+      end

@@ -1,0 +1,471 @@
+*mlist
+       subroutine tcoupl
+c
+c  Transient interface subroutine between selap and couple.
+c
+c  Cognizant engineer: ewc (gaj).
+c
+c  This is a COUPLE ROUTINE
+c
+c  Gets arguments from selap for, and calls, the couple debris bed heat
+c  conduction model.
+c
+       implicit none
+       include 'contrl.h'
+       include 'scddat.h'
+       include 'cpmdat.h'
+       include 'alcm.h'
+       include 'iparm.h'
+       include 'parm.h'
+       include 'coupl.h'
+       include 'couplc.h'
+       include 'comctl.h'
+       include 'fast.h'
+       include 'voldat.h'
+       include 'ufilef.h'
+       include 'ufiles.h'
+       include 'slumpv.h'
+       include 'ndxara.h'
+       include 'slpcom.h'
+       include 'scdpow.h'
+       include 'cmptim.h'
+       include 'trpblk.h'
+       include 'miscon.h'
+       include 'uphdpn.h'
+c
+       real af(maxcon)
+       real amug, amul, cpg, dtz, dtsel, hg, hl, tfluid, rhg, rhl
+       real tkg, tsat, voidfr, wslp, wsltot
+       real afru, afrz, engtot, wcmtot, wsoslp, wzuslp,tvapor
+       real fnsigl,pgas
+       integer i, n, nel, ndum
+       integer icm, ncstep, ik
+       real enrmix,tmixlc,rftmix,wmixtt,enrusl,eqnmax,eqnch,wmixto,
+     & tmpumx
+       integer ivolmx
+       integer ndbg
+       real wmixlc,afmxlc,wsso,wzuo
+       real vdbrek,vdmin,excsen,fracbk
+       dimension wmixlc(11),afmxlc(11)
+       real zunth1
+       external zunth1
+       data ncstep /0/
+c   vdbrek = void fraction threshold; values less than this result in
+c            slumping molten material not completely breaking up.
+c   vdmin = minimum void fraction liquid for some break up.
+c   values for vdbrek and vdmin are also defined for slumping from
+c   system calculations in subroutine debadd.
+       data vdbrek/0.20/,vdmin/0.01/
+c
+         ndbg=0
+           if(timehy.ge.6785.0.and.timehy.le.6800.0)ndbg=1
+             if(ndbg.eq.1)then
+             write(output,9105)timehy,nslphs(mcp),tmpslp(mcp,1),
+     &       mcp,tmslpu
+9105         format(' TCOUPL entered; timehy=',e11.4,
+     &       ' nslphs=',i5,' tmpslp=',e11.4,' mcp=',i5,
+     &       ' tmslpu=',e11.4)
+             end if
+!     force couple time step every RELAP5 time step for COUPLE mesh #1
+         ntsc(1) = 1
+       if (ncpmsh .le. 0) return
+       do mcp = 1,maxcpm
+c  Initialize ik for non user defined slumping (for nslphs.ne.1).
+         ik = 1
+           if(ndbg.eq.1)then
+           write(output,9122)mcp,icoup(mcp)
+9122       format(' TCOUPL; mcp=',i5,' icoup(mcp)=',i5)
+           end if
+         if (icoup(mcp) .lt. 1) cycle
+         call gpcoup (1)
+         if (nslphs(mcp) .eq. 0) then
+c  Debris is from lwr meltdown slumping.
+!ljs        tmpumx=tmpslp(mcp,1)
+            tmpumx = tmslpu
+              if(ndbg.eq.1)then
+              write(output,9125)tmpumx
+9125          format(' TCOUPL lwr slump; tmpumx=',e10.4)
+              end if
+         elseif (nslphs(mcp) .eq. 1) then
+c  Debris is from user defined slumping.
+c  call subroutine that obtains from user-defined input the amount of
+c  material that slumps into a couple finite element mesh.
+           dtz = timehy - time
+           call slmpdt (timehy,dtz)
+           ik = iksave(mcp)
+           qinslp = 0.0
+c  Account for possibility that user-defined slumping is to model
+c  breakup of material that slumps to lower head.
+           wmixto = wzrslp + wurslp + wssslp + wagslp + wbcslp +
+     &     wuoslp + wzoslp + walslp + wlislp + wcdslp
+             if(ndbg.eq.1)then
+             write(output,9115)wmixto,wssslp
+9115         format(' TCOUPL; wmixto=',e10.4,' wssslp=',e10.4)
+             end if
+c  Start if block AA.
+cljs if time step is of order of 1.e-8, then wmixto will be of order 1.e-5
+cljs testing BWR control blade meltdown
+           if (wmixto .gt. 1.e-8) then
+c  Compute atomic fraction of each constituent in material that mass of
+c  Zr (kg).
+             wmixlc(1) = wzrslp
+c  Mass of metallic U.
+             wmixlc(2) = wurslp
+c  Mass of stainless steel.
+             wmixlc(3) = wssslp
+c  Mass of Ag-In-Cd.
+             wmixlc(4) = wagslp
+c  Mass of Boron Carbide.
+             wmixlc(5) = wbcslp
+c  Mass of UO2.
+             wmixlc(6) = wuoslp
+c  Mass of ZrO2.
+             wmixlc(7) = wzoslp
+c  Mass of Al.
+             wmixlc(8) = walslp
+c  Mass of Li.
+             wmixlc(9) = wlislp
+c  Mass of Cd.
+             wmixlc(10) = wcdslp
+c  Mass of Si.
+             wmixlc(11) = 0.0
+             call calaf (wmixlc,wmixtt,afmxlc)
+             ivolmx = invc(mcp) + filndx(4)
+             rftmix = satt(ivolmx)
+!            tmixlc = tmpslp(mcp,ik)
+             tmixlc = tmslpu
+               if(ndbg.eq.1)then
+               write(output,91205)ik,tmpslp(mcp,ik)
+91205          format(' TCOUPL; ik=',i5,' tmpslp=',e11.4)
+               end if
+             tmpumx = tmixlc
+             enrmix = zunth1(afmxlc(1),afmxlc(2),afmxlc(3),afmxlc(4),
+     &       afmxlc(5),afmxlc(6),afmxlc(7),tmixlc,afmxlc(8),afmxlc(9),
+     &       afmxlc(10),afmxlc(11),rftmix)
+             if(enrmix .le. 0.0) enrmix = 0.0
+c  enrusl = internal energy in material that slumped this time step.
+             enrusl = wmixtt*enrmix
+             eqnmax = v(ivolmx)*voidf(ivolmx)*rhof(ivolmx)*
+     &       (sathg(ivolmx) - sathf(ivolmx))
+             if (nobrok(mcp) .eq. 1) then
+               nstslp(mcp) = 1
+               eqnch = 0.0
+               porslp(mcp,ik) = 1.0e-3
+               radslp(mcp,ik) = 1.0e-3
+!              tmpumx = tmpslp(mcp,ik)
+               tmpumx = tmslpu
+             else
+c  Case of nobrok(mcp) .ne. 1  (breakup).
+c  Model gradual reduction in quenching as void fraction of liquid
+c  decreses below vdbrek.
+               if (voidf(ivolmx) .lt. vdbrek) then
+                 porslp(mcp,ik) = 1.0e-3
+                 radslp(mcp,ik) = 1.0e-3
+                 if (voidf(ivolmx) .lt. vdmin) then
+                 eqnch = 0.0
+!ljs             tmpumx = tmpslp(mcp,ik)
+                 tmpumx = tmslpu
+                 nstslp(mcp) = 1
+               else
+                 fracbk = (voidf(ivolmx) - vdmin)/(vdbrek - vdmin)
+                 eqnch = fracbk*enrusl 
+                 nstslp(mcp) = 1
+                 excsen = 0.0
+                 if (eqnch .gt. eqnmax) then
+                   excsen = eqnch - eqnmax
+                   eqnch = eqnmax
+                 endif
+                 enrslp = (1. - fracbk)*enrusl + excsen
+c  100. ~ (enthalpy at 500 K)*(1.e-3 kg).
+c  Do not call mixent if both small mass and low enthalpy.
+                 if (enrslp .lt. 100.0) then
+                   tmpumx = rftmix
+                 else
+                   wzuo = 0.0
+                   wsso = 0.0
+                   afru = 1.
+                   afrz = 0.0
+                   call mixent (enrslp,wmixlc(6),wmixlc(1),wmixlc(7),
+     &             wmixlc(4),wmixlc(3),wsso,wzuo,afru,afrz,wmixlc(5),
+     &             rftmix,tmpumx)
+                 endif
+               endif
+             else
+c    voidf .gt. vdbrek; 100% breakup
+               eqnch = enrusl
+               tmpumx = rftmix
+               nstslp(mcp) = 0
+             endif
+           endif
+           qinslp=eqnch/dtz
+         endif
+c  End if block AA.
+       elseif (nslphs(mcp) .eq. 2) then
+c  non-LWR case
+c Debris is from slumping of Scdap components above Couple mesh.
+c mix together individual component slumpings.
+         nslump(mcp) = 0
+         wcmtot = 0.0
+         wssslp = 0.0
+         wurslp = 0.0
+         wzrslp = 0.0
+         wagslp = 0.0
+         wbcslp = 0.0
+         wuoslp = 0.0
+         wzoslp = 0.0
+         walslp = 0.0
+         wlislp = 0.0
+         wcdslp = 0.0
+         powslp = 0.0
+         engtot = 0.0
+         do n = 1,ncmesh(mcp)
+           icm = icmesh(n,mcp)
+           fnsigl = float(nsigl(icm))
+           wurslp = wurslp + wurslc(icm)*fnsigl
+           walslp = walslp + walslc(icm)*fnsigl
+c  None of the following ...slc mass array values are currently
+c  calculated.
+c  wuoslp = wuoslp + wuoslc(icm)*fnsigl
+c  wssslp = wssslp + wssslc(icm)*fnsigl
+c  wzrslp = wzrslp + wzrslc(icm)*fnsigl
+c  wagslp = wagslp + wagslc(icm)*fnsigl
+c  wbcslp = wbcslp + wbcslc(icm)*fnsigl
+c  wzoslp = wzoslp + wzoslc(icm)*fnsigl
+c  wlislp = wlislp + wlislc(icm)*fnsigl
+c  wcdslp = wcdslp + wcdslc(icm)*fnsigl
+           powslp = powslp + powslc(icm)*fnsigl
+           engtot = engtot + engslc(icm)*fnsigl
+           if (wurslc(icm).gt.0.0 .or. wuoslc(icm).gt.0.0)
+     &     iscoup(icm) = 1
+         enddo
+         wcmtot = wssslp + wurslp + wzrslp + wagslp + wbcslp + wuoslp +
+     &   wzoslp + walslp + wlislp + wcdslp
+         if (wcmtot .gt. 1.e-8) then
+            if(ndbg.eq.1)then
+            write(output,9121)wcmtot,wssslp
+9121        format(' TCOUPL; wcmtot=',e10.4,' wssslp=',e10.4)
+            end if
+c  Slump of material from core components has occurred this time step.
+           nslump(mcp) = 1
+           radslp(mcp,ik) = 0.0
+           porslp(mcp,ik) = 0.0
+           wzuslp = 0.0
+           afru = 0.0
+           afrz = 1.
+           wsoslp = 0.0
+c  Calculate equilibrium temperature of mixture.
+           if (walslp .le. 1.e-10) then
+c  Calculate equilibrium temperature for mixture of lwr materials.
+             call mixent (engtot,wuoslp,wzrslp,wzoslp,wagslp,wssslp,
+     &       wsoslp, wzuslp,afru,afrz,wbcslp,rftemp,tmpumx)
+           else
+c  Calculate equilibrium temperature for mixture of srs materials.
+             call mixsrs (engtot,walslp,wurslp,wssslp,wcdslp,wlislp,
+     &       tmpslp(mcp,ik))
+             tmpumx = tmpslp(mcp,ik)
+           endif
+         endif
+c  End of coding that processes material slumping below components.
+       elseif (nslphs(mcp) .eq. 3) then
+c Debris is from corium hydro model.
+       else if (nslphs(mcp) .eq.-1) then
+c No slumping; mesh is always full.
+       else
+          call fabend
+       endif
+       if (icoup(mcp) .eq. 1) then
+         if (nslump(mcp) .eq. 1) then
+           if(ndbg.eq.1)then
+           write(output,9211)timehy
+9211       format(' TCOUPL 9011, timehy=',e11.4)
+           end if
+           icoup(mcp) = 2
+!          imdctl(1) = ior(imdctl(1),dmwrite)
+!    write(inpout,"('0-------- Core degradation',es14.6,' s: First
+!    & slumping into couple mesh',i3,' occurs.')") timehy,mcp 
+             if(ndbg.eq.1)then
+             write(output,9015)timehy
+9015         format(' TCOUPL 9015; timehy=',e11.4)
+             end if
+         endif
+       endif
+        itsc(mcp) = itsc(mcp) + 1
+c  Get selap time step, and update couple time and time step.
+        dtsel = timehy - time
+        time = timehy
+        dtcpl = dtcpl + dtsel
+        if(dtcpl.lt.1.e-6)dtcpl=1.e-6
+        wsltot = 0.0
+        if (nslump(mcp) .eq. 1) then
+          ncslp(mcp) = 1
+c accumulate mass of each material slumped since last couple call,
+c particle diam.*mass, porosity*mass, temp.*mass, and power*time.
+          ws(1,mcp) = ws(1,mcp) + wzrslp
+          ws(2,mcp) = ws(2,mcp) + wurslp
+          ws(3,mcp) = ws(3,mcp) + wssslp
+          ws(4,mcp) = ws(4,mcp) + wagslp
+          ws(5,mcp) = ws(5,mcp) + wbcslp
+          ws(6,mcp) = ws(6,mcp) + wuoslp
+            if(ndbg.eq.1)then
+            write(output,9021)ncslp(mcp),wuoslp,wbcslp,wzrslp
+9021        format(' TCOUPL; ncslp=',i5,' wuoslp=',e10.4,
+     &      ' wbcslp=',e10.4,' wzrslp=',e10.4)
+            write(output,9022)wssslp,wurslp,wagslp
+9022        format(' TCOUPL; wssslp=',e10.4,' wurslp=',e10.4,
+     &      ' wagslp=',e10.4)
+            end if
+          ws(7,mcp) = ws(7,mcp) + wzoslp
+          ws(8,mcp) = ws(8,mcp) + walslp
+          ws(9,mcp) = ws(9,mcp) + wlislp
+          ws(10,mcp)= ws(10,mcp)+ wcdslp
+          wslp = wzrslp+wurslp+wssslp+wagslp+wbcslp+wuoslp+wzoslp +
+     +    walslp+wlislp+wcdslp
+          pdmave(mcp) = (pdmave(mcp)*wsltot + radslp(mcp,ik)*wslp)/
+     &    (wsltot + wslp)
+          porave(mcp) = (porave(mcp)*wsltot + porslp(mcp,ik)*wslp)/
+     &    (wsltot + wslp)
+          tave(mcp) = (tave(mcp)*wsltot + tmpumx*wslp)/
+     &    (wsltot + wslp)
+          if (ncpowi(mcp) .eq.  0.or. ncpowi(mcp).eq.3) then
+cljs   powslp = power (W) in material that slumped during this
+cljs            time step.
+            powave(mcp) = powave(mcp) + powslp
+          else
+            powave(mcp) = 0.0
+          end if
+          do 20 i=1,maxcon
+   20     wsltot = wsltot + ws(i,mcp)
+c the following 2 values may need to be changed.
+          if((lhead.eq.1.and.wsltot.gt.20.).or.
+     #       (lhead.eq.0.and.wsltot.gt. 1.e-3))then
+            if((lhead.eq.1.and.wsltot.gt.40.0).or.
+     #         (lhead.eq.0.and.wsltot.gt.1.e-3))
+     #         ncdtsl(mcp)=0
+            go to 30
+          end if
+        else
+c ncdtsl=number of selap time steps since last couple call.
+c if ncdtsl<3, then couple called even if no slumping.
+          ncdtsl(mcp) = ncdtsl(mcp) + 1
+          if (ncdtsl(mcp) .lt. 3) go to 30
+        end if
+          if(ndbg.eq.1)then
+          write(output,9011)mcp,time,timc(mcp),itsc(mcp),
+     &    ntsc(mcp)
+9011      format(' TCOUPL before COUPLE; mcp=',i5,' time=',e14.8,
+     &    ' timc=',e14.8,' itsc=',i8,' ntsc=',i8)
+          end if
+        if (itsc(mcp).lt.ntsc(mcp) .and. time.lt.timc(mcp)) go to 90
+cljs testing for Laguna Verde to eliminate call to couple and
+cljs subsequent stop by subroutine gelb due to zero pivot for node
+cljs on top surface of mesh and slumped debris located much farther
+cljs down. This update allows core modelling to proceed without lower
+cljs head modelling.
+cljs    if(time.lt.1.e+10)go to 90
+   30   continue
+c call couple this selap time step.
+        if (ncslp(mcp) .gt. 0) then
+c get atomic fraction of each material.
+          call calaf (ws(1,mcp), wsltot, af(1))
+c calculate average particle diam., porosity, power, and temp.
+        else
+          if (icoup(mcp) .gt. 1) then
+c use last values of partical diam. & porosity for dryout correl.
+            pdmave(mcp) = radslp(mcp,ik)
+            porave(mcp) = porslp(mcp,ik)
+          end if
+        end if
+        pdmave(mcp) = 2. 0* pdmave(mcp)
+c get water properties from selap volume.
+        i = filndx(4) + invc(mcp)
+        pgas=p(i)
+        rhg = rhog(i)
+        cpg = csubpg(i)
+        tkg = thcong(i)
+        rhl = rhof(i)
+        amul = viscf(i)
+        amug = viscg(i)
+        hl = sathf(i)
+        hg = sathg(i)
+        tfluid = tempf(i)
+        tsat = satt(i)
+        voidfr = voidg(i)
+        tvapor=tsat
+        if(voidg(i).gt.0.0001)tvapor=tempg(i)
+        istep = istep + 1
+        call couple (a(i22), a(n101), a(n100), ncslp(mcp), af(1),
+     +  wsltot, porave(mcp), powave(mcp), pdbtot(mcp), tave(mcp), pdmave
+     +  (mcp), rhg, cpg, tkg, rhl, amul, amug, hl, hg, tfluid, tsat,
+     +  voidfr, icoup(mcp), stmass(mcp), nstslp(mcp), nslphs(mcp),
+     +  nobrok(mcp),pgas, tvapor)
+c Calculate ave. temp. of debris and of structure, and find maximum
+c structure temp.
+        twalav(mcp) = 0.0
+        tmpdav(mcp) = 0.0
+        twalmx(mcp) = 0.0
+        nel = 0
+        call caltav (a(i8), a(i108), a(i100), a(i22), nel, ndum, numel,
+     +  twalmx(mcp), ntwalm(mcp), tmpdav(mcp), twalav(mcp), a(iptmlt),a
+     +  (i74),a(i76),a(i78),a(i80),a(i82),a(i84),a(i86), a(iptalf),a
+     +  (iptlif),a(iptcdf),a(iptsif),a(i6),a(i7),a(i105))
+c find max. temp. and power density in debris bed.
+        tmpdmx(mcp) = 0.0
+        powdmx(mcp) = 0.0
+        do n=1,numnp
+          if(a(i22+n-1).gt.tmpdmx(mcp).and.wtmdeb(mcp).gt.1.e-3)then
+            tmpdmx(mcp) = a(i22+n-1)
+            ntmpdm(mcp) = n
+          end if
+          if (a(i27+n-1) .gt. powdmx(mcp)) then
+            powdmx(mcp) = a(i27+n-1)
+            npowdm(mcp) = n
+          end if
+        enddo
+        if (nmcpwr .eq. mcp) then
+          if (mod(ncount,kpr) .eq. 0) then
+c Write time and temperatures to Couple output file.
+            write (coupfl,rec=nrecno,err=60) time
+            nrecno = nrecno + 1
+            do n = 1, numnp
+              write (coupfl,rec=nrecno,err=60) a(i22+n-1)
+              nrecno = nrecno + 1
+            enddo
+c Write number of time steps written.
+            ncstep = ncstep + 1
+            write (coupfl,rec=3,err=60) ncstep
+            go to 70
+   60       write (tty,9020) trim(filsch(10)), ncstep
+ 9020 format (' Error writing time and temps. to file ',a,
+     +'   Couple time step no.',i5)
+            stop 'couple-1'
+   70       continue
+          endif
+         endif
+c  Reset values for next couple time step.
+         itsc(mcp) = 0
+         timc(mcp) = time + dtcoup(mcp)
+         dtold = dtcpl
+         dtcpl = 0.0
+         ncslp(mcp) = 0
+         pdmave(mcp) = 0.0
+         porave(mcp) = 0.0
+         powave(mcp) = 0.0
+         tave(mcp) = 0.0
+         if (nslphs(mcp) .ne. -1) then
+           do i = 1,maxcon
+             wst(i,mcp) = wst(i,mcp) + ws(i,mcp)
+             ws(i,mcp) = 0.0
+           enddo
+           call calaf (wst(1,mcp),wtmdeb(mcp),afrdeb(1,mcp))
+           hgtdeb(mcp) = max(0.0,height-dh)
+             if(ndbg.eq.1)then
+             write(output,9109)height,dh,mcp,hgtdeb(mcp)
+9109         format(' TCOUPL; height=',e10.4,' dh=',e10.4,
+     &       ' mcp=',i5,' hgtdeb=',e10.4)
+             end if
+         endif  
+   90    continue
+         call gpcoup (2)
+       enddo
+       return
+       end

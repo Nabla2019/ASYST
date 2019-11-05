@@ -1,0 +1,500 @@
+*mlist
+       subroutine rkin
+c  Advances space independent reactor kinetics.
+c
+c  Cognizant engineer: rjw.
+c
+       use gentblc
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'convarc.h'
+       include 'htsrcm.h'
+       include 'rkinc.h'
+       include 'rknatb.h'
+       include 'trpblk.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       real rkdpvn(l_),rkrf0(l_),rkrf2(l_),rkrf3(l_),rkrfx(l_),
+     & rkcnfx(l_)
+       equivalence (rkdpvn(1),fa(1)),(rkrf0(1),fa(2)),(rkrf2(1),fa(3)),
+     & (rkrf3(1),fa(4)),(rkrfx(1),fa(5)),(rkcnfx(1),fa(6))
+       integer isv(4)
+       real rkarg(l_)
+       equivalence (rkarg(1),fa(1))
+       integer i,icc,j,ja,jd,jl,jp,jx,k,l,l1,n,nc
+       real arg,c0,c1,c2,c3,c4,c5,c6,c7,dell,dr(1),h,hov2,lolim,r,rm1,
+     & rslope,tem,uplim,w3,wavg,x
+       logical del,err,rept
+c
+c  Data statements.
+       data c0/0.33333333333/, c1/8.33333333333e-2/,
+     & c2/1.66666666667e-2/, c3/2.77777777778e-3/,
+     & c4/3.968253968e-4/, c5/4.960317460e-5/,
+     & c6/5.511463845e-6/, c7/5.511463845e-7/
+c  dell is 2**(-15)
+       data lolim/0.0001/, uplim/0.001/, dell/3.051758e-5/
+c
+c  Point kinetics.
+c  Compute reactivity.
+       j = filndx(21)
+       r = rkro(j)
+c  Do scram curves.
+       if (rknsc(j) .ne. 0) then
+         jp = j + rksptr(j)
+         do i = 1,rknsc(j)
+           if (rknscr(jp) .lt. 1000) then
+             k = rknscr(jp+1)
+             arg = timehy
+             if (gen(k)%gttrp(1) .ne. 0) then
+               arg = trptm(gen(k)%gttrp(2))
+               if (arg .ge. 0.0) arg = timehy - arg
+             endif
+c            if (arg .ne. gen(k)%gtarg) then
+               call gtpolat (gen(k)%gtinfo,gtptr(k)%gtbl,arg,dr(1:1),
+     &         err)
+               gen(k)%gtarg = arg
+               gen(k)%gtval = dr(1)
+c            else
+c              dr(1) = gen(k)%gtval
+c            endif
+           else
+             dr(1) = cnvarn(rknscr(jp+1))
+           endif
+           r = r + dr(1)
+           jp = jp + 2
+         enddo
+       endif
+c  Check if separable or table feedback.
+       if (iand(rkopt(j),32) .eq. 0) then
+c  Separable feedback.
+c  Do volume feedback.
+         if (rknvfb(j) .ne. 0) then
+           jp = j + rknvfb(j+1)
+           l = j + rkdnpt(j)
+           do i = 1,rknvfb(j)
+             k = rkvoln(jp+1)
+             call polat (rkdenr(l-3),rkdenr(l),rho(k),dr(1),err)
+             r = r + rkvwf(jp)*dr(1) + rkvta(jp)*(hyarf(k)*tempf(k) +
+     &       hyarg(k)*tempg(k))/(hyarf(k) + hyarg(k)) +
+     &       rkvbf(jp)*boron(k)
+             jp = jp + 5
+           enddo
+         endif
+c  Do heat structure feedback.
+         if (rknsfb(j) .ne. 0) then
+           jp = j + rknsfb(j+1)
+           l = j + rkdppt(j)
+           do 16 i = 1,rknsfb(j)
+             arg = fa(rkhtno(jp+1))
+             call polat (rkdopr(l-3),rkdopr(l),arg,dr(1),err)
+             r = r + rkfwf(jp)*dr(1) + rkfta(jp)*arg
+             jp = jp + 4
+   16      continue
+         endif
+       else
+c  Table feedback.
+         rkarg(ixpc+1) = 0.0
+         rkarg(ixpc+2) = 0.0
+         rkarg(ixpc+4) = 0.0
+         rkarg(ixpc+8) = 0.0
+c  Do volume averaging.
+         jp = j + rknvfb(j+1)
+         if (iand(rkopt(j),512) .eq. 0) then
+           do i = 1,rknvfb(j)
+             k = rkvoln(jp+1)
+             rkarg(ixpc+1) = rkarg(ixpc+1) + rho(k)*rkvwf(jp)
+             rkarg(ixpc+2) = rkarg(ixpc+2) +
+     &       rkvwf(jp)*((1.-voidg(k))*rhof(k)*tempf(k) +
+     &       voidg(k)*rhog(k)*tempg(k))/
+     &       ((1.0-voidg(k))*rhof(k) + voidg(k)*rhog(k))
+             rkarg(ixpc+8) = rkarg(ixpc+8) + boron(k)*rkvwf(jp)
+             jp = jp + 5
+           enddo
+         else
+           do i = 1,rknvfb(j)
+             k = rkvoln(jp+1)
+             rkarg(ixpc+1) = rkarg(ixpc+1) + voidg(k)*rkvwf(jp)
+             rkarg(ixpc+2) = rkarg(ixpc+2) + tempf(k)*rkvwf(jp)
+             rkarg(ixpc+8) = rkarg(ixpc+8) + boron(k)/rhof(k)*rkvwf(jp)
+             jp = jp + 5
+           enddo
+         endif
+c  Do heat structure averaging.
+         jp = j + rknsfb(j+1)
+         do i = 1,rknsfb(j)
+           rkarg(ixpc+4) = rkarg(ixpc+4) + fa(rkhtno(jp+1))*rkfwf(jp)
+           jp = jp + 3
+         enddo
+c  Search coordinate tables.
+         jp = rkdnpt(j) + j
+         k = rkdeni(jp) + j
+         n = iand(ishft(rkopt(j),-2),7)
+         isv(4) = 0
+         icc = 1
+         do 103 i = 1,n
+           l1 = rkdeni(jp+1) - 1
+           jd = ixpc + icc
+           isv(i) = -1
+  105      if (rkdenr(jp+isv(i)+1) .lt. rkarg(jd)) then
+             isv(i) = isv(i) + 1
+             if (isv(i) .lt. l1) go to 105
+             isv(i) = isv(i) - 1
+             rkarg(jd) = 1.0
+           else
+             if (isv(i) .lt. 0) then
+               isv(i) = 0
+               rkarg(jd) = 0.0
+             else
+               rkarg(jd) = (rkarg(jd) - rkdenr(jp+isv(i)))/
+     &         (rkdenr(jp+isv(i)+1) - rkdenr(jp+isv(i)))
+             endif
+           endif
+           icc = icc + icc
+           jp = jp + l1 + 4
+  103    continue
+         icc = ior(ior(ior(ishft(isv(1),24),ishft(isv(2),16)),
+     &   ishft(isv(3),8)),isv(4))
+         n = ishft(1,n)
+         jd = k + n
+         if (icc .ne. rkfdcd(jd)) then
+           rkfdcd(jd) = icc
+           l1 = rkdppt(j) + j + isv(1) + isv(2)*rknden(jd+2) +
+     &     isv(3)*rknden(jd+4) + isv(4)*rknden(jd+8)
+c  Compute interpolation elements.
+           rkcoef(k) = rktabl(l1)
+           rkcoef(k+1) = rktabl(l1+1) - rkcoef(k)
+           rkcoef(k+2) = rktabl(l1+rknden(jd+2)) - rkcoef(k)
+           rkcoef(k+4) = rktabl(l1+rknden(jd+4)) - rkcoef(k)
+           rkcoef(k+3) = rktabl(l1+rknden(jd+3)) - rkcoef(k+2) -
+     &     rktabl(l1+1)
+           rkcoef(k+5) = rktabl(l1+rknden(jd+5)) - rkcoef(k+4) -
+     &     rktabl(l1+1)
+           rkcoef(k+6) = rktabl(l1+rknden(jd+6)) - rkcoef(k+4) -
+     &     rktabl(l1+rknden(jd+2))
+           rkcoef(k+7) = rktabl(l1+rknden(jd+7)) - rkcoef(k+6) -
+     &     rktabl(l1+rknden(jd+3)) - rktabl(l1+rknden(jd+5)) +
+     &     rktabl(l1+1)
+           if (iand(rkopt(j),16) .ne. 0) then
+             rkcoef(k+8) = rktabl(l1+rknden(jd+8)) - rkcoef(k)
+             rkcoef(k+9) = rktabl(l1+rknden(jd+9)) - rkcoef(k+8) -
+     &       rktabl(l1+1)
+             rkcoef(k+10) = rktabl(l1+rknden(jd+10)) - rkcoef(k+8) -
+     &       rktabl(l1+rknden(jd+2))
+             rkcoef(k+12) = rktabl(l1+rknden(jd+12)) - rkcoef(k+8) -
+     &       rktabl(l1+rknden(jd+4))
+             rkcoef(k+11) = rktabl(l1+rknden(jd+11)) - rkcoef(k+10) -
+     &       rktabl(l1+rknden(jd+9)) - rktabl(l1+rknden(jd+3)) +
+     &       rktabl(l1+1)
+             rkcoef(k+13) = rktabl(l1+rknden(jd+13)) - rkcoef(k+12) -
+     &       rktabl(l1+rknden(jd+9)) - rktabl(l1+rknden(jd+5)) +
+     &       rktabl(l1+1)
+             rkcoef(k+14) = rktabl(l1+rknden(jd+14)) - rkcoef(k+12) -
+     &       rktabl(l1+rknden(jd+10)) - rktabl(l1+rknden(jd+6)) +
+     &       rktabl(l1+rknden(jd+2))
+             rkcoef(k+15) = rktabl(l1+rknden(jd+15)) - rkcoef(k+14) -
+     &       rktabl(l1+rknden(jd+13)) - rktabl(l1+rknden(jd+11)) +
+     &       rktabl(l1+rknden(jd+9)) - rktabl(l1+rknden(jd+7)) +
+     &       rktabl(l1+rknden(jd+5)) + rktabl(l1+rknden(jd+3)) -
+     &       rktabl(l1+1)
+           endif
+         endif
+c  Evaluate reactivity.
+         rkarg(ixpc+3) = rkarg(ixpc+2)*rkarg(ixpc+1)
+         rkarg(ixpc+5) = rkarg(ixpc+4)*rkarg(ixpc+1)
+         rkarg(ixpc+6) = rkarg(ixpc+4)*rkarg(ixpc+2)
+         rkarg(ixpc+7) = rkarg(ixpc+4)*rkarg(ixpc+3)
+         if (iand(rkopt(j),16) .ne. 0) then
+           rkarg(ixpc+9) = rkarg(ixpc+8)*rkarg(ixpc+1)
+           rkarg(ixpc+10) = rkarg(ixpc+8)*rkarg(ixpc+2)
+           rkarg(ixpc+12) = rkarg(ixpc+8)*rkarg(ixpc+4)
+           rkarg(ixpc+11) = rkarg(ixpc+8)*rkarg(ixpc+3)
+           rkarg(ixpc+13) = rkarg(ixpc+8)*rkarg(ixpc+5)
+           rkarg(ixpc+14) = rkarg(ixpc+8)*rkarg(ixpc+6)
+           rkarg(ixpc+15) = rkarg(ixpc+8)*rkarg(ixpc+7)
+         endif
+         do i = 2,n
+           r = r + rkcoef(k+i-1)*rkarg(ixpc+i-1)
+         enddo
+         r = r + rkcoef(k)
+       endif
+c
+       rslope = (r - rkrn(j))/dt
+c  Set time increment and advancement counter.
+       nc = 1
+       icc = iand(rkopt(j),3)
+       if (dt .ne. rkdt(j)) then
+         if (dt .lt. rkdt(j)) then
+           if (dt .ne. 0.5*rkdt(j)) then
+             if (icc.le.0 .or. dt.ne.0.25*rkdt(j)) then
+               icc = 2
+             else
+   39          icc = -1
+             endif
+           else
+             icc = icc - 1
+           endif
+           rkdt(j) = dt
+         else
+           tem = rkdt(j)*1.5
+           rkdt(j) = dt
+   27      if (rkdt(j) .gt. tem) then
+             rkdt(j) = 0.5*rkdt(j)
+             nc = nc + nc
+             go to 27
+           endif
+           icc = 2
+         endif
+       endif
+c  Set power equation terms and compute cn functions.
+       ja = j + rkoffa(j)
+       jl = ja
+       if (rkfu38(j) .ne. 0.0) jl = jl - 9
+       jp = j + 9
+       jd = jp + rkoffd(j)
+c  Set alpha for power equation.
+   90  rklmda(j) = (1.0 - rkrn(j))*rkbol(j)
+       rept = .false.
+c  Set r function for power equation.
+   91  rkfi(j) = 0.0
+c  Logic for cn(h/2).
+       k = 0
+       h = 0.5*rkdt(j)
+       hov2 = h
+       if (icc .eq. 2) go to 36
+       if (icc) 29,38,37
+   29  do 35 i = j,ja,9
+         rkcnf1(i) = rkcnh1(i)
+         rkcnf2(i) = rkcnh2(i)
+         rkcnf3(i) = rkcnh3(i)
+   35  continue
+   36  jx = ja
+       go to 30
+   37  do 28 i = j,ja,9
+         rkcnh1(i) = rkcnf1(i)
+         rkcnh2(i) = rkcnf2(i)
+         rkcnh3(i) = rkcnf3(i)
+   28  continue
+   38  jx = j
+       go to 30
+c  Logic for cn(h).
+   31  k = k + 3
+       h = rkdt(j)
+       if (icc) 44,45,32
+   44  if (rept) go to 46
+   45  jx = j
+       go to 30
+   32  jx = ja
+c  Evaluate functions.
+   30  do 33 i = j,jx,9
+         x = -h*rklmda(i)
+         if (abs(x) .gt. 1.0) then
+           tem = 1.0/x
+           rkcnh1(i+k) = (exp(x) - 1.0)*tem*h
+           rkcnh2(i+k) = (rkcnh1(i+k) - h)*tem
+           rkcnh3(i+k) = (2.0*rkcnh2(i+k) - h)*tem
+         else
+           rkcnh3(i+k) = (((((((c7*x + c6)*x + c5)*x + c4)*x + c3)*x +
+     &     c2)*x + c1)*x + c0)*h
+           rkcnh2(i+k) = 0.5*(x*rkcnh3(i+k) + h)
+           rkcnh1(i+k) = (x*rkcnh2(i+k) + h)
+         endif
+   33  continue
+       if (k .eq. 0) go to 31
+c  Apply stage 1.
+   46  rkrf0(ixpc) = rkbol(j)*rksum(j)
+       k = ixpc
+       do 42 i = jp,jl,9
+         k = k + 6
+         rkrf0(k) = rklmda(i)*rkdepv(j)
+   42  continue
+       if (rkfu38(j) .ne. 0.0) rkrf0(k+6) = rkfu38(j)*rkdepv(jl-8)
+       k = ixpc
+       del = .false.
+       do 43 i = j,ja,9
+         if (.not.rept) rkrfx(k) = rkrf0(k) - rklmda(i)*rkdepv(i)
+         tem = rkrfx(k)*rkcnh1(i)
+         rkdpvn(k) = rkdepv(i) + tem
+         del = abs(tem/rkdpvn(k)) .ge. dell .or. del
+         k = k + 6
+   43  continue
+c  Apply stage 2.
+       rkfi(j) = rslope*hov2
+       rm1 = 1.0 - rkrn(j) - rkfi(j)
+       tem = rkslob(j)
+       k = ixpc
+       do 51 i = jp,jd,9
+         k = k + 6
+         tem = tem + rkfi(i)*rkdpvn(k)
+   51  continue
+       k = ixpc
+       if (abs((rm1*rkdpvn(k) - tem)/tem) .lt. 0.0001) rkdpvn(k) =
+     & tem/rm1
+       rkrf2(k) = rkbol(j)*tem
+       do 52 i = jp,jl,9
+         k = k + 6
+         rkrf2(k) = rklmda(i)*rkdpvn(ixpc)
+   52  continue
+       if (rkfu38(j) .ne. 0.0) rkrf2(k+6) = rkfu38(j)*rkdpvn(k)
+       k = ixpc
+       do 53 i = j,ja,9
+         rkdpvn(k) = rkdpvn(k) + (rkrf2(k) - rkrf0(k))*rkcnh2(i)
+         k = k + 6
+   53  continue
+c  Apply stage 3.
+       k = ixpc
+       tem = rkslob(j)
+       do 61 i = jp,jd,9
+         k = k + 6
+         tem = tem + rkfi(i)*rkdpvn(k)
+   61  continue
+       k = ixpc
+       if (abs((rm1*rkdpvn(k) - tem)/tem) .lt. 0.0001) rkdpvn(k) =
+     & tem/rm1
+       rkrf2(k) = rkbol(j)*tem
+       do 62 i = jp,jl,9
+         k = k + 6
+         rkrf2(k) = rklmda(i)*rkdpvn(ixpc)
+   62  continue
+       if (rkfu38(j) .ne. 0.0) rkrf2(k+6) = rkfu38(j)*rkdpvn(k)
+       k = ixpc
+       do 63 i = j,ja,9
+         rkdpvn(k) = rkdepv(i) + rkrfx(k)*rkcnf1(i) + 2.0*(rkrf2(k) -
+     &   rkrf0(k))*rkcnf2(i)
+         k = k + 6
+   63  continue
+c  Apply stage 4.
+       rkfi(j) = rslope*rkdt(j)
+       r = rkrn(j) + rkfi(j)
+       rm1 = 1.0 - r
+       tem = rkslob(j)
+       k = ixpc
+       do 71 i = jp,jd,9
+         k = k + 6
+         tem = tem + rkfi(i)*rkdpvn(k)
+   71  continue
+       k = ixpc
+       if (abs((rm1*rkdpvn(k) - tem)/tem) .lt. 0.0001) rkdpvn(k) =
+     & tem/rm1
+       rkrf3(k) = rkbol(j)*tem
+       do 72 i = jp,jl,9
+         k = k + 6
+         rkrf3(k) = rklmda(i)*rkdpvn(ixpc)
+   72  continue
+       if (rkfu38(j) .ne. 0.0) rkrf3(k+6) = rkfu38(j)*rkdpvn(k)
+       k = ixpc
+       do 73 i = j,ja,9
+         rkcnfx(k) = 2.0*rkcnf3(i) - rkcnf2(i)
+         rkdpvn(k) = rkdpvn(k) + (rkrf0(k) - 2.0*rkrf2(k) + rkrf3(k))*
+     &   rkcnfx(k)
+         k = k + 6
+   73  continue
+c  Apply stage 5.
+       tem = rkslob(j)
+       k = ixpc
+       do 81 i = jp,jd,9
+         k = k + 6
+         tem = tem + rkfi(i)*rkdpvn(k)
+   81  continue
+       k = ixpc
+       if (abs((rm1*rkdpvn(k) - tem)/tem) .lt. 0.0001) rkdpvn(k) =
+     & tem/rm1
+       rkrf2(k) = rkbol(j)*tem
+       do 82 i = jp,jl,9
+         k = k + 6
+         rkrf2(k) = rklmda(i)*rkdpvn(ixpc)
+   82  continue
+       if (rkfu38(j) .ne. 0.0) rkrf2(k+6) = rkfu38(j)*rkdpvn(k)
+       k = ixpc
+       do 83 i = j,ja,9
+         rkdpvn(k) = rkdpvn(k) + (rkrf2(k) - rkrf3(k))*rkcnfx(k)
+         k = k + 6
+   83  continue
+c  Apply error analysis.
+       if (rkdpvn(ixpc) .le. 0.0) go to 87
+       k = ixpc
+       rksum(j) = rkslob(j)
+       do 84 i = jp,jd,9
+         k = k + 6
+         rksum(j) = rksum(j) + rkfi(i)*rkdpvn(k)
+   84  continue
+       k = ixpc
+       rept = abs((rm1*rkdpvn(k) - rksum(j))/rksum(j)) .lt. 0.0001
+       if (rept) rkdpvn(k) = rksum(j)/rm1
+       tem = 1.0/rkdt(j)
+       wavg = log(rkdpvn(k)/rkdepv(j))*tem
+       w3 = wavg
+       if (.not.rept) w3 = rkbol(j)*(rksum(j)/rkdpvn(k) - rm1)
+       tem = abs(rkomeg(j) + w3 - 2.0*wavg)*rkcnf2(j)/
+     & (1.0 + tem*rkcnf1(j))
+       if (.not.del) go to 86
+       if (tem .ge. uplim) go to 87
+   86  icc = 0
+       nc = nc - 1
+       if (iand(nc,1) .eq. 0) then
+         if (tem .le. lolim) then
+           rkdt(j) = 2.0*rkdt(j)
+           nc = ishft(nc,-1)
+           icc = 1
+         endif
+       endif
+       do 89 i = j,ja,9
+         rkdepv(i) = rkdpvn(k)
+         k = k + 6
+   89  continue
+       rkomeg(j) = w3
+       rkrn(j) = r
+       if (nc .ne. 0) go to 90
+       rkopt(j) = ior(iand(rkopt(j),not(3)),icc)
+       jd = jd + 1
+       if (jd .le. ja) then
+         if (rkfu38(j) .ne. 0.0) then
+           i = jd + (rknum(j) - rknumd(j) - 1)*9
+           rkpowa(j) = rkfi(i-18)*rkdepv(i-18) + rkfi(i-9)*rkdepv(i-9)
+           k = ja - 18
+         else
+           rkpowa(j) = 0.0
+           k = ja
+         endif
+         rkpowk(j) = 0.0
+         do 95 i = jd,k,9
+           rkpowk(j) = rkpowk(j) + rkfi(i)*rkdepv(i)
+   95    continue
+         if (rkpsi(j) .ne. 0.0) then
+           rkcapt(j) = rkcapt(j) + dt
+           if (iand(rkopt(j),16384).eq.0 .and. rkcapt(j).le.1.0e4) then
+             rkpowk(j) = rkpowk(j)*
+     &       (1.0 + (3.24e-6 + 5.23e-10*rkcapt(j))*rkpsi(j))
+           elseif (rkcapt(j) .le. 1.0e9) then
+   96        tem = rkcapt(j) - rkntbl(1,rkilk+1)
+             if (tem .gt. 0.0) then
+               rkilk = rkilk + 1
+               rkntbx = (rkntbl(2,rkilk+1) - rkntbl(2,rkilk))/
+     &         (rkntbl(1,rkilk+1) - rkntbl(1,rkilk))
+               go to 96
+             else
+               rkpowk(j) = rkpowk(j)*(rkntbx*tem + rkntbl(2,rkilk+1))
+             endif
+           endif
+         endif
+       endif
+       rkpowg(j) = rkpowk(j) + rkpowa(j)
+       rkpowf(j) = rkqval(j)*rkdepv(j)
+       rkpow(j) = rkpowf(j) + rkpowg(j)
+       return
+c  Reduce time step.
+   87  nc = nc + nc
+       icc = -1
+       rept = .true.
+       rkdt(j) = 0.5*rkdt(j)
+       if (rkdt(j) .ge. 1.0e-7) go to 91
+       write (output,2001)
+ 2001  format ('0******** Reactor kinetics time step reduced below minim
+     &um value, problem terminated.')
+       fail = .true.
+       return
+       end

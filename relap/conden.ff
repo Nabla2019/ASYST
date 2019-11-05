@@ -1,0 +1,263 @@
+*mlist
+       subroutine conden
+c
+c  Condensation heat transfer correlations.
+c
+c  Cognizant engineer: rjw.
+c
+       implicit none
+       include 'contrl.h'
+       include 'fast.h'
+       include 'htrcom.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+       real alo,alp,diff,dtliq,dtpps,dtvap,f1,f2,ftr,
+     & hinter,hshah,ht1,ht2,htcfdb,quax,reyg,twsub,xmg,z
+       real direct,filmt,refilm,hdb,hf,hnuss,qffodb
+       external dittus
+c
+       hinter(alo,ht1,ht2,alp,diff) = ht1 + (ht2 - ht1)*(alp - alo)*diff
+c
+c  Condensation heat transfer.
+       if (help.ne.0 .and. iand(ihlppr(1),ishft(1,4)).ne.0) then
+         if( iand(vctrlx(iv),1).ne.0 ) then
+           write (output,50) hfg,rhof(iv),rhog(iv),thconf(iv),
+     &     thcong(iv),viscf(iv),viscg(iv),csubpf(iv),csubpg(iv),
+     &     tempg(iv),tempf(iv),hydzc(iv2) + hydzc(iv2+1),dl(iv1)
+   50  format (5x,'conden - hfg',11x,'rhof',10x,'rhog',10x,'thconf',8x,
+     & 'thcong',8x,'viscf',9x,'viscg',9x,'csubpf'/12x,1p,8e14.6/
+     & 14x,'csubpg',8x,'tempg',9x,'tempf',9x,'elev.chng.',6x,'dl'/
+     & 12x,5e14.6)
+         endif
+       endif
+c
+       hshah = 0.0
+       ftr = 0.0
+       htcg = 0.0
+       dtpps = tw - satt(iv)
+       dtliq = tw - tempf(iv)
+c
+c  Try to smooth transitions from condensation to other modes.
+       if (voidg(iv).le.0.3 .or. irwt.gt.0 .or. dtliq.gt.0.0) then
+c  Forced convection to liquid.
+         rhos = rhof(iv)
+         tf = tempf(iv)
+         thcons = thconf(iv)
+         viscs = viscf(iv)
+         cps = csubpf(iv)
+         beta = betaff(iv)
+         mode = 2
+c
+         call dittus
+         qfgo = 0.0
+c  Save the Dittus-Boelter values for liquid.
+         htcfdb = htcf
+         qffodb = qfluxo
+       else
+         htcfdb = 0.
+         qffodb = 0.
+       endif
+       if (abs(delgrv) .lt. 0.001) then
+c  Laminar film condensation
+c  Horizontal stratified condensation heat transfer.
+         twsub = -dtpps
+         hcond = .296*((rhof(iv)*max((rhof(iv) - rhog(iv)),0.0)*gravcn*
+     &   hfg*thconf(iv)**3)/(htdiam*viscf(iv)*(max(1.,twsub))))**.25
+       else
+c  Condensation on a vertical pipe or plate.
+c  Base it on film thickness to make it a local form
+c  instead of the average value used in MOD3 up to 3.1.1.1
+c  Local Form of Nusselt for Vertical Surfaces.
+c  -  calculate film thickness from film Re.
+c  -  direct is the direction cosine for the gravity vector.
+c  -  it is assumed that a slanted surface is facing up.
+c
+         direct = abs(delgrv/dl(iv1))
+c
+         refilm = abs(gliqa) * htdiam / viscf(iv)
+         filmt = 0.9086*(refilm*(viscf(iv)/rhof(iv))**2/direct)**0.33333
+c
+c  -  limit film thickness : > 10 microns.
+         filmt = max(1.0e-05,filmt)
+c
+c  -  compute Nusselt HTC.
+         hcond = thconf(iv)/filmt
+c
+c  -  do not allow the HTC to be less than that for laminar flow.
+         hcond = max(hcond,4.36*thconf(iv)/htdiam)
+       endif
+       hnuss = hcond
+c
+c  Check flag for using default condensation correlation package.
+c    laminar .. Nusselt
+c    turbulent .. Shah
+c    non-condensible .. Colburn-Hougen
+c
+       if (htopta .eq. 53) then
+c
+c  Alternative model is Nusselt-UCB.
+c  Vierow-Shrock UCBerkley. Int Conf on Multiphase Flows 1991, Tsukuba,
+c  Sept 24-27, 1991.
+c  First get a Reynolds number based on film thickness.  Do not let the
+c  thickness be zero when voidg is 1. or the condensation startup
+c  transient will be wrong. R5 hydro does not realize that the water is
+c  sticking to the wall.
+c  F1 has the gas velocity effect and f2 has the noncondensible.
+c  Professor Schrock reported to Gary Johnsen in 1992 that the
+c  multiplier for the effect of gas flow should not exceed 2. or the
+c  Toshiba data would be over predicted.
+c  The Reynolds number is based on the mixture mass flux and viscosty.
+c
+         reyg = ggasa*htdiam/viscg(iv)
+         f1 = min(2.0, 1.0 + 2.88e-5*reyg**1.18)
+         hcond = hcond*f1
+c
+         f2 = 1.0
+c  The presence of a non-condensible can reduce condensation.
+         if (quala(iv) .gt. 1.0e-9) then
+c  Calculate the amount of reduction from the UCB work also.
+c
+           if (quala(iv) .lt. .063) then
+             f2 = 1.0 - 10.*quala(iv)
+           elseif (quala(iv) .gt. 0.6) then
+             f2 = 1.0 -  quala(iv)**0.22
+           else
+             f2 = 1.0 - 0.938*quala(iv)**0.13
+           endif
+         endif
+         hcond = hcond*f2
+       else
+c
+         if (quala(iv) .lt. 0.001) then
+c  Turbulent ... Shah correlation.
+           quax = max(min(quale(iv), 1.0),1.0e-9)
+           rey = min(4000.0,gabs)*htdiam/viscf(iv)
+c  The upper mass flux limit of the Shaw correlation verified range
+c  is 4000. See section 506.3 page 9 Sept 1990 Genium Publishing HT.
+           pr = viscf(iv)*csubpf(iv)/thconf(iv)
+           hdb = 0.023*thconf(iv)*rey**0.8*pr**0.4/htdiam
+           hf = hdb*(1.0 - quax)**0.8
+           z = (p(iv)/pcrit)**0.4*(1.0/quax - 1.0)**0.8
+           ftr = 1.0
+           if (z.ne.0.0) ftr = 1.0 + 3.8/z**0.95
+           hshah = hf*ftr
+           hcond = max(hcond, hshah)
+         endif
+c
+         if (quala(iv) .lt. 0.0001) then
+c          do nothing
+         elseif (quala(iv) .gt. 0.001) then
+           call noncnd
+           qfgo = 0.0
+           z = qfluxo/hcond
+           hcond = hcond*z/dtpps
+           htcf = hcond
+c Noncnd returns qfluxo and hcond but delta-temp must be solved for
+         else
+           hshah = hcond
+           call noncnd
+           xmg = (0.001 - quala(iv))*1111.1111
+c 1111.1111=1/0.0009=(0.001-0.0001)
+           z = qfluxo/hcond
+           hcond = hcond*z/dtpps
+           hcond = hshah*xmg + hcond*(1.0 - xmg)
+         endif
+       endif
+       if (dtliq .lt. 0.) then
+c Normal condensation
+         qfluxo = hcond*dtpps
+         qffo = hcond*dtliq
+         qffo = max(qffo,qfluxo)
+         qfgo = qfluxo - qffo
+         qfgo = min(qfgo, 0.0)
+         htcg = qfgo/dtpps
+         htcf = hcond
+       else
+c Abnormal condensation
+         htcf = htcfdb
+         qffo = htcf*dtliq
+         htcg = hcond
+         qfgo = hcond*dtpps
+       endif
+c
+c  Weight heat flux by degree of stratification and water level
+c  assume no bubbles are breaking the surface in condensation mode
+c  and complete stratification exists.
+c  Heat flux discontinuities may occur when strat begins or ends.
+       if (irwt .gt. 0) then
+         xmg = voidg(iv)
+         if (dlev(iv) .gt. 0.0) xmg = 1.0 - dlev(iv)/dl(iv)
+         htcg = hnuss*xmg
+         htcfdb = htcfdb*(1.0 - xmg)
+         htcf = htcfdb
+         qfgo = htcg*dtpps
+         qffo = htcf*(tw - tempf(iv))
+         if (tempf(iv).lt.satt(iv) .and. voidg(iv).gt.0.95) then
+c  Ramp energy taken from liquid to zero as liquid disappears.
+c  1./(.999 - .95) = 1/0.049 = 20.40816
+           htcf = hinter(voidg(iv),0.0,htcf,.999,20.40816)
+           qffo = htcf*(tw - tempf(iv))
+         endif
+       endif
+       if (voidg(iv) .lt. 0.3) then
+c  Htrc1 sends the code to dittus mode 2 if voidg is less than .1.
+c  Interpolate between voidg - .3 and .1.
+c  1./(.3 - .1) = 5.0
+         htcf = hinter(0.1,htcfdb,htcf,voidg(iv),5.0)
+         htcg = hinter(0.1,0.0,htcg,voidg(iv),5.0)
+         qffo = htcf*dtliq
+         qfgo = htcg*dtpps
+       endif
+       if (voidg(iv) .lt. 1.) then
+         mode = 10
+       else
+         mode = 11
+       endif
+       qfluxo = qfgo + qffo
+       htcoef = htcg + htcf
+       htzhgg = 0.0
+       htzhgp = htcg
+       htzht  = htcoef
+       htzhff = htcf
+       htzhft = 0.0
+       htzhgt = 0.0
+       htqot = qfluxo
+       htqof = qffo
+       htqog = qfgo
+       htgamf = 0.0
+       htgamg = htsa*recipv(iv)/max((hsteam(iv) - sathf(iv)),1.e4)
+$if def,dbgprnt,2
+       if (help .ne. 0) write (12,"('conden01',i10,es13.5)") volno(iv),
+     & hsteam(iv) - sathf(iv)
+       gamw = htgamg*qfgo
+c  The low value of 1.e4 was chosen based on Helium.
+$if def,dbgprnt
+       if (help .ne. 0) then
+         if (iand(ihlppr(1),ishft(1,4)) .ne. 0) then
+           if (iand(vctrlx(iv),1) .ne. 0) then
+             if (htopta .eq. 53) then
+               write (output,1100) htcoef,qfluxo,gamw,hcond,f1,f2
+ 1100  format (5x,'conden - htcoef',8x,'qfluxo',8x,'gamw',10x,'hcond',
+     & 9x,'f1',12x,'f2',/12x,1p,6e14.6)
+             else
+               write (output,1101) qfluxo,qfgo,qffo,gamw,filmt,rey,
+     &         hshah,ftr
+ 1101  format (5x,'conden - qfluxo',8x,'qfgo',10x,'qffo',6x,'gamw',
+     & 8x,'filmt',8x,'rey',9x,'hshah',6x,'ftr'/12x,1p,8g12.3)
+             endif
+             write (output,1102) hcond,htcoef,htcg,htcf,hnuss,htcfdb
+ 1102  format (14x,'hcond',9x,' htcoef',8x,'htcg',10x,'htcf',9x,'hnuss'
+     & ,10x,'htcfdb',/12x,1p,6e14.6)
+             dtvap = tw - tempg(iv)
+             write (output,1103) dtpps,dtliq,dtvap,gabs,gliqa,ggasa
+ 1103  format (14x,'dtpps',8x,' dtliq',5x,'dtvap',8x,
+     & 'gabs',8x,'gliqa',7x,'ggasa',/12x,1p,6g12.3)
+           endif
+         endif
+       endif
+$endif
+       return
+       end

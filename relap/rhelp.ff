@@ -1,0 +1,311 @@
+*mlist
+       module jvprnt
+!  Input data for restricting print of volume and junction results.
+!
+       integer, allocatable :: junprd(:),volprd(:)
+!
+       contains
+!
+       subroutine jvprntclear
+!  Deallocates junction and volume print control information.
+       implicit none
+!
+       if (allocated(volprd)) deallocate (volprd)
+       if (allocated(junprd)) deallocate (junprd)
+       return
+       end subroutine jvprntclear
+!
+       subroutine rhelp
+c
+c  Processes lists of volumes and junctions to print if debug
+c  is activated.
+c
+c  Cognizant engineer: rjw.
+c
+*in32 iscr
+*in32end
+c
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'ufiles.h'
+c
+       integer k,m,l3a(9),l3b(9),iscr(100)
+       real scr(100)
+       equivalence (scr(1),iscr(1))
+       logical fnd
+       integer, parameter :: nsubnm=56
+       character*8,chwrd,subnam(nsubnm)
+c
+       data l3a/2,0,0,100,0,1,-2,0,0/
+       data l3b/4,0,0,100,0,1,-2,-1,-1/
+       data subnam/'accum','brntrn',',ccfl','chfcal','conden','dittus',
+     & 'eqfinl','fwdrag','ht1tdp','ht2tdp','htadv','htfilm','htfinl',
+     & 'htrc1','hydro','istate','jchoke','jprop','noncnd','phantj',
+     & 'phantv','pimplt','pintfc','prednb','preseq','pstdnb','qfmove',
+     & 'simplt','sstchk','stacc','state','statep','suboil','sysitr',
+     & 'syssol','tstate','valve','vexplt','vfinl','vimplt','vlvela',
+     & 'volvel','trip','power','volume','junction','heatstr','radht',
+     & 'reflood','fsnprdtr','control','input','miedit','ielvtn',
+     & 'level','scdap'/
+c
+c  Read card 2 data.
+       l3a(1) = 2
+       l3a(6) = 1
+       call inp2 (fa(filndx(1)),scr(1),l3a)
+       if (l3a(6) .lt. 0) then
+         fail = .true.
+       else
+         if (l3a(6) .ne. 0) then
+           allocate (volprd(l3a(6)))
+           volprd = iscr(1:l3a(6))
+         endif
+       endif
+c  Read list of junctions from card 3.
+       l3a(1) = 3
+       l3a(6) = 1
+       call inp2 (fa(filndx(1)),scr(1),l3a)
+       if (l3a(6) .lt. 0) then
+         fail = .true.
+       else
+         if (l3a(6) .ne. 0) then
+           allocate (junprd(l3a(6)))
+           junprd = iscr(1:l3a(6))
+         endif
+       endif
+c  Read list of subroutines from card 4.
+       l3b(1) = 4
+       l3b(4) = nsubnm
+       l3b(6) = 1
+c  Set print flags to print all subroutines.
+       ihlppr(1) = not(0)
+       ihlppr(2) = not(0)
+       fnd = .false.
+       call inp2 (fa(filndx(1)),scr(1),l3b)
+       if (l3b(6) .lt. 0) then
+         fail = .true.
+       else
+         if (l3b(6) .ne. 0) then
+           ihlppr(1) = 0
+           ihlppr(2) = 0
+           fnd = .true.
+           do1: do k = 1,l3b(6)
+             write (chwrd,'(a8)') scr(k)
+             do m = 1,nsubnm
+               if (chwrd .eq. subnam(m)) then
+                 if (m .le. 31) then
+                   ihlppr(1) = ior(ihlppr(1),ishft(1,m-1))
+                 else
+                   ihlppr(2) = ior(ihlppr(2),ishft(1,m-32))
+                 endif
+                 cycle do1
+               endif
+             enddo
+           enddo do1
+         endif
+       endif
+       l3b(1) = 5
+       l3b(6) = 1
+       call inp2 (fa(filndx(1)),scr(1),l3b)
+       if (l3b(6) .lt. 0) then
+         fail = .true.
+       elseif (l3b(6) .ne. 0) then
+         if( fnd) then
+           write(output,*) '0******** Cannot have both cards 4 and 5 in 
+     &the same input deck.'
+           fail = .true.
+         endif
+         do2: do k = 1,l3b(6)
+           write (chwrd,'(a8)') scr(k)
+           do m = 1,nsubnm
+             if (chwrd .eq. subnam(m)) then
+               if (m .le. 31) then
+                 ihlppr(1) = iand(ihlppr(1),not(ishft(1,m-1)))
+               else
+                 ihlppr(2) = iand(ihlppr(2),not(ishft(1,m-32)))
+               endif
+               cycle do2
+             endif
+           enddo
+         enddo do2
+       endif
+       return
+       end subroutine rhelp
+!
+       subroutine ihelp
+!  Set volume and junction flags to indicate print status.
+!
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'jundat.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+!
+       integer i,k,ke,m
+       logical fnd,nofnd(0:2),rng
+!
+!  Volume processing.
+       if (.not.allocated(volprd)) then
+         i = filndx(4)
+         do m = 1,nvols(i)
+           vctrlx(i) = ior(vctrlx(i),1)
+           i = i + ivskp
+         enddo
+       else
+         i = filndx(4)
+         do m = 1,nvols(i)
+           vctrlx(i) = iand(vctrlx(i),not(1))
+           i = i + ivskp
+         enddo
+         nofnd = .false.
+         k = 1
+         ke = size(volprd)
+         do
+           if (volprd(k) .le. 0) then
+             if (.not.nofnd(1)) then
+               nofnd(1) = .true.
+               write (output,"('0******** One or more zero or incorrectl
+     &y placed negative value on Card 2.')")
+               k = k + 1
+             endif
+           else
+             fnd = .true.
+             rng = .false.
+             if (k .lt. ke) then
+               if (volprd(k+1) .lt. 0) then
+                 rng = .true.
+                 volprd(k+1) = -volprd(k+1)
+                 if (volprd(k+1) .le. volprd(k)) then
+                   if (.not.nofnd(2)) then
+                     nofnd(2) = .true.
+                     write (output,"('0******** One or more improper ran
+     &ges on Card 2.')")
+                   endif
+                 else
+                   fnd = .false.
+                   i = filndx(4)
+                   do m = 1,nvols(i)
+                     if (volno(i).ge.volprd(k) .and.
+     &               volno(i).le.volprd(k+1)) then
+                       fnd = .true.
+                       vctrlx(i) = ior(vctrlx(i),1)
+                     endif
+                     i = i + ivskp
+                   enddo
+                   k = k + 2
+                 endif
+               endif
+             endif
+             if (.not.rng) then
+               fnd = .false.
+               i = filndx(4)
+               do m = 1,nvols(i)
+                 if (volno(i).eq.volprd(k)) then
+                   fnd = .true.
+                   vctrlx(i) = ior(vctrlx(i),1)
+                   cycle
+                 endif
+                 i = i + ivskp
+               enddo
+               k = k + 1
+             endif
+             if (.not.fnd) then
+               if (nofnd(0)) then
+                 nofnd(0) = .true.
+                 write (output,"('0******** One or more instances 
+     &of single value or range on Card 2 not finding selected volumes.')
+     &")
+               endif
+             endif
+           endif
+           if (k .gt. ke) exit
+         enddo
+         deallocate (volprd)
+         if (any(nofnd)) fail = .true.
+       endif
+!  Junction processing.
+       if (.not.allocated(junprd)) then
+         i = filndx(5)
+         do m = 1,njuns(i)
+           jcex(i) = ior(jcex(i),ishft(1,20))
+           i = i + ijskp
+         enddo
+       else
+         i = filndx(5)
+         do m = 1,njuns(i)
+           jcex(i) = iand(jcex(i),not(ishft(1,20)))
+           i = i + ijskp
+         enddo
+         nofnd = .false.
+         k = 1
+         ke = size(junprd)
+         do
+           if (junprd(k) .le. 0) then
+             if (.not.nofnd(1)) then
+               nofnd(1) = .true.
+               write (output,"('0******** One or more zero or incorrectl
+     &y placed negative value on Card 3.')")
+               k = k + 1
+             endif
+           else
+             fnd = .true.
+             rng = .false.
+             if (k .lt. ke) then
+               if (junprd(k+1) .lt. 0) then
+                 rng = .true.
+                 junprd(k+1) = -junprd(k+1)
+                 if (junprd(k+1) .le. junprd(k)) then
+                   if (.not.nofnd(2)) then
+                     nofnd(2) = .true.
+                     write (output,"('0******** One or more improper ran
+     &ges on Card 3.')")
+                   endif
+                 else
+                   fnd = .false.
+                   i = filndx(5)
+                   do m = 1,njuns(i)
+                     if (junno(i).ge.junprd(k) .and.
+     &               junno(i).le.junprd(k+1)) then
+                       fnd = .true.
+                       jcex(i) = ior(jcex(i),ishft(1,20))
+                     endif
+                     i = i + ijskp
+                   enddo
+                   k = k + 2
+                 endif
+               endif
+             endif
+             if (.not.rng) then
+               fnd = .false.
+               i = filndx(5)
+               do m = 1,njuns(i)
+                 if (junno(i).eq.junprd(k)) then
+                   fnd = .true.
+                   jcex(i) = ior(jcex(i),ishft(1,20))
+                   cycle
+                 endif
+                 i = i + ijskp
+               enddo
+               k = k + 1
+             endif
+             if (.not.fnd) then
+               if (nofnd(0)) then
+                 nofnd(0) = .true.
+                 write (output,"('0******** One or more instances 
+     &of single value or range on Card 3 not finding selected junctions.
+     &')")
+               endif
+             endif
+           endif
+           if (k .gt. ke) exit
+         enddo
+         deallocate (junprd)
+         if (any(nofnd)) fail = .true.
+       endif
+       return
+       end subroutine ihelp
+!
+       end module jvprnt

@@ -1,0 +1,300 @@
+*mlist
+       subroutine rmflds
+c
+c
+c  Reads optional hydrodynamic system cards that specify a reference
+c  volume, its position coordinates, fluid type in the system, the
+c  system name, system information flags, and system thermodynamic
+c  property file name.
+c
+c  Cognizant engineer: rjw.
+c
+*in32 idat
+*in32end
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'mxnfcd.h'
+       include 'sysdatc.h'
+       include 'ufiles.h'
+c
+c  Local variables.
+       integer i,idat(10),inp10,ix,j,l,lcontg,ll(2),n3,n4,nsys,nt,
+     & nnum
+       integer(8) idat8(10)
+       real alt(3),blank,ft,ftbnid,grav,none,xft,rdat(10)
+       equivalence (idat8(1),rdat(1),idat(1))
+       integer l3a(11),l3b(8),l3c(13)
+       logical tfail,tfail2
+       character blnk*8,chwrd*8,labl(2)*5,non*8,solbl(2)*20,sysmac*8
+       character fixmov(2)*8
+c
+       data l3a/120,0,3,5,0,1,0,1,-1,-1,0/
+       data l3b/119,0,0,2,0,1,1,-1/
+       data l3c/120,0,3,7,0,1,0,3*1,-1,-1,0/
+       data grav/9.80665/
+       data fixmov/'fixed','moving'/
+       data labl/' (m) ',' (ft)'/, non/' *none* '/
+       data solbl/'no noncondensibles','no molten metals'/
+       data blnk/'        '/
+       data xft/0.3048/
+c
+c  Process card 119.
+       l3b(6) = 1
+       call inp2 (fa(filndx(1)),idat8,l3b)
+       if (l3b(6) .lt. 0) then
+         fail = .true.
+         l3b(6) = 0
+       endif
+       if (l3b(6) .lt. 2) then
+         read (fixmov(1),'(a8)') idat8(2)
+       endif
+       if (l3b(6) .lt. 1) then
+         rdat(1) = grav
+       else
+         if (rdat(1) .eq. -1.0) then
+           rdat(1) = grav
+         else
+           if (.not.uniti) rdat(1) = rdat(1)*xft
+         endif
+       endif
+       if (rdat(1) .lt. 0.0) then
+         fail = .true.
+         write (output,2055)
+ 2055  format ('0******** Negative gravitational constant entered, earth
+     & gravity entered.')
+         rdat(1) = grav
+       endif
+       gravcn = rdat(1)
+       if (rdat(1) .lt. 1.e-6) then
+         fail = .true.
+         write (output, 2059)
+ 2059  format ('0******** Gravitational constant entered too small, defa
+     &ulted to minimum gravity (=1.e-6).')
+         gravcn = 1.0e-6
+       endif
+       write (chwrd,'(a8)') idat8(2)
+       if (chwrd .eq. fixmov(2)) then
+         print = ior(print,16384)
+       elseif (chwrd .ne. fixmov(1)) then
+         fail = .true.
+         write (output,2056)
+ 2056  format ('0******** Fixed/moving option is incorrect, set to fixed
+     &.')
+       endif
+       if (.not.unito) rdat(1) = rdat(1)/xft
+       if (iand(print,16384) .eq. 0) then
+         chwrd(6:6) = '.'
+       else
+         chwrd(7:7) = '.'
+       endif
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2057) rdat(1),chwrd
+ 2057  format ('0Gravitational constant is',1p,g14.6,'.'/
+     & '0Simulation model is ',a)
+c
+c  Determine if cards 120-129 are present.
+       l3a(1) = 120
+       l3c(1) = l3a(1)
+       call inplnk (l3a(1),ix,n3,n4,fa(filndx(1)))
+       if (n4 .eq. 0) then
+         l3a(1) = ix
+         if (ix.eq.-1 .or. ix.gt.129) go to 700
+       endif
+       iextra = ior(iextra,1)
+       if (filid(28) .ne. 0.0) then
+         call ftbdel (filid(28))
+       else
+         filid(28) = ftbnid(1)
+       endif
+c  Get storage.
+       n4 = 10*isyskp
+       if (n4 .gt. lcontg(1)) go to 1000
+       call ftbrsv (filid(28),n4,-1,l)
+       read (non,'(a8)') none
+       read (blnk,'(a8)') blank
+       nt = 1
+       if (.not.unito) nt = 2
+       ft = 1.0
+       if (.not.uniti) ft = xft
+       nsys = 0
+       i = l
+c  Get the input data.
+   12  call inplnk (l3a(1),ix,n3,n4,fa(filndx(1)))
+       if (n4 .ne. 0) then
+         tfail2 = .false.
+         if (iand(print,16384) .eq. 0) then
+           l3a(6) = 1
+           call inp2 (fa(filndx(1)),idat8,l3a)
+           if (l3a(6) .lt. 0) then
+             fail = .true.
+             tfail2 = .true.
+           else
+             sysvol(i) = idat(1)
+             sysel(i) = rdat(2)
+             sysel(i+1) = rdat(2)
+             sysel(i+2) = rdat(2)
+             sysmaf(i) = idat8(3)
+             if (l3a(6) .ge. 4) then
+               sysnam(i) = idat8(4)
+             else
+               read (non,"(a8)") sysnam(i)
+             endif
+             if (l3a(6) .ge. 5) then
+               sysopt(i) = idat(5)
+             else
+               sysopt(i) = 0
+             endif
+             do n4 = 6,l3a(6)
+               tpfnha(n4+i-6) = idat8(n4)
+             enddo
+             if (l3a(6) .lt. 10) then
+               j = max(l3a(6)+1,6)
+               do n4 = j,10
+                 read (blnk,"(a8)") tpfnha(n4+i-6)
+               enddo
+             endif
+           endif
+         else
+           l3c(6) = i
+           call inp2 (fa(filndx(1)),idat8,l3c)
+           if (l3c(6) .lt. 0) then
+             fail = .true.
+             tfail2 = .true.
+           else
+             sysvol(i) = idat(1)
+             sysel(i) = rdat(2)
+             sysel(i+1) = rdat(3)
+             sysel(i+2) = rdat(4)
+             sysmaf(i) = idat8(5)
+             if (l3c(6) .gt. 6) then
+               sysnam(i) = idat8(4)
+             else
+               read (non,"(a8)") sysnam(i)
+             endif
+             if (l3a(6) .ge. 7) then
+               sysopt(i) = idat(7)
+             else
+               sysopt(i) = 0
+             endif
+             do n4 = 6,l3a(6)
+               tpfnha(n4+i-6) = idat8(n4)
+             enddo
+             if (l3a(6) .lt. isyskp) then
+               j = max(l3a(6)+1,8)
+               do n4 = j,isyskp
+                 read (blnk,"(a8)") tpfnha(n4+i-8)
+               enddo
+             endif
+           endif
+         endif
+         if (.not.tfail2) then
+           write (sysmac,'(a8)') sysmaf(i)
+           j = 2
+           do n4 = 1,j
+             if (sysmac .eq. fsymbl(n4)) go to 22
+           enddo
+           n4 = 1
+           read (fsymbl(1),'(a8)') sysmaf(i)
+           fail = .true.
+           write (output,2002) l3a(1)
+ 2002  format ('0******** Fluid type on card',i4,' not found, set to h2o
+     &.')
+   22      nnum = abs(sysvol(i))
+           if (nnum.eq.0 .or. nnum.ge.1000000000) then
+             fail = .true.
+             write (output,2003) sysvol(i)
+ 2003  format ('0********',i10,' is illegal volume number, system will b
+     &e set to h2o and reference coordinates will be set to zero.')
+             sysvol(i) = 0
+           endif
+           sysel(i) =sysel(i)*ft
+           sysel(i+1) =sysel(i+1)*ft
+           sysel(i+2) =sysel(i+2)*ft
+           alt(1) = sysel(i)
+           alt(2) = sysel(i+1)
+           alt(3) = sysel(i+2)
+           if (.not.unito) then
+             alt(1) = alt(1)/xft
+             alt(2) = alt(2)/xft
+             alt(3) = alt(3)/xft
+           endif
+           if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+           if (iand(print,16384) .eq. 0) then
+             write (output,2004) sysvol(i),sysmaf(i),alt(1),labl(nt),
+     &       sysnam(i)
+ 2004  format ('0System containing volume',i10.9,' has ',a10,' as a flui
+     &d, a base elevation of',1p,g13.5,a5,', and is named ',a10)
+           else
+             write (output,2014) sysvol(i),sysmaf(i),alt,labl(nt),
+     &       sysnam(i)
+ 2014  format ('0System containing volume',i10.9,' has ',a10,' as a flui
+     &d, base coordinates of',1p,3g13.5,a5,','/'  and is named ',a10)
+           endif
+           endif
+           sysmat(i) = n4
+           tfail = .false.
+           n3 = sysopt(i)
+           j = n3/10
+           n3 = n3 - 10*j
+           if (n3 .gt. 1) then
+             tfail = .true.
+             n3 = 0
+           endif
+           if (j .gt. 1) then
+             tfail = .true.
+             j = 0
+           endif
+           sysopt(i) = ior(ishft(j,1),n3)
+           if (tfail) then
+             write (output,2006) l3a(1)
+ 2006  format ('0******** Card',i4,' has incorrect system options.')
+             fail = .true.
+           endif
+           n3 = 0
+           do 25 j = 1,2
+             if (iand(sysopt(i),j) .ne. 0) then
+               n3 = n3 + 1
+               ll(n3) = j
+             endif
+   25      continue
+           if (n3 .ne. 0)then
+             if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &       write (output,2008) (solbl(ll(j)),j=1,n3)
+           endif
+ 2008  format (' System information flag options:  ',2a25)
+           nsys = nsys + 1
+           i = i + isyskp
+         endif
+         l3a(1) = l3a(1) + 1
+       else
+         l3a(1) = ix
+       endif
+       l3c(1) = l3a(1)
+       if (l3a(1).ne.-1 .and. l3a(1).le.129) go to 12
+c
+       if (nsys .eq. 0) go to 800
+       nusys(l) = nsys*isyskp
+       filsiz(28) = nusys(l) + 1
+       go to 900
+c  Set default fluids.
+  700  if (filid(28) .ne. 0.0) return
+       filid(28) = ftbnid(1)
+       call ftbrsv (filid(28),1,-1,l)
+c  Set h2o only loops.
+  800  filsiz(28) = 1
+       nusys(l) = 0
+c  Return space.
+  900  call ftbsft (filid(28),filsiz(28),2,filndx(28))
+       call fmvlwr
+       return
+c  Write error message for insufficient space.
+ 1000  write (output,2005)
+ 2005  format ('0******** Insufficient space to process cards 120-129, d
+     &efaults set.')
+       filsiz(1) = inp10(fa(filndx(1)),120,129)
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+       fail = .true.
+       go to 800
+       end

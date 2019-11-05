@@ -1,0 +1,553 @@
+*mlist
+      subroutine rcoupl
+c
+c  Reads the control card for the couple debris bed heat conduction
+c  model.
+c
+c  Cognizant engineer: ewc.
+c
+c This is a COUPLE ROUTINE.
+*in32 iv
+*in32end
+c
+       use gentblc
+       implicit none
+       include 'contrl.h'
+       include 'comctl.h'
+       include 'fast.h'
+       include 'convarc.h'
+       include 'ufiles.h'
+       include 'scntl.h'
+       include 'scddat.h'
+       include 'cpmdat.h'
+       include 'slumpv.h'
+       include 'coupl.h'
+       include 'couplc.h'
+       include 'debout.h'
+       include 'chcons.h'
+      real qfrsum, xv(19)
+      character evc(2)*10,debsrc(5)*31,psep*80
+      character*6 brok(2)
+      integer iv(19), l5a(13), l5b(9), l5c(10), l5d(9),l54(10)
+      integer i, icin, n, jx, k, l
+      integer ncard,next,istart,ndata
+      integer ndbg
+      equivalence (iv(1),xv(1))
+c
+      data l5a / 50001000, 0, 0, 7, 0, 1, 0, 0, 0, 0, 0, 1, 0 /
+      data l5b / 50002000, 0, 1, 6, 0, 1, 2, 0, 0 /
+      data l54 / 50004000, 0, 4, 4, 0, 1, 0, 1, 0, 0/
+      data l5c /    0, 0, 0, 4, 0, 1, 0, 2, 1, 1 /
+      data l5d /    0, 0, 0,19, 0, 1, 2, 1, 1 /
+      data evc / 'saturated', 'sub-cooled'/
+      data brok / 'is', 'is not'/
+      data debsrc/'null; mesh is full','lwr meltdown',
+     # 'user defined slumping',
+     # 'depends on the components above',
+     # 'corium hydro model'/
+c
+      psep(1:80) = '-'
+        ndbg = 0
+        if(ndbg.eq.1)then
+        write(output,9005)
+9005    format(' COUPLl entered')
+        end if
+      nmcpwr = 0
+      if(.not.scntrl(7))then
+        ncpmsh = 0
+        nslph0 = 0
+        mmcond = 0
+      endif
+      if(.not.scntrl(4))return
+c  read containment volume card if present.
+      call inplnk(l54(1),next,istart,ndata,fa(filndx(1)))
+      if(ndata.gt.0 )then
+        l54(6)=1
+        call inp2(fa(filndx(1)), xv, l54)
+        if(l54(6).le.0)goto 100
+        icnvol=iv(1)
+        conhtc=xv(2)
+        icntmp=iv(3)
+        icntmp=min(max(icntmp,1),2)
+        icnlvl=iv(4)
+      else
+        if(.not.scntrl(7))then
+          icnvol=0
+          conhtc=0.0
+          icntmp=2
+          icnlvl=0
+        endif
+      endif
+      if(icnvol.ne.0)then
+        write(output,1058)icnvol,conhtc,evc(icntmp+1)
+ 1058 format(/'Ex-Vessel Heat Transfer Input'/
+     #        '  Containment Volume = ',i9/
+     #        '  Heat Transfer Coefficient to vapor = ',1pe11.2,/
+     #        '  Boiling correlation uses ',a,' data.')
+        if(icnlvl.lt.0)then
+          write(output,'(2x,23hContainment level from ,a,i4)')
+     #         'General Table',abs(icnlvl)
+        else
+          write(output,'(2x,23hContainment level from ,a,i4)')
+     #         'Control Variable ',icnlvl
+        endif
+        if (icnlvl .lt. 0) then
+          if (ngtbls .eq. 0) then
+            write (output,1060)'general table',iabs(icnlvl),l54(1)
+ 1060 format('0******** Error, ',a,i5, ' specified on card ',i9,
+     #  ', but none are entered.')
+            fail=.true.
+          else
+            do k = 1,ngtbls
+              if (iabs(icnlvl) .eq. gtnum(k)) go to 14
+            enddo
+            write (output,1070)l54(1),'general table',iabs(icnlvl)
+ 1070 format('0******** Error, card',i10,
+     #       ' refers to non-existent ',a,' number',i4,'.')
+            fail = .true.
+            go to 17
+   14       icnvar = k
+          endif
+        else if (icnlvl .gt. 0) then
+          if (filid(27) .eq. 0.0) then
+            write (output,1060) 'control variable',icnlvl,l54(1)
+            fail = .true.
+          else
+            jx = filndx(27)
+            do 15 k = 1, cnvnum(jx)
+              if (icnlvl .eq. cnvpnm(jx)) then
+                icnvar = jx - filndx(27)
+                goto 17
+              endif
+              jx = jx + cnvlen(jx)
+   15       continue
+            write (output,1070)l54(1),'control variable',icnlvl
+            fail=.true.
+          endif
+        else
+          write(output,1100)l54(1)
+ 1100 format ('0******** Error,',i10,' requires a liquid level.')
+          fail=.true.
+        endif
+      endif
+   17 continue
+      do 90 mcp=1,maxcpm
+        if(.not.scntrl(7))then
+c  set couple control default values.
+          icoup(mcp) = 0
+          ncvolc(mcp) = -1
+          nslphs(mcp) = -2
+          nobrok(mcp) = 1
+          ntsc(mcp) = 200
+          dtcoup(mcp) = 10.0
+          pmufot(mcp) = 1.0
+          pmufdk(mcp) = 1.0
+          pmuadk(mcp) = 1.0
+          ncpowi(mcp) = 0
+          do i = 1, 19
+            qfrspi(i,mcp) = 0.0
+          enddo
+          ncmesh(mcp) = 0
+        else
+          if (icoup(mcp) .gt. 0) then
+c  controls have been read from the restart file.
+            write(output,9001)psep
+ 9001 format(/,a)
+            write (output,9000) mcp
+ 9000 format (' Controls for couple mesh', i3)
+            if (icoup(mcp) .eq. 1) then
+              write (output,9010)'No '
+ 9010 format (5x,a,'debris bed exists.')
+            else
+              write (output,9010)' '
+            endif
+            write (output,9030) ncvolc(mcp)
+ 9030 format(/,'volume to receive debris is',i10)
+            write(output,9040)debsrc(nslphs(mcp)+2)
+ 9040 format (t5,'Debris source is ',a,'.')
+            if(nobrok(mcp).eq.0.or.nobrok(mcp).eq.2)then
+              write (output,9050) 'may'
+              if(nobrok(mcp).eq.2)write(output,9041)
+ 9041 format(t5,'Debris modeled as 50% quenched at time of settling.')
+            else
+              write (output,9050) 'may not'
+ 9050 format(/'COUPLE debris ',a,' be broken up.')
+            endif
+            write (output,9060) ntsc(mcp), dtcoup(mcp)
+ 9060 format(/'Maximum number of selap time steps per ',
+     # 'couple time step =',i5,/'Maximum couple time step =', e13.5)
+            if (nmcpwr .eq. mcp) write (output,9070)
+ 9070 format (/'COUPLE output file will be written for this mesh.')
+          endif
+        endif
+        icin = 0
+c read mesh control card
+        l5a(1) = 50010000 + 1000000*mcp
+c check for 103n cards
+        ncard=1030+mcp
+        call inplnk(ncard,next,istart,ndata,fa(filndx(1)))
+        if(ndata.gt.0)then
+          write(output,9990)ncard,l5a(1)
+          fail=.true.
+          goto 90
+        endif
+        call inplnk(l5a(1),next,istart,ndata,fa(filndx(1)))
+        if(ndata.eq.0.and..not.scntrl(7))then
+          write(output,9900)
+     #      'One card 5m010000 must be entered for each COUPLE mesh m.'
+          goto 100
+        endif
+        if(ndata.gt.0)then
+          l5a(6) = 1
+          call inp2 (fa(filndx(1)), xv, l5a)
+          if (l5a(6) .eq. 0) go to 90
+          if (l5a(6) .lt. 0) go to 100
+          if(.not.scntrl(7))then
+            write(output,9001)psep
+            write (output,9000) mcp
+          endif
+          if(iv(1).lt.-1 .or. iv(1).gt.1)then
+            write (output,9930) 1,l5a(1)
+            fail=.true.
+            if(.not.scntrl(7))then
+              icin=1
+            else
+              icin=-1
+            endif
+          else
+            icin=iv(1)
+          endif
+          if (icin .eq. 0) go to 20
+c   if couple input is to be read, set icoup(mcp) to -1 as a flag
+c   to be used in subr. couinp.
+          if (icin .eq. 1) icoup(mcp) = -1
+          if (l5a(6) .gt. 1) then
+            if (.not.scntrl(7)) then
+              ncvolc(mcp) = iv(2)
+              write (output,9030) ncvolc(mcp)
+              if (ncvolc(mcp) .le. 0) then
+                write(output,9900)'ncvolc must be > 0 on new problem'
+                fail = .true.
+              endif
+            else
+              if (iv(2) .ne. ncvolc(mcp) .and. iv(2) .ne. 0) then
+                write (output,9910) 2,l5a(1),
+     #          ' cannot be changed on restart.'
+                fail = .true.
+              endif
+            endif
+          endif
+          if (l5a(6) .gt. 2) then
+            if (.not.scntrl(7)) then
+              nslphs(mcp) = iv(3)
+              if(nslphs(mcp).le.-1 .or. nslphs(mcp).gt.2)then
+                fail=.true.
+                write(output,9930)3,l5a(1)
+                nslphs(mcp)=0
+              endif
+              write(output,9040)debsrc(nslphs(mcp)+2)
+              if (nslphs(mcp).eq.0 .or. nslphs(mcp).eq.1) then
+                if (nslph0 .eq. 0) then
+                  nslph0 = mcp
+                  if(ncvol.ne.0)then
+                    ncvolc(mcp) = ncvol
+                  else
+                    ncvol = ncvolc(mcp)
+                  endif
+c                 if (ncvolc(mcp) .ne. ncvol) then
+c                   write (output,9920)l5a(1),'must equal',ncvol
+c9920 format(/,'********* - Error, Word 2 on card',i10,a,i10)
+c                   fail=.true.
+c                 endif
+                else
+                  write (output,9900)
+     #               'Only 1 mesh allowed with LWR meltdown.'
+                  fail = .true.
+                endif
+              endif
+            else
+              if (iv(3) .ne. nslphs(mcp)) then
+                write (output,9910) 3,l5a(1),
+     #          'cannot be changed on restart.'
+                fail = .true.
+              endif
+            endif
+          endif
+          if (l5a(6) .gt. 3) nobrok(mcp) = iv(4)
+          if (l5a(6) .gt. 4) then
+            if (iv(5) .gt. 0) ntsc(mcp) = iv(5)
+          endif
+          if (l5a(6) .gt. 5) then
+            if (xv(6) .gt. 0.0) dtcoup(mcp) = xv(6)
+          endif
+          if (l5a(6) .gt. 6) then
+            if (iv(7) .ge. 1) then
+              if (nmcpwr .eq. 0) then
+                nmcpwr = mcp
+                kpr = iv(7)
+              else
+                write (output,9910)7,l5a(1),
+     #           'cannot be used more than once.'
+                fail = .true.
+              endif
+            endif
+          endif
+   20     continue
+          if (.not.scntrl(7)) then
+            if (icin .lt. 1) then
+              go to 90
+            else
+              ncpmsh = ncpmsh + 1
+              if(nobrok(mcp).eq.0.or.nobrok(mcp).eq.2)then
+                write (output,9050) 'may'
+                if(nobrok(mcp).eq.2)write(output,9041)
+              else
+                write (output,9050) 'may not'
+              endif
+              write (output,9060) ntsc(mcp), dtcoup(mcp)
+              if (nmcpwr .eq. mcp) write (output,9070)
+            endif
+          else
+            if (icin .eq. 0) then
+              if (icoup(mcp) .gt. 0) then
+                ncpmsh = ncpmsh - 1
+                write (output,9170) mcp
+ 9170 format ('$$$$$$$$ couple model is turned off for mesh', i3,
+     +' on restart.')
+                icoup(mcp) = 0
+              endif
+              go to 90
+            else if (icin .eq. -1) then
+              if (icoup(mcp) .gt. 0) then
+                write (output,9180)
+ 9180 format ('0   restart values above replaced as follows -')
+              else
+                go to 90
+              endif
+            else
+              if (icoup(mcp) .gt. 1) then
+                write (output,9190)
+ 9190 format ('0******** couple model cannot be',
+     +' changed after debris bed exists.')
+                go to 100
+              endif
+              if (icoup(mcp) .eq. 0) then
+                if (nsqslp.gt.0.and. nslphs(mcp).eq.0) then
+                  write (output,9200)
+ 9200  format ('0******** couple model cannot be activated for nslphs = 
+     &0 after slumping starts.')
+                  go to 100
+                endif
+              endif
+              if (icoup(mcp) .eq. 0) then
+                write (output,9210) mcp
+ 9210 format ('0$$$$$$$$ couple model being activated for mesh', i3,
+     +' on restart.')
+                ncpmsh = ncpmsh + 1
+              else
+                write (output,9220) mcp
+ 9220 format ('0$$$$$$$$ couple model being changed for mesh',i3,
+     +' on restart.')
+                write (output,9180)
+              endif
+            endif
+            if (l5a(6) .gt. 2) then
+              if(nobrok(mcp).eq.0.or.nobrok(mcp).eq.2)then
+                write (output,9050) 'may'
+                if(nobrok(mcp).eq.2)write(output,9041)
+              else
+                write (output,9050) 'may not'
+              endif
+              write (output,9060) ntsc(mcp), dtcoup(mcp)
+              if (nmcpwr .eq. mcp) write (output,9070)
+            endif
+          endif
+          if (nobrok(mcp).lt.0.or. nobrok(mcp).gt.2) then
+            write (output,9910)4,l5a(1),' must be 0, 1, or 2'
+            fail = .true.
+          endif
+          if (icin .gt. 0) then
+c  read couple control card 2 if needed.
+            if (nslphs(mcp) .eq.  2.or. nslphs(mcp) .eq. 3) then
+              l5b(1) = 50002000 + 1000000*mcp
+c check for 104n cards
+              ncard=1040+mcp
+              call inplnk(ncard,next,istart,ndata,fa(filndx(1)))
+              if(ndata.gt.0)then
+                write(output,9990)ncard,l5b(1)
+                fail=.true.
+                goto 90
+              endif
+              l5b(2) = l5b(1)
+              l5b(6) = 1
+              call inp2 (fa(filndx(1)), xv, l5b)
+              if (l5b(6) .lt. 0) go to 100
+              ncmesh(mcp) = l5b(6)
+              do 30 i=1,l5b(6)
+   30         icmesh(i,mcp) = iv(i)
+              write (output,9240) (icmesh(i,mcp),i=1,l5b(6))
+ 9240 format ('0     scdap components connected to this couple',
+     +' mesh =',6i3)
+            endif
+          endif
+        endif
+        if (nslphs(mcp) .ne. 2) go to 60
+c  Read and process Couple power card.
+        if (scntrl(7)) then
+          write (output,9250) ncpowi(mcp)
+ 9250 format ('0  Power option for this Couple mesh =', i6)
+          if (ncpowi(mcp) .eq. 0) then
+            write (output,9260)
+ 9260 format ('   Constant power from slumping material')
+          else if (ncpowi(mcp) .eq. 1) then
+            write (output,9270) pmufot(mcp), pmufdk(mcp), pmuadk(mcp)
+ 9270 format ('   Power determined by Relap5 reactor kinetics in',
+     +' Scdap components' /
+     +'     Multiplier for fission power in Couple mesh    =',e13.5/
+     +'     Multiplier for f.p. decay power in Couple mesh =',e13.5/
+     +'     Multiplier for act. decay power in Couple mesh =',e13.5)
+          else if (ncpowi(mcp) .eq. 2) then
+            write (output,9280) pmufot(mcp)
+ 9280 format ('0  Power determined by power other than Relap5'
+     +' reactor kinetics in Scdap components' /
+     +'   Multiplier for total power in Couple mesh =',e13.5)
+          endif
+        endif
+        l5c(1) = 50003000 + 1000000*mcp
+c check for 11n0 cards
+        ncard=1100+ 10*mcp
+        call inplnk(ncard,next,istart,ndata,fa(filndx(1)))
+        if(ndata.gt.0)then
+          write(output,9990)ncard,l5c(1)
+          fail=.true.
+          goto 90
+        endif
+        l5c(2) = l5c(1)
+        l5c(6) = 1
+        call inp2 (fa(filndx(1)), xv, l5c)
+        if (l5c(6) .lt. 0) go to 100
+        if (l5c(6) .gt. 0) then
+          if (scntrl(7)) write (output,9180)
+          ncpowi(mcp) = iv(1)
+        endif
+        write (output,9250) ncpowi(mcp)
+        if (ncpowi(mcp) .eq. 0) then
+          write (output,9260)
+        else if (ncpowi(mcp) .eq. 1) then
+          if (l5c(6) .gt. 1) pmufot(mcp) = xv(2)
+          if (l5c(6) .gt. 2) pmufdk(mcp) = xv(3)
+          if (l5c(6) .gt. 3) pmuadk(mcp) = xv(4)
+          write (output,9270) pmufot(mcp), pmufdk(mcp), pmuadk(mcp)
+        else if (ncpowi(mcp) .eq. 2) then
+          if (l5c(6) .gt. 1) pmufot(mcp) = xv(2)
+          write (output,9280) pmufot(mcp)
+        else
+          write (output,9930)1,l5c(1)
+          fail = .true.
+        endif
+   40   continue
+        if (ncpowi(mcp) .eq. 1) then
+c  Read fission product power fractions card(s) if present.
+          l5d(1) = 50003001 + 1000000*mcp
+c check for 11n0 cards
+          ncard=1101+ 10*mcp
+          call inplnk(ncard,next,istart,ndata,fa(filndx(1)))
+          if(ndata.gt.0.or.next.lt.1101+ 10*mcp)then
+            write(output,9990)ncard,l5d(1)
+            fail=.true.
+            goto 90
+          endif
+          l5d(2) = l5d(1) + 8
+          l5d(6) = 1
+          call inp2 (fa(filndx(1)), xv, l5d)
+          if (l5d(6) .gt. 0) then
+            if (l5d(6) .ne. 19) fail = .true.
+            qfrsum = 0.0
+            write (output,9310)
+ 9310 format ('0 Fraction of fission product decay heat due to ',
+     +' each species -')
+            do 50 n = 1, l5d(6)
+              qfrspi(n,mcp) = xv(n)
+              qfrsum = qfrsum + qfrspi(n,mcp)
+              if (qfrspi(n,mcp) .ne. 0.0) then
+                write (output,9320) chaidx(n), qfrspi(n,mcp)
+ 9320 format (7x,a4,e13.5)
+              endif
+              if (qfrspi(n,mcp) .lt. 0.0) then
+                write (output,9330)
+ 9330 format ('0******** Negative power fraction')
+                fail = .true.
+              endif
+   50       continue
+            if (qfrsum .le. 0.0) then
+              write (output,9340)
+ 9340 format ('     All fractions = 0.0')
+            else if (qfrsum .gt. 1.0) then
+              write (output,9350) qfrsum
+ 9350 format ('0$$$$$$$$ Warning - fractions sum =',e12.4)
+            endif
+          endif
+        endif
+   60   continue
+        if (icin .gt. 0) then
+c   initialize common /coupl/
+          hgtdeb(mcp) = 0.0
+          pdmave(mcp) = 0.0
+          porave(mcp) = 0.0
+          powave(mcp) = 0.0
+          powdmx(mcp) = 0.0
+          stmass(mcp) = 0.0
+          tave(mcp) = 0.0
+          timc(mcp) = timehy + dtcoup(mcp)
+          tmpdmx(mcp) = 0.0
+          twalmx(mcp) = 0.0
+          wtmdeb(mcp) = 0.0
+          itsc(mcp) = 0
+          ncdtsl(mcp) = 0
+          ncslp(mcp) = 0
+          npowdm(mcp) = 1
+          ntmpdm(mcp) = 1
+          ntwalm(mcp) = 1
+          do i=1,maxcon
+            afrdeb(i,mcp) = 0.0
+            ws(i,mcp) = 0.0
+            wst(i,mcp) = 0.0
+          enddo
+        endif
+   90 continue
+cljs 
+cljs   set default value for number of slumpings. For all but
+cljs   user defined slumping, ntpslp(mcp) = 1.
+        ntpslp(1) = 1
+c  Check for user-defined slumping.
+        if(ndbg.eq.1)then
+        write(output,9091)mcp,nslphs(mcp)
+9091    format(' RCOUPL just before call RSLPHS; mcp=',i5,
+     &  ' nslphs(mcp)=',i5)
+        end if
+cljs  After do loop 90 completed, mcp has value of 2. Since coding
+cljs  designed only for one Couple mesh, reset mcp=1.
+      mcp = 1
+          if(ndbg.eq.1)then
+          write(output,9095)mcp,nslphs(mcp)
+9095      format(' RCOUPL before RSLPHS; mcp=',i5,' nslphs(mcp)=',i5)
+          end if
+        if(nslphs(mcp).eq.1)then
+c       call user defined slumping of material to lower head 
+        call rslphs
+          if(ndbg.eq.1)then
+          write(output,9096)
+9096      format(' RCOUPL; RSLPHS called')
+          end if
+        end if
+      return
+  100 fail = .true.
+      icin = 0
+      return
+ 9900 format('0********* - Error, ',a)
+ 9910 format('0********* - Error, Word',i3,' on card',i10,a)
+ 9930 format('0********* - Error, Word',i3,' on card',i10,
+     #      ' out of range.')
+ 9990 format(1h0,'********* Error. Your card',i10,
+     #                  ' should be numbered',i10,'.')
+       end

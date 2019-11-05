@@ -1,0 +1,359 @@
+      SUBROUTINE SLOWTRAN(
+     &  RIVELO,TNF,DLW,DLL,DLN ,DLNV,DLNU,FNSWT,FNPPOT,SW,VOLU,
+     &  ZB,TIMEFP,PRFP,PMFP,TINFP,ZBFP,DELTFP,AVBU,BUPM,PPM,
+     &  ISAVE,ITRR,WOM)
+C     
+C     THIS SUBROUTINE PROVIDES OVERALL CONTROL OF THE TRANSIENT FISSION
+C     PRODUCT PROBLEM
+C
+      use     iss_rk3d_int,   ONLY: rel2rk3d,rk3d2rel !vmq       
+      use     rk3dcode, only:fcallss   !vmq  
+    
+      include 'param.fcb'
+      include 'veloc.fcb'
+      include 'restinp.fcb'
+      include 'burn.fcb'
+      include 'che.fcb'
+      include 'cntl.fcb'
+      include 'crod.fcb'
+      include 'geom.fcb'
+      include 'perttr.fcb'
+      include 'nonfue.fcb'
+      include 'power.fcb'
+      include 'soln2.fcb'
+      include 'start.fcb'
+      include 'thermk.fcb'
+      include 'thermo.fcb'
+      include 'tim.fcb'
+      include 'time.fcb'
+      include 'xsec1.fcb'
+      include 'crit.fcb'
+      include 'fpxs.fcb'
+      include 'varlen.fcb'
+      include 'varlens.fcb'
+      include 'array.fcb'
+      
+      DIMENSION
+     &  TIMEFP(NFP)                     ,PRFP(*)                 ,
+     &  PMFP(*)                         ,TINFP(*)                ,
+     &  ZBFP(NBMAX,*)                   ,DELTFP(*)               ,
+     &  RIVELO(NXYL,NZ,*)               ,FNSWT(NXYL,*)           ,
+     &  FNPPOT(NXYL,*)                  ,ZB(*)                   ,
+     &  SW(NXYL,NZ,*)                   ,DLN(NXYT,NZ,*)          ,
+     &  DLL(NXYL,NZ+1,*)                ,DLW(NXYT,NZ,*)          ,
+     &  DLNV(NXYT,NZ,*)                 ,DLNU(NXYT,NZ,*)         ,
+     &  TNF(NXYL,NZ,*)                  ,ISAVE(*)                ,
+     &  VOLU(NXYL,*)                    ,AVBU(*)                 ,
+     &  PPM(*)                          ,BUPM(*)                 ,
+     &  ITRR(*)                         ,WOM(*)
+      
+      CHARACTER*8 ISAVE
+
+      SL3=.FALSE.
+      IWFLAG=1
+      
+      BUIN=AVBU(IBU)
+      IF (IRSTRT.EQ.'Y' .OR. .NOT. fcallss) GOTO 114 !vmq
+      CALL PINTER(BUPM,PPM,NPPMX,BUIN,PM)
+ 114  CONTINUE
+C     
+C.....INITIALIZE THE VALUE OF RIVELO FOR STEADY STATE
+C     
+      DO 112 IXY=1,NXYL
+       DO 113 IZ=1,NZ
+        DO 115 IG=1,NG
+         RIVELO(IXY,IZ,IG) = 0.0
+ 115    CONTINUE
+ 113   CONTINUE
+ 112  CONTINUE
+      
+      LTHSHORT = 1
+      CALL XSFDBK(
+     &  A(LDCLN),A(LDLNN),A(LDCWN),A(LDCNVN),A(LDCNUN),A(LDLLN),
+     &  A(LDLWN),A(LDCNN),A(LDLNVN),A(LDLNUN),A(LRIVELON),A(LRNURON),
+     $  A(LRNURIN),A(LB2N),A(LDOPLN),
+     &  A(LRHOWN),A(LDXEN),A(LDSMN),A(LDXN),A(LDYN),
+     &  A(LDZN),A(LVOLUN),A(LAWXN),A(LAWUN),A(LAWVN),A(LAWZN),A(LAWYN),
+     &  A(LBWYN),A(LBWXN),A(LBWUN),A(LBWVN),A(LBWZN),A(LAQN),A(LTCDN),
+     &  A(LTCAN),A(LTCRN),A(LTNFN),A(LTPFN),A(LTXTN),A(LSIGDSNN),
+     &  A(LBETAN),
+     &  A(LBETAMIN),A(LXHIPN),A(LXHIPMIN),A(LBETATN),A(LXHIDMIN),
+     &  A(LBETATLAMN),A(LFU5N),A(LFU8N),A(LFPU9N),A(LFPU0N),A(LFPU1N),
+     &  A(LFPU2N),A(LSWN),A(LDU38N),A(LDPU39N),A(LDPU40N),A(LDPU41N),
+     &  A(LDU35N),A(LDPU42N),A(LRNUU5N),A(LRNUU8N),A(LRNUP9N),
+     &  A(LRNUP0N),A(LRNUP1N),A(LRNUP2N),AINT(LNCOLXYN),AINT(LNCOLZN),
+     &  AINT(LNBCN),AINT(LNXSTARTN),AINT(LNXENDN),AINT(LNDNUMN),
+     &  AINT(LNMAXN),A(LXXEABN),A(LXSMABN),A(LRNUN),A(LTCOLCN),
+     &  A(LFRACTN),A(LRHOWREFN),A(LTCOLREFN),
+     &  A(LGIN),A(LGXN),A(LGPN),A(LGINMIN),
+     &  A(LGXNMIN),A(LGPNMIN),A(LFU5PYRON),A(LFU8PYRON),A(LFPU9PYRON),
+     &  A(LFPU0PYRON),A(LFPU1PYRON),A(LFPU2PYRON),
+     &  A(LFU5PYRIN),A(LFU8PYRIN),A(LFPU9PYRIN),
+     &  A(LFPU0PYRIN),A(LFPU1PYRIN),A(LFPU2PYRIN),
+     &  LTHSHORT,A(LTTCOLINN),A(LFU6N),A(LDU36N),A(LRNUU6N),
+     &  A(LFU6PYRON),A(LFU6PYRIN),A(LFU4N),A(LDU34N),A(LRNUU4N),
+     &  A(LFU4PYRON),A(LFU4PYRIN),A(LRHOWMREFN),
+     &  A(LREFBN),
+     &  A(LDAM41N),A(LFAM1N),A(LFAM1PYRON),A(LFAM1PYRIN),A(LRNUA1N),
+     &  A(LALAMDATN),A(LALAMDAMIN),A(LBFACTN),
+     $   A(LTXTON),A(LTNFON),A(LTPFON))
+      
+C     
+C=====INITIALIZING THE CORRECTIONS IN THE COUPLING TO 0.00
+C     
+      DO 16 IZ=1,NZ
+       DO 6 IXY=1,NXYL
+        DO 68 IG=1,NG
+         IF(IRSTRT.EQ.'Y' .OR. .NOT. fcallss) GOTO 68   !vmq
+         
+         DLW (IXY,IZ,IG) = 0.0
+         DLL (IXY,IZ,IG) = 0.0
+         
+         IF(NSHAP.EQ.'CART') THEN
+          DLN (IXY,IZ,IG) = 0.0
+         ELSEIF(NSHAP.EQ.'HEXA') THEN
+          DLNV(IXY,IZ,IG)=.0
+          DLNU(IXY,IZ,IG)=.0
+         ENDIF
+         
+ 68     CONTINUE
+ 6     CONTINUE
+ 16   CONTINUE
+
+      IF(IRSTRT.NE.'Y' .OR. fcallss)THEN  !vmq
+       DO 466 IZ=1,NZ
+        DO 467 IXY=1,NXYL
+         FNSWT(IXY,IZ) = 0.0
+         DO 468 IG=1,NG
+          FNSWT(IXY,IZ) =FNSWT(IXY,IZ)
+     *      +        TNF(IXY,IZ,IG)*SW(IXY,IZ,IG)
+     *      *VOLU(IXY,IZ)
+ 468     CONTINUE
+ 467    CONTINUE
+ 466   CONTINUE
+      ENDIF
+      
+C     
+C-----FOR RESTART CASE DO NOT INITIALIZE FISSION SOURCE ,
+C     OUTER ITERATION INDEX
+      
+      IF (IRSTRT .EQ. 'Y'.OR. .NOT. fcallss) GOTO 1998
+      
+      DO 91 IZ=1,NZ
+       DO 90 IXY=1,NXYL
+        FNPPOT(IXY,IZ)=FNSWT(IXY,IZ)
+ 90    CONTINUE
+ 91   CONTINUE
+ 1998 CONTINUE
+      
+C     
+C-------START THE XE-SM TRANSIENT PROCEDURE
+C     
+      DO 2000 IFP=1,NFP
+C     
+C---  INITIALIZING CLOCKS
+C     
+       TXSFDST=0.0
+       TSCALST=0.0
+       TTHST=0.0
+       TLSST=0.0
+C     
+C---  INITIALIZING THE CHEBYSHEC CYCLE
+C     
+       NEWCP = 1
+       
+C     
+C---- INITIALIZE THE STEADY-STATE OUTER ITERATION INDEX
+C     
+       KSST = 0
+       
+       PROLD = PR
+C     
+C--------------------ASSIGN THE VARIOUS CORE PARAMETERS
+C     
+       PM  = PMFP(IFP)
+       PR  = PRFP(IFP)
+       TINFPP = TINFP(IFP)
+       
+       DO 29 IBK=1,NBACU
+        ZB(IBK) = ZBFP(IBK,IFP)*2.54+RODOFFSET
+ 29    CONTINUE
+       
+       DT = DELTFP(IFP)
+       THR = TIMEFP(IFP)
+       CCF=PR*QT
+       T=THR*3600.
+       DT=DT*3600.
+       
+C     
+C-----OUTPUT TO THE SCREEN
+C     
+       ICRT = 3
+       
+C !vmq       IF(CRTON.EQ.'Y') THEN
+C !vmq        NADJ=0
+C !vmq        CALL OUTPCRT(NADJ,ICRT,A(LAVBUN),A(LZBN),A(LZBTRN) )
+C !vmq       ENDIF
+       
+C     
+C     INITIALIZING INPUT TEMPERATURE ( INPUT TO THE BOTTOM OF THE CORE )
+C=====================================================================
+C     *
+       TCOLIN = TINFPP
+       
+       SCALEV  = QT*PR
+       
+       CALL RELPOWER(SCALEV,
+     &   A(LPWRDNN),A(LRELPWRN),A(LZETAN),A(LDIN),
+     &   A(LALPHATN),A(LVOLUN),A(LSWN),A(LTPFN),
+     &   AINT(LNCOLXYN),AINT(LNCOLZN),A(LFRACTBN) ,
+     $     A(LRELPWRSN),A(LSWSN),A(LTPFSN))
+
+       CALL GTIME(TIN)
+
+       !vmq
+       
+C       CALL THFDBKS(A(LPWRDNN),A(LRELPWRN),A(LGGMKN),
+C     &   A(LAREAN),A(LWTFRRIN),A(LVOLUN),A(LRHOWN),A(LTAVFN),
+C     &   A(LHEFFN),A(LDOPLN),AINT(LNCOLXYN),AINT(LNCOLZN),A(LTCOLCN),
+C     &   A(LTFREFN),A(LUNEWN))
+
+       call rel2rk3d !vmq
+       CALL GTIME(TOUT)
+       TTHST=TTHST+(TOUT-TIN)
+       
+       CALL TXENON( A(LTPFN),A(LVOLUN),A(LSWN),A(LDXEN),A(LDSMN),
+     &   A(LDION),A(LDPMN),A(LTNFN),A(LXXEABN),A(LXSMABN),A(LRNUN),
+     &   A(LGIN),A(LGXN),A(LGPN),AINT(LNCOLXYN),AINT(LNCOLZN),
+     &   A(LFRACTBN) )
+       
+       CALL CNTROD( A(LZBN),A(LDISTN),A(LFRACTN),AINT(LLRODN) )
+       
+       CALL GTIME(TIN)
+       
+       LTHSHORT = 0
+       CALL XSFDBK(
+     &   A(LDCLN),A(LDLNN),A(LDCWN),A(LDCNVN),A(LDCNUN),A(LDLLN),
+     &   A(LDLWN),A(LDCNN),A(LDLNVN),A(LDLNUN),A(LRIVELON),A(LRNURON),
+     $   A(LRNURIN),
+     &   A(LB2N),A(LDOPLN),
+     &   A(LRHOWN),A(LDXEN),A(LDSMN),A(LDXN),A(LDYN),
+     &   A(LDZN),A(LVOLUN),A(LAWXN),A(LAWUN),A(LAWVN),A(LAWZN),
+     $   A(LAWYN),
+     &   A(LBWYN),A(LBWXN),A(LBWUN),A(LBWVN),A(LBWZN),A(LAQN),A(LTCDN),
+     &   A(LTCAN),A(LTCRN),A(LTNFN),A(LTPFN),A(LTXTN),A(LSIGDSNN),
+     &   A(LBETAN),
+     &   A(LBETAMIN),A(LXHIPN),A(LXHIPMIN),A(LBETATN),A(LXHIDMIN),
+     &   A(LBETATLAMN),A(LFU5N),A(LFU8N),A(LFPU9N),A(LFPU0N),A(LFPU1N),
+     &   A(LFPU2N),A(LSWN),A(LDU38N),A(LDPU39N),A(LDPU40N),A(LDPU41N),
+     &   A(LDU35N),A(LDPU42N),A(LRNUU5N),A(LRNUU8N),A(LRNUP9N),
+     &   A(LRNUP0N),A(LRNUP1N),A(LRNUP2N),AINT(LNCOLXYN),AINT(LNCOLZN),
+     &   AINT(LNBCN),AINT(LNXSTARTN),AINT(LNXENDN),AINT(LNDNUMN),
+     &   AINT(LNMAXN),A(LXXEABN),A(LXSMABN),A(LRNUN),A(LTCOLCN),
+     &   A(LFRACTN),A(LRHOWREFN),A(LTCOLREFN),
+     &   A(LGIN),A(LGXN),A(LGPN),A(LGINMIN),
+     &   A(LGXNMIN),A(LGPNMIN),A(LFU5PYRON),A(LFU8PYRON),A(LFPU9PYRON),
+     &   A(LFPU0PYRON),A(LFPU1PYRON),A(LFPU2PYRON),
+     &   A(LFU5PYRIN),A(LFU8PYRIN),A(LFPU9PYRIN),
+     &   A(LFPU0PYRIN),A(LFPU1PYRIN),A(LFPU2PYRIN),
+     &   LTHSHORT,A(LTTCOLINN),A(LFU6N),A(LDU36N),A(LRNUU6N),
+     &   A(LFU6PYRON),A(LFU6PYRIN),A(LFU4N),A(LDU34N),A(LRNUU4N),
+     &   A(LFU4PYRON),A(LFU4PYRIN),A(LRHOWMREFN),A(LREFBN),
+     &   A(LDAM41N),A(LFAM1N),A(LFAM1PYRON),A(LFAM1PYRIN),A(LRNUA1N),
+     &   A(LALAMDATN),A(LALAMDAMIN),A(LBFACTN),
+     $   A(LTXTON),A(LTNFON),A(LTPFON))
+       
+       IF(IOUTER.EQ.2) THEN
+        WSCALE=0.0
+        CALL WSHIFT(A(LTNFN),
+     &    A(LSWN),A(LFNSWTN),A(LFNSHIFTN),A(LBETATN),
+     &    A(LXHIPN),A(LBETATLAMN),A(LFILAMDT1N))
+       ENDIF
+       
+       CALL TRIDIA0( A(LRBWXVN),A(LBBWXVN),
+     &   A(LRBFVN),A(LBBFVN),A(LRQWVN),A(LBQWVN),
+     &   A(LYBWXVN),A(LYBFVN),A(LYQWVN),A(LAWZN),
+     &   A(LBWZN),A(LAQN),AINT(LIRPLANN),AINT(LIBPLANN),
+     &   AINT(LIYPLANN),A(LBFN),A(LQWN),A(LFNSHIFTN) )
+       
+       CALL GTIME(TIN)	  
+       CALL LSORB0(A(LSSWN),AINT(LITRRN),A(LWOMN),
+     &   A(LWOMON),A(LFLUXN) )
+       CALL GTIME(TOUT)
+       TLSST=TLSST+(TOUT-TIN)
+
+       IF(NPC.EQ.'Y') THEN
+        WRITE(55,880)
+        WRITE(55,881) (IG,WOM(IG),ITRR(IG),IG=1,NG)
+ 880    FORMAT(//1X,'ENERGY',
+     *    /1X,'GROUP  ',9X,'OMEGA',7X,'INNER IT./OUTER IT.')
+ 881    FORMAT(3X,I2,6X,E13.5,11X,I3)
+       ENDIF
+       
+       IF(IRSTRT .EQ. 'Y' .OR. .NOT. fcallss)  GOTO 7998 !vmq
+       SN = 0.
+       DO 12 IZ=1,NZ
+        DO 11 IXY=1,NXYL
+         DO 10 IG=1,NG
+          SN=SN+TNF(IXY,IZ,IG)*SW(IXY,IZ,IG)*VOLU(IXY,IZ)
+ 10      CONTINUE
+ 11     CONTINUE
+ 12    CONTINUE
+       CKM=1.0
+       FISLNM=SN
+       EFFKINP = CKM
+       FISLNN=FISLNM
+       
+ 7998  CONTINUE
+       
+       IF(IONCE.EQ.0)THEN
+        CKE = EFFKINP
+        IONCE=1
+       ENDIF
+       
+       CALL OUTIN(
+     &   A(LBETATN),A(LBETATLAMN),A(LAVBUN),A(LVOLUN),
+     &   A(LFNSWTN),A(LFNPPOTN),A(LFNPPPOTN),A(LSWN),A(LTNFN),
+     &   A(LSIGDSNN),A(LXHIPN),A(LSEXTN),A(LSCWN),A(LSCATN),
+     %   AINT(LITRRN),A(LWOMN),A(LWOMOLDN),AINT(LLSEXTZN),
+     &   AINT(LLSEXTRN),A(LFNSHIFTN),A(LSWPPOTN))
+       
+       SCALEV = CCF
+       
+       CALL PEAK(A(LRELPWRN),AINT(LNXSTARTN),AINT(LNXENDN),
+     &   AINT(LNDNUMN) )
+       
+       ICRT = 3
+       IF(CRTON.EQ.'Y') THEN
+        NADJ=0
+        CALL OUTPCRT(NADJ,ICRT,A(LAVBUN),A(LZBN),A(LZBTRN) )
+       ENDIF
+       
+       IOFLAGXE=0
+       IF(IFP.LT.NFP.AND.ISAVE(IBU).EQ.'Y') THEN
+        IOFLAGXE=1
+        ISAVE(IBU)='N'
+       ENDIF
+
+       CALL OUTPUTSS
+     &   (A(LTPFN),A(LRELPWRN),A(LDXEN),A(LDION),A(LDPMN),A(LDSMN),
+     &   A(LAVBUN),A(LDELBUN),A(LBUNODEN),A(LVOLUN),A(LSWN),
+     &   A(LFNSWTN),A(LZBN),A(LTCOLCN),A(LTAVFN),A(LUNEWN),A(LRHOWN),
+     &   A(LDLNN),A(LDLLN),A(LDLWN),A(LDLNVN),A(LDLNUN),A(LDU38N),
+     &   A(LDPU39N),A(LDPU40N),A(LDPU41N),A(LDU35N),A(LDLFP1N),
+     &   A(LDLFP2N),A(LDPU42N),AC(LISAVEN),AC(LOUTN),AINT(LNCOLXYN),
+     &   AINT(LNCOLZN),AINT(LNXSTARTBN),AINT(LNXENDBN),AINT(LNXSTARTN),
+     &   AINT(LNXENDN),AINT(LNDNUMN),A(LFRACTBN),A(LDU36N),
+     &   A(LDU34N),A(LDBPN),A(LDOPLN),A(LTMODCN),A(LRHOWMN)
+     $   ,A(LAKINFN),A(LTNFN),A(LTCRN),A(LTCAN),A(LTCDN),A(LTXTN)
+     $   ,A(LXXEABN),A(LXSMABN),A(LDAM41N))
+       
+       IF(IOFLAGXE.EQ.1) ISAVE(IBU)='Y'
+       
+       IRSTRT='N'
+       
+ 2000 CONTINUE
+      call rk3d2rel !vmq      
+      RETURN
+      END
+ 

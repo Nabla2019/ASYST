@@ -1,0 +1,175 @@
+*mlist
+*if def,selap
+       subroutine oxconb4c (i,who,wso,waro,qab,
+     #  dwscb,dh21,tsurf)
+!  Computes steady state cladding oxidation for B4C control rod.
+! 
+!  The correlations in this subroutine were taken from zoxdat.ff
+!  correlations were originally used for oak ridge BWR channelbox
+!  model
+!
+!   Cognizant engineer: 
+!
+!     input variables                  description
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+!
+
+!
+       include 'scddat.h'
+       include 'scdcom.h'
+       include 'scdout.h'
+       include 'cmatp.h'
+       include 'miscon.h'
+       include 'ndxara.h'
+       include 'ufiles.h'
+       include 'contrl.h'
+       include 'conele.h'
+       include 'comctl.h'
+       include 'blageo.h'
+       include 'upccon.h'
+       include 'tblsp.h'
+       include 'buntim.h'
+       include 'fast.h'
+       include 'voldat.h'
+!     
+      real(kr)  qab, dwscb,tsurf,prest,presst
+      integer i,k,flag
+!  Local variables.
+       real(kr) who,wso,waro,
+     &   amw(18),yin(18),yout(18),y0(18),
+     &   dco, dco2, dch4, dh21, db2o3,
+     &   mh2oin,mh2in,Ea,k0,a0,a1,b4cgain,
+     &   reab4c,limb4c,r0,rab,pi,tvol,tbulk,
+     &   mb2o3,heat1,heat2
+       external snfunc
+       real  snfunc,aden
+       integer ic, il,jk,l,ictype
+       data amw/  2.016, 18.015, 28.011, 16.043, 44.010,
+     1   69.620, 87.636, 43.818, 13.835, 27.670, 27.818, 
+     2   15.999, 31.999,55.255, 69.620, 10.811, 12.011, 
+     3   39.948/
+       data r0,pi /8.31, 3.1416/
+       ictype = 2
+!
+c
+c  k=ko(molB4C/m2/s)*exp(-Ea/RT)*P_H2O**alpha*P_tot**beta
+c
+c  flag =1 : VERDI BOX data 
+c           2 : Veshchunov(2005)
+c           3 : IRSN(2006)
+c  Reference : Progress on B4C modelling in Severe Accident Codes 
+c  in the frame of SARNET network of excellence Applications to Phebus
+c  and Quench experiments, G. Repetto et. al
+
+c ********Externalize
+       flag=3
+       goto (100,200,300),flag
+  100   if(tsurf .le. 1800.0) then
+             Ea=1.503e5
+             k0=1.143e3
+           else
+             Ea=2.586e5
+             k0=1.471e6
+           endif
+           a0=0.
+           a1=0.
+           goto 400             
+c the true correlation is the sum of two terms           
+  200   if(tsurf .le. 1373.0) then
+             Ea=2.16e4
+             k0=2.5e-7
+           else
+             Ea=3.829e5
+             k0=6.0e5
+           endif
+           a0=1.
+           a1=0.
+           goto 400             
+  300   if(tsurf .le. 1400.0) then
+             Ea=2.5e4
+             k0=4.331e-6
+           else
+             Ea=1.775e5
+             k0=3.64
+           endif
+           a0=1.
+           a1=-0.25
+           goto 400             
+
+  400 continue
+c
+c Reference : Modelling of B4C oxidation by Steam at hight temperatures based on
+c Separate-effects tests and its application to the bundle experiment quench-07
+c M.S.Veshchunov et. al (FZKA 7118)
+c B2O3(g)+3H2O(g) <-->  2H3BO3(g)
+c B2O3(g)+3H2O(g) <-->  2HBO2(g)
+c CO(g)+H2O(g) <-->CO2(g)+H2(g)
+c CH4(g)+H2O(g) <-->CO(g)+3H2(g)
+c These four equilibrium equation above should be considered with 
+c non-equibrium euquation below
+c
+c B4C+8H2O(g) --> 2B2O3 +CO2(g) + 8H2(g) 
+c 
+c Therefore first advance chemiical reaction with the equation below to cousume the 
+c computed B4C mass from the kinetics then apply solgasmix code based on the mass
+c provided by the  non-equibrium equation. The production of CO and CH4 can be 
+c  explained by combining with four equibrium equations.
+c Solgasmix consider 1: H2, 2:H2O,3:CO,4:CH4,5:CO2,6:B2O3(g),7:H3B3O6,
+c   8:HBO2,9:BH3,10:B2H6,11:BOH,12:O,13:O2,14:Ar,15:B4C,16:B2O3(l,s),
+c 17:B, 18:C
+c Note:  3H3BO3(g) = H3B3O6(g) + 3H2O(g)      
+
+       il = nvad((icomp - 1)*ndax + i) + filndx(4)  
+       presst = pps(il)
+       prest =p(il)       
+       mh2oin=wso*dt*1000.0/amw(2)
+       mh2in=who*dt*1000.0/amw(1)
+       mb2o3=cwb2o3(i,icomp)*1000.0/amw(15)
+c       mh2in=0.0
+       b4cgain=k0*exp(-Ea/r0/tsurf)*(presst**a0)*(prest**a1)
+       rab=(cwb4c(i,icomp)/aden(ictype,tsurf)/pi)**0.5
+       reab4c = b4cgain*dt*snfunc(ngeom(icomp)
+     &       ,rab,dzcnd2(i,icomp),1.0) 
+       limb4c  = mh2oin/8.0
+       if(reab4c .ge. limb4c) reab4c=limb4c       
+       
+       cwb4c(i,icomp)=cwb4c(i,icomp)-reab4c*amw(14)/1.e3
+       qab=(867.4-0.06706*tsurf)*reab4c
+c consider chemical equibrium state close to B4C pellet
+c consider only H2O comming from bulk flow       
+       do 500 jk=1,18
+ 500    yin(jk)=0.0
+       yin(1)=reab4c*8.0
+       yin(2)=mh2oin-reab4c*8.0
+       if(tsurf.le.1600.)then        
+          yin(16)=mb2o3+reab4c*2.
+       else
+          yin(6)=reab4c*2.
+          qab = qab-yin(6)*405.
+       endif
+       yin(5)=reab4c
+       call b4cadvsi(tsurf,prest,yin,y0,heat1)
+       cwb2o3(i,icomp)=y0(16)*amw(15)/1.e3
+c consider then chemical equibrium state at bulk flow
+c consider all present gases                
+       do 600 jk=9,18
+ 600    y0(jk)=0.0
+       y0(1)=y0(1)+mh2in
+       y0(14)=waro*dt*1000.0/amw(18)
+       il = nvad((icomp-1)*ndax+i) + filndx(4)
+       tvol=tempg(il) 
+       tbulk=(tsurf+ tvol)/2.0               
+       call b4cadvsi(tbulk,prest,y0,yout,heat2)         
+       dco  =yout(3)*amw(3)/1000.0/dt
+       dco2 =yout(5)*amw(5)/1000.0/dt
+       dch4 =yout(4)*amw(4)/1000.0/dt 
+       dh21 =(yout(1)-mh2in)*amw(1)/1000.0/dt
+       dwscb=(mh2oin-yout(2))*amw(2)/1000.0/dt
+       cooxd2(i,icomp)=dco
+       co2oxd2(i,icomp)=dco2
+       ch4oxd2(i,icomp)=dch4 
+       qab=(qab-heat1-heat2)*1.e3
+      return
+      end
+*endif

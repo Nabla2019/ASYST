@@ -1,0 +1,142 @@
+*mlist
+*if def,selap
+      subroutine ruptur (igm,imat,radi,rado,pri,pro,tbar,dt,dcreep)
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: ljs (fpg).
+c
+c  the model uses the master creep rupture curves developed in
+c  b. l. harris, v. n. shah, & g. e. north, "creep rupture
+c  failure of three components of the reactor primary coolant
+c  system during the tmlb' accident", egg-ea-7431, nov., 1986.
+c  these describe the larson-miller parameter.
+c  also used for carbon steel is the manson-haferd parameter,
+c  described in letter blh-3-87 from b. l. harris to l. j. siefken,
+c  "investigation of three creep rupture theories for use in the
+c  analysis of a-508, class 2 carbon steel hot leg nozzle", 4/6/87.
+c
+c     g. a. jayne          june, 1987.
+c
+c     called by subr. trupt.
+c
+c     arguments list -
+c        igm    = geometry indicator -
+c                    1 = rectangular,
+c                    2 = cylindrical,
+c                    3 = spherical.
+c        imat   = material index -
+c                    1 = carbon steel a-508,
+c                    2 = stainless steel 316,
+c                    3 = inconel 600.
+c        radi   = inner radius.
+c        rado   = outer radius.
+c        pri    = inner pressure.
+c        pro    = outer pressure.
+c        tbar   = average temperature of wall.
+c        dt     = time since last rupture calculation.
+c        dcreep = creep rupture damage term.
+c     arguments changed by this subroutine itself -
+c        dcreep
+c
+       implicit none
+*call ufiles
+       integer igm,imat
+       real radi,rado,pri,pro,tbar,dt,dcreep
+c
+c  Local variables.
+       real con,dp,drad,plm,priksi,proksi,str,tbarr,texp,tr
+       real plmcs,plminc,plmss1,plmss2,pmhcs
+       external fabend
+c
+c     larson-miller parameters, from master creep rupture curves -
+c
+c           a-508, class 2 carbon steel
+      plmcs (str) =  -9603.0 * log10(str) + 46454.0
+c
+c           316 stainless steel, str < 52 ksi
+      plmss1(str) = -13320.0 * log10(str) + 54870.0
+c
+c           316 stainless steel, str > 52 ksi
+      plmss2(str) = -64000.0 * log10(str) +142000.0
+c
+c           inconel 600
+      plminc(str) = -11333.0 * log10(str) + 43333.0
+c
+c     manson-haferd parameter for a-508, class 2 carbon steel -
+c
+      pmhcs (str) =  157.233 * log10(str) - 255.346
+c
+c
+c     convert temperature from kelvin to degrees r.
+c
+      tbarr = 1.8 * tbar
+c
+c     calculate stress in ksi.
+c
+      priksi = pri / 6894757.2
+      proksi = pro / 6894757.2
+      dp = priksi - proksi
+c
+      if (dp .le. 0.0) go to 500
+c
+      str = 0.0
+      drad = rado - radi
+c
+      if (igm .eq. 1) then
+c       rectangular geometry.
+c        **** rupture calc. not done.
+      else  if (igm .eq. 2) then
+c       cylindradical geometry.
+        str = (priksi*radi - proksi*rado) / drad
+      else  if (igm .eq. 3) then
+c       spherical geometry.
+        str = (priksi*radi*radi - proksi*rado*rado) / (drad*(rado+radi))
+        str = str + 0.5*dp
+      end if
+c
+      if (str .lt. 0.001) go to 500
+c     Creep rupture correlations are not valid for
+c     values of stress less than 1 ksi.
+      if(str.lt.1.0)str=1.0
+c
+      if (imat .eq. 1 .and. str .lt. 14.0) then
+c
+c       use manson-haferd parameter.
+c
+        texp = (tbarr - 1503.69) / pmhcs(str) + 3.499
+        go to 400
+      end if
+c
+  200 continue
+c
+      con = 20.0
+c
+c     get larson-miller parameter.
+c
+      if (imat .eq. 1) then
+        plm = plmcs (str)
+      else if (imat .eq. 2) then
+        if (str .lt. 52.0) then
+          plm = plmss1(str)
+        else
+          plm = plmss2(str)
+        end if
+      else if (imat .eq. 3) then
+        con = 15.0
+        plm = plminc(str)
+      else
+        write (output,310) imat
+  310   format ('0 **** subr. ruptur - invalid material index =',i4)
+        call fabend
+      end if
+      texp = plm / tbarr - con
+  400 continue
+c     calculate time to rupture.
+      tr = 3600.0 * 10.0**texp
+c     add damage this time step to creep damage term.
+      dcreep = dcreep + dt/tr
+  500 continue
+      return
+      end
+*endif

@@ -1,0 +1,141 @@
+*mlist
+*if def,selap
+       subroutine clddfm (naz,nrcldi,nrcond,nrodes,
+     & deltcc, deltc0, dtemp , dzcond, ggivy , hfix  , ii    , jiter ,
+     & oxdhc , pcool , pgas  , pitch , rci   , rco   , rcii  ,
+     & rcoi  , rl    , tcolc , tcond , timec , vplen , xcond , zcond ,
+     & vfvod , hoop  , icladf, cldfdt, pcool0, pgas0 , rpel  , tcond0,
+     & vtvod,qclad,qout,rfar,iareax,ncrum)
+c
+c  Drive the cladding deformation models and initialize necessary input
+c  variables.
+c
+c Modified by T. Haste/G. Hodson Aug., 1989
+c to include strain rupture criterion
+c limit natural strain erupt is included in common /farays/
+c engineering strain erupt1 is tested against the average nodal
+c hoop strain 'hoop' .
+c
+c  Cognizant engineer: ewc (vxshah ghb).
+c
+c calling subroutines:  fuelan , simuan
+c subroutines called:  cladf , driveb
+c
+       use scdmod
+       implicit none
+*call contrl
+*call scddat
+c  The following list of dimension are for input and output associated
+c  with **fuelan** and other scdap models.
+c
+c  Local variables.
+       integer naz,nrcldi(ndax),nrcond(ndax),nrodes(ndax),ii,jiter,
+     & icladf,iareax,ncrum(ndax)
+       real deltcc,deltc0,dtemp(ndax),dzcond(ndax),ggivy(17),hfix(ndax),
+     & oxdhc(ndax),pcool,pgas,pitch,rci(ndax),rco(ndax),rcii,rcoi,rl,
+     & tcolc(ndax),tcond(ndrd,ndax),timec,vplen,xcond(ndrd,ndax),
+     & zcond(ndax),vfvod(ndax),hoop(ndax),cldfdt,pcool0,pgas0,
+     & rpel(ndax),tcond0(ndrd,ndax),vtvod(ndax),qclad(ndax),qout(ndax),
+     & rfar(ndax)
+       integer i,nr
+       integer ndbg
+       real cladt(ndax),delt,dtsum,pc,pg,rlmeas,t0,t1,deldum,delf
+       real avfunc
+*call cons
+*call cdfinv
+*call ufiles
+c
+       real erupt1
+*call farays
+c
+c  Calculate engineering rupture strain.
+       ndbg=0
+       erupt1 = exp(erupt)-1.0
+       delf=0.0
+c
+       if (icladf .gt. 0) return
+c  Save the input inside radius.
+       do i = 1,naz
+c  Calculate the incoming total void volume for driveb.
+         vtvod(i) = pi*(rci(i)**2 - rcii**2)*dzcond(i) + vfvod(i)
+         if (vtvod(i) .lt. vfvod(i)) vtvod(i) = vfvod(i)
+       enddo
+c  Note.  jiter.ne.0 means that uniform cladding strain model is called.
+c    ebal2=user-defined instability strain (transition strain).
+c    erupt=user-defined cladding rupture strain.
+       if (jiter.ne.0 .or. ebal2.gt.(erupt-1.e-4)) then
+         delt = cldfdt
+         dtsum = 0.0
+  200    if (dtsum .lt. deltcc) then
+           dtsum = dtsum + delt
+           if (dtsum .gt. deltcc)  then
+             delt = deltcc - (dtsum - delt)
+             dtsum = deltcc
+           endif
+           pg = pgas0 + (pgas - pgas0)*dtsum/deltcc
+           pc = pcool0 + (pcool - pcool0)*dtsum/deltcc
+           do i = 1,naz
+             nr = nrodes(i) - nrcldi(i) + 1
+             t0 = avfunc(2,xcond(nrcldi(i),i),tcond0(nrcldi(i),i),nr)
+             t1 = avfunc(2,xcond(nrcldi(i),i),tcond(nrcldi(i),i),nr)
+             cladt(i) = t0 + (t1 - t0)*dtsum/deltcc
+           enddo
+           call cladf (caad,cacd,card,cep,cepp,ceps,cfcp,
+     &     cfap,cfrp,cfnck,cfncn,ccwkf,ccwnf,
+     &     cflux,cladt,cladt0,carea,dxcfri,dtemp,delt,
+     &     edot,etru,hoopmx,jiter,naz,pc,ii,
+     &     pg,rci,rco,rmin,epplas,depp,hoopmn)
+           go to 200
+         endif
+       elseif (jiter .eq. 0) then
+         do i = 1,naz
+           nr = nrodes(i) - nrcldi(i) + 1
+           cladt(i) = avfunc(2,xcond(nrcldi(i),i),
+     &     tcond(nrcldi(i),i),nr)
+         enddo
+         call driveb (ccwkf,ccwnf,etru,cfnck,cfncn,cinwid,cladt,dxcfri,
+     &   dzcond,edot,ggivy,hfix,icall0,ii,naz,nrcond,oxdhc,pitch,rci,
+     &   rco,rcoi,rmin,tcolc,tcond,timec,vplen,vtvod,xcond,zcond,
+     &   carea,fareai,rareai,cflux,deltcc,deltc0,pcool,pgas,rl,icladf,
+     &   caad,cacd,card,cfap,cfcp,cfrp,rpel,qclad,qout,ceps,nbncl0,
+     &   rfar,blkey,jiter,iareax,ncrum)
+c  Calculate the void volume and hoop strain for each node.
+       endif
+       do i = 1,naz
+         if (rci(i).gt.rpel(i)) then
+           vtvod(i) = pi*(rci(i)**2 - rcii**2)*dzcond(i) + vfvod(i)
+         else
+           vtvod(i) = vfvod(i)
+         endif
+         if (vtvod(i).lt.vfvod(i)) vtvod(i) = vfvod(i)
+         hoop(i) = (rci(i) - rcii)/rcii
+         if (hoop(i).ge.erupt1) then
+           if(ii.eq.0)then
+           imdctl(1) = ior(imdctl(1),dmwrite)
+           write(inpout,"('0-------- Core degradation',es14.6,' s: Overs
+     &train failure, axial node',i3,', component',i3,','/
+     & ' temperature (K)=', es12.4,' hoop strain =',es12.4,
+     & ' rupture strain =',es12.4)") timehy,i,scd1(icomp)%cmpno,
+     &     cladt(i),hoop(i),erupt1
+           write(output,9005)timehy
+9005       format(' CLDDFM; time =',e10.4,' s')
+           end if
+           icladf=1
+           ii = i
+c  Pick failure node based on largest strain.
+           deldum=hoop(i)
+           if (deldum.gt.delf) then
+             delf = deldum
+             ii=i
+           endif
+         endif
+       enddo
+       do i = 1,naz
+c  If rod length is less than 2.5 m, assume it is is test rod and so
+c  far1 would be used outside of its data base.
+         rlmeas = zcond(naz) + 0.5*dzcond(naz)
+         if (blkey(i).eq.0.0 .or. rlmeas.lt.2.5) rfar(i) = rco(i)
+       enddo
+       return
+       end
+*endif

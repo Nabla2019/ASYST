@@ -1,0 +1,182 @@
+*mlist
+*if def,selap
+       subroutine bwhtcn
+c
+c  bwhtcn does B4C rod heat conduction calculations.
+c
+c  Cognizant engineer: ewc.
+c
+       use scdmod
+       implicit none
+       include 'comctl.h'
+       include 'cons.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'scddat.h'
+       include 'scntl.h'
+       include 'statec.h'
+       include 'voldat.h'
+       include 'scdout.h'
+       include 'tblsp.h'
+       include 'trnot2.h'
+       include 'ndxara.h'
+       include 'bwcons.h'
+       include 'bwprop.h'
+       include 'bwtrns.h'
+       include 'bwgeom.h'
+       include 'trnot1.h'
+c
+c  Local variables.
+       integer i,ib,ibp,ic,il,in,inl,k,nazm
+       real co,do,uo
+       real a1,a2,arg1,arg2,arg3,arg4,arg5,arg6,dmbct,cnk,delta,deltad,
+     & deltao,dvox,x12
+       dimension a1(ndax),a2(ndax),x12(ndax),cnk(ndax)
+       real mbctld
+       real acp,aden,athcon,scp,sden,sthcon
+       external acp,aden,athcon,scp,sden,sthcon
+       external bwrmlt
+       data uo/1.827834e5/, co/10310.75/, do/0.52257/
+c
+       ibp = ibwrc(icomp)
+       nazm = max(nazs(ibp),nazb(ibp))
+       if (nazm.le.0) return
+       ib = (ibwrc(icomp)-1)*ndax + 1
+       ic = (icomp-1)*ndax + 1
+       i = ib
+       do k = 1,naz
+         in = nvad(ic) + filndx(4)
+         if (m2t(i).le.0.0) then
+           t2(i) = tcolc(ic)
+           go to 100
+         endif
+c ---- call matpro to get denss(i), denso(i) at t2(i)
+         denss(i) = sden(t2(i))
+         denso(i) = 1.3077*denss(i)
+c ---- oxidation of ss
+         deltao = max( 0.0,rso(i)-rss(i) )
+         delta = sqrt( deltao*deltao+oxssa*exp(-oxssb/t2(i)*dt))
+         deltad = delta - deltao
+c ---- cutoff temperature for stainless-steel oxidation is set at 1400k
+         if (t2(i).le.1000.0) then
+           delta = deltao
+           deltad = 0.0
+         endif
+         dvox = pi*deltad*(rss(i)+deltad)*dzcond(ic)
+         wtgsdt(i) = min( msst(i)*mwox/mwss, dvox*denso(i)*mwox/
+     +                mwso )
+         wtgsdt(i) = min( wtgsdt(i), 8.0/9.0*flstm0(ic)*dt )
+         h2oxd(ic) = wtgsdt(i)/(8.0*dt)
+         sroxd(ic) = 9.0*h2oxd(ic)
+         flstm(ic) = flstm0(ic) - sroxd(ic)
+         flwh2(ic) = flwh20(ic) + h2oxd(ic)
+         if(.not.scntrl(8))then
+           do il = 1,noncn
+             if (il .ne. nonhy) cycle
+             inl = in + il - 1
+             gaman(inl) = gaman(inl) + h2oxd(ic)*nsigl(icomp)*recipv(in)
+             enthn(inl) = uo + co*t2(i) + do/2.0*(t2(i)-tao)**2
+           enddo
+         endif
+         msot(i) = msot(i) + wtgsdt(i)*mwso/mwox
+         msos(i) = msos(i) + wtgsdt(i)*mwso/mwox
+         msst(i) = msst(i) - wtgsdt(i)*mwss/mwox
+         mssl(i) = max( 0.0, mssl(i)-wtgsdt(i)*mwss/mwox )
+         msss(i) = msst(i) - mssl(i)
+         qoxss(i) = hoxss*wtgsdt(i)/mwox
+         vss(i) = msst(i) / denss(i)
+         vso(i) = msot(i) / denso(i)
+         rss(i) = sqrt(vss(i)/(pi*dzcond(ic)) + rbo(i)**2)
+         rso(i) = sqrt(vso(i)/(pi*dzcond(ic)) + rss(i)**2)
+c ---- collapsing into 2 regions
+         r1(i) = rbo(i)
+         r2(i) = rso(i)
+         a1(k) = 2.0*pi*r1(i)*dzcond(ic)
+         a2(k) = 2.0*pi*r2(i)*dzcond(ic)
+         x12(k) = 0.5*(r1(i)+r2(i))
+         m1t(i) = mbct(i) + mbot(i)
+         m2t(i) = msst(i) + msot(i)
+c ---- call matpro to get cpbc(i),cpbo(i),cnkbc(i),cnkbo(i) at t1(i)
+c ---- call matpro to get cpss(i),cpso(i),cnkss(i),cnkso(i) at t2(i)
+         cpbc(i) = acp(2,t1(i))
+         cpbo(i) = cpbc(i)
+         cpss(i) = scp(t2(i))
+         cpso(i) = cpss(i)
+         cnkbc(i) = athcon(2,t1(i))
+         cnkbo(i) = cnkbc(i)
+         cnkss(i) = sthcon(t2(i))
+         cnkso(i) = cnkss(i)
+         cp1(i) = (mbct(i)*cpbc(i) + mbot(i)*cpbo(i))/m1t(i)
+         cp2(i) = (msst(i)*cpss(i) + msot(i)*cpso(i))/m2t(i)
+         cnk1(i) = (cnkbc(i)*mbct(i) + cnkbo(i)*mbot(i))/m1t(i)
+         cnk2(i) = (cnkss(i)*msst(i) + cnkso(i)*msot(i))/m2t(i)
+         cnk(k) = (cnk1(i)*r1(i)+cnk2(i)*(r2(i)-r1(i)))/r2(i)
+         arg1 = cnk(k)*a1(k)*dt/(m1t(i)*cp1(i)*x12(k))
+         arg2 = cnk(k)*a1(k)*dt/(m2t(i)*cp2(i)*x12(k))
+         arg3 = (hfixf(ic)+hfixg(ic))*a2(k)*dt/(m2t(i)*cp2(i))
+         arg4 = qoxss(i)/(m2t(i)*cp2(i))
+         arg5 = (hfixf(ic)*tempf(in)+hfixg(ic)*tempg(in))*a2(k)*dt /
+     &   (m2t(i)*cp2(i))
+         arg6 = scd22(k,icomp,1,1)%qrdsur*a2(k)*dt/(m2t(i)*cp2(i))
+         t2o(i) = t2(i)
+         t1o(i) = t1(i)
+         t2(i) = ( (1.0+arg1)*(t2o(i)+arg4+arg5-arg6) + arg2*t1o(i) )/
+     &   ( 1.0+ arg2+ arg3+ arg1+ arg1*arg3 )
+         t1(i) = (t1o(i)+arg1*t2(i)) / (1.0+arg1)
+         call bwrmlt( ic,i,0.0,0.0,2 )
+         go to 25
+  100    continue
+c ---- 1 region energy balancing
+         if (m1t(i).le.0.0) then
+           t1(i) = tcolc(ic)
+           go to 25
+         endif
+c ---- oxidation of b4c
+         mbctld = mbct(i)
+         mbct(i) = mbctld*exp((-oxbca*t1(i)+oxbcb)*dt)
+         dmbct = mbctld - mbct(i)
+         wtgbdt(i) = dmbct*mwbo/mwbc
+         h2oxd(ic) = wtgbdt(i)*14.0/(mwbo*dt)
+         sroxd(ic) = h2oxd(ic)*9.0
+c        cooxd(ic) = 2.0*h2oxd(ic)
+         flstm(ic) = flstm0(ic) - sroxd(ic)
+         flwh2(ic) = flwh20(ic) + h2oxd(ic)
+         if(.not.scntrl(8))then
+           do il = 1,noncn
+             if (il .ne. nonhy) cycle
+             inl = in + il - 1
+             gaman(inl) = gaman(inl) + h2oxd(ic)*nsigl(icomp)*recipv(in)
+             enthn(inl) = uo + co*t1(i) + do/2.0*(t1(i)-tao)**2
+           enddo
+         endif
+         qoxbc(i) = hoxbc*dmbct
+         mbot(i) = mbot(i) + wtgbdt(i)
+         mbol(i) = mbol(i) + wtgbdt(i)
+         mbcs(i) = mbcs(i) - dmbct
+         m1t(i) = mbct(i) + mbot(i)
+c ---- call matpro to get denbc(i),denbo(i),cpbc(i),cpbo(i) at t1(i)
+         denbc(i) = aden(2,t1(i))
+         denbo(i) = denbc(i)*1.3077
+         vbc(i) = mbct(i) / denbc(i)
+         vbo(i) = mbot(i) / denbo(i)
+         rbc(i) = sqrt(vbc(i)/(pi*dzcond(ic)))
+         rbo(i) = sqrt(vbo(i)/(pi*dzcond(ic)) + rbc(i)**2)
+         a1(k) = 2.0*pi*rbo(i)*dzcond(ic)
+         cpbc(i) = acp(2,t1(i))
+         cpbo(i) = cpbc(i)
+         cp1(i) = (mbct(i)*cpbc(i)+mbot(i)*cpbo(i)) / m1t(i)
+         t1o(i) = t1(i)
+         arg1 = m1t(i)*cp1(i)
+         arg2 = (hfixf(ic)+hfixg(ic))*a1(k)*dt
+         arg3 = (hfixf(ic)*tempf(in)+hfixg(ic)*tempg(in))*a1(k)*dt
+         arg4 = scd22(k,icomp,1,1)%qrdsur*a1(k)*dt
+         t1(i) = (arg1*t1o(i) + qoxbc(i) + arg3 - arg4)/(arg1 + arg2)
+         call bwrmlt( ic,i,0.0,0.0,1  )
+         nrods2(k,icomp) = 1
+  25     continue
+         i = i + 1
+         ic = ic + 1
+       enddo
+       return
+       end
+*endif

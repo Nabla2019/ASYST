@@ -1,0 +1,935 @@
+*mlist
+*if def,selap
+       subroutine rubtrn(j,tsat)
+c
+c  Subroutine determines which axial nodes have made transition from
+c  rod-like to rubble debris geometry. If rubble debris has formed, it
+c  also calculates mass of rubble debris at each axial node and the
+c  decay heat at axial node at time that rubble formed there.
+c
+       use invtbl
+       implicit none
+       integer j
+       real tsat
+c  j = number of component currently being analyzed. (input)
+c  tsat=saturation temperature of coolant (k).
+       include 'cons.h'
+       include 'contrl.h'
+       include 'scddat.h'
+       include 'buntim.h'
+       include 'ufiles.h'
+       include 'fast.h'
+       include 'statec.h'
+       include 'comctl.h'
+       include 'voldat.h'
+       include 'jundat.h'
+       include 'scdout.h'
+       include 'ndxara.h'
+       include 'tblsp.h'
+       include 'scdcom.h'
+       include 'cmatp.h'
+       include 'debout.h'
+       include 'intcom.h'
+       include 'hardpn.h'
+       include 'scdpow.h'
+       include 'miscon.h'
+       include 'cpmdat.h'
+       include 'slumpv.h'
+       include 'dbacct.h'
+c
+c  porosr = porosity of rubble debris.
+c
+c  Set porosity to zero so packing due to liquefaction has been taken
+c  into account.
+c
+c  Local variables.
+       integer jindex,k,kbotd,kdyn,ktopd,
+     & nrubgn,nswrub,kbotlq,ktoplq
+       integer nswdis,noxshl
+       integer ncomph,ntest1,ntest2,kdynn,nswmlt,nrbtim,nmatdb
+       integer kk,k1,nsw,kvoidm,kaxn,ichn,ivol,indxjn,
+     & nj,idxjun,jj,icpchn,kki,m,nn
+       real porosr,prubgn,rcmid,rhoab,rhoss,tfragm,thkbet,
+     & wurub,wzrub,dbdmin
+       real wuo2,wzr,wox,afu,afz,afo,tzr2
+       real tmlcer,tlqcer,tfragf,thkbtm
+       real pliq,psol
+       real fcomp,tuomlt,tliq,rliqsw,eps,voltot,
+     & fvlcld,fvlful,fvlzro,sumcld,sumful,sumzro,rhozr,rhozo2,tsur,
+     & woxrb1,wzorb1,aflowi,dlttmp,tmltzr,afo1,afu1,
+     & afz1,porcm1,porcm2,diacm1,diacm2,drmetl,tmploc,dvsum,tmpsum,
+     & dvrod
+       real frcfal,frcfun
+       external atomfr,pliq,psol
+       external fhyprp
+       real zoden,cden
+       external zoden,cden
+c
+c  Data statements.
+       data rhoab/ 10.17e+3/, rhoss/ 7.8e+3/
+       data porosr / 0.0/
+c  rliqsw = fraction of inner radius of dissolution of fuel
+c           pellet to as-fabricated outer radius of fuel pellet
+c           at which modeling of slumping best performed by
+c           axial spreading model instead of LIQSOL model.
+c  This value can be determined by evaluating results of experiments
+c  such PBF SFD 1-1, 1-4, LOFT FP-2, and PHEBUS B9+.
+c  Apply same value for rliqsw in subroutines heatld and disuo2.
+       data rliqsw /0.250/
+       data tmlcer / 2830./
+       data tlqcer / 2873./
+c  Temperature that causes fuel and cladding to disintegrate into
+c  rubble debris when shattering flag is turned on.
+       data tfragf /650.0/
+c  thkbtm=minimum thickness of beta layer for ductile cladding.
+       data thkbtm / 0.1e-3/
+c  dbdmin = minimum diameter of rubble debris (mm).
+       data dbdmin / 0.3e-3/
+c
+c  Switch to indicate user definition of debris bed.
+       nrbtim=0
+c
+       tfragm = tfrag + tsat
+c  Limit upper value of tfragm such that oxidation not occurring at
+c  time of fragmentation; otherwise very large pulse in oxidation may
+c  be calculated.
+       if(tfragm.gt.tfragf)tfragm=tfragf
+c
+       kbotd=0
+       ktopd=0
+c  Store lowest and highest axial nodes that are debris.
+       do k=1,naz
+         if(irubpp(k,j).eq.1.and.kbotd.eq.0.and.k.gt.nhrdpn(j)) kbotd=k
+         if(irubpp(k,j).eq.1) ktopd=k
+       enddo
+       if(kbotd.eq.0) kbotd=ktopd
+c  Store highest and lowest axial nodes that are part of molten pool.
+       kbotlq=0
+       ktoplq=0
+       do k=1,naz
+         if(kbotlq.eq.0.and.lcrucb(k,j).eq.1) kbotlq=k
+         if(lcrucb(k,j).eq.1) ktoplq=k
+       enddo
+       do 200 k=1,naz
+         kdyn=(j-1)*ndax+k
+c  nrubgn = 0 no debris formation,
+c         = 1 = intact rods disintegrate into debris due to quenching
+c               or user-defined debris formation'
+c         = 2 = transition to debris that represents intact fuel rods.
+         nrubgn=0
+         nswrub=0
+         if(irubpp(k,j).eq.1) go to 200
+c***   modify to be consistent with drop relocation model.
+c***   wurub=wuobng(kdyn)+wfrouo(kdyn)-wuorem(kdyn)-wremuo(kdyn)
+         wurub=wuobng(kdyn)-fdrmn2(k,j)*wuobc2(k,j)+wfrouo(kdyn)
+         if(wurub.lt.0.0)wurub=0.0
+c***     wzrub=wzrbng(kdyn)+wfrozr(kdyn)-wremzr(kdyn)
+         wzrub=wzrbng(kdyn)-fdrmn2(k,j)*wzrbc2(k,j)+wfrozr(kdyn)+
+     &   winfro(k,j)
+         if(wzrub.lt.0.0)wzrub=0.0
+         tsur=tcond3(nrodes(kdyn),k,j)
+         rhozo2=zoden(tsur)
+         rhozr=cden(tsur)
+c  Compute mass of metallic Zr and mass of oxygen in oxidized Zr.
+         if(wremzr(kdyn).gt.1.e-10) then
+c  All Zr at node is in form of ZrO2 (metallic Zr has slumped).
+c  Note. If as-fabricated Zr at node has slumped away. then any
+c  relocated drops of Zr at node have also slumped.
+           wzrub=0.7403*rhozo2*pi*(rco((j-1)*ndax+k)**2
+     &     -rnoxd((j-1)*ndax+k)**2)*dzcond((j-1)*ndax+k)
+           if(int(brchv(k,j)).eq.1) wzrub=2.*wzrub
+           wzorb1=1.3508*wzrub
+           woxrb1=(1.-0.7403)*rhozo2*pi*(rco((j-1)*ndax+k)**2
+     &     -rnoxd((j-1)*ndax+k)**2)*dzcond((j-1)*ndax+k)
+           if(int(brchv(k,j)).eq.1) woxrb1=2.*woxrb1
+         else
+c  Case of cladding intact.
+c***  mass of oxygen based on mass of ZrO2 at node.
+c***       woxrb1=(1.-0.7403)*rhozo2*pi*(rco((j-1)*ndax+k)**2
+c*** &     -rnoxd((j-1)*ndax+k)**2)*dzcond((j-1)*ndax+k)
+           woxrb1=2.0*pi*rco((j-1)*ndax+k)*dzcond((j-1)*ndax+k)
+     &     *oxdwc2(k,j)
+           if(int(brchv(k,j)).eq.1)woxrb1=2.*woxrb1
+           wzorb1=rhozo2*pi*(rco((j-1)*ndax+k)**2
+     &     -rnoxd((j-1)*ndax+k)**2)*dzcond((j-1)*ndax+k)
+           if(int(brchv(k,j)).eq.1) wzorb1=2.*wzorb1
+c  Add on oxygen in oxidized part of relocated material in axial node.
+           if(idrfz2(k,j).eq.1.or.idrfz2(k,j).eq.2.or.
+     #     idrfz2(k,j).eq.3) then
+             woxrb1=woxrb1+ndrfz2(k,j)*2.*pi*
+     #       (rdrops(k,j)**2)*wdrfz2(k,j)
+             wzorb1=wzorb1+3.8506*ndrfz2(k,j)*2.*pi*
+     #       (rdrops(k,j)**2)*wdrfz2(k,j)
+           endif
+         endif
+         if((wurub+wzrub).gt.0.001) then
+       call atomfr (wurub, wzrub, woxrb1, afu, afz, afo)
+c***   fix tmlsol and tmlliq because transition damage modeling
+c***   requires reference values for start and completion of late
+c***   phase damage and associated blockage; reference on level of
+c***   damage is lost if tmlsol and tmlliq change during start of
+c***   melting due to oxidation.
+c***   tmlsol(k,j) = psol (afo, afu, afz)
+c***   tmlliq(k,j) = pliq (afo, afu, afz)
+       tmlsol(k,j) = 2830.
+       tmlliq(k,j) = 2873.
+c      minimum value for this temperature is 2830 K.
+c   apply constraints based on integral rod data in which ZrO2
+c   oxide layer on inner surface of cladding has effect.
+c   Kfk data states that UO2 in contact with ZrO2 liquefies at 2873. K.
+c    make sure this temperature less than melting temperature of
+c    standalone UO2 as it is calculated in subroutine LIQSOL.
+       fcomp=0.0
+       call fhyprp (burnup(kdyn) ,fcomp ,tuomlt ,tliq)
+c***   if(tmlsol(k,j).gt.(tuomlt-10.))tmlsol(k,j)=tuomlt-10.
+       else
+       end if
+c   now change wzrub from total mass of Zr at including that in ZrO2
+c   to being just mass of metallic Zr at node.
+c   0.7404 = 91.22/(91.22+32.)
+       wzrub=wzrub-0.7404*wzorb1
+       if(wzrub.lt.0.0)wzrub=0.0
+c  Calculate bulk average fuel temperature.
+          dvsum=0.0
+          tmpsum=0.0
+          kki=(j-1)*ndax+k
+          do m=2,nrodes(kki)
+            dvrod=pi*(xcond3(m,k,j)**2-xcond3(m-1,k,j)**2)
+            dvsum=dvsum+dvrod
+            tmpsum=tmpsum+dvrod*0.5*(tcond3(m,k,j)+tcond3(m-1,k,j))
+          enddo
+          tmploc=tmpsum/dvsum
+c***      if(tcond3(1,k,j).gt.tmlsol(k,j) .or.    
+c*** &    tcond3(nrodes(kdyn),k,j).gt.tmlsol(k,j))then
+          if (tmploc.gt.tmlsol(k,j)) then
+            imdctl(1) = ior(imdctl(1),dmwrite)
+            write(inpout,"('0-------- Core degradation',es14.6,' s: Debr
+     &is formation caused by phase change, axial node',i3,', component',
+     & i3,',')") timehy,k,j
+            write(inpout,907) tmploc,tmlsol(k,j),tmlliq(k,j),
+     &      tcond3(nrodes(kdyn),k,j)
+  907  format ('temp.(average) =',f8.2,' K',' solidus temp.=',f8.2,
+     & ' K, liquidus temp.=',f8.2,' K',' temp.(sur.)=',f8.2,' K')
+c  According to pbf sfd 1-4 and tmi-2 core bore data, debris formed by
+c  meltdown has same characteristics as debris formed by quenching
+c  embrittled rods.
+c  rcos(j) = as-fabricated outer cladding radius for component j (m)
+            porcom(k,j) = (pitch(j)**2-pi*rco((j-1)*ndax+k)**2)/
+     &      pitch(j)**2
+            aflowi=pitch(j)**2-pi*rco((j-1)*ndax+k)**2
+c  Calculate diamter of debris that results in same hydraulic diameter
+c  as intact rods, basic equation is:
+c  4*(flow area)/(wetted perimeter) = 4*(debris porosity)
+c  *(effective diameter of debris particles)
+c  /(6*(1 - (debris porosity))
+c  aflowi = flow area in intact geometry.
+c  diacom(k,j)=effective diameter of debris particles.
+            diacom(k,j)=(3./pi)*((pitch(j)**2)/rco((j-1)*ndax+k))
+     &      *(1.-aflowi/pitch(j)**2)
+            if(diacom(k,j).lt.dbdmin)diacom(k,j)=dbdmin
+            write(inpout,922)diacom(k,j),pitch(j),rco((j-1)*ndax+k),
+     &      aflowi
+922    format(' in RUBTRN, diacom=',es10.4,' pitch=',es10.4,' rco=',
+     & es10.4,' aflowi=',es10.4)
+            aovcom(k,j)=(1.-porcom(k,j))*6./diacom(k,j)
+            nrubgn=2
+            nswrub=1
+            go to 20
+          endif
+c  If axial node is between two nodes that are molten, force everything
+c  between to join the molten pool; this is required because code cannot
+c  represent more than one molten pool.
+       if (lcrucb(k,j).eq.0 .and. k.gt.kbotlq .and. k.lt.ktoplq) then
+         imdctl(1) = ior(imdctl(1),dmwrite)
+         write (inpout,"('0-------- Core degradation',es14.6,' s: axial 
+     &node',i3,', component',i3,',')") timehy,k,j
+         write (inpout,984)
+  984  format(' Location now represented as debris because it is bracket
+     &ed on both top and bottom ends by molten pool.')
+         write (inpout,982) tcond3(1,k,j)
+  982  format(' Temperature of location (K) =',f8.2,'.')
+         porcom(k,j)=0.54
+         diacom(k,j)=0.2*rpel(kdyn)
+         if(diacom(k,j).lt.dbdmin)diacom(k,j)=dbdmin
+         aovcom(k,j)=(1.-porcom(k,j))*6./diacom(k,j)
+         nswrub=1
+         go to 20
+       endif
+c  Check to see if conditions are  met for next mode of propagation,
+c  namely that of molten material from higher elevation node slumping
+c  across void caused by drainage of molten material to lower head and
+c  then being supported by rod stubs below void region.
+       kvoidm=0
+       if(k.le.(naz-2))then
+         if(lcrucb(k+1,j).eq.2)then
+c  Void region due to drainage above node k.
+c  Find highest node that is void.
+         kvoidm=0
+         k1=k+2
+         nsw=0
+         do kk = k1,naz
+           if (nsw.eq.1) cycle
+           if (lcrucb(kk,j).le.1) then
+             kvoidm = kk - 1
+             nsw = 1
+           endif
+         enddo
+         if (kvoidm.ge.1) then
+           if (lcrucb(kvoidm+1,j).eq.1 .or.
+     &     tcond3(1,kvoidm+1,j).gt.tlqcer) then
+             imdctl(1) = ior(imdctl(1),dmwrite)
+             write (inpout,"('0-------- Core degradation',es14.6,' s: ax
+     &ial node',i3,', component',i3,',')") timehy,k,j
+             write (inpout,986)
+  986  format (' Debris formation due to node being first node, below vo
+     &id region and it catches molten material from above.')
+             write (inpout,987) tcond3(1,k,j)
+  987  format (' Temperature of location (K) =',f8.2,'.')
+             nswrub=1
+             porcom(k,j)=0.54
+             diacom(k,j)=0.2*rpel(kdyn)
+             if(diacom(k,j).lt.dbdmin)diacom(k,j)=dbdmin
+             aovcom(k,j)=(1.-porcom(k,j))*6./diacom(k,j)
+             go to 20
+           endif
+         endif
+       endif
+       endif
+c  Check for next mode of damage progression.
+       if (k.lt.naz) then
+         if (lcrucb(k+1,j).eq.1) then
+           nswrub=1
+           imdctl(1) = ior(imdctl(1),dmwrite)
+           write (inpout,"('0-------- Core degradation',es14.6,' s: axia
+     &l node',i3,', component',i3,',')") timehy,k,j
+           write (inpout,918)
+  918  format(' Molten pool may spread downward into this component.')
+           porcom(k,j)=(pitch(j)**2-pi*rco((j-1)*ndax+k)**2)/pitch(j)**2
+           aflowi=pitch(j)**2-pi*rco((j-1)*ndax+k)**2
+c  Calculate diamter of debris that results in same hydraulic diameter
+c  as intact rods, basic equation is:
+c  4*(flow area)/(wetted perimeter) = 4*(debris porosity)
+c  *(effective diameter of debris particles)
+c  /(6*(1 - (debris porosity))
+c  aflowi = flow area in intact geometry.
+c  diacom(k,j)=effective diameter of debris particles.
+           diacom(k,j)=(3./pi)*((pitch(j)**2)/rco((j-1)*ndax+k))
+     &     *(1.-aflowi/pitch(j)**2)
+           if(diacom(k,j).lt.dbdmin)diacom(k,j)=dbdmin
+           aovcom(k,j)=(1.-porcom(k,j))*6./diacom(k,j)
+           nrubgn=2
+           go to 20
+         endif
+       endif
+c  Fragmentation due to quenching.
+       thkbet=rnalf(kdyn)-rci(kdyn)
+       rcmid=sqrt(0.5*(rnoxd(kdyn)**2+rci(kdyn)**2))
+       if (int(brchv(k,j)).eq.1) then
+c  Equal volume on both sides of midplane.
+         thkbet=rnalf(kdyn)-rcmid
+         if(thkbet.lt.0.0)thkbet=0.0
+       endif
+c  Note. Criteria of cladding being at least 17% oxidized before
+c  embrittlement is based on conservative Appendix K rule.
+c  (tfragm+100.) adjusts for possiblity that saturation temperature of
+c  water in lower plenum may be 100 K lower in temperature than that in
+c  core region.
+c  Assume no fragmentation unless quench by contact with liquid water.
+       nn=nvad(kdyn)+filndx(4)
+       afu1=0.0
+       afz1=1.0
+       afo1=0.0
+       tmltzr=pliq(afo1,afu1,afz1)
+       if(nsmgeo.ge.2)then
+c  Invoke debris transition models.
+         if(thkbet.lt.thkbtm.and.tcond3(nrodes(kdyn),k,j).lt.
+     &   tfragm.and.fadrop(k,j).le.1.0    
+     &   .and.voidf(nn).ge.0.0001
+     &   .and.tmxful(k,j).lt.tmlsol(k,j)
+     &   .and.tmxful(k,j).gt.tmltzr)nrubgn = 1
+         if(wremzr(kdyn).gt.1.e-10
+     &   .and.tcond3(nrodes(kdyn),k,j).lt.tfragm
+     &   .and.voidf(nn).ge.0.0001
+     &   .and.tmxful(k,j).lt.tmlsol(k,j)
+     &   .and.tmxful(k,j).gt.tmltzr)nrubgn = 1
+       else
+c  Do not invoke debris transition models.
+         if(thkbet.lt.thkbtm.and.tcond3(nrodes(kdyn),k,j).lt.
+     #   tfragm.and.voidf(nn).ge.0.0001)nrubgn = 1
+         if(wremzr(kdyn).gt.1.e-10
+     #   .and.tcond3(nrodes(kdyn),k,j).lt.tfragm
+     #   .and.voidf(nn).ge.0.0001)nrubgn = 1
+       endif
+       if (nrubgn.eq.1) then
+         if (irubqq(k,j).eq.0) then
+           imdctl(1) = ior(imdctl(1),dmwrite)
+           write (inpout,"('0-------- Core degradation',es14.6,' s: axia
+     &l node',i3,', component',i3,', Embrittled cladding quenched and fr
+     &agmented.')") timehy,k,j
+           write (inpout,910) tcond3(nrodes(kdyn),k,j),
+     &     tcnd03(nrodes(kdyn),k,j), thkbet,tfragm,tfragf
+  910  format (' tcond3(nrodes(kdyn),k,j)=',f8.2,
+     &     '  tcnd03(nrodes(kdyn),k,j)=',f8.2,' thkbet=',f8.2,
+     &     ' tfragm=',f8.2,' tfragf=',f8.2)
+           write (inpout,911) tcond3(nrodes(kdyn),k,j),shtflg(k,j),
+     &     wremzr(kdyn),rcmid,rnalf(kdyn)
+  911  format(' surface temperature =',f8.2,' shattering flag =',
+     & i3,' wremzr=',es12.4,' rcmid=',es12.4,' rnalf=',es12.4)
+           write (inpout,9112) rco(kdyn)
+ 9112  format (' rco=',es12.4)
+           irubqq(k,j)=1
+c  Porosity and particle diameter for upper debris bed of tmi-2.
+       porcm2=0.54
+       diacm2=0.2*rpel(kdyn)
+c  Porosity and particle diameter that characterizes intact fuel
+c  rods.
+       porcm1=(pitch(j)**2-pi*rco((j-1)*ndax+k)**2)/pitch(j)**2
+       aflowi=pitch(j)**2-pi*rco((j-1)*ndax+k)**2
+       diacm1=(3./pi)*((pitch(j)**2)/rco((j-1)*ndax+k))
+     & *(1.-aflowi/pitch(j)**2)
+       if(nsmgeo.ge.2)then
+c  Interpolate between these two end point values of debris
+c  characteristics depending on maximum historical value of fuel
+c  temperature.
+         if(tmxful(k,j).lt.tmltzr)then
+         porcom(k,j)=porcm1
+         diacom(k,j)=diacm1
+         if(diacom(k,j).lt.dbdmin)diacom(k,j)=dbdmin
+         else
+           if(tmxful(k,j).ge.tmlsol(k,j))then
+           porcom(k,j)=porcm2
+           diacom(k,j)=diacm2
+           if(diacom(k,j).lt.dbdmin)diacom(k,j)=dbdmin
+           else
+c  Interpolate.
+           porcom(k,j)=porcm1+((tmxful(k,j)-tmltzr)
+     #     /(tmlsol(k,j)-tmltzr))*(porcm2-porcm1)
+           diacom(k,j)=diacm1+((tmxful(k,j)-tmltzr)
+     #     /(tmlsol(k,j)-tmltzr))*(diacm2-diacm1)
+           if(diacom(k,j).lt.dbdmin)diacom(k,j)=dbdmin
+           end if
+         end if
+       else
+       porcom(k,j)=porcm1
+       porcom(k,j)=porcm1
+       end if
+       aovcom(k,j)=(1.-porcom(k,j))*6./diacom(k,j)
+       nswrub=1
+       go to 20
+       end if
+       end if
+c  Cohesive debris formation due to liquefied u-zr-o slumping into node.
+c  Set area/volume ratio to small number to simulate blockage region.
+c  Time set of debris formation.
+       if (timehy.gt.timdeb(k,j)) then
+         imdctl(1) = ior(imdctl(1),dmwrite)
+         write (inpout,"('0-------- Core degradation',es14.6,' s: axial 
+     &node',i3,', component',i3,',')") timehy,k,j
+         write (inpout,915) tcond3(1,k,j)
+  915  format (' Debris formation caused by time trip, debris temperatur
+     &e=',f8.2,' K')
+       nrbtim=1
+       irubqq(k,j)=1
+c  User defined porosity and particle diameter.
+       porcom(k,j)=porinp(k,j)
+       diacom(k,j)=diainp(k,j)
+       aovcom(k,j)=(1.-porcom(k,j))*6./diacom(k,j)
+       nswrub=1
+c  Determine whether debris oxidation is to be modeled.
+       nrubgn=1
+c  For wssdeb(1,1) > 500.0, user inputs ZrO2 and UO2 instead of Zr and
+c  stainless steel. (see subroutine rdeb)
+c  Oxidation.
+       go to 20
+       endif
+       if (dmltax(k,j).ge.0.00001.and. int(crucb).ne.1) then
+         imdctl(1) = ior(imdctl(1),dmwrite)
+         write (inpout,"('0-------- Core degradation',es14.6,' s: axial 
+     &node',i3,', component',i3,',')") timehy,k,j
+         write (inpout,952)
+  952  format (' Debris formation caused by downward propagation of molt
+     &en pool.')
+       nswrub=1
+       porcom(k,j)=(pitch(j)**2-pi*rco((j-1)*ndax+k)**2)/pitch(j)**2
+       aflowi=pitch(j)**2-pi*rco((j-1)*ndax+k)**2
+c  Calculate diamter of debris that results in same hydraulic diameter
+c  as intact rods, basic equation is:
+c  4*(flow area)/(wetted perimeter) = 4*(debris porosity)
+c  *(effective diameter of debris particles)
+c  /(6*(1 - (debris porosity))
+c  aflowi = flow area in intact geometry.
+c  diacom(k,j)=effective diameter of debris particles.
+       diacom(k,j)=(3./pi)*((pitch(j)**2)/rco((j-1)*ndax+k))
+     # *(1.-aflowi/pitch(j)**2)
+       if(diacom(k,j).lt.dbdmin)diacom(k,j)=dbdmin
+       nrubgn=2
+       if(nbublk(ncmpgp(j),k).eq.1)then
+c  Set debris charcteristics for region blocked by meltdown.
+       porcom(k,j)=0.1
+       diacom(k,j)=pitch(j)
+       end if
+       aovcom(k,j)=(1.-porcom(k,j))*6./diacom(k,j)
+       go to 20
+       end if
+       if (frcspr(k,j).ge.0.001 .and. int(crucb).ne.1) then
+         imdctl(1) = ior(imdctl(1),dmwrite)
+         write (inpout,"('0-------- Core degradation',es14.6,' s: axial 
+     &node',i3,', component',i3,',')") timehy,k,j
+         write (inpout,954)
+  954  format(' Debris formation caused by radial propagation of molten 
+     &pool.')
+       nswrub=1
+       porcom(k,j)=(pitch(j)**2-pi*rco((j-1)*ndax+k)**2)/pitch(j)**2
+       aflowi=pitch(j)**2-pi*rco((j-1)*ndax+k)**2
+c  Calculate diamter of debris that results in same hydraulic diameter
+c  as intact rods, basic equation is:
+c  4*(flow area)/(wetted perimeter) = 4*(debris porosity)
+c  *(effective diameter of debris particles)
+c  /(6*(1 - (debris porosity))
+c  aflowi = flow area in intact geometry.
+c  diacom(k,j)=effective diameter of debris particles.
+       diacom(k,j)=(3./pi)*((pitch(j)**2)/rco((j-1)*ndax+k))
+     # *(1.-aflowi/pitch(j)**2)
+       if(diacom(k,j).lt.dbdmin)diacom(k,j)=dbdmin
+       nrubgn=2
+       if(nbublk(ncmpgp(j),k).eq.1)then
+c  Set debris charcteristics for region blocked by meltdown.
+       porcom(k,j)=0.1
+       diacom(k,j)=pitch(j)
+       endif
+       aovcom(k,j)=(1.-porcom(k,j))*6./diacom(k,j)
+       go to 20
+       endif
+c  Case of molten pool formed by dissolution of large part of fuel by
+c  cladding.
+       if(rpel(kdyn).gt.0.2e-3)then
+       nswdis=0
+c  eps = term to assure debris formation before oxide shell failure
+c  triggered in LIQSOL.
+c  If oxide thickness is greater than durable thickness, then do not
+c  trigger debris formation.
+       noxshl=0
+       tzr2=0.0
+       frcfal=frcoxf
+       if(frcfal.lt.(1.-1.e-10))then
+       frcfun=frcfal/(1.-frcfal)
+c  This is case of double-sided oxidation.
+c  Preclude oxide breach as does melprog.
+c  frcfal=fraction of cladding that must be oxidized to prevent oxide
+c  shell from failing due to dissolution.
+c  Thickness of metallic zr was 0.604047 thickness after oxidation.
+              tzr2=0.0
+              if ( int(brchv(k,j)) .ne. 1) then
+                 tzr2 = rnoxd(kdyn) - rci(kdyn)
+              else
+              tzr2=0.5*(rnoxd(kdyn) - rci(kdyn))
+              end if
+       if((0.604047*oxdeo(kdyn)).gt.(frcfun*tzr2))noxshl=1
+            end if
+       eps=50.0
+      nswdis=0
+c***  Delete debris formation due to fuel dissolution by deactivating th
+c***  three lines below.
+c***   if((ruliq(kdyn)/rpel(kdyn)).lt.rliqsw
+c*** # .and.tcond3(1,k,j).gt.(tmpfal-eps)
+c*** # .and.noxshl.eq.0)nswdis=1
+       if (nswdis.eq.1) then
+         imdctl(1) = ior(imdctl(1),dmwrite)
+         write (inpout,"('0-------- Core degradation',es14.6,' s: axial 
+     &node',i3,', component',i3,',')") timehy,k,j
+         write (inpout,992) tcond3(1,k,j)
+  992  format(' Cohesive debris formed by large amount of dissolution of
+     & fuel by cladding, temperature =',f8.2,' K.')
+         write (inpout,995) frcoxf,frcfun,tzr2,oxdeo(kdyn),noxshl
+  995  format(' Durable oxide fraction =',es12.4,' frcfun=',es12.4,
+     & 'thickness Zr =',es12.4,' thickness oxide =',es12.4,
+     & ' noxshl=',i3)
+       write (inpout,996) ruliq(kdyn),rpel(kdyn)
+  996  format(' Outer radius of solid part of fuel =',
+     & es12.4,' original pellet radius =',es12.4)
+       porcom(k,j)=0.54
+       diacom(k,j)=0.2*rpel(kdyn)
+       if(diacom(k,j).lt.dbdmin)diacom(k,j)=dbdmin
+       aovcom(k,j)=(1.-porcom(k,j))*6./diacom(k,j)
+       nswrub=1
+       go to 20
+       endif
+       end if
+       go to 200
+   20  continue
+c
+c  Transition to rubble debris.
+       irubnh(k,j)=1
+       irubpp(k,j)=1
+       prubgn=powrub(k,j)
+       if (nspowi.eq.3 .or. nspowi.eq.1) then
+         if (powtot(1).gt.0.) prubgn=prubgn*powtot(1)
+       endif
+       imdctl(1) = ior(imdctl(1),dmwrite)
+       write (inpout,"('0-------- Core degradation',es14.6,' s: rubble f
+     &ormation, axial node',i3,', component',i3,', Centerline temperatur
+     &e =',f8.2,' K.')") timehy,k,j,tcond3(1,k,j)
+       write (inpout,904) wurub,wzrub,wzorb1
+  904  format (' Mass of UO2 at node =',es10.4,' kg;  mass of metallic',
+     & ' Zr at node =',es10.4,' kg;  mass of oxidic Zr at node =',
+     & es10.4,' kg')
+       write (inpout,906) prubgn
+  906  format (' Nuclear heat generation at node =',es10.4,' W')
+c***   for some reason bgnhg is not defined here, so omit printout.
+c***   write(output,924)bgnhg
+c***924    format(' reactor power at time of rubble debris formation =',
+c*** # es10.4,' W ')
+       write (inpout,925) bgmct
+  925  format (' Maximum core temperature at time of rubble debris forma
+     &tion =',f8.2,' K.')
+c  Store current values of thermal hydraulic variables that are required
+c  for transition smoothing modeling.
+       ichn=ncmpgp(j)
+       ivol=nvad((j-1)*ndax+k)+filndx(4)
+c  If two fuel components in flow channel, then only set initial
+c  thermal hydraulic parameters for first fuel component identified
+c  for that component.
+       nsw=0
+       do jj = 1,icp(ichn)
+         if (nsw .eq. 1) cycle
+         icpchn = ngpc(ichn,jj)
+         if (idcomp(icpchn).ne.0) cycle
+         if (rpel((icpchn-1)*ndax+k) .le. 0.2e-3) cycle
+         if (j .eq. icpchn) then
+           nsw = 1
+           dlttmp = tmlliq(k,j) - tmlsol(k,j)
+c  Calculate bulk average fuel temperature.
+           dvsum = 0.0
+           tmpsum = 0.0
+           kki = (j - 1)*ndax + k
+           do m = 2,nrodes(kki)
+             dvrod = pi*(xcond3(m,k,j)**2 - xcond3(m-1,k,j)**2)
+             dvsum = dvsum + dvrod
+             tmpsum = tmpsum + dvrod*0.5*(tcond3(m,k,j) +
+     &       tcond3(m-1,k,j))
+           enddo
+           tmploc = tmpsum/dvsum
+           frcmcl(ichn,k) = (tmploc - tmlsol(k,j))/dlttmp
+           if (frcmcl(ichn,k) .lt. 0.0) frcmcl(ichn,k) = 0.0
+           if (frcmcl(ichn,k) .gt. 1.0) frcmcl(ichn,k) = 1.0
+           dhydb0(ichn,k) = diamv(ivol)
+           avold0(ichn,k) = avol(ivol)
+c  Store loss coefficients for juntions at inlet and outlet of this
+c  volume.
+           indxjn = invfnd(ivol)
+           do nj = 1,invcnt(ivol)
+c  Skip the cross flow junctions( 8 bit on).
+             if (iand(invj(indxjn)%invjun,8) .eq. 0) then
+c  idxjun = junction index.
+               idxjun = invj(indxjn)%invvnx
+               if (iand(invj(indxjn)%invjun,2) .ne. 0) then
+c  Outlet junction (2 bit is on).
+                 klsof0(ichn,k) = fjunf(idxjun)
+                 klsor0(ichn,k)= fjunr(idxjun)
+               else
+c  Inlet junction (2 bit is off).
+                 klsif0(ichn,k) = fjunf(idxjun)
+                 klsir0(ichn,k)= fjunr(idxjun)
+               endif
+               indxjn = indxjn + 1
+             endif
+           enddo
+         endif
+       enddo
+c  Checks for user defined mass of zircaloy per fuel rod in debris bed
+c  or stainless steel per fuel rod in debris bed.
+c  If true user defined mass is read in and mass of UO2 is set to 0.0.
+c  If condition below met, then user-defined debris bed through
+c  subroutine rdeb.
+       if(nrbtim.eq.1)then
+c  Determine based on user-defined porosity whether Zr and SS being
+c  modeled or ZrO2 and UO2 being modeled.
+         nmatdb=0
+         if(wssdeb(1,1).gt.500.0)nmatdb=1
+         if(nmatdb.eq.0)then
+c  Zr and SS being modeled.
+         wzrdeb(k,j)=wzdeb(k,j)
+         wssrub(k,j)=wssdeb(k,j)
+         wuorub(k,j)=0.0
+         wzorub(k,j)=0.0
+         woxrub(k,j)=0.0
+         else
+         wuorub(k,j)=wssdeb(k,j)
+         wzorub(k,j)=wzdeb(k,j)
+c     0.259698 = 32.0/(91.22+32.)
+         woxrub(k,j)=0.259698*wzorub(k,j)
+         wzrdeb(k,j)=0.0
+         wssrub(k,j)=0.0
+         end if
+       else
+       wuorub(k,j)=wurub
+       wzorub(k,j)=wzorb1
+       wzrdeb(k,j)=wzrub
+       woxrub(k,j)=woxrb1
+       endif
+c  Initialize variables for calculating oxidation of rubble debris.
+       if(nrubgn.ne.1)go to 190
+       if(nrbtim.eq.1)then
+c  Note. stainless steel oxidation is not modeled, only Zr and UO2.
+       if((wzrdeb(k,j)+wuorub(k,j)).lt.1.e-3)go to 190
+       end if
+c  Case of embrittled, partially oxidized fuel rods that degenerate to
+c  debris.
+       if(nrbtim.eq.1)go to 175
+c  Note. density of Zr = 6.56e+3
+       wzrdeb(k,j)=pi*(rnoxd(kdyn)**2 - rci(kdyn)**2)*dzcond(kdyn)*
+     # 6.56e+3
+       if(int(brchv(k,j)).eq.1)then
+       rcmid=sqrt(0.5*(rnoxd(kdyn)**2+rci(kdyn)**2))
+       wzrdeb(k,j)=2.*pi*(rnoxd(kdyn)**2 - rcmid**2)*dzcond(kdyn)*
+     # 6.56e+3
+       if(wzrdeb(k,j).lt.0.0)wzrdeb(k,j)=0.0
+       end if
+c      Note. density of ZrO2 = 5800. kg/m3
+       wzorub(k,j)=pi*(rco(kdyn)**2 - rnoxd(kdyn)**2)*dzcond(kdyn)*
+     # 5800.
+       if(int(brchv(k,j)).eq.1)wzorub(k,j)=2.*wzorub(k,j)
+c      Note.  density of 95% UO2 = 10400. kg/m3.
+       wuorub(k,j)=pi*(rpel(kdyn)**2)*dzcond(kdyn)*10400.
+       if(wremzr(kdyn).gt.1.e-10)wzrdeb(k,j)=0.0
+       if(wremzr(kdyn).gt.1.e-10)wuorub(k,j)=pi*(ruliq(kdyn)**2)*
+     # 10400.
+175    continue
+      if(nrbtim.ne.1)then
+       tzrdeb(k,j)=rnoxd(kdyn)-rci(kdyn)
+       if(int(brchv(k,j)).eq.1)then
+       rcmid=sqrt(0.5*(rnoxd(kdyn)**2+rci(kdyn)**2))
+       else
+       rcmid=rci(kdyn)
+       end if
+       tzrdeb(k,j)=rnoxd(kdyn)-rcmid
+       if(tzrdeb(k,j).lt.0.0)tzrdeb(k,j)=0.0
+      else
+c  Factor of 0.7236 results in cube with same surface area as sphere
+c  where diameter of sphere is diacom(k,j), tzrdeb(k,j)= length of
+c  side of cube.
+       tzrdeb(k,j)=0.7236*diacom(k,j)
+      end if
+       wgzrd0(k,j)=3.826e-3
+       wgzrd1(k,j)=3.826e-3
+c      (weight gain for total oxidation) =
+c      ((32.0/91.22*(mass of Zr in particle)
+c      / (surface area of particle)
+c      Note. 91.22 = atomic weight of Zr.
+       if(tzrdeb(k,j).gt.1.e-6.and.wzrdeb(k,j).gt.1.e-10)then
+       wmxcld(k,j)=wgzrd0(k,j)+(32.0/91.22)*6.56e+3*tzrdeb(k,j)**3/
+     # (6.*tzrdeb(k,j)**2)
+       else
+       wmxcld(k,j)=wgzrd0(k,j)
+       end if
+       if(noxide2(k,j).ge.2)then
+       wgzrd0(k,j)=wmxcld(k,j)
+       wgzrd1(k,j)=wmxcld(k,j)
+       end if
+c      write(output,8505)wgzrd0(k,j),wmxcld(k,j)
+c8505  format(' initial weight gain of metallic debris particles =',
+c    # es10.4,' kg O2/m2   weight gain for complete oxidation =',es10.4,
+c    # ' kg O2/m2')
+c      write(output,8508)tzrdeb(k,j)
+c8508  format(' thickness of metallic debris particles =',es10.4,' m')
+       wguod0(k,j)=1.e-3
+       wguod1(k,j)=1.e-3
+c  Note. average size of debris particles in TMI-2 debris bed was
+c  0.87e-3 m. (0.2*rpel(kdyn)).
+      if(nrbtim.ne.1)then
+       tuodeb(k,j)=0.2*rpel(kdyn)
+       tzodeb(k,j)=rco(kdyn)-rnoxd(kdyn)
+       wmxful(k,j)=(32.0/810.)*10400.*tuodeb(k,j)**3/
+     # (6.*tuodeb(k,j)**2)
+      else
+c      case of user-defined debris
+       tuodeb(k,j)=0.7236*diacom(k,j)
+       tzodeb(k,j)=0.7236*diacom(k,j)
+       wmxful(k,j)=(32.0/810.)*10400.*tuodeb(k,j)**3/
+     & (6.*tuodeb(k,j)**2)
+      end if
+c      write(output,8507)wguod0(k,j),wmxful(k,j)
+c8507  format(' initial weight gain of UO2 debris =',es10.4,
+c    & ' kg O2/m2      weight gain for complete oxidation =',es10.4,
+c    & ' kg O2/m2')
+       if(wzrdeb(k,j).gt.1.e-10.and.tzrdeb(k,j).gt.1.e-6)then
+       nzrdeb(k,j)=(wzrdeb(k,j)/6.56e+3)/tzrdeb(k,j)**3
+       else
+       nzrdeb(k,j)=0.0
+       end if
+       if(wuorub(k,j).gt.1.e-10.and.tuodeb(k,j).gt.1.e-6)then
+       nuodeb(k,j)=(wuorub(k,j)/10400.)/tuodeb(k,j)**3
+       else
+       nuodeb(k,j)=0.0
+       end if
+       if(wzorub(k,j).gt.1.e-10.and.tzodeb(k,j).gt.1.e-6)then
+       nzodeb(k,j)=(wzorub(k,j)/5800.)/tzodeb(k,j)**3
+       else
+       nzodeb(k,j)=0.0
+       end if
+c  Calculate fraction of UO2 by weight in cladding particles.
+       if(nzrdeb(k,j).gt.0.5.and.nrbtim.ne.1)then
+       if((rnoxd(kdyn)-rci(kdyn)).gt.1.e-5)then
+       fuocld(k,j)=10400.*(rpel(kdyn)**2 - ruliq(kdyn)**2)/
+     & (10400.*(rpel(kdyn)**2 - ruliq(kdyn)**2) +
+     & 6.56e+3*(rnoxd(kdyn)**2 - rci(kdyn)**2))
+       end if
+       else
+       fuocld(k,j)=0.0
+       end if
+       if(wremzr(kdyn).gt.1.e-10.and.nrbtim.ne.1)fuocld(k,j)=1.0
+c  Calculate effective heat of reaction of mixture.
+       hefcld(k,j)=(1.-fuocld(k,j))*(6.45e+6)*(91.22/32.)+
+     & fuocld(k,j)*(1.84e+5)*(810./32.)
+c  Calculate effective particle size of debris.
+c  First calculate volume fraction of each component, namely
+c  cladding, fuel, and ZrO2.
+       voltot=nzrdeb(k,j)*tzrdeb(k,j)**3+nuodeb(k,j)*tuodeb(k,j)**3+
+     & nzodeb(k,j)*tzodeb(k,j)**3
+       fvlcld=nzrdeb(k,j)*tzrdeb(k,j)**3/voltot
+       fvlful=nuodeb(k,j)*tuodeb(k,j)**3/voltot
+       fvlzro=nzodeb(k,j)*tzodeb(k,j)**3/voltot
+       sumcld=0.0
+       if(nzrdeb(k,j).gt.0.5)sumcld=fvlcld/tzrdeb(k,j)
+       sumful=0.0
+       if(nuodeb(k,j).gt.0.5)sumful=fvlful/tuodeb(k,j)
+       sumzro=0.0
+       if(nzodeb(k,j).gt.0.5)sumzro=fvlzro/tzodeb(k,j)
+c  Note. shape factor for rough particles = 0.78.
+       ddbeff(k,j)=0.78/(sumcld+sumful+sumzro)
+       diacom(k,j)=ddbeff(k,j)
+       if(diacom(k,j).lt.dbdmin)diacom(k,j)=dbdmin
+       go to 198
+  190  continue
+       if(nrubgn.ne.2)go to 198
+c  Calculate size of cube with same surface area as intact cladding.
+c  nzrdeb*6.*tzrdeb**2 = 2.*pi*rco*dzcond
+c  Note. factor of 4. in equation below accounts for double-sided
+c  oxidation.
+       if(int(brchv(k,j)).eq.1)then
+       tzrdeb(k,j)=sqrt(4.*pi*rco(kdyn)*dzcond(kdyn)/6.)
+       else
+       tzrdeb(k,j)=sqrt(2.*pi*rco(kdyn)*dzcond(kdyn)/6.)
+       end if
+       if(wremzr(kdyn).gt.1.e-10)tzrdeb(k,j)=0.0
+       wgzrd0(k,j)=oxdwc2(k,j)
+       wgzrd1(k,j)=wgzrd0(k,j)
+c  (weight gain for total oxidation) =
+c  ((32.0/91.22*(mass of Zr in particle)
+c  / (surface area of particle)
+c  Note. 91.22 = atomic weight of Zr.
+       if(int(brchv(k,j)).eq.1)then
+       rcmid=sqrt(0.5*(rnoxd(kdyn)**2+rci(kdyn)**2))
+       else
+       rcmid=rci(kdyn)
+       end if
+       if(tzrdeb(k,j).gt.1.e-6.and.wremzr(kdyn).lt.1.e-10)then
+       wmxcld(k,j)=oxdwc2(k,j)+(32.0/91.22)*rhozr*
+     # pi*(rnoxd(kdyn)**2-rcmid**2)*dzcond(kdyn)/
+     # (2.*pi*rco(kdyn)*dzcond(kdyn))
+        if(wmxcld(k,j).lt.1.e-5)wmxcld(k,j)=1.e-5
+        if(wmxcld(k,j).lt.oxdwc2(k,j))wmxcld(k,j)=oxdwc2(k,j)
+        else
+        wmxcld(k,j)=oxdwc2(k,j)
+        end if
+        if(noxide2(k,j).ge.2)then
+        wgzrd0(k,j)=wmxcld(k,j)
+        wgzrd1(k,j)=wmxcld(k,j)
+        end if
+c       write(output,8509)wgzrd0(k,j),wmxcld(k,j)
+c8509   format(' initial weight gain of metallic debris particles =',
+c    &  es10.4,' kg O2/m2   weight gain for complete oxidation =',
+c       es10.4,' kg O2/m2')
+       drmetl=rnoxd(kdyn)-rcmid
+c      write(output,8510)oxdwc2(k,j),drmetl
+c8510  format(' cladding weight gain at debris formation =',es10.4,
+c    & ' kg O2/m2,  metallic thickness =',es10.4,' kg O2/m2')
+c      write(output,8512)rco(kdyn),rnoxd(kdyn),rcmid
+c8512  format(' cladding outside radius =',es10.4,' m,  radius of',
+c    & ' inside surface of oxide layer =',es10.4,' m,  midplane',
+c    & ' radius =',es10.4,' m')
+       wguod0(k,j)=1.e-3
+c***   tuodeb(k,j)=sqrt(2.*pi*(rpel(kdyn)**2)*dzcond(kdyn)/6.)
+c***   tzodeb(k,j)=rco(kdyn)-rnoxd(kdyn)
+c***  debris is representing intact rods, so dummy out oxidation of
+c***  UO2 by setting cube size to small value.
+c***  tzodeb(k,j) is currently never applied.
+       tuodeb(k,j)=1.e-6
+       tzodeb(k,j)=1.e-6
+       wmxful(k,j)=(32.0/810.)*10400.*rpel(kdyn)**2/
+     & (2.*pi*rpel(kdyn))
+c      write(output,8511)wguod0(k,j),wmxful(k,j)
+c8511  format(' initial weight gain of UO2 debris =',es10.4,
+c    & ' kg O2/m2      weight gain for complete oxidation =',es10.4,
+c    & ' kg O2/m2')
+       nzrdeb(k,j)=1.
+       nuodeb(k,j)=1.
+       nzodeb(k,j)=1.
+       fuocld(k,j)=0.0
+c  Calculate effective heat of reaction of mixture.
+       hefcld(k,j)=(6.45e+6)*(91.22/32.)
+       ddbeff(k,j)=diacom(k,j)
+  198  continue
+c  Take out coding that considered control rod material to be well-mixed
+c  with fuel rod debris; control rod material now considered to reside
+c  below fuel rod debris (stratified geometry).
+c
+c  if control rods are embedded in fuel rods that become debris, then
+c  add mass of control rods to debris.
+       if(rpel(kdyn).gt.0.2e-3)then
+c  Calculate mass of control rod material per fuel rod.
+         jindex=0
+         if(j.lt.ncomp.and.idcomp(j+1).eq.1)jindex=j+1
+         if(j.lt.(ncomp-1).and.idcomp(j+2).eq.1)jindex=j+2
+c  Check for layout of core components where all fuel rods defined
+c  first, then all control rods.
+           ntest1=0
+           ntest2=0
+           if(ncomp.ge.4)then
+           ncomph=ncomp/2
+           if(idcomp(1).eq.0.and.idcomp(2).eq.0)ntest1=1
+           if(idcomp(ncomph+1).eq.1.and.idcomp(ncomph+2).eq.1)
+     &     ntest2=1
+           if(ntest1.eq.1.and.ntest2.eq.1)then
+c  Layout of core with all fuel rods defined first, then the control
+c  rods.
+             jindex=ncomph+j
+             end if
+           end if
+         if(jindex.gt.0)then
+           irubpp(k,jindex)=1
+           icohpp(k,jindex)=1
+         end if
+       end if
+       powrub(k,j)=prubgn
+       if(nspowi.eq.3.or.nspowi.eq.1)then
+c  Divide by current reactor power so that where powrub is being
+c  applied it can be multiplied by current reactor power to take into
+c  account the change in decay heat.
+c  If nspowi=3, then power from RELAP5 reactor kinetics model.
+c  If nspowi=1, then power from RELAP5 general table.
+c  Powtot(1)=current power in component 1 (total of fission, fission
+c  product and actinide). (W/m3).
+         if(powtot(1).gt.0.)then
+           powrub(k,j)=powrub(k,j)/powtot(1)
+         else
+           powrub(k,j)=0.0
+         endif
+       end if
+  200  continue
+  240  continue
+c  Update powrub array for nodes that are still intact and do not
+c  contain rubble.
+       do k=1,naz
+         if (irubpp(k,j).eq.0 .and. icohpp(k,j).eq.0 .and.
+     &   wuorub(k,j).lt.1.e-10) then
+           if (unuca(k,j).gt.1.e-10) powrub(k,j) =
+     &     dzcond((j-1)*ndax+k)*unuca(k,j)
+           if (nspowi.eq.3.or.nspowi.eq.1) then
+             if (powtot(1).gt.0.) powrub(k,j)=powrub(k,j)/powtot(1)
+           endif
+         endif
+       enddo
+       return
+       end
+*endif

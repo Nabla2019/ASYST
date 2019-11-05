@@ -1,0 +1,210 @@
+*mlist
+*if def,selap
+       subroutine oxshot (oxdeo,alfao,oxdwc,oxdwc0,oxdhc,
+     & rnoxd,rnalf,noxide)
+c  regard surface at radial node 1 as being same as surface at outer
+c  node, then flip results in subroutine slabc.
+c
+c  Computes zircaloy cladding oxidation on outside surface of
+c  shroud.
+c  Note: This subroutine should not be called if islbot(icomp)=1;
+c        insulated surface.
+c
+c  Cognizant engineer: cma.
+c     calling subroutines:  slabc
+c     subroutines called:   avfunc, oxcrst, oxstato,
+c                           oxydef2,qlimit,vfunc,
+c                           vsfunc
+c
+c     input variables                  description
+c        oxdwc0         cladding oxide weight gain from previous time
+c                         step (kg/m2)
+c
+c     i/o variables                    description
+c        alfao          cladding outer alpha thickness (m)
+c        noxide         cladding oxidation flag, if non zero cladding i
+c                         completely oxidized
+c        oxdeo          cladding outer oxide thickness (m)
+c        oxdwc          cladding oxide weight gain (kg/m2)
+c
+c     output variables                 description
+c        oxdhc          cladding oxidation heat generation (w/m)
+c        rnalf          inner radius or leftmost coordinate of outer
+c                         alpha layer (m)
+c        rnoxd          inner radius or leftmost coordinate of outer
+c                         oxide layer (m)
+c
+c     local variables                  description
+c        oxlis0         oxidation steam starvation rate limit per
+c                         unit surface area for previous time step
+c                         (kg/m2-s)
+c        toxlim         minimum cladding surface temperature for
+c                         oxidation calculation (k)
+c        wtlim          weight gain limit (kg/m2)
+c        zrden          density of zircaloy (kg/m3)
+c        zrheat         heat of reaction used in heat generation
+c                         calculation (j/kg)
+c
+       use lpdatc
+       implicit none
+       include 'cons.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'scddat.h'
+       include 'scntl.h'
+       include 'scdcom.h'
+       include 'scdout.h'
+       include 'miscon.h'
+       include 'ndxara.h'
+       include 'fecom.h'
+       include 'cmatp.h'
+       include 'oxcom1.h'
+       include 'oxcom2.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'tblsp.h'
+       include 'statec.h'
+       include 'dbacct.h'
+       include 'buntim.h'
+       include 'oxsrv2.h'
+       integer noxide(ndax)
+       real oxdeo(ndax),alfao(ndax),oxdwc(ndax),oxdwc0(ndax),
+     & oxdhc(ndax),rnoxd(ndax), rnalf(ndax)
+c Local variables.
+       integer i,il,iln,im,in,noxzr,noxmat,nshap
+       integer kdyn
+       integer ilt,jnon,nlvol
+       real quaair,quani,quahy
+       real co,do,oxlis0,rcmid,toxlim,uo
+       real avfunc,qlimit,vfunc,vsfunc
+       real wtlimd,rwgn,rthk,srftmp
+       real fatot,wtgmax,effow1
+       real o2mw,zrmw,fnro,soxwgn,soxthk
+       real molair,moloxy,molnit,frcarg,frcoxy,frcnit,sumbot,
+     &      frcwox,frcwn2,frcwar,yh20,yn2,numer
+       real flow,wg,thbsa,thsa,f1,ynlim,onemu,rhzr,rhzrx,wmzr,wmzrx
+       real slen,fraca,ratwg,delwg,dheat,thx,thm,thxg
+       real ratoxc,mssair,delt,thbe,rcx,tempc,denom,molarg,yh2o,yo2
+       real flowg,frcflw,yolim,rci1,rco1,rcm,wgrat,thxe
+       real mssnit,mssarg,thm1,thx0
+       real wtmh2o,smh2o,smh2
+       real cirrd1
+       real yar
+       real ratthk,thkmt1,thkoxe
+       real rodfla,frcfla
+       real thbka,thbks
+       real toxpsi
+       real yh2
+       real sfunc1
+       integer ibrk,iopt,iopen,jjj
+       integer iselct
+       integer nswgam
+       integer ndbg,ndbgi
+c
+       external oxdair
+c
+       data uo/1.827834e5/, co/10310.75/, do/0.52257/
+       ndbg=0
+c  Define non nodally dependent constants.
+cljs  toxlim is lower bound of temperature for SCDAP oxidation modeling
+       toxlim = 1000.0
+cljs   toxpsi is lower bound of temperature for PSI oxidation modeling
+cljs   toxpsi = 773.
+cljs   set toxpsi to PSI recommended value
+       toxpsi = 400.
+       o2mw = 32.
+       zrmw = 91.22
+       thzta = 1.35*zrden/zoxden
+       ia(ixpc) = 1
+c  Do loop on axial nodes.
+       do i = 1,naz
+         ndbgi=0
+           if(ndbg.eq.1.and.i.eq.2)ndbgi=1
+         srftmp = tcond3(1,i,icomp)
+         rco2sh(i,icomp) = rcoi2sh(i,icomp)
+         rcoish(i,icomp) = rcoi2sh(i,icomp)
+       nlvol = nvad((ndcomp+nsout(icomp)-1)*ndax+i) + filndx(4)
+             if(ndbgi.eq.1)then
+             write(output,9002)i,icomp,nsout(icomp),nlvol,
+     &       volno(nlvol)
+9002         format(' OXSHOT; i=',i5,' icomp=',i5,' nsout=',i5,
+     &       ' nlvol=',i6,' volno(nlvol)=',i10)
+             end if
+c    perimeter of shroud is slbwd(icomp)
+       cirrd1 = slbwd(icomp)          
+c       rcmid defined to be x-cooridate of inside surface metallaic
+c       layer on outside surface of shroud (m)
+         rcmid = rci2sh(i,icomp)
+         wtlimd = oxdwct(i,icomp)
+cljs     sfunc1 = dzcnd2(i,icomp)*slbwd(icomp)
+         sfunc1 = slbwd(icomp)
+           if(wtlimd.ge.wtgnmx2(i,icomp)) noxide(i) = 2
+         if (noxide(i).ge.1 .or. srftmp.lt.toxlim .or.
+     &   scntrl(13))then
+           oxdhc(i) = 0.0
+           h2oxsho(i,icomp) = 0.0
+           froxpl2(i,icomp) = cirrd1*oxdwc(i)/wtgnmx2(i,icomp)
+         else
+c  nshap = 0 = do not force application of diffusion limit.
+           nshap=0
+           call oxydef2(oxlis0,i,nlvol,nshap)
+           kaxndb = i
+           noxmat = mshmt3(1,i,icomp)
+           oxdwc0(i) = oxdwc(i)
+           froxpl2(i,icomp) = cirrd1*oxdwc(i)/wtgnmx2(i,icomp)
+           if (noxmat.le.3 .or. noxmat.eq.5) then
+             fatot=0.0                  
+c   If reflood is occurring, then assume cracks in oxide prevent
+c   drops of relocated material from sufficating oxidation at that
+c   location.
+             il = nlvol                    
+             fatot = 0.0
+             wtgmax = wtgnmx2(i,icomp)
+             wtlim = wtgmax
+c      shroud oxide layer assumed to never shatter
+             effsh2(i,icomp) = oxdwc(i)
+             effow1=effow0(i,icomp)
+             noxzr = noxide(i)
+             call oxstato(rcmid,srftmp,oxlis0,oxdeo(i),oxdwc(i),
+     &       alfao(i),rnoxd(i),rnalf(i),noxide(i),oxdwc0(i),fatot,
+     &       wtgmax,effow1)
+             thkstm2(i,icomp) = oxdeo(i)
+             froxpl2(i,icomp) = cirrd1*oxdwc(i)/wtgnmx(i,icomp)
+             oxdhc(i) = (91.22/32.0)*zrheat*(oxdwc(i) - oxdwc0(i))*
+     &       sfunc1/dt
+             effoxw(i,icomp)=effow1
+           elseif (noxmat.eq.18 .or. noxmat.eq.19) then
+             rwgn = soxwgn(srftmp)
+             if (rwgn.lt.0.) rwgn=0.0
+             oxdwc(i) = sqrt(oxdwc(i)**2 + rwgn*dt)
+             if (oxdwc(i).lt.oxdwc0(i))oxdwc(i) = oxdwc0(i)
+             froxpl2(i,icomp) = cirrd1*oxdwc(i)/wtgnmx2(i,icomp)
+             oxdhc(i)=1.5738e+6 * (oxdwc(i)-oxdwc0(i) )/dt
+             rthk = soxthk(srftmp)
+             oxdeo(i) = sqrt(oxdeo(i)**2 + rthk*dt)
+             thkstm2(i,icomp) = oxdeo(i)
+           else
+             fail=.true.
+             write(output,9000)noxmat
+ 9000  format('0********* OXIDIZ has unknown material, index =',i3)
+           endif
+           delwg = oxdwc(i)-oxdwc0(i)
+           h2oxsho(i,icomp) = ((oxdwc(i) - oxdwc0(i))*
+     &     sfunc1/8.0)/dt
+         endif
+         h2oxsho(i,icomp)=max(0.,h2oxsho(i,icomp))
+         if (.not.scntrl(8)) then
+c  Add hydrogen to hydrodynamic volume.
+           il = nlvol
+           do in=1,noncn
+             if (in .ne. nonhy) cycle
+             iln = il + in - 1
+             gaman(iln)=gaman(iln)+isgl*recipv(il)*h2oxsho(i,icomp)
+             enthn(iln) = uo + co*srftmp + do/2.0* (srftmp-tao)**2
+           enddo
+         endif
+       enddo
+       return
+       end
+*endif

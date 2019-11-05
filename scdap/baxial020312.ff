@@ -1,0 +1,534 @@
+*mlist
+*if def,selap
+      subroutine baxial(j)
+!  baxial controls the models that constitute the BWR structures
+!  (ie, canister and control blade) heatup, oxidation, melting
+!  and relocation.
+!
+!  Cognizant engineer: ewc (ljo fpg).
+!
+!******************************************************************
+!
+!     baxial              1-April-96
+!
+!     the BWR canister/control blade modules were developed at ORNL
+!     by L.J.Ott under the auspices of the NRC sponsored Boiling
+!     Water Reactor Severe Accident Technologies programs.
+!
+!     for information or assistance, call
+!                 L.J.Ott (fts)-624-0324 or (615)-574-0324
+!                 F.P.Griffin (fts)-626-4684 or (615)-576-4684
+!
+!******************************************************************
+!-----local variables
+!
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+!
+       include 'scddat.h'
+       include 'tblsp.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'voldat.h'
+       include 'ufiles.h'
+       include 'stcblk.h'
+       real(kr) akzrbx, amw(7), atoti , atoto , cond  ,
+     & ccp,ccpr,cpzrbx(2),delws,delzci,
+     & dum3  , dwsbi(2)      , dwsbo(2)      , dz1   ,
+     & fboxi , fboxo , hrdbso, hrdcb ,
+     & hsb(2), hsri(2)       , ph2   , ph2o  , pres  ,
+     & qmwbi , qmwbo , qmwv1 , qstocb(ndax)    ,
+     & qstocc(ndax,2)  , smss(2)       , smsscn(2)    ,
+     & smsso , sum2  , sum3  , sum4  , sum5  , tbk   ,
+     & tbko  , waro  , wdm   , who   , woir  ,
+     & woir2 , ws    , ws2   , wso   , xazir , xazir2,
+     & xbeta2, xdelbx, xoir  , xoir2 , xzrrx
+      real(kr) prop(26),cond1,dum1
+!
+      logical err
+!
+      integer ic1,ic2,in1,in2,it,nflusv
+      integer         i     , j     , k     , l
+!
+!-----commons
+!
+       include 'axtrns.h'
+       include 'bcs.h'
+       include 'blinit.h'
+       include 'blkage.h'
+       include 'cboilx.h'
+       include 'cr2.h'
+       include 'za.h'
+       include 'blageo.h'
+!
+      data amw/18.01534,2.01594,28.01055,44.00995,16.04303,28.01340,
+     1         39.948/
+!
+! *** check canister temperatures and reset tbxmx (if needed)
+!
+      do 10 i=1,ndz(j)
+         do 10 k=1,2
+   10       if(tbxmx(i,k,j).lt.tboxo(i,k,j))tbxmx(i,k,j)=tboxo(i,k,j)
+!
+! *** relocate molten material, determine solidification (if any),
+!     and heat transfer to underlying structure
+!
+      call reloc(j,qstocc,qstocb)
+!
+! *** start node by node (axial direction) calculations
+!
+!  calculate nfluid in stcset if saved fluid is not light water
+      nflusv=nfluid
+      if (nflusv.ne.1) call stcset (1)
+!
+      do 130 i=1,ndz(j)
+         dz1=hdz(i,j)
+!
+!     zero the radiative, convective, etc. components of the
+!     node heat balances
+!
+         do 20 k=1,3
+            if(k.lt.3)then
+               qbxaxp(k)=0.0
+               qbxaxm(k)=0.0
+               qradrb(k)=0.0
+            end if
+            qcbaxp(k)=0.0
+   20       qcbaxm(k)=0.0
+            qradrc   =0.0
+!
+         do 70 k=1,2
+!
+!     initiate the accumulative variables for the node heat balances
+!
+            qbox(k)=qstocc(i,k)+qsszrx(i,k,j)
+            qsszrx(i,k,j)=0.0
+            qcb1   =0.0
+            qcb2   =0.0
+            qcb3   =qstocb(i)
+!
+!     determine canister properties at old time temperatures
+!
+!  use conversions of k = (f + 459.67)/1.8
+!  and btu/h/ft/f = w/m/k / 1.730735
+!  and btu/(lbm*f) = j/(kg*k) / 4186.8
+            if (chngno(70)) then
+              call cthconr ((tboxo(i,k,j)+459.67)/1.8,cond1,dum1)
+            else
+              call cthcon((tboxo(i,k,j)+459.67)/1.8,cond1,dum1)
+            endif
+            akzrbx   =cond1/1.730735
+            if (chngno(70)) then
+              cpzrbx(k) = ccpr((tboxo(i,k,j)+459.67)/1.8)/4186.8
+            else
+              cpzrbx(k) = ccp((tboxo(i,k,j)+459.67)/1.8)/4186.8
+            endif
+!
+!     determine axial heat conduction contribution (can./control blade)
+!     to node heat balances
+!
+            if(iax.eq.1)call baxcon(i,k,j)
+!
+!     determine nodal masses (canister and control blade)
+!
+            smsscn(k)=0.0
+            do 30 l=1,11
+               smsscn(k)=smsscn(k)+wsscan(i,k,j,l,1)+wsscan(i,k,j,l,2)
+               if(k.eq.2)then
+                  smsscn(k)=smsscn(k)+wsscno(i,j,l,1)+
+     *                       wsscno(i,j,l,2)
+               end if
+   30          continue
+            twzcan(k)=wzcan(i,k,j,1)+wzcan(i,k,j,2)+wzcan(i,k,j,3)+
+     *                wzcan(i,k,j,4)+wzcan(i,k,j,5)+wzcan(i,k,j,6)+
+     *                wzcan(i,k,j,7)+smsscn(k)
+            if(k.eq.2)go to 60
+            sum3=0.0
+            sum2=0.0
+            sum4=0.0
+            sum5=0.0
+            do 40 l=1,7
+               sum2=sum2+wsscb(i,j,l,2)
+   40          sum3=sum3+wsscb(i,j,l,1)
+            do 50 l=1,11
+               sum5=sum5+wsscbb(i,j,l,2)
+   50          sum4=sum4+wsscbb(i,j,l,1)
+            twcb2=sum2+wfe2o(i,j)+wfe2i(i,j)
+            twcb3=sum3+wfe3o(i,j)+wfe3i(i,j)
+            twcb1=wb4c(i,j)+wb2o3(i,j)+wb(i,j)+wc(i,j)
+            if(icb(i,3,j).eq.1)then
+               twcb3=twcb3+sum4+sum5
+            else
+               twcb2=twcb2+sum4+sum5
+            end if
+!
+!     set-up coefficients for implicit solution of energy
+!     equations for the canister
+!
+!     canister
+!
+   60       ai1(k)=boxl(k,j)/(boxt(j)/akzrbx+1.0/hwboxi(i))
+            ao1(k)=boxl(k,j)/(boxt(j)/akzrbx+1.0/hwboxo(i))
+            ax(k)=twzcan(k)/dz1*cpzrbx(k)/(dtm/60.0)
+!
+!    determine stream enthalpies and surface emissivities
+!
+!-----canister/fuel side
+!
+!  units of blade/box properties (originally calculated in stmh2p)
+!  temperature    = F
+!  pressure       = psia
+!  spec. enthalpy = Btu/lbm    (variables hsb, hsbo, hsri, hsrcb)
+!  thermal cond.  = Btu/h/ft/F (variable cond)
+!
+!  calculate steam enthalpy using subroutine sth2x3
+!  prop(1) = temperature (input), K = (F + 459.67)/1.8
+!  prop(2) = pressure (input), Pa
+!  prop(5) = specific enthalpy (output), J/kg
+!  Btu/lbm = J/kg / 2326.000
+!
+            ic1 = (icbla(j)-1)*ndax + i
+            ic2 = (ndcomp+nsout(icbla(j))-1)*ndax + i
+            in1 = nvad(ic1) + filndx(4)
+            in2 = nvad(ic2) + filndx(4)
+!
+            prop(1) = min( tempg(in1) , 4999.99 )
+            prop(1) = max( prop(1) , fa(ndxstd)+0.01 )
+            prop(2) = p(in1)
+            call sth2x3 (fa(ndxstd),prop(1),it,err)
+            hsb(k) = prop(5) / 2326.000
+            if (err) then
+              write (output,1000) 1,prop(1),prop(2),prop(5)
+ 1000         format ('0******** Steam table error in baxial(',i1,
+     &        ').  t, p, h =',3es13.5)
+              fail = .true.
+            endif
+!
+            prop(1) = min( (tboxo(i,k,j)+459.67)/1.8 , 4999.99 )
+            prop(1) = max( prop(1) , fa(ndxstd)+0.01 )
+            call sth2x3 (fa(ndxstd),prop(1),it,err)
+            hsri(k) = prop(5) / 2326.000
+            if (err) then
+              write (output,1000) 2,prop(1),prop(2),prop(5)
+              fail = .true.
+            endif
+!
+!----canister/control blade side (canister)
+!
+            tbko=tsinko(i)
+!  psia = Pa/6894.757
+            pres=p(in2)/6894.757
+            waro=waroo(i)
+            who =whoo(i)
+            wso =wsoo(i)
+            wdm =wso/amw(1)+who/amw(2)+waro/amw(7)
+            if(wdm.le.0.0)then
+               ph2o=0.0
+            else
+               ph2o=pres*(wso/amw(1))/wdm
+            end if
+!
+            prop(1) = min( tempg(in2) , 4999.99 )
+            prop(1) = max( prop(1) , fa(ndxstd)+0.01 )
+            prop(2) = p(in2)
+            call sth2x3 (fa(ndxstd),prop(1),it,err)
+            hsbo(k) = prop(5) / 2326.000
+            if (err) then
+              write (output,1000) 3,prop(1),prop(2),prop(5)
+              fail = .true.
+            endif
+!
+            call hrstm2(tboxo(i,k,j),tbko,ph2o,1,1,xboxo(i,k,j),
+     *                  tbxmx(i,k,j),emisbo(i,k,j),emisvo(i,k,j),hrdbso,
+     *                  xboxcb(j),0)
+!
+!----canister/control blade side (control blade)
+!
+            if(k.eq.2)go to 70
+!
+            prop(1) = min( (tcb3o(i,j)+459.67)/1.8 , 4999.99 )
+            prop(1) = max( prop(1) , fa(ndxstd)+0.01 )
+            call sth2x3 (fa(ndxstd),prop(1),it,err)
+            hsrcb = prop(5) / 2326.000
+            if (err) then
+              write (output,1000) 4,prop(1),prop(2),prop(5)
+              fail = .true.
+            endif
+!
+!  calculate thermal cond. using the following properties in /voldat/
+!  thconf = liquid thermal conductivity, W/m/K
+!  thcong = vapor thermal conductivity, W/m/K
+!  Btu/h/ft/F = W/m/K / 1.730735
+            cond = ( voidg(in2)*thcong(in2) +
+     &      (1.0-voidg(in2))*thconf(in2) ) / 1.730735
+!
+            call hrstm2(tcb3o(i,j),tbko,ph2o,2,2,0.0,0.0,
+     *                  emiscb(i,j),dum3,hrdcb,xboxcb(j),0)
+!
+   70    continue
+!
+!-**-determine heat radiated from structures to structures
+!
+!    (all structural radiation calc. assume steam to be an absorbing
+!     /transmitting medium)
+!
+!-**-if iradrx=1, determine structure-to-structure radial radiation
+!
+         if(voido(i).gt.voidmx.and.iradrx.eq.1)then
+            call baxrad(i,j)
+         end if
+!
+!-**-update accumulative variables for the node heat balances
+!    (except for structural/steam/hydrogen reaction)
+!
+         do 80 k=1,2
+            qbox(k)=qbox(k)+qradrb(k)/dz1+qrdrbx(i,k)/dz1+
+     *              qbxaxp(k)+qbxaxm(k)
+   80       continue
+         qcb3=qcb3+qradrc/dz1+qcbaxp(3)+qcbaxm(3)
+         qcb2=qcb2+qcbaxp(2)+qcbaxm(2)
+         qcb1=qcb1+qcbaxp(1)+qcbaxm(1)
+!
+!-**-structural/steam/hydrogen/etc. reaction calculations
+!
+         smsso=0.0
+         do 90 k=1,2
+            smss(k)=0.0
+            do 90 l=1,11
+               smss(k)=smss(k)+wsscan(i,k,j,l,1)+wsscan(i,k,j,l,2)
+               if(k.eq.2)smsso=smsso+wsscno(i,j,l,1)+wsscno(i,j,l,2)
+   90          continue
+!
+!----zero the dws--(-) variables
+!
+         do 100 k=1,2
+            dwsbi(k)=0.0
+  100       dwsbo(k)=0.0
+!
+!----set-up flows (inside and outside canisters)
+!
+         ws  =wsi(i)
+         tbk =tsinki(i)
+!  psia = Pa/6894.757
+         pres=p(in1)/6894.757
+         waro=waroo(i)
+         who =whoo(i)
+         wso =wsoo(i)
+         tbko=tsinko(i)
+         wdm =wso/amw(1)+who/amw(2)+waro/amw(7)
+         if(wdm.le.0.0)then
+            ph2o=0.0
+            ph2=0.0
+         else
+            ph2o=pres*(wso/amw(1))/wdm
+            ph2 =pres*(who/amw(2))/wdm
+         end if
+!
+!----will allocate flows (stream splitting) for each structure
+!    (where there are multiple structures seeing the same stream)
+!    based on the surface area of each structure seeing the stream
+!
+         atoti=0.0
+         atoto=0.0
+         if(scn(i,1,j).ne.0.0)then
+            atoti=atoti+boxl(1,j)
+            atoto=atoto+boxl(1,j)
+         end if
+         if(scn(i,2,j).ne.0.0)then
+            atoti=atoti+boxl(2,j)
+            atoto=atoto+boxl(2,j)
+         end if
+         if(scb(i,j).ne.0.0)atoto=atoto+cbl(j)
+         do 120 k=1,2
+!
+!----bwr cannister (fuel assembly side)
+!
+            if(imwbox.eq.0)go to 120
+            if(voidi(i).lt.voidmx)go to 110
+            if(tboxo(i,k,j).le.1200.0)go to 110
+            if((wzcan(i,k,j,1)+wzcan(i,k,j,4)).eq.0.0)go to 110
+            if(scn(i,k,j).eq.0.0)go to 110
+            if(iblkc(i,k,j).eq.2)go to 110
+            if(smss(k).ne.0.0)go to 110
+            if(ws.eq.0.0)go to 110
+            xdelbx=abs(2.0/3.0*(xboxi(i,k,j)+xboxo(i,k,j))-xbox(j))
+            if(xdelbx.lt.0.00001)go to 110
+            if(wzcan(i,k,j,4).eq.0.0)then
+               xoir=xboxi(i,k,j)
+               woir=woboxi(i,k,j)
+               xazir=xazbxi(i,k,j)
+            else
+               xoir=0.0
+               woir=0.0
+               xazir=0.0
+            end if
+            ws2=ws*boxl(k,j)/atoti
+            fboxi=(7000.0-(hsri(k)-hsb(k)))/7000.0
+            call zrmwsl(mw1,mw2,tbk,tbko,xbox(j)/2.0,dtm,ws2,dz1,
+     *         boxl(k,j),qmwv1,xoir,woir,xazir,xoir2,woir2,xazir2,
+     *                   xbeta2,xzrrx,delws,hsb(k),hsri(k),qbox(k),
+     *                   tboxo(i,k,j),ai1(k),ao1(k),ax(k))
+            if(wzcan(i,k,j,4).eq.0.0)then
+               delzci=(xzrrx/30.48)*boxl(k,j)*dz1*rhocld
+               delzci=min(delzci,wzcan(i,k,j,1))
+               wzcan(i,k,j,1)=max(wzcan(i,k,j,1)-(delzci+1.0e-20),0.0)
+               qmwbi=qmwv1
+               xboxi(i,k,j)=xoir2
+               woboxi(i,k,j)=woir2
+               xazbxi(i,k,j)=xazir2
+            else
+               delzci=(xzrrx/30.48)*boxl(k,j)*dz1*rhocld
+               qmwbi=qmwv1
+               if(delzci.gt.wzcan(i,k,j,4))then
+                  delzci=wzcan(i,k,j,4)
+                  qmwbi=delzci*2762.6*fboxi/dtm/dz1
+                  delws=qmwbi*dz1/7000.0/fboxi
+               end if
+               delzci=min(delzci,wzcan(i,k,j,4))
+               wzcan(i,k,j,4)=max(wzcan(i,k,j,4)-(delzci+1.0e-20),0.0)
+            end if
+            wzcan(i,k,j,2)=wzcan(i,k,j,2)+delzci*(123.219/91.22)
+            dwsbi(k)=min(delws,ws2)
+            qmwbi=min(qmwbi,ws2*7000.0*fboxi/dz1)
+            twzcan(k)=wzcan(i,k,j,1)+wzcan(i,k,j,2)+wzcan(i,k,j,3)+
+     *                wzcan(i,k,j,4)+wzcan(i,k,j,5)+wzcan(i,k,j,6)+
+     *                wzcan(i,k,j,7)+smsscn(k)
+            ax(k)=twzcan(k)/dz1*cpzrbx(k)/(dtm/60.0)
+!
+!    adjust qbox(k)
+!
+            qbox(k)=qbox(k)+qmwbi*60.0
+!
+            qcan(j)=qcan(j)+qmwbi*60.0*4.0*dz1
+  110       continue
+!
+!    outside of cannister (seeing institial fluid)
+!
+            if(voido(i).lt.voidmx)go to 120
+            if(tboxo(i,k,j).le.1200.0)go to 120
+            if((wzcan(i,k,j,1)+wzcan(i,k,j,4)).eq.0.0)go to 120
+            if(scn(i,k,j).eq.0.0)go to 120
+            if(iblkcb(i,k,j).eq.2)go to 120
+            if(k.eq.2.and.smsso.ne.0.0)go to 120
+            if(wso.eq.0.0)go to 120
+            xdelbx=abs(2.0/3.0*(xboxi(i,k,j)+xboxo(i,k,j))-xbox(j))
+            if(xdelbx.lt.0.00001)go to 120
+            if(wzcan(i,k,j,4).eq.0.0)then
+               xoir=xboxo(i,k,j)
+               woir=woboxo(i,k,j)
+               xazir=xazbxo(i,k,j)
+            else
+               xoir=0.0
+               woir=0.0
+               xazir=0.0
+            end if
+            ws2=wso*boxl(k,j)/atoto
+            fboxo=(7000.0-(hsri(k)-hsbo(k)))/7000.0
+            call zrmwsl(mw1,mw2,tbk,tbko,xbox(j)/2.0,dtm,ws2,dz1,
+     *         boxl(k,j),qmwv1,xoir,woir,xazir,xoir2,woir2,xazir2,
+     *                   xbeta2,xzrrx,delws,hsbo(k),hsri(k),qbox(k),
+     *                   tboxo(i,k,j),ai1(k),ao1(k),ax(k))
+            if(wzcan(i,k,j,4).eq.0.0)then
+               delzci=(xzrrx/30.48)*boxl(k,j)*dz1*rhocld
+               delzci=min(delzci,wzcan(i,k,j,1))
+               wzcan(i,k,j,1)=max(wzcan(i,k,j,1)-(delzci+1.0e-20),0.0)
+               qmwbo=qmwv1
+               xboxo(i,k,j)=xoir2
+               woboxo(i,k,j)=woir2
+               xazbxo(i,k,j)=xazir2
+            else
+               delzci=(xzrrx/30.48)*boxl(k,j)*dz1*rhocld
+               qmwbo=qmwv1
+               if(delzci.gt.wzcan(i,k,j,4))then
+                  delzci=wzcan(i,k,j,4)
+                  qmwbo=delzci*2762.6*fboxo/dtm/dz1
+                  delws=qmwbo*dz1/7000.0/fboxo
+               end if
+               delzci=min(delzci,wzcan(i,k,j,4))
+               wzcan(i,k,j,4)=max(wzcan(i,k,j,4)-(delzci+1.0e-20),0.0)
+            end if
+            wzcan(i,k,j,2)=wzcan(i,k,j,2)+delzci*(123.219/91.22)
+            dwsbo(k)=min(delws,ws2)
+            qmwbo=min(qmwbo,ws2*7000.0*fboxo/dz1)
+            twzcan(k)=wzcan(i,k,j,1)+wzcan(i,k,j,2)+wzcan(i,k,j,3)+
+     *                wzcan(i,k,j,4)+wzcan(i,k,j,5)+wzcan(i,k,j,6)+
+     *                wzcan(i,k,j,7)+smsscn(k)
+            ax(k)=twzcan(k)/dz1*cpzrbx(k)/(dtm/60.0)
+!
+!    adjust qbox(k)
+!
+            qbox(k)=qbox(k)+qmwbo*60.0
+            qcan(j)=qcan(j)+qmwbo*60.0*4.0*dz1
+!
+  120    continue
+!
+!-**-load dw--output arrays
+!    (steam consumed and hydrogen generated)
+!
+         dws(i) =dwsbi(1)+dwsbi(2)
+         dwh(i) =amw(2)/amw(1)*dws(i)
+         dwsbx(i,1)=dwsbi(1)
+         dwsbx(i,2)=dwsbi(2)
+         dwhbx(i,1)=amw(2)/amw(1)*dwsbi(1)
+         dwhbx(i,2)=amw(2)/amw(1)*dwsbi(2)
+         dwso(i)=dwsbo(1)+dwsbo(2)
+         dwho(i)=amw(2)/amw(1)*dwso(i)
+         dwsobx(i,1)=dwsbo(1)
+         dwsobx(i,2)=dwsbo(2)
+         dwhobx(i,1)=amw(2)/amw(1)*dwsbo(1)
+         dwhobx(i,2)=amw(2)/amw(1)*dwsbo(2)
+!
+!-**-control blade (steel/b4c/steam/h2 reactions and set-up of
+!    c- variables)
+!
+         call cblade(i,j,dtm,cond,ph2o,ph2,pres,tbko,1)
+!
+!-**-interstitial blockages (set-up the abl(-,-,-) and bbl(-,-) arrays)
+!
+         call blckag(i,j,dtm)
+!
+!-**-solve the nodal heat balances via a call to axsolv
+!
+         call bxsolv(i,j,dtm)
+!
+!-**-the end of the 130 loop
+!
+  130 continue
+!
+!  reset nfluid in stcset if saved fluid is not light water
+       if (nflusv.ne.1) call stcset (nflusv)
+!
+!-**-load old time temperatures
+!
+      do 160 i=1,ndz(j)
+         do 160 k=1,2
+            tboxo(i,k,j)=tbox(i,k,j)
+            if(k.ne.2)then
+               tcb1o(i,j)=tcb1(i,j)
+               tcb2o(i,j)=tcb2(i,j)
+               tcb3o(i,j)=tcb3(i,j)
+            end if
+            if(iblkcb(i,k,j).eq.2)then
+               do 140 l=1,nbl(i,k,j)
+  140             tblko(i,k,j,l)=tblk(i,k,j,l)
+               l=nbl(i,k,j)
+               tblko(i,k,j,l+1)=tblko(i,k,j,l)
+               tblko(i,k,j,l+2)=tblko(i,k,j,l)
+            else
+               if(k.eq.2)then
+                  do 150 l=1,6
+  150                tblko(i,k,j,l)=tboxo(i,k,j)
+               else
+                  tblko(i,k,j,1)=tcb1o(i,j)
+                  tblko(i,k,j,2)=tcb2o(i,j)
+                  tblko(i,k,j,3)=tcb3o(i,j)
+                  tblko(i,k,j,4)=tcb3o(i,j)
+                  tblko(i,k,j,5)=tboxo(i,k,j)
+                  tblko(i,k,j,6)=tboxo(i,k,j)
+               end if
+            end if
+  160 continue
+      return
+      end
+*endif

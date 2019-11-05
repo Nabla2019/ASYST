@@ -1,0 +1,192 @@
+*mlist
+       subroutine courn1 (dtx)
+c
+c  Compute minimum courant limit using volume/area*velocity
+c  where the volume is the donor volume based on velocity.
+c  It is used with chngno(60) or chngno(64).
+c
+c  Cognizant engineer: gam
+c
+       use lpdatc
+       use statcc
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'cmpdat.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       real dtx, factor
+c  dtx    = courant dt
+c  factor = factor to increse dtx for ss and nearly implicit
+       integer i,isave,ix,ixk,ixl,j,jx,k,ktv,kx,ltv
+       real vflimt,vglimt,dtxlim
+c  vflimt = limit on voidf for not checking for courant limit
+c  vglimt = limit on voidg for not checking for courant limit
+c  dtxlim = upper limit on courant limit when it is infinity
+       data vflimt /1.0e-6/, vglimt /1.0e-6/, dtxlim /1.0e+3/
+c
+c  Logic of this routine
+c  Zero out the dtcrnf and dtcrng values initially (scrtch variables)
+c  dtcrnf is courant limit for liquid, dtcrng is for vapor
+c  Loop over all juns, put product of jun area times jun vel divided
+c  by the upstream vol into dtcrnf and dtcrng
+c  If there is more than one value to put into the slot, then it uses
+c  the maximum one.
+c  Loop over all volumes computing reciprocal of dtcrnf and dtcrng,
+c  storing it in same location and look for minimum value for all
+c  the volumes, which is the minimum courant limit, dtx.
+c
+c  k is volume block index (voldat.h)
+       k = filndx(4)
+       do 100 kx = 1,nvols(k)
+c  ix is pointer to scratch storage (scrtch.h) for this volume
+         ix = vctrls(k)
+         dtcrnf(ix) = 0.0
+         dtcrng(ix) = 0.0
+         k = k + ivskp
+  100  continue
+c
+c  j is junction block index (jundat.h)
+       j = filndx(5)
+c  Loop over all junctions.
+       do 210 jx=1,njuns(j)
+c  Get the from volume (ktv) and to volume (ltv) indices.
+         ktv = ij1nx(j)
+         ltv = ij2nx(j)
+         ixk = vctrls(ktv)
+         ixl = vctrls(ltv)
+c  Check the sign of the velocity, toss dtcrn[fg] into upstream vol
+c  Liquid phase
+         if (velfj(j) .ge. 0.0) then
+c                                    positive liquid velocity
+           if (voidf(ktv) .gt. vflimt) then
+c  check for homogeneous case
+             if (iand(ishft(jc(j),-9),1) .eq. 1) then
+               dtcrnf(ixk) = max(dtcrnf(ixk),
+     &           ajun(j)*abs(velfj(j))*recipv(ktv))
+             else
+               dtcrnf(ixk) = max(dtcrnf(ixk),
+     &           ajun(j)*abs(velfj(j))*voidfj(j)*recipv(ktv)/voidf(ktv))
+             endif
+           endif
+         else
+c  Negative liquid velocity.
+           if (voidf(ltv) .gt. vflimt) then
+             if (iand(ishft(jc(j),-9),1) .eq. 1) then
+               dtcrnf(ixl) = max(dtcrnf(ixl),
+     &           ajun(j)*abs(velfj(j))*recipv(ltv))
+             else
+               dtcrnf(ixl) = max(dtcrnf(ixl),
+     &           ajun(j)*abs(velfj(j))*voidfj(j)*recipv(ltv)/voidf(ltv))
+             endif
+           endif
+         endif
+c  Vapor phase
+         if (velgj(j) .ge. 0.0) then
+c  Positive vapor velocity.
+           if (voidg(ktv) .gt. vglimt) then
+             if (iand(ishft(jc(j),-9),1) .eq. 1) then
+               dtcrng(ixk) = max(dtcrng(ixk),
+     &           ajun(j)*abs(velgj(j))*recipv(ktv))
+             else
+               dtcrng(ixk) = max(dtcrng(ixk),
+     &           ajun(j)*abs(velgj(j))*voidgj(j)*recipv(ktv)/voidg(ktv))
+             endif
+           endif
+         else
+c  Negative vapor velocity.
+           if (voidg(ltv) .gt. vglimt) then
+             if (iand(ishft(jc(j),-9),1) .eq. 1) then
+               dtcrng(ixl) = max(dtcrng(ixl),
+     &           ajun(j)*abs(velgj(j))*recipv(ltv))
+             else
+               dtcrng(ixl) = max(dtcrng(ixl),
+     &           ajun(j)*abs(velgj(j))*voidgj(j)*recipv(ltv)/voidg(ltv))
+             endif
+           endif
+         endif
+         j = j + ijskp
+  210  continue
+c
+c  Loop over volumes looking for largest value of dtcrnf or dtcrng,
+c  set dtx to this value and save the volume index.
+c  Then set dtcrnf and dtcrng to reciprocals
+c  Up to this point, dtcrn[fg] contain one over the courant limit
+c  which gets around the divide by zero velocity problem without
+c  having an if test for each velocity
+c
+c  i is index to statistics block index (statc.h)
+       i = 1
+       k = filndx(4)
+       dtx = 0.0
+cgam   testda(1) = 0.0
+cgam   testda(2) = 0.0
+c  Loop over all the volumes.
+       do kx = 1,nvols(k)
+c  Do not include the time dependent volumes in the check.
+         ix = vctrls(k)
+         if (dtx .lt. dtcrnf(ix)) then
+           dtx = dtcrnf(ix)
+           isave = i
+cgam
+c  testda(1) indicates the limiting volume (format=890.04 for 890-04)
+c  testda(2) indicates the limiting phase (1=liquid, 2=gas)
+cgam       testda(1) = volno(k)/1.0e6
+cgam       testda(2) = 1.0
+cgam
+         endif
+         if (dtx .lt. dtcrng(ix)) then
+           dtx = dtcrng(ix)
+           isave = i
+cgam
+cgam       testda(1) = volno(k)/1.0e6
+cgam       testda(2) = 2.0
+cgam
+         endif
+         if (dtcrnf(ix) .ne. 0.0) then
+           dtcrnf(ix) = 1.0/dtcrnf(ix)
+         else
+           dtcrnf(ix) = dtxlim
+         endif
+         if (dtcrng(ix) .ne. 0.0) then
+           dtcrng(ix) = 1.0/dtcrng(ix)
+         else
+           dtcrng(ix) = dtxlim
+         endif
+cgam
+c  extv01 is the Courant limit for the liquid phase
+c  extv02 is the Courant limit for the gas phase
+cgam     extv01(k) = dtcrnf(ix)
+cgam     extv02(k) = dtcrng(ix)
+cgam
+         i = i + 1
+         k = k + ivskp
+       enddo
+c
+c  increment the # times this vol. had smallest courant limit
+c  increase courant limit for nearly implicit and steady state runs
+c  increment number of times dt was reduced by courant in this
+c  major print interval
+c
+       if (dtx .ne. 0.0) then
+         dtx = 1.0/dtx
+         statv(isave)%stscl2 = statv(isave)%stscl2 + 1
+         factor = 20.0
+         if (ishft(iroute,-6) .eq. 1) factor = 40.0
+         if (iand(print,128) .ne. 0) dtx = factor*dtx
+         if (dt .gt. dtx) then
+           statv(isave)%strcl2 = statv(isave)%strcl2 + 1
+         endif
+       else
+         dtx = dtxlim
+       endif
+c
+c  Store min courant time step in dtn so 208 cards can plot it.
+       dtn = dtx
+       return
+       end

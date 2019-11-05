@@ -1,0 +1,312 @@
+       program rmopt
+c  Program to remove options from source file.
+c
+       integer in,out,output,wd,ifx,idx,ihln(4),iftbl(100),iftblo(100),
+     * iftblc(100),iftblp(100),bufl(50),jhold,nin
+       logical ldef,lenif,chng,omito,omitn,ifx6,ifx8,idx8,idx88,sav,
+     * iftbl6(100),iftbl8(100),iftbld(100),deftbo(100)
+       character buf(50)*96,mesg(10)*36,ihld(4)*8,deftbl(100)*8,newc*2
+c
+       data in/5/, out/6/, output/1/
+       data mesg/ ' ', 'unrecognizable * or $ card',
+     * 'define card mispositioned',
+     * 'incorrect define card',
+     * 'too many define cards',
+     * 'incorrect if card',
+     * 'too many stacked if cards',
+     * 'incorrect endif card',
+     * 'if statement not nested',
+     * 'endif not matched with if'/
+c
+c  Initialize.
+       open (unit=output,file='fort.1')
+       ldef = .false.
+       nd = 0
+       ni = 0
+       nin = 0
+       ncr = 0
+       nm = 0
+       omito = .false.
+       omitn = .false.
+       sav = .false.
+       inc = 1
+c  Read a card.
+   10  buf(inc) = ' '
+       read (in,'(a)',end=220) buf(inc)
+       ncr = ncr + 1
+       im = 0
+       lenif = .false.
+c  Check if $ card.
+       if (buf(inc)(1:1).ne.'$' .and. buf(inc)(1:1).ne.'*') goto 135
+c  Break card into fields.
+       nf = 1
+       ihld(1) = ' '
+       icl = 8
+       ic = 0
+       j = 1
+       jcc = 72
+       chng = .false.
+   20  if (chng) then
+         if (buf(inc)(j:j) .eq. ' ') goto 35
+         if (buf(inc)(j:j) .eq. ',') goto 118
+         jhold = j
+         nf = nf + 1
+         if (nf .gt. 4) go to 118
+         ihld(nf) = ' '
+         chng = .false.
+       else
+         if (buf(inc)(j:j).eq.' ' .or. buf(inc)(j:j).eq.',') goto 30
+       endif
+       icl = icl - 1
+       if (icl .lt. 0) goto 118
+       ic = ic + 1
+       ihld(nf)(ic:ic) = buf(inc)(j:j)
+       goto 35
+   30  ihln(nf) = ic
+       icl = 8
+       ic = 0
+       chng = .true.
+   35  jcc = jcc - 1
+       if (jcc .le. 0) then
+         if (.not.chng) goto 30
+         goto 39
+       endif
+       j = j + 1
+       goto 20
+c  Check if $define card.
+   39  if (ihld(1)(2:8) .eq. 'define') then
+         if (ldef) then
+           im = 3
+           goto 135
+         endif
+         omito = .true.
+         if (nf .ne. 3) then
+           im = 4
+           goto 135
+         endif
+         if (ihld(3).ne.'on' .and. ihld(3).ne.'off') then
+           im = 4
+           go to 135
+         endif
+         if (nd .ge. 100) then
+           im = 5
+           goto 135
+         endif
+         nd = nd + 1
+         deftbl(nd) = ihld(2)
+         deftbo(nd) = ihld(3) .eq. 'on'
+         im = 1
+         goto 200
+       endif
+c  Check if *if or $if card.
+       ldef = .true.
+       if (ihld(1)(2:8) .eq. 'if') then
+         if (nf .le. 2) goto 87
+         ifx = 0
+         ifx6 = .false.
+         ifx8 = .false.
+         if (ihld(2) .ne. 'def') then
+           if (ihld(2) .ne. '-def') goto 87
+           ifx8 = .true.
+         endif
+         idx = 0
+         idx8 = .false.
+         idx88 = .true.
+         if (nd .ne. 0) then
+           do 65 i = 1,nd
+             if (deftbl(i) .eq. ihld(3)) then
+               idx8 = .true.
+               if (deftbo(i)) idx88 = .false.
+               goto 75
+             endif
+   65      continue
+         endif
+   75    ifx8 = idx8 .and. (ifx8 .neqv. idx88)
+         if (nf .le. 3) then
+           ifx6 = .true.
+           goto 100
+         endif
+         if (nf .ne. 4) goto 87
+         wd = 0
+         jc = 8
+         j = 0
+   85    j = j + 1
+         if (ihld(4)(j:j) .eq. ' ') goto 95
+         if (ihld(4)(j:j).ge.'0' .and. ihld(4)(j:j).le.'9') goto 90
+   87    im = 6
+         goto 135
+   90    wd = wd*10 + ichar(ihld(4)(j:j)) - ichar('0')
+         jc = jc - 1
+         if (jc .gt. 0) goto 85
+   95    if (wd .gt. 4094) goto 87
+         ifx = wd + 1
+         if (ni .eq. 0) goto 105
+         do 96 i = 1,ni
+           if (iftbl6(i) .or. iftbl(i).gt.wd) goto 96
+           im = 6
+           goto 100
+   96    continue
+  100    if (ni .ge. 100) then
+           im = 7
+           goto 135
+         endif
+  105    ni = ni + 1
+         if (.not.ifx6) nin = nin + 1
+         if (ifx6 .or. idx8) then
+           iftblc(ni) = 0
+         else
+           iftblc(ni) = inc
+           iftblp(ni) = jhold
+         endif
+         iftbl(ni) = ifx
+         if (.not.omito) ifx = ifx - 1
+         iftblo(ni) = ifx
+         iftbl6(ni) = ifx6
+         iftbl8(ni) = ifx8
+         iftbld(ni) = idx8
+         omitn = omito .or. ifx8
+         omito = omito .or. idx8
+         sav = sav .or. .not.ifx6
+         goto 130
+       endif
+c  Check if *endif or $endif card.
+       if (ihld(1)(2:8) .ne. 'endif') then
+  118    if (buf(inc)(1:1) .eq. '*') go to 135
+         im = 2
+         goto 135
+       endif
+       if (nf .ne. 1) then
+         im = 8
+         goto 135
+       endif
+       lenif = .true.
+  130  if (im .eq. 0) im = 1
+       goto 145
+  135  ldef = .true.
+c  Delete any exhausted if's from table.
+  145  chng = .false.
+       if (ni .ne. 0) then
+         wd = 0
+         do 155 i = 1,ni
+           if (.not.iftbl6(i)) then
+             if (omito) iftblo(i) = iftblo(i) - 1
+             iftbl(i) = iftbl(i) - 1
+             if (iftbl(i) .eq. 0) then
+               nin = nin - 1
+               sav = nin .ne. 0
+               chng = .true.
+               if (iftblc(i) .ne. 0) then
+                 newc = ' '
+                 iftbl(i) = iftblo(i)/10
+                 if (iftbl(i) .ne. 0) then
+                   newc(1:1) = char(iftbl(i) + ichar('0'))
+                   iftblo(i) = iftblo(i) - 10*iftbl(i)
+                   newc(2:2) = char(iftblo(i) + ichar('0'))
+                 else
+                   newc(1:1) = char(iftblo(i) + ichar('0'))
+                 endif
+                 j = iftblp(i)
+                 buf(iftblc(i))(j:j+1) = newc(1:2)
+               endif
+               goto 155
+             endif
+           endif
+           wd = wd + 1
+           if (chng) then
+             iftbl(wd) = iftbl(i)
+             iftblo(wd) = iftblo(i)
+             iftblc(wd) = iftblc(i)
+             iftblp(wd) = iftblp(i)
+             iftbl6(wd) = iftbl6(i)
+             iftbl8(wd) = iftbl8(i)
+             iftbld(wd) = iftbld(i)
+           endif
+  155    continue
+         ni = wd
+       endif
+       if (lenif) then
+         if (ni .eq. 0) then
+           im = 10
+         else
+           if (iftbl6(ni)) then
+             omito = omito .or. iftbld(ni)
+           else
+             wd = ni
+             do 165 i = 1,ni
+               if (iftbl6(wd)) goto 175
+               wd = wd - 1
+  165        continue
+             im = 10
+             goto 190
+  175        omito = iftbl8(wd)
+             ic = ni - 1
+             do 180 i = wd,ic
+               iftbl(wd) = iftbl(wd+1)
+               iftblo(wd) = iftblo(wd+1)
+               iftblc(wd) = iftblc(wd+1)
+               iftblp(wd) = iftblp(wd+1)
+               iftbl6(wd) = iftbl6(wd+1)
+               iftbl8(wd) = iftbl8(wd+1)
+               iftbld(wd) = iftbld(wd+1)
+  180        continue
+             im = 9
+           endif
+           ni = ni - 1
+           chng = .true.
+         endif
+       endif
+  190  if (chng) then
+         omitn = .false.
+         if (ni .ne. 0) then
+           do 195 i = 1,ni
+             omitn = omitn .or. iftbl8(i)
+  195      continue
+         endif
+       endif
+c  Write or save card.
+  200  if (im .gt. 1) then
+cc  200  if (im .ge. 0) then
+cc         if (im .eq. 0) im = 1
+         nm = nm + 1
+         write (output,1002) buf(inc),mesg(im)
+ 1002  format (' ',a,3x,a)
+cc         write (output,2001) omito,omitn,sav,ni,nin,inc
+cc 2001  format (' omito:',l1,' omitn:',l1,' sav:',l1,' ni:',i3,
+cc     * ' nin:',i3,' inc:',i3)
+cc         if (ni .ne. 0) then
+cc           do 7777 i = 1,ni
+cc             write (output,2002) iftbl(i),iftblo(i),iftblc(i),iftblp(i
+cc     *       iftbl6(i),iftbl8(i),iftbld(i)
+cc 2002  format (4i6,3l2)
+cc 7777      continue
+cc         endif
+       endif
+       if (.not.omito) then
+         do 215 j = 72,2,-1
+           if (buf(inc)(j:j) .ne. ' ') go to 214
+  215    continue
+         j = 1
+  214    bufl(inc) = j
+         if (sav) then
+           inc = inc + 1
+           if (inc .gt. 50) then
+             write (output,1005)
+ 1005  format (' Error, count field in $if def card is too large.')
+             stop 'Error'
+           endif
+         else
+           do 216 i = 1,inc
+             write (out,'(a)') buf(i)(1:bufl(i))
+  216      continue
+           inc = 1
+         endif
+       endif
+       omito = omitn
+       goto 10
+c  Finish up.
+  220  if (ni .ne. 0) write (output,1004)
+ 1004  format (' E O F',88x,'unsatisfied $if cards remain')
+       if (nm .ne. 0) write (output,1003) ncr,nm
+ 1003  format ('0Number of cards processed =',i8,', Number of error mess
+     *ages =',i8,'.')
+       end

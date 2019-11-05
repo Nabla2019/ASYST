@@ -1,0 +1,270 @@
+*mlist
+*if def,selap
+      subroutine sbntac
+c 
+c  Drives the SCDAP component analysis.
+c
+c  Cognizant engineer: ewc.
+c
+      use scdmod
+      implicit none
+       include 'comctl.h'
+       include 'fast.h'
+       include 'contrl.h'
+       include 'voldat.h'
+       include 'scddat.h'
+       include 'plndat.h'
+       include 'fecom.h'
+       include 'intcom.h'
+       include 'scdout.h'
+       include 'debout.h'
+       include 'ndxara.h'
+       include 'buntim.h'
+       include 'nbtim.h'
+       include 'fgrcom.h'
+       include 'tblsp.h'
+       include 'bwgeom.h'
+       include 'bwtrns.h'
+       include 'ufiles.h'
+       include 'blageo.h'
+       include 'scdcom.h'
+       include 'miscon.h'
+cljs add dbacct
+       include 'dbacct.h'
+       include 'cr2.h'
+      integer itime1
+c  Local variables.
+      integer i,ib,iij,j,k,kdyn
+      integer ndbg,nrd,jd,jj,js,il1s,il1,nsw,kx,nr1,ncallb,nswax
+      real curtim,timebf
+      real msblad,msbox,tcool1
+      integer nl11,mmm,jblade
+      external bwhtcn,bwloca,bwshfl,cylin,dbmgri,dbmgro,fuelan,
+     & fuelel,simuan,slabc
+c
+      ndbg = 0
+cljs    if(timehy.ge.28690.0.and.timehy.le.28695.0)ndbg=1
+          if(ndbg.eq.1)then
+          write(output,9005)timehy
+9005      format(' SBNTAC entered; timehy=',e14.8)
+          end if
+cljs  set start of time step values to wtotb and wtott arrays
+!0214   do j=1,ncomp     
+!0214   wtotb(j) = 0.0
+!0214   wtott(j) = 0.0
+!0214   end do
+cljs  set start of time step values for wtotr array
+!0214   do j=1,naz
+!0214   wtotr(j) = 0.0
+!0214   end do
+cljs  zero out arrays storing hydrogen production during time step
+        do j = 1,ncomp
+          do k =1,naz
+          h2oxd2(k,j) = 0.0
+          hgdrps(k,j) = 0.0 
+          hgcohs(k,j) = 0.0
+          hgdeb(k,j) = 0.0
+          end do
+        end do
+      call tdpowr
+c     set initial intact bundle timestep to incoming bundle time and
+c     end of intact bundle time to end of bundle timestep.  curtim is
+c     is not used since no disruption routines exist, therefore its
+c     value is set to always be greater than the end of timestep
+c
+      timdb = timehy
+      timebf = timehy + deltb
+      curtim = 2.0 * timebf
+c     if node is rubble debris, set ifrag to flag rubble debris.
+      do 10 j=1,ncomp
+         do 10 k=1,naz
+            kdyn=(j-1)*ndax+k
+            if(irubpp(k,j).eq.1)ifrag(kdyn)=1
+   10       continue
+   20 deltdb = deltb
+      if((timebf-timdb).gt.0.0)then
+c
+         if(nblabx.ge.1) then
+c  perform these calculations only if bwr control blade/channel box
+c  components (type 8) are active
+           do 30 icomp=1,ncomp
+             if(idcomp(icomp).ne.0 .and. idcomp(icomp).ne.6) goto 30
+             if(iblfsp(icomp).lt.0) then
+               iblfsp(icomp)=max(-iblfsp(icomp),iblfs(icomp))
+               itime1=timehy*2.0
+               if(itime1.eq.itimef(icomp)) iblfsp(icomp)=-iblfsp(icomp)
+               do 32 k=1,naz
+                 mzrfsp(k,icomp)=mzrfsp(k,icomp)+mzrfs(k,icomp)
+                 mssfsp(k,icomp)=mssfsp(k,icomp)+mssfs(k,icomp)
+                 mcfsp(k,icomp) =mcfsp(k,icomp) +mcfs(k,icomp)
+                 mctfsp(k,icomp)=mctfsp(k,icomp)+mctfs(k,icomp)
+   32          continue
+             else
+               iblfsp(icomp)=-iblfs(icomp)
+               itimef(icomp)=timehy*2.0
+               do 34 k=1,naz
+                 mzrfsp(k,icomp)=mzrfs(k,icomp)
+                 mssfsp(k,icomp)=mssfs(k,icomp)
+                 mcfsp(k,icomp) =mcfs(k,icomp)
+                 mctfsp(k,icomp)=mctfs(k,icomp)
+   34          continue
+             endif
+             iblfs(icomp)=0
+             do 36 k=1,naz
+               mzrfs(k,icomp)=0.0
+               mssfs(k,icomp)=0.0
+               mcfs(k,icomp) =0.0
+               mctfs(k,icomp)=0.0
+   36        continue
+   30      continue
+         endif
+         ifa = 1
+         do 50 icomp = 1,ncomp
+            nsigl1=nsigl(icomp)
+            icmp = icomp
+            isgl = nsigl(icomp)
+           if  ( idcomp( icomp ) .eq. 0 )  then
+             call dbmgri
+             call fuelan
+             call dbmgro
+           else if  ( idcomp( icomp ) .eq. 1 )  then
+c  analyze control rod if component id = 1
+c Default SIC control rod model
+             if (crm(icomp) .eq. 0) then
+               call cylin
+c B4C control rod model
+             elseif (crm(icomp) .eq. 1) then
+               call cylin2
+             else
+               write (output,"('0******** sbntac: crm =',i9,' is not val
+     &id. This should not happen.')") crm(icomp)
+               fail = .true.
+               endif
+            else if  ( idcomp( icomp ) .eq. 2 )  then
+c  analyze shroud if component id = 2
+               call slabc
+c  increment n-reactor fuel assembly id
+               ifa = ifa + 1
+            else if (idcomp(icomp).eq.3) then
+               ib = (ibwrc(icomp)-1)*ndax + 1
+               do 40 k = 1,naz
+                  mbclre(ib) = 0.0
+                  mbolre(ib) = 0.0
+                  msslre(ib) = 0.0
+                  msolre(ib) = 0.0
+                  ib = ib + 1
+   40             continue
+               call bwhtcn
+               call bwloca
+               call bwshfl
+$if def,nreac
+            else if( idcomp(icomp) .eq. 4 ) then
+               call fuelel
+$endif
+            else if( idcomp(icomp) .eq. 5 ) then
+               call fuelel
+            else if( idcomp(icomp) .eq. 6 ) then
+               call dbmgri
+               call simuan
+               call dbmgro
+            else if( idcomp(icomp) .eq. 7 ) then
+               call fuelel
+            else if( idcomp(icomp) .eq. 8 ) then
+cljs  If control blade is surrounded by fuel rods that are no longer
+cljs  intact at all axial nodes, assume control blade no longer
+cljs  intact anyhwere.
+            ncallb = 1
+              if(icomp.ge.2)then
+                if(idcomp(icomp-1).eq.0)then
+                nsw = 0
+                  do i = 1,naz
+                    if(lcrucb(i,icomp-1).ge.1)nsw = 1
+                    if(irubpp(i,icomp-1).ge.1)nsw = 1
+                  end do
+                end if
+                  if(nsw.eq.1)ncallb = 0
+              end if
+cljs          if(idcomp(icomp).eq.8)then
+cljs            do i = 1,naz
+cljs            jblade = iblabx(icomp)
+cljs            msblad = wsscno(i,jblade,1,1) + wsscno(i,jblade,2,1)
+cljs            msbox = wsscbb(i,jblade,1,1) + wsscbb(i,jblade,2,1)
+cljs &                  + wsscbb(i,jblade,2,2) + wsscbb(i,jblade,1,2)
+cljs                 if(ndbg.eq.1)then
+cljs                 write(output,9105)icomp,i,msblad,msbox
+c9105                 format(' SBNTAC, icomp=',i5,' i=',i5,
+cljs &               ' msblad=',e10.4,' msbox=',e10.4)
+cljs                 end if
+cljs              if(msblad.ge.1.e-6 .or. msbox.ge.1.e-6)then
+cljs              ncallb = 0
+cljs   material has slumped from this node
+cljs   testing
+cljs   slumping may cause code failure, turn off further BWR
+cljs   control blade calculation for this component.
+cljs              end if
+cljs            end do
+cljs          end if
+                  if(ndbg.eq.8)then
+                  write(output,9007)ncallb,icomp
+9007              format(' SBNTAC; ncallb=',i5,' icomp=',i5)
+                  end if
+cljs   correct code to add call to bladrv for idcomp = 8 (BWR control
+cljs   blade and channel box
+              if(ncallb.eq.1)then
+              call bladrv
+              end if
+            else
+               write (output,2001)'Component type unrecognized.'
+ 2001          format('0********',a)
+               stop 'sbntac-1'
+            endif
+   50       continue
+c  curtim is always > timdb until disruption routines are added
+         if  ( curtim .lt. timdb )   then
+            timdb = curtim
+         else
+            timdb = timdb + deltdb
+         endif
+c  continue component analysis
+         go  to  20
+      endif
+      if(ndbris .eq. 0) then
+c  if no previous component damage, check for breach due to clad burst
+         do 60 j = 1,ncomp
+            if(idcomp(j).eq.0.or.idcomp(j).eq.6)then
+               if  ( ii(j) .gt. 0 ) then
+                  iij = ii(j)
+               else
+                  iij = 0
+               endif
+c                 test for severe disruption or cladding breach
+               if  ( idsrup(j) .ne. 0   .or.
+     &               ( ibrch(j) .ne. 0 .and.ibrch(j) .ne. iij ))  then
+                  ndbris = 1
+                  go to 70
+               endif
+            end if
+   60       continue
+   70    continue
+      endif
+       do i = 1,16
+c  zero out fission gas array for debris models
+         do j = 1,ndcomp
+           fpary( i,j ) = 0.0
+         enddo
+       enddo
+       if (qst0 .eq. 0.0 .and. qstor0(1) .gt. 0.0) then
+c  calculate and write total initial stored energy in components.
+         do j=1,ncomp
+           write (output,90) j,qstor0(j)
+   90  format ('0   initial stored energy for component',i4,' =', e14.6,
+     &  ' (J)')
+           qst0 = qst0 + qstor0(j)
+         enddo
+         write (output,110) qst0
+  110  format(/'0         total initial stored energy       =', e14.6,
+     & ' (J)')
+       endif
+       return
+       end
+*endif

@@ -1,0 +1,184 @@
+*mlist
+*if def,selap
+      subroutine fpmdlk (mad, debug)
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: ljs.
+c
+      implicit none
+*call cons
+c     Define the coefficients for fission product transport.
+c
+c     Earl S. Marwil
+c     Scientific Computing Unit
+c     EG&G Idaho, Inc.
+c     PO Box 1625
+c     Idaho Falls, ID 83415-2408
+      logical debug
+*call fplim
+*call fpbin
+*call fpcoef
+*call fpctrl
+*call fpmdl
+*call fpvol
+c
+      real mad (nst,nsp)
+      external fpvdif, fpcthc
+      external fpcek, fpchk, fpagk, fpdpk
+      external fpdbug, fpvbin, fpmbin
+      integer ibin, isp
+      real cturb, clmnr, vapnu, tm, ta, ca, tbar, cthrm
+      logical trblnt
+      real re, temp, pr
+      real returb
+      parameter (returb=2300.0)
+      real third
+      parameter (third = 1.0 / 3.0)
+      real bltzmn
+      parameter (bltzmn = 1.380622e-23)
+      real g0
+      parameter (g0 = 9.8)
+      real pdiff(maxbin), ptcon(maxbin), ptau(maxbin)
+      real tvol(maxbin), tmass(maxbin)
+      real mdiff(maxsp), pmix(maxsp)
+      real eps, ctau
+      vapnu = vapmu / vaprho
+c     Determine flow regime and flow coefficients
+      re = vaprho * vapv * diam / vapmu
+      trblnt = re .ge. returb
+      cturb = 0.23 * (re ** 0.83) / diam
+      clmnr = 3.66 / diam
+      if ((mdlagg .and. agdiff) .or. (mdldep .and. dpdiff)) then
+c        Calculate Particle Diffusion Coefficients using
+c        classical Stokes-Einstein equation for spherical particles
+c        with a diameter greater than .1 micrometer
+c        Assume a relative Stokes flow region
+c
+c        W.C. Hinds, Aerosol Technology, John Wiley & Sons,
+c        New York, NY, 1982, page 136.
+         temp = bltzmn * vapt / (3.0 * pi * vapmu)
+         do 10 ibin = 1, nbin
+            pdiff(ibin) = temp / pdiam(ibin)
+   10       continue
+      end if
+      if ((mdlagg .and. agturb) .or. (mdldep .and. dpturb)) then
+c        Calculate turbulent coefficients
+c        eps is the rate of dissipation of turbulent energy
+c
+c        M.A. Delichasios and R.F. Probstein, Coagulation in
+c        Turbulent Flow - Theory and Experiment, AD-A031297,
+c        1974, page 22.
+c
+c        tm is the coefficient for velocity variation in turbulent
+c        motion
+c
+c        V.L. Streeter, ed., Handbook of Fluid Dynamics,
+c        McGraw-Hill, New York, NY, 1961, page 10-9.
+c
+c        ta is the momentary fluid acceleration due to a turbulent
+c        eddie
+c
+c        M.A. Delichasios and R.F. Probstein, Coagulation in
+c        Turbulent Flow - Theory and Experiment, AD-A031297,
+c        1974, page 337.
+c
+         if (trblnt) then
+            eps = 0.03 * vapv ** 3 / (diam * re ** 0.375)
+            temp = sqrt ( eps / vapnu )
+            tm = sqrt ( 2.0 / 15.0 ) * temp
+            ta = sqrt ( 1.3 * eps * temp )
+         end if
+      end if
+      if ((mdlagg .and. agca) .or. (mdldep .and. dpca)) then
+c        Compute Centrifugal Acceleration
+         if (brad .gt. 0.0) then
+            ca = vapv ** 2 / brad
+         else
+            ca = 0.0
+         end if
+c        Calculate average time to traverse a bend with a given
+c        angle and radius
+         tbar = bang * brad / vapv
+      end if
+      if (mdlagg .or. mdldep) then
+c        Calculate Particle time constants
+         ctau = 1.0 / (18.0 * vapmu)
+*****************************************************************
+c   The following few lines have been commented out, computing
+c   a particle density, and substituted with a constant density,
+c   as a temporary patch.  Have been getting some negative tvol,
+c   and thus a 0.0 time constant for some bins.
+c   Change made by KRK with approval of Don Hagrman  4/17/92
+         call fpvbin (mad, tvol)
+         call fpmbin (mad, tmass)
+         do 30 ibin = 1, nbin
+c           if (tvol(ibin) .gt. 0.0) then
+c              ptau(ibin) = ctau * tmass(ibin) / tvol(ibin) *
+c    &            pdiam(ibin) ** 2
+c *********  debug, set tmass/tvol to 4.0e+3 kg/m3, as a temporary
+c            debug mechanism.
+               ptau(ibin) = ctau * 4.0e+03 * pdiam(ibin)**2
+c ********   end debug *********
+c           else
+c              ptau(ibin) = 0.0
+c           end if
+   30       continue
+      end if
+      if (mdldep .and. dpthrm) then
+c        Calcuate coefficient for thermophoresis deposition
+         if (trblnt) then
+c           Calculate Prandl number
+            pr = vapmu * vapcp / vaptc
+            cthrm = cturb * pr ** third
+         else
+            cthrm = clmnr
+         end if
+c        Calculate Particle thermal conductivity
+c        Assume time dependence on particle species mixture
+c        is not significant.
+         do 50 ibin = 1, nbin
+            do 40 isp = 1, nsp
+               pmix(isp) = mad(ibin+ivap,isp)
+   40          continue
+            call fpcthc (pmix, vapt, ptcon(ibin))
+   50       continue
+      end if
+      if (mdlce) then
+c        Compute molecular diffusion coefficients
+         call fpvdif (vapt, vapmu, mdiff)
+c        Calculate Condensation/Evaporation coefficients
+         call fpcek (maxbin, nbin, pdiam,
+     &   maxsp, nsp, mdiff, maxsrf, nsrf, surfar, surft,
+     &   vapnu, vapt, vapp,
+     &   cesurf, cepart, trblnt, cturb, clmnr,
+     &   ksurf, eqsrf, kpart, eqvap)
+      end if
+      if (mdlchm) then
+c        Calculate chemical absorbtion coefficients
+         call fpchk (maxsp, nsp, maxsrf, nsrf,
+     &   surfar, surfmt, surft, kchem)
+      end if
+      if (mdlagg) then
+c        Calculate agglomeration coefficients
+         call fpagk (maxbin, nbin, pdiam, pdiff, ptau,
+     &   agdiff, aggs, agturb, agca, agga, trblnt,
+     &   tm, ta, ca, vapa, g0,
+     &   kaggl)
+      end if
+      if (mdldep) then
+c        Calculate deposition coefficients
+         call fpdpk (maxbin, nbin, pdiam, pdiff, ptau, ptcon,
+     &   maxsrf, nsrf, surfda, surfar, surft,
+     &   diam, vapnu, vapt, vapmfp, vaptc,
+     &   dpdiff, dpgs, dpturb, dpca, dpthrm,
+     &   trblnt, cturb, clmnr, cthrm,
+     &   ta, ca, g0, tbar,
+     &   kdep)
+      end if
+      if (debug) then
+         call fpdbug
+      end if
+      return
+      end
+*endif

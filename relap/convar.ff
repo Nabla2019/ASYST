@@ -1,0 +1,447 @@
+*mlist
+       subroutine convar
+c
+c  Advance control variables over a time step.
+c
+c Cognizant engineer: rjw.
+c
+       use gentblc
+$if def,hydrolod,1
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'convarc.h'
+       include 'pumpblk.h'
+       include 'trpblk.h'
+       include 'turbin.h'
+       include 'ufiles.h'
+$if def,hydrolod,2
+       include 'cmpdat.h'
+       include 'jundat.h'
+c
+       real hold,var(4)
+       integer i,ii,ir,ityp,j,l,m
+       logical tfail
+$if def,hydrolod
+       integer fstvl,lstvl,nxtvl,ncinc,sysno,
+     &         fccc,fnn,lccc,lnn,snn,enn,nvcp,nj,n,jj,iix
+       integer pckcod(2)
+       real conv
+       logical hydone
+       character labl*64
+$endif
+       character chwrd*8
+c
+       i = filndx(27)
+       do j = 1,cnvnum(i)
+         select case (cnvtyp(i))
+c  Sum component.
+         case (1)
+           ii = i - 4
+           var(2) = cnvsan(ii)
+           do l = 1,cnvnpa(i)
+             ii = ii + 5
+             var(1) = fa(cnvpck(ii+1))
+             var(2) = var(2) + cnvsan(ii)*var(1)
+           enddo
+           cnvarn(i) = cnvscl(i)*var(2)
+c  Multiplier component.
+         case (2)
+           ii = i
+           var(2) = cnvscl(i)
+           do l = 1,cnvnpa(i)
+             var(1) = fa(cnvpck(ii+1))
+             var(2) = var(2)*var(1)
+             ii = ii + 4
+           enddo
+           cnvarn(i) = var(2)
+$if def,hydrolod
+!  Force SUM a component.
+         case (24)
+           ii = i - 4 
+           var(2) = cnvarn(ii)
+           iix = 5
+           ii = ii + iix
+           ncinc = 100
+           if (iand(cnvopt(i),2) .ne. 0) ncinc = 10
+           ir = cnvpnm(i)*ncinc + 20500001 
+           hydone = .false.
+! get first volume no. in a segment
+           fstvl = cnvint(ii)
+! get last volume no. in a segment
+           lstvl = cnvint(ii+iix)  
+! get CCC of last volume
+           lccc = lstvl/1000000
+! get NN of last volume
+           lnn = lstvl/10000 - lccc*100
+           do
+! get CCC of first volume
+             fccc = fstvl/1000000
+! get NN of first volume
+             fnn = max(1,fstvl/10000 - fccc*100)
+! if the segment is one component (e.g. pipe)
+             if (fccc .eq. lccc) then
+! get the first volume in the component
+               snn = min(fnn, lnn)
+! get the last volume in the component
+               enn = max(fnn, lnn)
+! sum all hydraulic load from first volume to last volume within component
+               do l = snn, enn
+                 fstvl = fccc*1000000 + l*10000
+                 write (chwrd,'(a8)') cnvalf(ii)
+                 call scnreq(ir,chwrd,fstvl,1,pckcod,conv,labl,
+     &       tfail)
+                 var(1) = fa(pckcod(2)+filndx(pckcod(1)))
+                 var(2) = var(2) + cnvsan(ii)*var(1)
+               enddo
+! set done to be true to indicate sumation is finished
+               hydone = .true.
+! else the segment is more than one components
+             else
+               n = filndx(3)
+               do l = 1,ncmps(n)
+                 if (cmpnum(n) .eq. fccc) then
+! get number of volumes in the component
+                   nvcp = nvc(n)
+                   exit
+                 endif
+                 n = n + cmplen(n)
+               enddo 
+! sum all hydraulic load from first volume to last volume within component
+               do l = fnn, nvcp
+                 fstvl = fccc*1000000 + l*10000
+                 write (chwrd,'(a8)') cnvalf(ii)
+                 call scnreq(ir,chwrd,fstvl,1,pckcod,conv,labl,
+     &       tfail)
+                 var(1) = fa(pckcod(2)+filndx(pckcod(1)))
+                 var(2) = var(2) + cnvsan(ii)*var(1)
+               enddo
+! get next connected volume
+               lp1: do sysno = 1, nloops
+                 jj = lpdat(sysno)%lij
+                 do n = 1,lpdat(sysno)%lijn
+                   if (ij1(jj).ne.0 .and. ij2(jj).ne.0) then
+                     if (fstvl/1000000.eq.ij1(jj)/1000000) then
+                       nxtvl = ij2(jj)
+                       exit lp1
+                     endif
+                   endif
+                   jj = jj + ijskp
+                 enddo
+               enddo lp1
+               fstvl = nxtvl
+             endif
+             if (hydone) exit
+           enddo
+           cnvarn(i) = cnvscl(i)*var(2)
+$endif
+c  Divider component.
+         case (3)
+           ii = i
+           do l = 1,cnvnpa(i)
+             var(l) = fa(cnvpck(ii+1))
+             ii = ii + 4
+           enddo
+           if (var(1) .eq. 0.0) then
+             write (output,2001) cnvpnm(i)
+ 2001  format ('0******** divisor in div component',i4,' is zero.')
+             fail = .true.
+           elseif (cnvnpa(i) .eq. 1) then
+             cnvarn(i) = cnvscl(i)/var(1)
+           else
+             cnvarn(i) = cnvscl(i)/var(1)*var(2)
+           endif
+c  Differential component.
+         case (4,5)
+           var(1) = fa(cnvpck(i+1))
+           if (cnvtyp(i) .ne. 4) then
+             cnvarn(i) = cnvscl(i)*(var(1) - cnvold(i))/dt
+           else
+             cnvarn(i) = cnvscl(i)*(var(1) - cnvold(i))*2.0/dt -
+     &       cnvarn(i)
+           endif
+           cnvold(i) = var(1)
+c  Integral, proportional-integral, lag, and lead-lag components.
+         case (6,15:17)
+           var(1) = fa(cnvpck(i+1))
+           if (cnvtyp(i) .eq. 6) then
+             cnvarn(i) = cnvscl(i)*(var(1) + cnvold(i))*dt*0.5 +
+     &       cnvarn(i)
+             cnvold(i) = var(1)
+           elseif (cnvtyp(i) .eq. 15) then
+             cnvold(i+3)=max(min(cnvold(i+3)+(var(1)+cnvold(i+2))*
+     &       dt*0.5,cnvmax(i)),cnvmin(i))
+             cnvarn(i) = max(min(cnvscl(i)*(cnvsan(i)*var(1)  +
+     &       cnvsan(i+1)*cnvold(i+3)) , cnvmax(i)) , cnvmin (i))
+             cnvold(i+2) = var(1)
+           elseif (cnvtyp(i) .eq. 16) then
+             var(2) = dt*0.5/cnvsan(i)
+             cnvarn(i) = (cnvarn(i)*(1.0 - var(2)) + cnvscl(i)*var(2)*
+     &       (var(1) + cnvold(i+1)))/(1.0 + var(2))
+             cnvold(i+1) = var(1)
+           else
+             var(2) = dt*0.5/cnvsan(i+1)
+             cnvold(i+2) = cnvscl(i)*(cnvold(i+2) + var(1))
+             hold = ((cnvold(i+2) - cnvarn(i))*var(2) + cnvold(i+3) +
+     &       cnvscl(i)*cnvsan(i)*var(1)/cnvsan(i+1))/(1.0 + var(2))
+             cnvold(i+3) = cnvold(i+3) + var(2)*(cnvold(i+2) - hold -
+     &       cnvarn(i))
+             cnvarn(i) = hold
+             cnvold(i+2) = var(1)
+           endif
+c  Pumpctl, steamctl, and feedctl components.
+         case (20:22)
+           ii = i
+           do l = 1,cnvnpa(i)
+             var(l) = fa(cnvpck(ii+1))
+             ii = ii + 4
+           enddo
+           if (cnvtyp(i) .ne. 22) then
+             hold = var(1) - var(2)
+             cnvold(i+7) = max(min((cnvold(i+6) + hold)*0.5*dt*
+     &       cnvsan(i+4) + cnvold(i+7),cnvmax(i)),cnvmin(i))
+             cnvarn(i) = cnvold(i+7) + cnvsan(i+5)*hold
+             cnvold(i+6) = hold
+           else
+             hold = (var(1) - var(2))*cnvsan(i+12) + (var(3) - var(4))*
+     &       cnvsan(i+13)
+             cnvold(i+17) = max(min((cnvold(i+16) + hold)*0.5*dt*
+     &       cnvsan(i+14) + cnvold(i+17),cnvmax(i)),cnvmin(i))
+             cnvarn(i) = cnvold(i+17) + cnvsan(i+15)*hold
+             cnvold(i+16) = hold
+           endif
+c  Shaft component.
+         case (19)
+           var(1) = cnvsin(i)
+           var(2) = -cnvsfr(i)*cnvarn(i)
+           if (cnvsct(i) .ne. 0) var(2) = var(2) + cnvarn(cnvsct(i+1))
+           m = 0
+           ii = i
+           do l = 1,cnvnpa(i)
+             ir = cnvscp(ii+3)
+             if (cnvscp(ii) .lt. 2) then
+               if (ipuctr(ir) .ne. 0) then
+                 if (trptm(ipuctr(ir+1)) .ge. 0.0) then
+                   pmpold(ir) = pmpold(ir) + (pmpmt(ir) + pmpttk(ir))*
+     &             dt/pmpnrt(ir)
+                   go to 99
+                 endif
+               endif
+               var(1) = var(1) + pmpnrt(ir)
+               var(2) = var(2) + pmpmt(ir) + pmpttk(ir)
+               go to 99
+             elseif (cnvscp(ii) .eq. 2) then
+               if (turctr(ir) .ne. 0) then
+                 if (trptm(turctr(ir+1)) .ge. 0.0) then
+                   turvel(ir) = turvel(ir) + turtrq(ir)*dt/turint(ir)
+                   go to 99
+                 endif
+               endif
+               var(1) = var(1) + turint(ir)
+               var(2) = var(2) + turtrq(ir)
+               go to 99
+             else
+               tfail = .false.
+               gentrq(ir) = -genfr(ir)*genvel(ir)
+               if (gentrp(ir) .ne. 0) then
+                 if (trptm(gentrp(ir+1)) .ge. 0.0) tfail = .true.
+               endif
+               if (gendtr(ir) .ne. 0) then
+                 if (trptm(gendtr(ir+1)) .ge. 0.0) then
+                   if (.not.tfail) then
+                     gentrq(ir) = (gensvl(ir) -
+     &               genvel(ir))*genint(ir)/dt - gentrq(ir)
+                     genpow(ir) = gentrq(ir)*genvel(ir)
+                     genvel(ir) = gensvl(ir)
+                   else
+                     genvel(ir) = genvel(ir) + gentrq(ir)*dt/genint(ir)
+                     gentrq(ir) = 0.0
+                     genpow(ir) = 0.0
+                   endif
+                   go to 99
+                 endif
+               endif
+               var(1) = var(1) + genint(ir)
+               var(2) = var(2) + gentrq(ir)
+               m = ir
+             endif
+   99        ii = ii + 4
+           enddo
+           if (m .eq. 0) then
+             cnvarn(i) = max(min(cnvarn(i) + var(2)*dt/var(1),
+     &       cnvmax(i)),cnvmin(i))
+           else
+             if (.not.tfail) then
+               gentrq(m) = (gensvl(m) - genvel(m))*var(1)/dt - var(2)
+               genpow(m) = gentrq(m)*genvel(m)
+               cnvarn(i) = gensvl(m)
+             else
+               cnvarn(i) = max(min(cnvarn(i) + var(2)*dt/var(1),
+     &         cnvmax(i)),cnvmin(i))
+               gentrq(m) = 0.0
+               genpow(m) = 0.0
+             endif
+             genvel(m) = cnvarn(i)
+           endif
+           ii  = i
+           do l = 1,cnvnpa(i)
+             ir = cnvscp(ii+3)
+             if (cnvscp(ii) .lt. 2) then
+               if (ipuctr(ir) .eq. 0) then
+                 pmpold(ir) = cnvarn(i)
+               elseif (trptm(ipuctr(ir+1)) .lt. 0.0) then
+                 pmpold(ir) = cnvarn(i)
+               endif
+             elseif (cnvscp(ii) .eq. 2) then
+               if (turctr(ir) .eq. 0) then
+                 turvel(ir) = cnvarn(i)
+               elseif (trptm(turctr(ir+1)) .lt. 0.0) then
+                 turvel(ir) = cnvarn(i)
+               endif
+             endif
+             ii = ii + 4
+           enddo
+c  Delay component.
+         case (7)
+           if (timehy .ge. cnvnxt(i)) then
+             ii = cnvdct(i) + 2
+             if (ii .ge. cnvdct(i+1)) ii = 0
+             l = i + ii
+             cnvdct(i) = ii
+             cnvtbl(l) = timehy
+             cnvnxt(i) = (int(timehy/cnvdli(i)) + 1)*cnvdli(i)
+             cnvtbl(l+1) = fa(cnvpck(i+1))
+           endif
+           var(1) = timehy - cnvdla(i)
+           ii = cnvdct(i+2)
+           l = i + ii
+           do
+             var(2) = cnvtbl(l) - var(1)
+             if (var(2) .gt. 0.0) exit
+             m = l
+             ii = ii + 2
+             if (ii .ge. cnvdct(i+1)) ii = 0
+             cnvdct(i+2) = ii
+             l = i + ii
+             cnvdft(i) = (cnvtbl(l+1) - cnvtbl(m+1))/(cnvtbl(l) -
+     &       cnvtbl(m))
+           enddo
+           cnvarn(i) = cnvscl(i)*(cnvtbl(l+1) - cnvdft(i)*var(2))
+c  Function component.
+         case (8)
+           var(1) = fa(cnvpck(i+1))
+           l = cnvgen(i+1)
+           if (gen(l)%gttrp(1) .ne. 0) then
+             ii = gen(l)%gttrp(2)
+             if (trptm(ii) .lt. 0.0) then
+               var(1) = trptm(ii)
+             else
+               write (chwrd,'(a8)') cnvalf(i)
+               if (chwrd .eq. 'time') var(1) = var(1) - trptm(ii)
+             endif
+           endif
+           if (var(1) .eq. gen(l)%gtarg) then
+             var(2) = gen(l)%gtval(1)
+           else
+             call gtpolat (gen(l)%gtinfo,gtptr(l)%gtbl,var(1),var(2:2),
+     &       tfail)
+             gen(l)%gtarg = var(1)
+             gen(l)%gtval(1) = var(2)
+           endif
+           cnvarn(i) = cnvscl(i)*var(2)
+c  Standard function component.
+         case (9)
+           var(1) = fa(cnvpck(i+1))
+           l = ishft(cnvnop(i),-24)
+           select case (l)
+           case (1)
+             var(2) = abs(var(1))
+           case (2)
+             if (var(1) .lt. 0.0) then
+               fail = .true.
+               write (output,2002) cnvpnm(i),var(1)
+ 2002  format ('0******** Control component',i5,' SQRT function argument
+     & (',1pg14.6,') is negative; 0.0 substituted as argument.')
+               var(2) = 0.0
+             else
+               var(2) = sqrt(var(1))
+             endif
+           case (3)
+             var(2) = exp(var(1))
+           case (4)
+             if (var(1) .le. 0.0) then
+               fail = .true.
+               write (output,2003) cnvpnm(i),var(1)
+ 2003  format ('0******** Control component',i5,' LOG function argument
+     &(',1pg14.6,') is zero or negative; 1.0 substituted as argument.')
+               var(2) = 1.0
+             else
+               var(2) = log(var(1))
+             endif
+           case (5)
+             var(2) = sin(var(1))
+           case (6)
+             var(2) = cos(var(1))
+           case (7)
+             var(2) = tan(var(1))
+           case (8)
+             var(2) = atan(var(1))
+           case (9,10)
+             var(2) = var(1)
+             ii = i
+             do ityp = 2,cnvnpa(i)
+               ii = ii + 4
+               var(1) = fa(cnvpck(ii+1))
+               if (l .ne. 10) then
+                 var(2) = min(var(2),var(1))
+               else
+                 var(2) = max(var(2),var(1))
+               endif
+             enddo
+           end select
+           cnvarn(i) = cnvscl(i)*var(2)
+c  Unit trip component.
+         case (10)
+           cnvarn(i) = 0.0
+           var(1) = trptm(cnvtrp(i+1))
+           if (iand(cnvnop(i),64) .ne. 0) then
+             if (var(1) .lt. 0.0) cnvarn(i) = cnvscl(i)
+           else
+             if (var(1) .ge. 0.0) cnvarn(i) = cnvscl(i)
+           endif
+c  Unit delay component.
+         case (11)
+           cnvarn(i) = cnvscl(i)*trptm(cnvtrp(i+1))
+c  Real number to integer power component.
+         case (12)
+         var(1) = fa(cnvpck(i+1))
+         cnvarn(i) = cnvscl(i)*var(1)**cnvgen(i)
+c  Real number to real power component.
+         case (13)
+           var(1) = fa(cnvpck(i+1))
+           cnvarn(i) = cnvscl(i)*var(1)**cnvsan(i)
+c  Real number to variable power and compare component.
+         case (14,23)
+           ii = i
+           do l = 1,2
+             var(l) = fa(cnvpck(ii+1))
+             ii = ii + 4
+           enddo
+           if (cnvtyp(i) .eq. 14) then
+             cnvarn(i) = 0.0
+             if (var(1).ne.0.0 .or. var(2).ne.0.0) cnvarn(i) =
+     &       cnvscl(i)*var(1)**var(2)
+           else
+             cnvarn(i) = cnvscl(i)*(var(1) - var(2))**2
+           endif
+         end select
+         select case (cnvtyp(i))
+         case (1:17,20:23)
+           cnvarn(i) = max(min(cnvarn(i),cnvmax(i)),cnvmin(i))
+         end select
+         i = i + cnvlen(i)
+       enddo
+       return
+       end

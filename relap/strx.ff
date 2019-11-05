@@ -1,0 +1,176 @@
+*mlist
+       subroutine  strx (a,s,err)
+c
+c
+c  Computes thermodynamic properties as a function of quality when
+c  saturation temperature and pressure have been previously determined.
+c
+c  Cognizant engineer: rjw jet.
+c
+c      Calling sequence:
+c
+c                call  strx (rp1,rp2,lp3)
+c
+c      Parameters:
+c
+c                rp1 = a   = steam tables (input)
+c
+c                rp2 = s   = array into which the computed
+c                            thermodynamic properties are stored
+c                            (input,output)
+c
+c                lp3 = err = error flag (output)
+c
+c
+c      This routine adapted from sth2xb (entry point in sth2x1) written
+c      by R. J. Wagner for light water steam tables
+c
+c
+       implicit none
+c
+       real  a(*), s(*)
+       logical  err
+c
+       include 'stcom.h'
+c
+       real  unp,pa,ta,pb,tb,fr1,fr,dpdt1,dpdt2,dum,dpdtcr,f1,f2,
+     &       hfg1,hfg2,d1,d2,c0,c1,c2,c3
+       integer  ip,jp,jpp,kp2,kp,ia,ib
+c
+$if -def,in32,2
+       integer  msk
+       parameter (msk=1073741823)
+c
+       logical s2,s3
+$if def,in32,2
+       integer iunp(2)
+       equivalence (unp,iunp(1))
+c
+c--check for valid input
+       if (s(9).lt.0.0 .or. s(9).gt.1.0) then
+         err = .true.
+         go to 20
+       endif
+c
+c--compute thermodynamic properties
+$if -def,in32,5
+$if def,cray,1
+       ip = shiftr(s(23),30)
+$if -def,cray,1
+       ip = ishft(s(23),-30)
+       jp = and(s(23),msk)
+$if def,in32,3
+       unp = s(23)
+       ip = iunp(1)
+       jp = iunp(2)
+       s2 = .false.
+       s3 = .false.
+       if (ip.le.0 .or. ip.ge.nst) ip = 1
+       if (jp.le.0 .or. jp.ge.nsp) jp = 1
+c
+c--set indexes in temperature and pressure tables for saturation
+c--computations
+c
+   11  if (s(1) .ge. a(ip)) go to 10
+       ip = ip - 1
+       go to 11
+   10  if (s(1) .lt. a(ip+1)) go to 12
+       ip = ip + 1
+       go to 10
+   12  jpp = jp + nt
+  111  if (s(10) .ge. a(jpp)) go to 110
+       jpp = jpp - 1
+       if (jpp .gt. nt) go to 111
+       s3 = .true.
+       go to 112
+  110  if (s(10) .lt. a(jpp+1)) go to 112
+       jpp = jpp + 1
+       if (jpp .lt. it3p0) go to 110
+       s2 = .true.
+  112  jp = jpp - nt
+       kp2 = it4bp + jp*13
+       kp = it3bp + ip*13
+       if (s3 .or. a(jpp).le. a(kp)) go to 113
+       pa = a(jpp)
+       ta = a(kp2)
+       ia = kp2
+       go to 115
+  113  ta = a(ip)
+       pa = a(kp)
+       ia = kp
+  115  if (s2 .or. a(jpp+1).ge.a(kp+13)) go to 116
+       pb = a(jpp+1)
+       tb = a(kp2+13)
+       ib = kp2 + 13
+       go to 117
+  116  tb = a(ip+1)
+       pb = a(kp+13)
+       ib = kp + 13
+  117  fr1 = s(1) - ta
+       fr = fr1/(tb-ta)
+c
+c--two phase fluid
+c
+       hfg1 = a (ia+8) - a (ia+2) + pa * ( a (ia+7) - a (ia+1))
+       hfg2 = a (ib+8) - a (ib+2) + pb * ( a (ib+7) - a (ib+1))
+       dpdt1 = hfg1 / ( ta   *( a(ia+7)- a(ia+1)))
+       if ( tb .ne. tcrit .and. pb .ne. pcrit ) then
+         dpdt2 = hfg2 / ( tb   *( a(ib+7)- a(ib+1)))
+       else
+         if ( tb .eq. tcrit ) then
+           call  strsat (a,1,tb,dum,dpdtcr,err)
+         else
+           call  strsat (a,2,pb,dum,dpdtcr,err)
+         endif
+         dpdt2 = dpdtcr
+       endif
+       f1 = a (ia+1) * ( a (ia+3) - a (ia+4) * dpdt1)
+       f2 = a (ib+1) * ( a (ib+3) - a (ib+4) * dpdt2)
+       d1 = f1 * ( tb - ta )
+       d2 = f2 * ( tb - ta )
+       c0 = a (ia+1)
+       c1 = d1
+       c2 = 3. *( a(ib+1) - a(ia+1)) - d2 - 2. * d1
+       c3 = d2 + d1 - 2. *( a(ib+1) - a(ia+1))
+       s (11) = c0 + fr *( c1 + fr *( c2 + fr * c3 ))
+       f1 = a (ia+7) * ( a (ia+9) - a (ia+10)* dpdt1)
+       f2 = a (ib+7) * ( a (ib+9) - a (ib+10)* dpdt2)
+       d1 = f1 * ( tb - ta )
+       d2 = f2 * ( tb - ta )
+       c0 = a (ia+7)
+       c1 = d1
+       c2 = 3. *( a(ib+7) - a(ia+7)) - d2 - 2. * d1
+       c3 = d2 + d1 - 2. *( a(ib+7) - a(ia+7))
+       s (12) = c0 + fr *( c1 + fr *( c2 + fr * c3 ))
+c
+c--two phase fluid
+c
+       s(13) = a(ia+2) + (a(ib+2)-a(ia+2))*fr
+       s(14) = a(ia+8) + (a(ib+8)-a(ia+8))*fr
+       s(15) = s(13) + s(10)*s(11)
+       s(16) = s(14) + s(10)*s(12)
+       s(17) = a(ia+3) + (a(ib+3)-a(ia+3))*fr
+       s(18) = a(ia+9) + fr*tb/s(1)*(a(ib+9)-a(ia+9))
+       s(19) = a(ia+4) + (a(ib+4)-a(ia+4))*fr
+       s(20) = a(ia+10) + (s(10)-pa)/(pb-pa)*pb/s(10)*(a(ib+10)-
+     * a(ia+10))
+       s(21) = a(ia+5) + (a(ib+5)-a(ia+5))*fr
+       s(22) = a(ia+11) + (a(ib+11)-a(ia+11))*fr
+       s(25) = a(ia+6) + (a(ib+6)-a(ia+6))*fr
+       s(26) = a(ia+12) + (a(ib+12)-a(ia+12))*fr
+       fr = 1.0 - s(9)
+       s(3) = fr*s(11) + s(9)*s(12)
+       s(4) = fr*s(13) + s(9)*s(14)
+       s(5) = fr*s(15) + s(9)*s(16)
+       s(24) = fr*s(25) + s(9)*s(26)
+$if -def,in32,1
+       s(23) = or(shift(ip,30),jp)
+$if def,in32,3
+       iunp(1) = ip
+       iunp(2) = jp
+       s(23) = unp
+       err = .false.
+c
+c--done
+   20  return
+       end

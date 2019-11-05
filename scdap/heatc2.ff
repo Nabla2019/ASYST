@@ -1,0 +1,729 @@
+*mlist
+*if def,selap
+       subroutine heatc2 (ic,ck,rocp,qss,nvirn)
+!
+!  Advances two dimensional slab or cylindrical heat conduction for
+!  Scdap components.
+!
+!  Cognizant engineer: ljs.
+!
+       use gentblc
+       use scdmod
+       implicit none
+       include 'scddat.h'
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer ic,nvirn
+       real(kr) ck(ndrd,ndax),rocp(ndrd,ndax),qss(ndrd,ndax)
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'bconds.h'
+       include 'fpdkht.h'
+       include 'trnot1.h'
+       include 'trnot2.h'
+       include 'scdcom.h'
+       include 'ndxara.h'
+       include 'scdout.h'
+       include 'cmptim.h'
+       include 'cons.h'
+       include 'voldat.h'
+       include 'tblsp.h'
+       include 'fecom.h'
+       include 'nrcom.h'
+       include 'cora.h'
+       include 'convarc.h'
+       include 'scdads.h'
+       include 'trpblk.h'
+       include 'ufiles.h'
+       include 'hardpn.h'
+c
+c  Local variables.
+       integer i,i0,i1,i2,ib,ib1,ib2,ibm,ife,ih,
+     & iknt,il1,il2,il3,in1,in2,j,j1,jj,k,l,l0,l1,l2,m,nax,nci,nco,
+     & ndkat,ndkat1,nr1,nrd,nrd2
+       logical err
+       real(kr) a(ndrgndax+1),aa((ndrgndax+1)*ndrgndax+8),
+     & ab(ndrgndax+1,ndrgndax),abt(ndrgndax+1,ndrgndax-1),
+     & aho(2*ndrgndax,ndrgndax),al(ndrgndax+1,ndrgndax),
+     & alr(ndrgndax,ndrgndax),ar(ndrgndax+1,ndrgndax),asf(ndax),
+     & at(ndrgndax+1,ndrgndax),avo(ndrgndax,ndrgndax),b(ndrgndax+1),
+     & bb((ndrgndax+1)*ndrgndax),c(ndrgndax+1),
+     & cc((ndrgndax+1)*ndrgndax+8),d(ndrgndax+1),
+     & dd((ndrgndax+1)*ndrgndax+8),dr(ndrgndax,ndrgndax),dzav,
+     & g(ndrgndax+1,ndrgndax),sk1(ndrgndax),sko(ndrgndax),
+     & snk1(ndrgndax),snko(ndrgndax),src(ndrgndax+1,ndrgndax),
+     & t1(ndrgndax+1,ndrgndax),v1(2*ndrgndax,ndrgndax)
+       real(kr) delstp
+       integer in11
+c
+       if (idcomp(ic).eq.5 .or. idcomp(ic).eq.7) then
+         nax = naz1(ic)
+       else
+         nax = naz
+       endif
+       if (help .and. ic.eq.1) then
+         write (12,"('heatc2c1',i8,/(6es13.5))")
+     &   ncount,scd22(:,:,:,1)%qrdsur
+       endif
+       ib = (ic - 1)*ndax
+       nrd = numelm(ib+1)
+       nr1 = nrd + 1
+       nrd2 = 2*nrd
+c
+       ibm = ib + 1
+cc
+       if (help .ne. 0) write (12,7600) ncount,ic,nax,nrd,ngeom(ic)
+ 7600  format ('@#00',5i10)
+cc
+       if (ngeom(ic) .eq. 2) then
+         do m = 1,nax
+           do l = 1,nrd
+             l0 = l + 1
+             l2 = 2*l
+             l1 = l2 - 1
+             dr(l,m) = (xcond3(l0,m,ic) - xcond3(l,m,ic))*0.5
+             dr(l,m) = max(1.25e-6, dr(l,m))
+             avo(l,m) = 2.0*pi*(xcond3(l,m,ic)+dr(l,m))*dzcond(ibm)
+             aho(l1,m) = pi*dr(l,m)*(2.0*xcond3(l,m,ic) + dr(l,m))
+             aho(l2,m) = pi*dr(l,m)*(2.0*xcond3(l0,m,ic) - dr(l,m))
+             v1(l1,m) = aho(l1,m)*dzcond(ibm)
+             v1(l2,m) = aho(l2,m)*dzcond(ibm)
+           enddo
+           ibm = ibm + 1
+         enddo
+       else
+         do m = 1,nax
+           do l = 1,nrd
+             l0 = l + 1
+             l2 = 2*l
+             l1 = l2 - 1
+             dr(l,m) = (xcond3(l0,m,ic) - xcond3(l,m,ic))*0.5
+             dr(l,m) = max(1.25e-6, dr(l,m))
+             avo(l,m) = slbwd(ic)*dzcond(ibm)
+             aho(l1,m) = slbwd(ic)*dr(l,m)
+             aho(l2,m) = aho(l1,m)
+             v1(l1,m) = aho(l1,m)*dzcond(ibm)
+             v1(l2,m) = v1(l1,m)
+           enddo
+           ibm = ibm + 1
+         enddo
+       endif
+c
+       ib1 = ib + 1
+       ib2 = ib + 2
+       do j = 1,nax-1
+         j1 = j + 1
+         dzav = dzcond(ib1) + dzcond(ib2)
+         abt(1,j) = (aho(1,j) + aho(1,j1))*(ck(1,j) + ck(1,j1))*0.5/dzav
+         abt(nr1,j) = (aho(nrd2,j) + aho(nrd2,j1))*(ck(nrd,j) +
+     &   ck(nrd,j1))*0.5/dzav
+         if (nrd .gt. 1) then
+           do i = 2,nrd
+             i0 = i - 1
+             i1 = 2*i0
+             i2 = i1 + 1
+             abt(i,j) = ((aho(i1,j) + aho(i1,j1))*(ck(i0,j) +
+     &       ck(i0,j1)) + (aho(i2,j) + aho(i2,j1))*(ck(i,j)+ck(i,j1)))*
+     &       0.5/dzav
+           enddo
+         endif
+         ib1 = ib1 + 1
+         ib2 = ib2 + 1
+       enddo
+c
+       do j = 1,nax
+         do i = 1,nrd
+           alr(i,j) = avo(i,j)*ck(i,j)*0.5/dr(i,j)
+         enddo
+       enddo
+c
+       do j = 1,nax
+         al(1,j) = 0.0
+         ar(nr1,j) = 0.0
+         if (nrd .gt. 1) then
+           do i = 2,nr1
+             al(i,j) = alr(i-1,j)
+           enddo
+         endif
+         do i = 1,nrd
+           ar(i,j) = alr(i,j)
+         enddo
+       enddo
+       do i = 1,nr1
+         ab(i,1) = 0.0
+         at(i,nax) = 0.0
+         do j = 2,nax
+           ab(i,j) = abt(i,j-1)
+         enddo
+         do j = 1,nax-1
+           at(i,j) = abt(i,j)
+         enddo
+       enddo
+c
+       do j = 1,nax
+         g(1,j) = v1(1,j)*rocp(1,j)
+         g(nr1,j) = v1(nrd2,j)*rocp(nrd,j)
+         src(1,j) = v1(1,j)*qss(1,j)
+         src(nr1,j) = v1(nrd2,j)*qss(nrd,j)
+         if (nrd .ne. 1) then
+           do i = 2,nrd
+             i0 = i - 1
+             i1 = 2*i0
+             i2 = i1 + 1
+             g(i,j) = v1(i1,j)*rocp(i0,j) + v1(i2,j)*rocp(i,j)
+             src(i,j) = v1(i1,j)*qss(i0,j) + v1(i2,j)*qss(i,j)
+             if (i .eq. nodech(icomp)) src(i,j) = src(i,j) -
+     &       echflx(j,icomp)
+           enddo
+         endif
+       enddo
+c
+       il1 = ib + 1
+       if (nvirn .le. 2) then
+         if (ngeom(ic) .eq. 2) then
+           do j = 1,nax
+             in1 = nvad(il1) + filndx(4)
+             asf(j) = 2.0*pi*xcond3(nr1,j,ic)*dzcond(il1)
+             snko(j) = asf(j)*htsht(il1)
+             snk1(j) = asf(j)*(htsht(il1)*tcond3(nr1,j,ic) -
+     &       htsqst(il1) - scd22(j,ic,1,1)%qrdsur)
+cc
+       if (help .ne. 0) write (12,7601) j,il1,volno(in1),
+     & asf(j),hfixf(il1),hfixg(il1),htsht(il1),
+     & htsqst(il1),scd22(j,ic,1,1)%qrdsur,tempf(in1),tempg(in1),
+     & snko(j),snk1(j),tcond3(nr1,j,ic)
+ 7601  format ('@#01',3i10/(4es14.6))
+       if (help .ne. 0) write (12,"('@#01a',4i10,2es13.5)")
+     & nr1,j,ic,il1,xcond3(nr1,j,ic),dzcond(il1)
+cc
+             il1 = il1 + 1
+           enddo
+         else
+           do j = 1,nax
+             in1 = nvad(il1) + filndx(4)
+             asf(j) = avo(1,j)
+             snko(j) = asf(j)*htsht(il1)
+             snk1(j) = asf(j)*(htsht(il1)*tcond3(nr1,j,ic) -
+     &       htsqst(il1) - scd22(j,ic,1,1)%qrdsur)
+cc
+       if (help .ne. 0) write (12,8601) j,il1,in1,volno(in1),
+     & asf(j),hfixf(il1),hfixg(il1),htsht(il1),
+     & htsqst(il1),scd22(j,ic,1,1)%qrdsur,tempf(in1),tempg(in1),
+     & snko(j),snk1(j),tcond3(nr1,j,ic)
+ 8601  format ('@#b1',4i10,1p/(4e14.6))
+cc
+             il1 = il1 + 1
+           enddo
+           il2 = (ndcomp + nsout(ic) - 1)*ndax + 1
+c  islbot(ic) = 0 = Savannah River or ATR component or shroud component
+c  inside another shroud component.
+           if (islbot(ic) .eq. 0) then
+             do j = 1,nax
+               in2 = nvad(il2) + filndx(4)
+               sko(j) = asf(j)*htsht(il2)
+               sk1(j) = asf(j)*(htsht(il2)*tcond3(1,j,ic) -
+     &         htsqst(il2))
+               if (icrad(ic) .eq. ic) sk1(j) = sk1(j) -
+     &         scd22(j,nsout(ic),2,1)%qrdsur*asf(j)
+cc
+       if (help .ne. 0) write (12,8602) j,il2,volno(in2),
+     & asf(j),hfixf(il2),hfixg(il2),htsht(il2),
+     & htsqst(il2),scd22(j,nsout(ic),2,1)%qrdsur,tempf(in2),tempg(in2),
+     & snko(j),snk1(j),tcond3(nr1,j,ic)
+ 8602  format ('@#b2',3i10/(4es14.6))
+cc
+               il2 = il2 + 1
+             enddo
+           else
+             ih = (nsout(ic) - 1)*ndax + 1
+             do j = 1,nax
+               sko(j) = asf(j)*hout(ih)
+               sk1(j) = sko(j)*tcols(ih)
+               if (icrad(ic) .eq. ic) sk1(j) = sk1(j) -
+     &         scd22(j,nsout(ic),2,1)%qrdsur*asf(j)
+cc
+       if (help .ne. 0) write (12,8603) j,il2,volno(in1),
+     & asf(j),hfixf(il2),hfixg(il2),htsht(il2),
+     & htsqst(il2),scd22(j,nsout(ic),2,1)%qrdsur,tempf(in1),tempg(in1),
+     & snko(j),snk1(j),tcond3(nr1,j,ic)
+ 8603  format ('@#b3',3i10/(4es14.6))
+cc
+               il2 = il2 + 1
+               ih = ih + 1
+             enddo
+           endif
+         endif
+       else
+         ife = ic
+         if (ifa .ge. 2) ife = ic - idfe(nfe(ifa-1),ifa-1)
+         do j = 1,nax
+           in1 = nvad(il1) + filndx(4)
+           asf(j) = avo(1,j)
+           snko(j) = asf(j)*htsht(il1)
+           snk1(j) = asf(j)*(htsht(il1)*tcond3(nr1,j,ic) -
+     &     htsqst(il1) - scd22(j,ic,1,1)%qrdsur)
+cc
+       if (help .ne. 0) write (12,8604) j,il1,volno(in1),
+     & asf(j),hfixf(il1),hfixg(il1),htsht(il1),
+     & htsqst(il1),scd22(j,nsout(ic),2,1)%qrdsur,tempf(in1),tempg(in1),
+     & snko(j),snk1(j),tcond3(nr1,j,ic)
+ 8604  format ('@#b4',3i10/(4es14.6))
+cc
+           il1 = il1 + 1
+         enddo
+         if (ic .gt. idfe(1,ifa)) then
+           do j = 1,nax
+             snk1(j) = snk1(j) + qraden(ifa,j,ife-1)/nsigl(ic)
+           enddo
+         endif
+         if (islbot(ic) .eq. 0) then
+           il2 = (ndcomp + nsout(ic) - 1)*ndax + 1
+           do j = 1,nax
+             in2 = nvad(il2) + filndx(4)
+             sko(j) = asf(j)*htsht(il2)
+             sk1(j) = asf(j)*(htsht(il2)*tcond3(1,j,ic) -
+     &       htsqst(il2))
+             il2 = il2 + 1
+           enddo
+         else
+           ih = (nsout(ic) - 1)*ndax + 1
+           do j = 1,nax
+             sko(j) = asf(j)*hout(ih)
+             sk1(j) = sko(j)*tcols(ih)
+             ih = ih+ 1
+           enddo
+         endif
+         if (idcomp(ic).ge.4 .and. ic.lt.idfe(nfe(ifa),ifa)) then
+           do j = 1,nax
+             sk1(j) = sk1(j) - qraden(ifa,j,ife)/nsigl(ic)
+           enddo
+         endif
+       endif
+c
+       jj = 1
+       do i = 1,nr1
+         do j = 1,nax
+c  If ndkat <> 0 then apply relap general tables or cntrlvar to cora
+c  rod upper and lower temperatures.
+           if (j.eq.1 .and. idcomp(icomp).eq.6) then
+             ndkat = scd1(icomp)%ibndtb(1)
+             ndkat1 = 1
+           else if (j.eq.nax .and. idcomp(icomp).eq.6) then
+             ndkat = scd1(icomp)%ibndtb(2)
+             ndkat1 = 2
+           else
+             ndkat = 0
+           endif
+           if (ndkat .eq. 0) then
+             a(j) = -ab(i,j)
+             b(j) = 2.0*g(i,j)/dt + ab(i,j) + at(i,j)
+             c(j) = -at(i,j)
+             d(j) = (2.0*g(i,j)/dt-al(i,j) - ar(i,j))*tcond3(i,j,ic) +
+     &       src(i,j)
+           else
+             a(j) = 0.0
+             b(j) = 1.0
+             c(j) = 0.0
+             if (ndkat .gt. 0) then
+c  Boundary temp from Relap5 general table.
+               iknt = nbtcof(ndkat1,icomp)
+               call gtpolat (gen(iknt)%gtinfo,gtptr(iknt)%gtbl,
+     &         timec,d(j:j),err)
+             else
+c  Temp from Relap5 control variable.
+               d(j) = cnvarn(filndx(27) + nbtcof(ndkat1,icomp))
+             endif
+           endif
+         enddo
+         if (i .eq. 1) then
+           do j = 1,nax
+             if (.not.(idcomp(icomp).eq.6 .and.
+     &       ((j.eq.1 .and. scd1(icomp)%ibndtb(1).ne.0) .or.
+     &       (j.eq.nax .and. scd1(icomp)%ibndtb(2).ne.0))))
+     &       d(j) = d(j) + ar(i,j)*tcond3(i+1,j,ic)
+           enddo
+           if (ngeom(ic) .ne. 2) then
+             do j = 1,nax
+               if (.not.(idcomp(icomp).eq.6 .and.
+     &         ((j.eq.1 .and. scd1(icomp)%ibndtb(1).ne.0) .or.
+     &         (j.eq.nax .and. scd1(icomp)%ibndtb(2).ne.0) ))) then
+                  d(j) = d(j) + sk1(j)
+                  b(j) = b(j) + sko(j)
+               endif
+             enddo
+           endif
+         else
+           if (i .eq. nr1) then
+             do j = 1,nax
+               if (.not.(idcomp(icomp).eq.6 .and.
+     &         ((j.eq.1 .and. scd1(icomp)%ibndtb(1).ne.0) .or.
+     &         (j.eq.nax .and. scd1(icomp)%ibndtb(2).ne.0)))) then
+                 d(j) = d(j) + al(i,j)*tcond3(i-1,j,ic) + snk1(j)
+                 b(j) = b(j) + snko(j)
+               endif
+             enddo
+           else
+             do j = 1,nax
+               if (.not.(idcomp(icomp).eq.6 .and.
+     &          ((j.eq.1 .and. scd1(icomp)%ibndtb(1).ne.0) .or.
+     &          (j.eq.nax .and. scd1(icomp)%ibndtb(2).ne.0))))
+     &          d(j) = d(j) + al(i,j)*tcond3(i-1,j,ic) +
+     &          ar(i,j)*tcond3(i+1,j,ic)
+             enddo
+           endif
+         endif
+         do j = 1,nax
+           aa(jj) = a(j)
+           bb(jj) = b(j)
+           cc(jj) = c(j)
+           dd(jj) = d(j)
+           jj = jj + 1
+         enddo
+       enddo
+cc
+c      j = 1
+c      do m = 1,nr1
+c        do i = 1,nax
+c      if (help .ne. 0) write (12,7702) '@#a2',m,i,j,aa(j),bb(j),cc(j),
+c    & dd(j)
+c7702  format (a,3i4,1p,4e13.5)
+c        j = j + 1
+c        enddo
+c      enddo
+cc
+c  Downward pass of column oriented tridiagonal solution.
+       jj = 1
+       j = jj
+       do m = 1,nr1
+         delstp = 1.0/bb(j)
+         dd(j) = dd(j)*delstp
+         cc(j) = cc(j)*delstp
+         j = j + nax
+       enddo
+       jj = jj + 1
+       do i = 3,nax
+         j = jj
+         do m = 1,nr1
+           delstp = 1.0/(bb(j) - aa(j)*cc(j-1))
+           dd(j) = (dd(j) - aa(j)*dd(j-1))*delstp
+           cc(j) = cc(j)*delstp
+           j = j + nax
+         enddo
+         jj = jj + 1
+       enddo
+       j = jj
+       do m = 1,nr1
+         dd(j) = (dd(j) - aa(j)*dd(j-1))/(bb(j) - aa(j)*cc(j-1))
+         j = j + nax
+       enddo
+cc
+c      j = 1
+c      do m = 1,nr1
+c        do i = 1,nax
+c      if (help .ne. 0) write (12,7702) '@#b2',m,i,j,aa(j),bb(j),cc(j),
+c    & dd(j)
+c        j = j + 1
+c        enddo
+c      enddo
+cc
+c  Upward pass of column oriented tridiagonal solution.
+       do i = 2,nax
+         jj = jj - 1
+         j = jj
+         do m = 1,nr1
+           dd(j) = dd(j) - cc(j)*dd(j+1)
+           j = j + nax
+         enddo
+       enddo
+cc
+c      j = 1
+c      do m = 1,nr1
+c        do i = 1,nax
+c      if (help .ne. 0) write (12,7702) '@#c2',m,i,j,aa(j),bb(j),cc(j),
+c    & dd(j)
+c        j = j + 1
+c        enddo
+c      enddo
+cc
+c
+       jj = 1
+       do i = 1,nr1
+         do j = 1,nax
+           t1(i,j) = dd(jj)
+           jj = jj + 1
+         enddo
+       enddo
+c
+       jj = 1
+       do j = 1,nax
+         do i = 1,nr1
+           a(i) = -al(i,j)
+           b(i) = 2.0*g(i,j)/dt + al(i,j) + ar(i,j)
+           c(i) = -ar(i,j)
+           d(i) = (2.0*g(i,j)/dt - ab(i,j) - at(i,j))*t1(i,j) + src(i,j)
+         enddo
+         if (j .eq. 1) then
+           do i = 1,nr1
+             d(i) = d(i) + at(i,j)*t1(i,j+1)
+           enddo
+         else
+           if (j .eq. nax) then
+             do i = 1,nr1
+               d(i) = d(i) + ab(i,j)*t1(i,j-1)
+             enddo
+           else
+             do i = 1,nr1
+               d(i) = d(i) + ab(i,j)*t1(i,j-1) + at(i,j)*t1(i,j+1)
+             enddo
+           endif
+         endif
+         b(nr1) = b(nr1) + snko(j)
+         d(nr1) = d(nr1) + snk1(j)
+         if (ngeom(ic) .ne. 2) then
+           b(1) = b(1) + sko(j)
+           d(1) = d(1) + sk1(j)
+         endif
+         do i = 1,nr1
+           aa(jj) = a(i)
+           bb(jj) = b(i)
+           cc(jj) = c(i)
+           dd(jj) = d(i)
+           jj = jj+1
+         enddo
+       enddo
+cc
+c      j = 1
+c      do m = 1,nax
+c        do i = 1,nr1
+c      if (help .ne. 0) write (12,7702) '@#a3',m,i,j,aa(j),bb(j),cc(j),
+c    & dd(j)
+c        j = j + 1
+c        enddo
+c      enddo
+cc
+c  Downward pass of row oriented tridiagonal solution.
+       jj = 1
+       j = jj
+       do m = 1,nax
+         bb(j) = 1.0/bb(j)
+         dd(j) = dd(j)*bb(j)
+         cc(j) = cc(j)*bb(j)
+         j = j + nr1
+       enddo
+       jj = jj + 1
+       do i = 3,nr1
+         j = jj
+         do m = 1,nax
+           bb(j) = 1.0/(bb(j) - aa(j)*cc(j-1))
+           dd(j) = (dd(j) - aa(j)*dd(j-1))*bb(j)
+           cc(j) = cc(j)*bb(j)
+           j = j + nr1
+         enddo
+         jj = jj + 1
+       enddo
+       j = jj
+       do m = 1,nax
+         bb(j) = 1.0/(bb(j) - aa(j)*cc(j-1))
+         dd(j) = (dd(j) - aa(j)*dd(j-1))*bb(j)
+         j = j + nr1
+       enddo
+cc
+c      j = 1
+c      do m = 1,nax
+c        do i = 1,nr1
+c      if (help .ne. 0) write (12,7702) '@#b3',m,i,j,aa(j),bb(j),cc(j),
+c    & dd(j)
+c        j = j + 1
+c        enddo
+c      enddo
+cc
+c  Upward pass of row oriented tridiagonal solution.
+       do i = 2,nr1
+         jj = jj - 1
+         j = jj
+         do m = 1,nax
+           dd(j) = dd(j) - cc(j)*dd(j+1)
+           j = j + nr1
+         enddo
+       enddo
+cc
+c      j = 1
+c      do m = 1,nr1
+c        do i = 1,nax
+c      if (help .ne. 0) write (12,7702) '@#d3',m,i,j,aa(j),bb(j),cc(j),
+c    & dd(j)
+c        j = j + 1
+c        enddo
+c      enddo
+cc
+c
+       jj = 1
+       do j = 1,nax
+         do i = 1,nr1
+           tcond3(i,j,ic) = dd(jj)
+c  Since temperature for liquefied core material is calculated in
+c  subroutine heatld, override calculated temperature in heatc2 for
+c  liquefied material.
+           if (lcrucb(j,ic) .ge. 1) tcond3(i,j,ic) = tupool
+           jj = jj + 1
+         enddo
+       enddo
+c
+c  Process arrays for implicit connection between Scdap components and
+c  hydrodynamics.
+       if (iand(print,64) .ne. 0) then
+c  Left boundary.
+         if (islbot(ic) .eq. 0) then
+           il2 = (ndcomp + nsout(ic) - 1)*ndax + 1
+           jj = 1
+           j = jj
+           do m = 1,nax
+             delstp = -asf(m)*bb(j)
+             dfx(j,1,ic) = htshff(il2)*delstp
+             dfx(j,2,ic) = (htshgg(il2) + scd22(m,nsout(ic),2,1)%hgrad)*
+     &       delstp
+             dfx(j,3,ic) = (htshft(il2) + htshgt(il2))*delstp
+             dfx(j,4,ic) = htshgp(il2)*delstp
+             il2 = il2 + 1
+             j = j + nr1
+           enddo
+c  Apply foward and backward parts of tridiagonal solution.
+           jj = jj + 1
+           do i = 2,nr1
+             j = jj
+             do m = 1,nax
+               delstp = -aa(j)*bb(j)
+               dfx(j,1,ic) = delstp*dfx(j-1,1,ic)
+               dfx(j,2,ic) = delstp*dfx(j-1,2,ic)
+               dfx(j,3,ic) = delstp*dfx(j-1,3,ic)
+               dfx(j,4,ic) = delstp*dfx(j-1,4,ic)
+               j = j + nr1
+             enddo
+             jj = jj + 1
+           enddo
+c
+           do i = 2,nr1
+             jj = jj - 1
+             j = jj
+             do m = 1,nax
+               dfx(j,1,ic) = dfx(j,1,ic) - cc(j)*dfx(j+1,1,ic)
+               dfx(j,2,ic) = dfx(j,2,ic) - cc(j)*dfx(j+1,2,ic)
+               dfx(j,3,ic) = dfx(j,3,ic) - cc(j)*dfx(j+1,3,ic)
+               dfx(j,4,ic) = dfx(j,4,ic) - cc(j)*dfx(j+1,4,ic)
+               j = j + nr1
+             enddo
+           enddo
+         endif
+c  Right boundary.
+         il1 = ib + 1
+         jj = nr1
+         j = jj
+         do m = 1,nax
+           delstp = -asf(m)*bb(j)
+           dfx(j,5,ic) = htshff(il1)*delstp
+           dfx(j,6,ic) = (htshgg(il1) + scd22(m,ic,1,1)%hgrad)*delstp
+           dfx(j,7,ic) = (htshft(il1) + htshgt(il1))*delstp
+           dfx(j,8,ic) = htshgp(il1)*delstp
+           il1 = il1 + 1
+           j = j + nr1
+         enddo
+c  Apply backward part of tridiagonal solution.
+         do i = 2,nr1
+           jj = jj - 1
+           j = jj
+           do m = 1,nax
+             dfx(j,5,ic) = -cc(j)*dfx(j+1,5,ic)
+             dfx(j,6,ic) = -cc(j)*dfx(j+1,6,ic)
+             dfx(j,7,ic) = -cc(j)*dfx(j+1,7,ic)
+             dfx(j,8,ic) = -cc(j)*dfx(j+1,8,ic)
+             j = j + nr1
+           enddo
+         enddo
+cc
+c        j = 1
+c        do m = 1,nax
+c          do i = 1,nr1
+c            if (help .ne. 0) write (12,7703) '@#c4',m,i,j,
+c    &       (dfx(j,jj,ic),ic,jj=1,8)
+c7703  format (a,3i4,1p,4e13.5/16x,4e13.5)
+c            j = j + 1
+c          enddo
+c        enddo
+cc
+       endif
+!  Compute heat transfer related quantities.
+       do k = 1,2
+         if (k .eq. 2) then
+           if (nsout(ic).ge.1 .and. islbot(ic).eq.0) then
+             il1 = (ndcomp + nsout(ic) - 1)*ndax + 1
+             il2 = ib + 1
+             jj = nsout(ic)
+           else
+             il2 = 0
+           endif
+         else
+           il1 = ib + 1
+           il2 = il1
+           jj = ic
+         endif
+         do j = 1,nax
+           if (il2 .ne. 0) then
+             nci = nrcldi(il1)
+cljs  numelm(il1) not defined for second surface of shroud, so simply
+cljs  set nco = 1, which is radial node one (radial node at second
+cljs  surface.
+               if(k.eq.1)then
+               nco = numelm(il1) + 1
+               nci = nrcldi(il1)
+               else
+               nco =  1
+               nci = 1
+               end if
+             in1 = nvad(il1) + filndx(4)
+cljs qclad only used for calculation of localized ballooning of
+cljs fuel rods
+             if(idcomp(ic).eq.0)then
+               if (nci .eq. 1) then
+               qclad(il1) = -ck(1,j)*(tcond3(2,j,ic) 
+     &         - tcond3(1,j,ic))/(2.0*dr(1,j))
+               else
+               qclad(il1) = -(ck(nci-1,j)*(tcond3(nci,j,ic) -
+     &         tcond3(nci-1,j,ic))/dr(nci-1,j) + ck(nci,j)*
+     &         (tcond3(nci+1,j,ic) - tcond3(nci,j,ic))/
+     &         dr(nci,j))*0.25
+               endif
+             end if
+             delstp = tcond3(nco,j,ic) - tcnd03(nco,j,ic)
+             if (k .eq. 1) then
+               dzav = htsht(il1)*delstp + htsqst(il1)
+               qout2(j,ic,1) = dzav
+               scd21(j,jj,k)%qscd = dzav*htsasv(il1)
+             else
+               dzav = htsht(il1)*delstp + htsqst(il1)
+               qouts(il2) = dzav
+               scd21(j,jj,2)%qscd = dzav*htsasv(il1)
+               il2 = il2 + 1
+cljs change; second surface of shroud is at radial node 1
+               delstp = tcond3(1,j,ic) - tcnd03(1,j,ic)
+             endif
+             delstp = (htshgg(il1) + htshgt(il1) + htshgp(il1))*
+     &       delstp + htsqsg(il1)
+             scd21(j,jj,k)%qwgscd = delstp*htsasv(il1)
+             scd21(j,jj,k)%gamscd = (dzav - delstp)*htssmf(il1)
+             scd21(j,jj,k)%gamccd = delstp*htssmg(il1)
+             if (help .ne. 0) then
+               write (12,"(a,i10,2i5,i10,i4,6es13.5)") 'heatc200',
+     &         ncount,ic,j,volno(in1),il1,scd21(j,jj,k)%qscd,
+     &         scd21(j,jj,k)%qwgscd,htssmf(il1),scd21(j,jj,k)%gamscd,
+     &         htssmg(il1),scd21(j,jj,k)%gamccd
+               write (output,"('heatc201',7es13.5)")
+     &         scd22(j,jj,k,1)%qrdsur,tcond3(nco,j,ic),tcnd03(nco,j,ic),
+     &         tempg(in1),tempf(in1),htsqst(il1),htsqsg(il1)
+             endif
+           endif
+           il1 = il1 + 1
+         enddo
+       enddo
+       return
+       end
+*endif

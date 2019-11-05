@@ -1,0 +1,221 @@
+*mlist
+       subroutine iradht
+c
+c
+c  Check the radiation ht input for errors and initialize variables.
+c
+c  Cognizant engineer: ras.
+c
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'htsrcm.h'
+       include 'radhtc.h'
+       include 'voldat.h'
+       include 'ufiles.h'
+       integer i,idex,idum,idskp,iend,indic,ipx(2),istrt,ir,j,j1,
+     & jfl,jh,jhh,jid,jj,jr,jend,jstrt,jv,k,kdum,kp,l,lskip,
+     & lstop,lstrt,m,mdum,mend,mp,nend,nset
+       real ak,am,cmpr,deter,dkron,eps,simul,sum,tbrit,vfkm,vfmk,
+     & xdum(100)
+       logical newrad
+       character lr(2)*5
+       external radht,simul
+c
+       data lr     /'left','right'/
+       data newrad /.false./
+c
+       jr = filndx(38)
+       jfl = jr
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,814)
+  814  format ('0',33x,'Edit of radiation heat transfer after input proc
+     &essing.')
+c  nrset is negative if rad file was created during this run.  It was
+c  set negative in rradht routine.  Used as a flag
+       if (nrset(jr) .lt. 0) then
+         newrad = .true.
+         nrset(jr) = abs(nrset(jr))
+       endif
+       nset=nrset(jr)
+       do 90 jj=1,nset
+c  Check that no more than 100 conductors radi.
+         if (nrh(jr) .gt. 100) then
+           write (output, 802)
+  802  format ('0******** More than 100 conductors radiate, requires cod
+     &e changes in simul and iradht.')
+           fail  = .true.
+         endif
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+         write (output,820) setno(jr),nrh(jr)
+  820  format ('0Edits for set',i2,' which has ',i3,' surfaces follow:')
+         if ( unito) then
+           write (output, 803) trmin(jr), ' k'
+         else
+           tbrit = trmin(jr)*1.8 - 460.0
+           write (output, 803) tbrit, ' degf'
+  803  format ('0Radiation ht not calculated unless one surface temperat
+     &ure exceeds ',6x,f10.2,a2)
+         endif
+         write (output, 804) voidmn(jr)
+  804  format(' Radiation ht not calculated unless vapor void of adjacen
+     &t volume exceeds ',f10.4)
+         endif
+         if (trmin(jr) .lt. 0.0) then
+           fail = .true.
+           write (output,805) setno(jr)
+  805  format ('0******** Error. neg trmin value for (card 5ss00000,ss=
+     &',i2,')')
+         endif
+         if (voidmn(jr).lt.0.0 .or. voidmn(jr).gt.1.0) then
+           fail = .true.
+           write (output,806) setno(jr)
+  806  format ('0******** Error. voidmn bad range(0-1) (card 5ss00000,ss
+     & = ',i2,')')
+c  Check radiation conductor surface numbers.
+         endif
+         jstrt = jfl + irhoff(jr)
+         jend = jstrt + (nrh(jr)-1)*nrhskp
+         k = 0
+         write (output, 815)
+  815  format ('0Rad.sur.no.  str.no.  side     emissivity')
+         do 30 j = jstrt,jend,nrhskp
+           k = k + 1
+           ipx(1) = jrh(j)/1000
+           ipx(2) = jrh(j) - ipx(1)*1000
+           write (output, 807) k,ipx(1),'-',ipx(2),lr(jlr(j)+1),emis(j)
+  807  format (i6,i11,a1,i3.3,2x,a5,1pg13.5)
+c  Check validity of heat conductor number.
+           jh = filndx(8)
+           jv = filndx(4)
+           jhh = ihtptr(jh)
+           nend = nhtstr(jh)
+           do 40 j1 = 1,nend
+             jid = htstno(jhh + jh)
+             if (jrh(j) .eq. jid) then
+               if (jlr(j) .eq. 1) jlr(j) = j1
+               if (jlr(j) .eq. 0) jlr(j) = -j1
+               go to 41
+             else
+               jhh = ihtptr(jh+j1)
+             endif
+   40      continue
+           fail = .true.
+           write (output, 808)
+  808  format ('0******** Error, above is not a valid heat structure num
+     &ber.')
+c  Save offsets to surface area, surface temp, fluid temp.
+   41      itemof(j) = htxft(jh+jhh)
+           if (jlr(j) .gt. 0) itemof(j) = itemof(j) + htnmpt(jh+jhh) - 1
+           iareof(j) = jhh
+           if (jlr(j) .gt. 0) iareof(j) = jhh + 1
+           idum = jh + jhh
+           if (jlr(j) .gt. 0) idum = idum + 1
+           ialpof(j) = htbvo(idum)
+           if (emis(j) .lt. 0.0) then
+             fail = .true.
+             write (output, 809) emis(j)
+  809  format ('0******** Error - emissivity= ',f8.6,' invalid')
+           endif
+           if (emis(j) .ge. 1.0 ) then
+             write (output, 709)  emis(j)
+  709  format ('0******** - emissivity= ',f8.6,' reset to .999 to avoid
+     &a divide by zero.')
+             emis(j) = .999
+           endif
+c-zero out qrad if new radiation file or new set to old file
+           if (newrad .or. setno(jr).lt.0) then
+             qrad(j) = 0.0
+           endif
+   30    continue
+c  Check view factors.
+         istrt = jfl + ivewof(jr)
+         iend = (nrh(jr) - 1)*nrh(jr) + istrt
+         k = 0
+         idskp = nrh(jr)
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output, 816)
+  816  format ('0Rad.sur.no.  view factors from surface')
+         do 50 j = istrt,iend,idskp
+           k = k + 1
+           lstrt = istrt + k - 1
+           lstop = lstrt + nrh(jr)*(nrh(jr) - 1)
+           lskip = nrh(jr)
+           if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &     write (output, 810) k, (vfij(l),l=lstrt,lstop,lskip)
+  810  format (i6,5x,1p,10g12.4,9(/,11x,1p,10g12.4))
+           sum = 0.0
+           do 51 l = lstrt,lstop,lskip
+             sum = sum + vfij(l)
+   51      continue
+           if (sum.le.0.999 .or. sum.ge.1.001) then
+             fail   = .true.
+             write (output, 811) sum
+  811  format ('0******** Error, view factors above do not sum to 1.0, t
+     &hey sum to ',f10.5)
+           endif
+c  Check reciprocal relationship.
+           kdum = jfl + irhoff(jr) + (k-1)*nrhskp
+           kdum = jh + iareof(kdum)
+           ak = htsrfo(kdum)
+           mend = nrh(jr)
+           do 52 m = 1,mend
+             mdum = jfl + irhoff(jr) + (m-1)*nrhskp
+             mdum = jh + iareof(mdum)
+             am = htsrfo(mdum)
+             vfkm = vfij(jfl + ivewof(jr) + (m-1)*nrh(jr) + k - 1)
+             vfmk = vfij(jfl + ivewof(jr) + (k-1)*nrh(jr) + m - 1)
+             if (vfmk.ne.0.0 .or. vfkm.ne.0.0) then
+               if (vfmk .eq. 0.0 .or. am .lt. 1.e-10) go to 53
+               cmpr = (ak*vfkm)/(am*vfmk)
+               if (cmpr.gt.0.98 .and. cmpr.lt.1.02) go to 52
+!  53          fail   = .true.
+   53          continue
+               kp = jrh( jfl + irhoff(jr) + (k-1)*nrhskp )
+               mp = jrh( jfl + irhoff(jr) + (m-1)*nrhskp )
+               write (output,812) kp,mp,  kp,ak,vfkm,  mp,am,vfmk
+  812  format ('0******** Inconsistent view factors and areas for surfac
+     &es ',i9, ' and',i9/1x,'surface ',i9,':  area= ',e15.6,' and view
+     &factor= ',e15.6/1x,'surface ',i9,':  area= ',e15.6,' and view fac
+     &tor= ',e15.6)
+             endif
+   52      continue
+   50    continue
+         jr =jr + nrsskp
+   90  continue
+c  Calculate the inverted form factor matr if set does not refer to
+c  another set for view factors.  refset(jr) contains set number being
+c  referred to if referal method used.  refset was set in rradht.
+       jr = jfl
+       do 95 jj = 1,nset
+         setno(jr) = abs(setno(jr))
+         if (refset(jr) .eq. 0) then
+c
+           iend   = nrh(jr)
+           do 61 i = 1, iend
+             ir = jfl + irhoff(jr) + nrhskp*(i-1)
+             do 60 j = 1, iend
+               dkron  = 0.0
+               if (i .eq. j) dkron = 1.0
+               idex = jfl + ivewof(jr) + (j-1)*nrh(jr) + i - 1
+               vfij(idex) = dkron - (1.0 - emis(ir))*vfij(idex)
+   60        continue
+   61      continue
+           idex = jfl + ivewof(jr)
+           indic = -1
+           eps = 0.001
+           deter = simul(nrh(jr),vfij(idex),xdum,eps,indic,nrh(jr))
+           if (deter .eq. 0.0) then
+             fail = .true.
+             write (output,813) setno(jr)
+  813  format ('0******** Error. singular view factor matrix for radiati
+     &on set ',i4,'.')
+           endif
+         endif
+         jr = jr + nrsskp
+  95   continue
+c  End of loop over radiation sets.
+       if (.not.fail) call radht
+       return
+       end

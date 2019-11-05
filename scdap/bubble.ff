@@ -1,0 +1,757 @@
+*mlist
+*if def,selap
+       subroutine bubble (xnonc,xcon,an,bnonc,bcon,dtime,atemp,sizel,
+     & vconv,p)
+c
+c  Calculates the bubble size and species content after a time
+c  increment.
+c
+c  Cognizant engineer: ewc .
+c
+c This is a COUPLE ROUTINE
+c
+      implicit none
+c
+      real atemp, dtime, p, sizel, vconv
+c
+c     xnonc(i,l) = output mass of i th noncondensable
+c                   gas that leaves the volume element in
+c                   bubbles of size l during time increment
+c                   dtime (kg)
+c
+c     xcon(k,l)  = output mass of k th condensable
+c                   vapor that leaves the volume element in
+c                   bubbles of size l during time increment
+c                   dtime (kg)
+c
+c     an(l)   = input/output number concentration of
+c              bubble size l (m**(-3))
+c
+c     bnonc(i,l) = input/output mass of i th noncondensable
+c              gas in bubble size l at start/end of
+c              time increment (kg)
+c               i =  3 is krypton
+c               i =  4 is xenon
+c
+c     bcon(k,l)  = input/output mass of k th condensable
+c              vapor in bubble size l at start/end of
+c              time increment (kg)
+c               k =  1 for iodine
+c               k =  5 for cadmium
+c               k = 18 for zinc iodide
+c               k = 19 for zinc
+c               k = 20 for cesium
+c
+c     dtime   = input time increment for which releases
+c              are to be calculated (s)
+c
+c     atemp   = input average temperature during the time
+c                   increment considered (k)
+c
+c     sizel   = input liquid phase dimension (diameter) (m)
+c
+c     vconv   = input liquid pool convection velocity (m/s)
+c
+c     p    = input pressure (pa)
+c
+c     dxnon(i,l) = input rate of change of mass of i th
+c                   noncondensable gas in bubble size l
+c                   due only to exit from surface
+c                   at time tderv (kg/s)
+c                   common bder
+c
+c     dxcon(k,l) = input rate of change of mass of k th
+c                   condensable gas in bubble size l
+c                   due only to exit from surface
+c                   at time tderv (kg/s)
+c                   common bder
+c
+c      xa(l)   = input volume of l th bubble size class average
+c              (m**3).  common block bsize.
+c
+c      dba(l)   = input diameter of l th bubble size class average
+c              (m).  common block bsize
+c
+c      vrise(l)  = speed of rise of l th bubble size (m/s).
+c              common block bcons.
+c
+c      coal(l1,l2) = coalescence frequency function
+c                for bubble size classes l1 and l2
+c                (m**3/(bubble s))
+c                common block bcons.
+c
+c     topaa   = input component of liquid surface area normal
+c              to acceleration of gravity with access to
+c              effluent (m**2)
+c              common block dcon.
+c
+c     vv   = input volume fuel or debris considered (m**3)
+c              common block dcon.
+c
+c     viscl   = input dynamic viscosity of liquid phase
+c              (kg/(m s))
+c              common block matsrs
+c
+c     rholsd = input liquid phase density (kg/m**3)
+c              common block matsrs
+c
+c     zusten   = input surface tension of liquid phase (n/m)
+c                   common block matsrs
+c
+c     bubble was coded by d. l. hagrman october 19, 1989
+c     last modified on june 25, 1990
+c
+c
+*call bder
+*call bsize
+*call bcons
+*call dcon
+*call matsrs
+*call ufiles
+c
+      real an(15), bnonc(10,15), bcon(20,15)
+      real gmg(10), xgmix(10)
+c     the following dimension statements reserve space for
+c      the runge-kutta solution variables
+c
+      real  ya1(15), ya2(15), ya3(15), ya4(15)
+c
+      real  ybnon1(10,15), ybnon2(10,15), ybnon3(10,15),
+     #    ybnon4(10,15)
+c
+      real  ybcon1(20,21), ybcon2(20,21), ybcon3(20,21),
+     #          ybcon4(20,21)
+c
+      real  yxnon1(10,15), yxnon2(10,15), yxnon3(10,15),
+     #          yxnon4(10,15)
+c
+      real  yxcon1(20,15), yxcon2(20,15), yxcon3(20,15),
+     #          yxcon4(20,15)
+c
+      real  xnonc(10,15), xcon(20,15)
+c
+      real  xnont(10,15), xcont(20,15)
+c
+c     local variables
+      integer i, ibub, l, l1, l2
+      real ddt, dtmost, g1, g2, gdens, nflag, r12, reb, rhog,
+     #sig3, sqedv, sum, timet, ttry, upper2, upper3, viscl4, zvvot
+c
+      external bderv, gdens
+c
+c     data statement gmg(i) = kg-mole mass of i th noncondensable gas
+c
+      data gmg /4.003e+00,39.944e+00,83.80e+00,131.30e+00,
+     #  2.016e+00,28.020e+00,32.0e+00,28.01e+00,44.01e+00,
+     #  18.020e+00/
+c
+c              i = 1 is helium
+c              i = 2 is argon
+c              i = 3 is krypton
+c              i = 4 is xenon
+c              i = 5 is hydrogen
+c              i = 6 is nitrogen
+c              i = 7 is oxygen
+c              i = 8 is carbon monoxide
+c              i = 9 is carbon dioxide
+c              i =10 is water vapor
+c
+c     parameter (burp) set for use in test
+      real burp
+      parameter (burp=0.98)
+c
+c     check to see if bubbles exist
+      ibub = 0
+      do 100 l = 1,nbs
+       if(an(l) .gt. 1.0e-275) then
+          ibub = 1
+       endif
+  100 continue
+      if(ibub .eq. 0) go to 500
+c
+c     check for more bubble volume than physical volume to
+c      hold it -- i.e. frothing
+      sum = 0.0
+      do 102 l = 1,nbsm1
+         sum = sum + an(l) * xa(l)
+  102 continue
+      if(sum .gt. burp) then
+c        write(6,907) sum
+c 907    format(2x,'   ***frothing***   bubble fraction = ',es15.5)
+         do 110 l2 = 1,nbsm1
+            bnonc(3,nbs) = bnonc(3,nbs) + bnonc(3,l2)
+            bnonc(4,nbs) = bnonc(4,nbs) + bnonc(4,l2)
+            bcon(1,nbs) = bcon(1,nbs) + bcon(1,l2)
+            bcon(5,nbs) = bcon(5,nbs) + bcon(5,l2)
+            bcon(18,nbs) = bcon(18,nbs) + bcon(18,l2)
+            bcon(19,nbs) = bcon(19,nbs) + bcon(19,l2)
+            bcon(20,nbs) = bcon(20,nbs) + bcon(20,l2)
+            an(nbs) = an(nbs) + an(l2) * xa(l2) / xa(nbs)
+            bnonc(3,l2) = 0.0
+            bnonc(4,l2) = 0.0
+            bcon(1,l2) = 0.0
+            bcon(5,l2) = 0.0
+            bcon(18,l2) = 0.0
+            bcon(19,l2) = 0.0
+            bcon(20,l2) = 0.0
+            an(l2) = 0.0
+  110    continue
+         go to 500
+      endif
+c
+c     calculate quantities that are constant during dtime
+c      find sqrt(eddy diffusivity over viscosity) for later use
+      sqedv = 4.0e+00 * ((2.0e-03)**(1.5e+00)) * vconv * vconv *
+     #        vconv / sizel
+      sqedv = sqrt(sqedv)
+      sig3 = zusten * zusten * zusten
+      viscl4 = viscl * viscl * viscl * viscl
+      do 150 l1 = 1,nbs
+c         find bubble rise speed
+c          estimate gas density at system pressure
+c          estimate gas mole fractions
+       do 120 i = 1,10
+          xgmix(i) = 0.0e+00
+  120   continue
+       sum = bnonc(3,l1)/gmg(3) + bnonc(4,l1)/gmg(4)
+       if(sum .gt. 1.0e-275) then
+          xgmix(3) = bnonc(3,l1)/(gmg(3) * sum)
+          xgmix(4) = bnonc(4,l1)/(gmg(4) * sum)
+          rhog     = gdens(atemp,p,xgmix)
+       else
+c            if there is no gas use xenon at room temp.
+          rhog     = 5.89e+00
+       endif
+c         acceleration of gravity/18 = 5.44444444e-01
+c
+       vrise(l1) = 5.44444444e-01 * dba(l1) * dba(l1) *
+     #        (rholsd - rhog) / viscl
+c
+c         note: phil ellison suggested the following
+c          improved expression for vrise.   see page 250
+c          of wallis, one-dimensional, two-phase flow
+c          note:  velocities are presumed to be given
+c          by correlations in cm/s.  exponents 0.76 and
+c          0.52 seem to require calculation then
+c          conversion to m/s in region 2
+c
+       reb = rholsd * vrise(l1) * dba(l1) / viscl
+       if(reb .gt. 2.0e+00) then
+c            region 2
+c
+c            61.9701269 = 0.33 * (acceleeration of gravity**0.76)
+c            conversion to m/s converts to 0.619701269
+          vrise(l1) = 6.19701269e-01 *
+     #      ((1.0e-04 * rholsd / viscl)**5.2e-01) *
+     #      ((5.0e+01 * dba(l1))**1.28e+00)
+          reb = rholsd * vrise(l1) * dba(l1) / viscl
+          g1 = 9.8e+00 * viscl4 / (rholsd * sig3)
+          upper2 = 4.02e+00 * (g1 ** (-2.214e+00))
+          if(reb .gt. upper2) then
+c               region 3
+             vrise(l1) = 1.35e+00 *
+     #         sqrt(zusten/(rholsd * 5.0e-01 * dba(l1)))
+             reb = rholsd * vrise(l1) * dba(l1) / viscl
+             g2 = 9.8e+00 * reb * reb * reb * reb *
+     #        vrise(l1) * vrise(l1) * vrise(l1) * vrise(l1) *
+     #        rholsd * rholsd * rholsd / sig3
+             upper3 = 3.1e+00 * (g1**(-2.5e+00))
+c               other3 = 1.632e+01 * (g1**1.44e-01) ???????? not used ?
+c          if(g2 .gt. other3) but (g2 .lt. 5.75) not region 4
+c          and region 1 and region 2 have been eliminated.
+c          seems to be nowhere to go
+             if(g2 .gt. 5.75e+00 .and. reb .gt. upper3) then
+c            region 4
+          vrise(l1) = 1.18e+00 *
+     #           ((9.8e+00 * zusten / rholsd)**2.5e-01)
+             endif
+          endif
+       endif
+       do 140 l2 = 1,l1
+c            calculate coalescence frequency function
+c             start with the turbulence contribution
+          r12 = (dba(l1) + dba(l2)) * 2.5e-01
+          coal(l1,l2) = 1.3e+00 * r12 * r12 * r12 * sqedv
+c             then add differential bubble rise
+          coal(l1,l2) =  coal(l1,l2) + 3.414e+00 * r12 * r12 *
+     #         (vrise(l1) - vrise(l2))
+  140   continue
+  150 continue
+c
+c ********************************************************************
+c     temporary debugging printout follows
+c
+c     write (output,900)
+c 900 format(2x,' bubble rise velocities follow')
+c     write (output,901) (vrise(l),l=1,nbsm1)
+c 901 format(10es10.3)
+c ********************************************************************
+c
+c     use fourth order runge-kutta formula to find
+c      the bubble size concentration change and species
+c      size distribution after dtime
+c
+c     reduce dtime to ddt, a span to try to keep all an(l) positive
+      timet = 0.0e+00
+  160 continue
+c      move bubbles that will leave the volume element in less than
+c      0.5 seconds to overflow size
+       zvvot = 2.0*vv/topaa
+       do 162 l = 1,nbsm1
+          if (vrise(l) .gt. zvvot) then
+             an(nbs) = an(nbs) + an(l) * xa(l) / xa(nbs)
+             an(l) = 0.0
+             bnonc(3,nbs) = bnonc(3,nbs) + bnonc(3,l)
+             bnonc(3,l) = 0.0
+             bnonc(4,nbs) = bnonc(4,nbs) + bnonc(4,l)
+             bnonc(4,l) = 0.0
+             bcon(1,nbs) = bcon(1,nbs) + bcon(1,l)
+             bcon(1,l) = 0.0
+             bcon(5,nbs) = bcon(5,nbs) + bcon(5,l)
+             bcon(5,l) = 0.0
+             bcon(18,nbs) = bcon(18,nbs) + bcon(18,l)
+             bcon(18,l) = 0.0
+             bcon(19,nbs) = bcon(19,nbs) + bcon(19,l)
+             bcon(19,l) = 0.0
+             bcon(20,nbs) = bcon(20,nbs) + bcon(20,l)
+             bcon(20,l) = 0.0
+          endif
+  162   continue
+c
+c     initialize trial functions for time step calculation
+c
+      do 164 l =1,nbs
+       ant(l) = an(l)
+       bnont(3,l) = bnonc(3,l)
+       bnont(4,l) = bnonc(4,l)
+       bcont(1,l) = bcon(1,l)
+       bcont(5,l) = bcon(5,l)
+       bcont(18,l) = bcon(18,l)
+       bcont(19,l) = bcon(19,l)
+       bcont(20,l) = bcon(20,l)
+c        initialize gas released during time step at zero
+         xnonc(3,l) = 0.0
+         xnonc(4,l) = 0.0
+         xcon(1,l) = 0.0
+         xcon(5,l) = 0.0
+         xcon(18,l) = 0.0
+         xcon(19,l) = 0.0
+         xcon(20,l) = 0.0
+  164 continue
+      call bderv
+      ddt = dtime
+      do 170 l = 1,nbsm1
+       if(dadt(l) .lt. -1.0e-275) then
+          dtmost = abs(an(l)/dadt(l)) * 2.0e-01
+          ddt = min(dtmost,ddt)
+       endif
+  170 continue
+c
+c     try step size ddt.
+c     note:  a reduced ddt from after 370 continue may start
+c      over at 180 continue.
+c
+  180 continue
+c
+c ********************************************************************
+c     temporary debugging printout follows           *
+c     if(ddt .lt. 2.0e-05) then
+c         write (output,"(2x,'%#@** error.  ddt in bubble too small')
+c         stop 'bubble-1'
+c     endif
+c ********************************************************************
+       nflag = 0
+      ttry = timet + ddt
+      if((dtime-ttry) .lt. 0.0e+00) then
+       ddt = dtime - timet
+       ttry = dtime
+      endif
+c
+c
+c     initialize trial functions for trial step calculation
+      do 200 l =1,nbs
+       ant(l) = an(l)
+       bnont(3,l) = bnonc(3,l)
+       bnont(4,l) = bnonc(4,l)
+       bcont(1,l) = bcon(1,l)
+       bcont(5,l) = bcon(5,l)
+       bcont(18,l) = bcon(18,l)
+       bcont(19,l) = bcon(19,l)
+       bcont(20,l) = bcon(20,l)
+         xnont(3,l) = xnonc(3,l)
+         xnont(4,l) = xnonc(4,l)
+         xcont(1,l) = xcon(1,l)
+         xcont(5,l) = xcon(5,l)
+         xcont(18,l) = xcon(18,l)
+         xcont(19,l) = xcon(19,l)
+         xcont(20,l) = xcon(20,l)
+  200 continue
+      call bderv
+      do 220 l = 1,nbs
+       ya1(l) = ddt * dadt(l)
+       ybnon1(3,l) = ddt * dbnon(3,l)
+       ybnon1(4,l) = ddt * dbnon(4,l)
+       ybcon1(1,l) = ddt * dbcon(1,l)
+       ybcon1(5,l) = ddt * dbcon(5,l)
+       ybcon1(18,l) = ddt * dbcon(18,l)
+       ybcon1(19,l) = ddt * dbcon(19,l)
+       ybcon1(20,l) = ddt * dbcon(20,l)
+         yxnon1(3,l) = ddt * dxnon(3,l)
+         yxnon1(4,l) = ddt * dxnon(4,l)
+         yxcon1(1,l) = ddt * dxcon(1,l)
+         yxcon1(5,l) = ddt * dxcon(5,l)
+         yxcon1(18,l) = ddt * dxcon(18,l)
+         yxcon1(19,l) = ddt * dxcon(19,l)
+         yxcon1(20,l) = ddt * dxcon(20,l)
+  220 continue
+      do 240 l = 1,nbs
+       ant(l) = an(l) + ya1(l) * 5.0e-01
+       if(ant(l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bnont(3,l) = bnonc(3,l) + ybnon1(3,l) * 5.0e-01
+       if(bnont(3,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bnont(4,l) = bnonc(4,l) + ybnon1(4,l) * 5.0e-01
+       if(bnont(4,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(1,l) = bcon(1,l) + ybcon1(1,l) * 5.0e-01
+       if(bcont(1,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(5,l) = bcon(5,l) + ybcon1(5,l) * 5.0e-01
+       if(bcont(5,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(18,l) = bcon(18,l) + ybcon1(18,l) * 5.0e-01
+       if(bcont(18,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(19,l) = bcon(19,l) + ybcon1(19,l) * 5.0e-01
+       if(bcont(19,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(20,l) = bcon(20,l) + ybcon1(20,l) * 5.0e-01
+       if(bcont(20,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+  240 continue
+      call bderv
+      do 260 l = 1,nbs
+       ya2(l) = ddt * dadt(l)
+       ybnon2(3,l) = ddt * dbnon(3,l)
+       ybnon2(4,l) = ddt * dbnon(4,l)
+       ybcon2(1,l) = ddt * dbcon(1,l)
+       ybcon2(5,l) = ddt * dbcon(5,l)
+       ybcon2(18,l) = ddt * dbcon(18,l)
+       ybcon2(19,l) = ddt * dbcon(19,l)
+       ybcon2(20,l) = ddt * dbcon(20,l)
+         yxnon2(3,l) = ddt * dxnon(3,l)
+         yxnon2(4,l) = ddt * dxnon(4,l)
+         yxcon2(1,l) = ddt * dxcon(1,l)
+         yxcon2(5,l) = ddt * dxcon(5,l)
+         yxcon2(18,l) = ddt * dxcon(18,l)
+         yxcon2(19,l) = ddt * dxcon(19,l)
+         yxcon2(20,l) = ddt * dxcon(20,l)
+  260 continue
+      do 280 l = 1,nbs
+       ant(l) = an(l) + ya2(l) * 5.0e-01
+       if(ant(l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bnont(3,l) = bnonc(3,l) + ybnon2(3,l) * 5.0e-01
+       if(bnont(3,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bnont(4,l) = bnonc(4,l) + ybnon2(4,l) * 5.0e-01
+       if(bnont(4,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(1,l) = bcon(1,l) + ybcon2(1,l) * 5.0e-01
+       if(bcont(1,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(5,l) = bcon(5,l) + ybcon2(5,l) * 5.0e-01
+       if(bcont(5,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(18,l) = bcon(18,l) + ybcon2(18,l) * 5.0e-01
+       if(bcont(18,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(19,l) = bcon(19,l) + ybcon2(19,l) * 5.0e-01
+       if(bcont(19,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(20,l) = bcon(20,l) + ybcon2(20,l) * 5.0e-01
+       if(bcont(20,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+  280 continue
+      call bderv
+      do 300 l = 1,nbs
+       ya3(l) = ddt * dadt(l)
+       ybnon3(3,l) = ddt * dbnon(3,l)
+       ybnon3(4,l) = ddt * dbnon(4,l)
+       ybcon3(1,l) = ddt * dbcon(1,l)
+       ybcon3(5,l) = ddt * dbcon(5,l)
+       ybcon3(18,l) = ddt * dbcon(18,l)
+       ybcon3(19,l) = ddt * dbcon(19,l)
+       ybcon3(20,l) = ddt * dbcon(20,l)
+         yxnon3(3,l) = ddt * dxnon(3,l)
+         yxnon3(4,l) = ddt * dxnon(4,l)
+         yxcon3(1,l) = ddt * dxcon(1,l)
+         yxcon3(5,l) = ddt * dxcon(5,l)
+         yxcon3(18,l) = ddt * dxcon(18,l)
+         yxcon3(19,l) = ddt * dxcon(19,l)
+         yxcon3(20,l) = ddt * dxcon(20,l)
+  300 continue
+      do 320 l = 1,nbs
+       ant(l) = an(l) + ya3(l)
+       if(ant(l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bnont(3,l) = bnonc(3,l) + ybnon3(3,l)
+       if(bnont(3,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bnont(4,l) = bnonc(4,l) + ybnon3(4,l)
+       if(bnont(4,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(1,l) = bcon(1,l) + ybcon3(1,l)
+       if(bcont(1,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(5,l) = bcon(5,l) + ybcon3(5,l)
+       if(bcont(5,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(18,l) = bcon(18,l) + ybcon3(18,l)
+       if(bcont(18,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(19,l) = bcon(19,l) + ybcon3(19,l)
+       if(bcont(19,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(20,l) = bcon(20,l) + ybcon3(20,l)
+       if(bcont(20,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+  320 continue
+      call bderv
+      do 340 l = 1,nbs
+       ya4(l) = ddt * dadt(l)
+       ybnon4(3,l) = ddt * dbnon(3,l)
+       ybnon4(4,l) = ddt * dbnon(4,l)
+       ybcon4(1,l) = ddt * dbcon(1,l)
+       ybcon4(5,l) = ddt * dbcon(5,l)
+       ybcon4(18,l) = ddt * dbcon(18,l)
+       ybcon4(19,l) = ddt * dbcon(19,l)
+       ybcon4(20,l) = ddt * dbcon(20,l)
+         yxnon4(3,l) = ddt * dxnon(3,l)
+         yxnon4(4,l) = ddt * dxnon(4,l)
+         yxcon4(1,l) = ddt * dxcon(1,l)
+         yxcon4(5,l) = ddt * dxcon(5,l)
+         yxcon4(18,l) = ddt * dxcon(18,l)
+         yxcon4(19,l) = ddt * dxcon(19,l)
+         yxcon4(20,l) = ddt * dxcon(20,l)
+  340 continue
+      do 360 l = 1,nbs
+       ant(l) = an(l) + (ya1(l) + 2.0e+00 * ya2(l) +
+     #       2.0e+00 * ya3(l) + ya4(l))/6.0e+00
+       if(ant(l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bnont(3,l) = bnonc(3,l) + (ybnon1(3,l) +
+     #          2.0e+00 * ybnon2(3,l) + 2.0e+00 * ybnon3(3,l) +
+     #          ybnon4(3,l))/6.0e+00
+       if(bnont(3,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bnont(4,l) = bnonc(4,l) + (ybnon1(4,l) +
+     #          2.0e+00 * ybnon2(4,l) + 2.0e+00 * ybnon3(4,l) +
+     #          ybnon4(4,l))/6.0e+00
+       if(bnont(4,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(1,l) = bcon(1,l) + (ybcon1(1,l) +
+     #          2.0e+00 * ybcon2(1,l) + 2.0e+00 * ybcon3(1,l) +
+     #          ybcon4(1,l))/6.0e+00
+       if(bcont(1,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(5,l) = bcon(5,l) + (ybcon1(5,l) +
+     #          2.0e+00 * ybcon2(5,l) + 2.0e+00 * ybcon3(5,l) +
+     #          ybcon4(5,l))/6.0e+00
+       if(bcont(5,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(18,l) = bcon(18,l) + (ybcon1(18,l) +
+     #          2.0e+00 * ybcon2(18,l) + 2.0e+00 * ybcon3(18,l)+
+     #          ybcon4(18,l))/6.0e+00
+       if(bcont(18,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(19,l) = bcon(19,l) + (ybcon1(19,l) +
+     #          2.0e+00 * ybcon2(19,l) + 2.0e+00 * ybcon3(19,l)+
+     #          ybcon4(19,l))/6.0e+00
+       if(bcont(19,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+       bcont(20,l) = bcon(20,l) + (ybcon1(20,l) +
+     #          2.0e+00 * ybcon2(20,l) + 2.0e+00 * ybcon3(20,l)+
+     #          ybcon4(20,l))/6.0e+00
+       if(bcont(20,l) .lt. -1.0e-275) then
+          nflag = 1
+          go to 370
+       endif
+         xnont(3,l) = xnonc(3,l) + (yxnon1(3,l) +
+     #                2.0 * yxnon2(3,l) + 2.0 * yxnon3(3,l) +
+     #                yxnon4(3,l))/6.0
+         xnont(4,l) = xnonc(4,l) + (yxnon1(4,l) +
+     #                2.0 * yxnon2(4,l) + 2.0 * yxnon3(4,l) +
+     #                yxnon4(4,l))/6.0
+         xcont(1,l) = xcon(1,l) + (yxcon1(1,l) +
+     #                2.0 * yxcon2(1,l) + 2.0 * yxcon3(1,l) +
+     #                yxcon4(1,l))/6.0
+         xcont(5,l) = xcon(5,l) + (yxcon1(5,l) +
+     #                2.0 * yxcon2(5,l) + 2.0 * yxcon3(5,l) +
+     #                yxcon4(5,l))/6.0
+         xcont(18,l) = xcon(18,l) + (yxcon1(18,l) +
+     #                2.0 * yxcon2(18,l) + 2.0 * yxcon3(18,l) +
+     #                yxcon4(18,l))/6.0
+         xcont(19,l) = xcon(19,l) + (yxcon1(19,l) +
+     #                2.0 * yxcon2(19,l) + 2.0 * yxcon3(19,l) +
+     #                yxcon4(19,l))/6.0
+         xcont(20,l) = xcon(20,l) + (yxcon1(20,l) +
+     #                2.0 * yxcon2(20,l) + 2.0 * yxcon3(20,l) +
+     #                yxcon4(20,l))/6.0
+  360 continue
+c
+  370 continue
+      if(nflag .gt. 0) then
+       ddt = 5.0e-01 * ddt
+       go to 180
+      else
+       timet = ttry
+c ********************************************************************
+c     temporary debugging printout follows           *
+c     write (output,903) ddt,timet
+c 903 format(//2x,'time step size in bubble = ',es10.3,' s  net = ',
+c    # es10.3)
+c ********************************************************************
+c
+c     close out any size with less than 1 bubble per meter
+      do 374 l = 1,nbsm1
+       if(ant(l) .lt. 1.0e+00) then
+          ant(l+1) = ant(l+1) + xa(l) * ant(l) / xa(l+1)
+          ant(l) = 0.0e+00
+          bnont(3,l+1) = bnont(3,l+1) + bnont(3,l)
+          bnont(3,l) = 0.0e+00
+          bnont(4,l+1) = bnont(4,l+1) + bnont(4,l)
+          bnont(4,l) = 0.0e+00
+          bcont(1,l+1) = bcont(1,l+1) + bcont(1,l)
+          bcont(1,l) = 0.0e+00
+          bcont(5,l+1) = bcont(5,l+1) + bcont(5,l)
+          bcont(5,l) = 0.0e+00
+          bcont(18,l+1) = bcont(18,l+1) + bcont(18,l)
+          bcont(18,l) = 0.0e+00
+          bcont(19,l+1) = bcont(19,l+1) + bcont(19,l)
+          bcont(19,l) = 0.0e+00
+          bcont(20,l+1) = bcont(20,l+1) + bcont(20,l)
+          bcont(20,l) = 0.0e+00
+       endif
+  374 continue
+c         transfer successful trial values to non trial variables
+       do 380 l = 1,nbsm1
+          an(l) = ant(l)
+          bnonc(3,l) = bnont(3,l)
+          bnonc(4,l) = bnont(4,l)
+          bcon(1,l) = bcont(1,l)
+          bcon(5,l) = bcont(5,l)
+          bcon(18,l) = bcont(18,l)
+          bcon(19,l) = bcont(19,l)
+          bcon(20,l) = bcont(20,l)
+            xnonc(3,l) = xnont(3,l)
+            xnonc(4,l) = xnont(4,l)
+            xcon(1,l) = xcont(1,l)
+            xcon(5,l) = xcont(5,l)
+            xcon(18,l) = xcont(18,l)
+            xcon(19,l) = xcont(19,l)
+            xcon(20,l) = xcont(20,l)
+  380   continue
+c
+       an(nbs) = 0.0e+00
+         xnonc(3,nbs) = xnonc(3,nbs) + bnonc(3,nbs)
+       bnonc(3,nbs) = 0.0e+00
+         xnonc(4,nbs) = xnonc(4,nbs) + bnonc(4,nbs)
+       bnonc(4,nbs) = 0.0e+00
+         xcon(1,nbs) = xcon(1,nbs) + bcon(1,nbs)
+       bcon(1,nbs) = 0.0e+00
+         xcon(5,nbs) = xcon(5,nbs) + bcon(5,nbs)
+       bcon(5,nbs) = 0.0e+00
+         xcon(18,nbs) = xcon(18,nbs) + bcon(18,nbs)
+       bcon(18,nbs) = 0.0e+00
+         xcon(19,nbs) = xcon(19,nbs) + bcon(19,nbs)
+       bcon(19,nbs) = 0.0e+00
+         xcon(20,nbs) = xcon(20,nbs) + bcon(20,nbs)
+       bcon(20,nbs) = 0.0e+00
+c
+c ********************************************************************
+c         temporary debugging printout follows
+c         write out size classifications
+c         write (output,904)
+c 904   format(2x,'current bubble size distribution follows')
+c         write (output,905) (an(l),l=1,nbs)
+c 905   format(2x,10es10.3)
+c         sum = 0.0e+00
+c         do 390 l = 1,nbsm1
+c            sum = sum + an(l)
+c 390   continue
+c         write (output,906) sum
+c 906   format(2x,'density of all sizes is',es10.3,' per m**3')
+c ********************************************************************
+c
+      endif
+c
+      if(timet .lt. dtime) go to 160
+c
+  500 continue
+      return
+      end
+*endif

@@ -1,0 +1,754 @@
+*mlist
+*if def,selap
+       subroutine balon2 (gmix,ftemp,strnl,strnr,strna,strnc,rad,twall,
+     & ctemp,delz,fcp,frp,fap,acd,aad,ard,fnck,fncn,cwkf,cwnf,acs,aas,
+     & ars,ace,aae,are,dbyth,dbyz,stresf,tstres,disp,deh,dea,rstran,
+     & rave,stresr,stresa,dz0)
+!  balon2 computes non-symmetric cladding deformation.
+!
+!  Cognizant engineer: dlh.
+!
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       include 'cons.h'
+       include 'contrl.h'
+       include 'scddat.h'
+       include 'blonab.h'
+       include 'ufiles.h'
+!
+       dimension gmix(*)
+       dimension acs(9,9)    ,aas(9,9)    ,ars(9,9)    ,ace(9,9)
+     #  ,aae(9,9)    ,are(9,9)    ,dbyth(9,9)  ,dbyz(9,9)
+     #  ,stresf(9,9) ,tstres(9,9) ,disp(9,9)   ,deh(9)
+     #  ,rstran(9,9) ,dea(9)       ,rave(9)     ,stresr(9)
+     #  ,stresa(9)
+       dimension
+     #   ctemp(9,9)  ,strnl(9,9)  ,strnr(9,9)  ,strna(9,9)
+     #  ,strnc(9,9)  ,rad(9,9)    ,twall(9,9)  ,ftemp(9,9)
+     #  ,delz(9,9)   ,fcp(9,9)    ,frp(9,9)    ,fap(9,9)
+     #  ,acd(9,9)    ,aad(9,9)    ,ard(9,9)
+!
+!  Contrary to the following comments all balon2 variables are in si.
+!
+!     ifbaln     = output failure index
+!                       0  no failure
+!                       1  failure
+!     kntbal     = output fuel - cladding contact index
+!                       0  no contact
+!                       1  contact due to bowing
+!     ctemp(k,j) = output cladding temperature at axial node k,
+!                   circumferential node j at midpoint of time
+!                   step dtbal (degrees f).  nodes k and j are
+!                   determined by baloon initializing routine
+!     strnl(k,j) = output effective true plastic strain at node
+!                   k,j at end of time step (unitless)
+!     strnr(k,j) = output radial component of true plastic strain
+!                   at node k,j at end of time step (unitless)
+!     strna(k,j) = output axial component of true plastic strain
+!                   at node k,j at end of time step (unitless)
+!     strnc(k,j) = output tangential compokent of true plastic strain
+!                   at node k,j at end of time step (unitless)
+!     rad(k,j)   = output midwall radius of cladding
+!                   at node k,j at end of time step (inches)
+!     twall(k,j) = output wall thickness at node k,j at
+!                   end of time step (inches)
+!     delz(k,j)  = output axial length of node at k,j at
+!                   end of time step (inches)
+!     timbal     = output time at end of time step (s)
+!     dtbal      = output time step size of last internal time step (s)
+!
+!     htcbal     = input cladding surfact heat transfer coefficient
+!                   (btu/s*(ft**2)*f))
+!     tbkbal     = input bulk coolant temperature (degrees f)
+!     tc0bal     = input cladding average temperature when baloon
+!                   is first called (degrees f).
+!     tf0bal     = input fuel surface temperature when baloon is
+!                   first called (degrees f).  used only
+!                   when nbncal = 0.
+!     qbal       = input rod heat flux (btu/(s*(ft**2))).  used
+!                   only when nbncal = 0
+!     rfbal      = input hot radius of fuel pellet (in)
+!     r0bal      = input initial (undeformed) cladding outside
+!                   radius (in)
+!     h0bal      = input initial (undeformed) cladding wall thickness (i
+!     ftemp(k,j) = input fuel surface temperature at node k,j at
+!                   midpoint of time step dtbal (degrees f). used
+!                   only when nbncal = 1
+!     stemp(k,j) = input shroud surface temperature at node k,j at
+!                  midpoint of time step dtbal (degrees f). used
+!                   used only when nbncal = 1
+!     pcbal      = input coolant pressure (psi)
+!     pgbal      = input fuel rod pressure (psi)
+!     rmpbal     = input uniformly expanded cladding midplane
+!                   radius when baloon is first called (in).
+!                   used only when nbncal equals 0
+!     flxbal     = input fast neutron flux (neutrons/((m**2)*s))
+!     fabal      = input additional axial force applied to cladding
+!                   by constraints (pounds)
+!     zbaln      = input length of frap-t node (inches).  used
+!                   only when nbncal equals 0
+!     nbncal     = input initialization flag
+!                        0  causes baloon to initilize itself
+!                        1  no initialization
+!     nprntb     = input switch which determines the amount of
+!                   information printed from within the subroutine
+!                        0  no print out unless the time step from
+!                            scdap was divided into more than
+!                            300 sub-steps
+!                        1  prints sub-step number
+!                                  substep duration (s)
+!                                  average midwall radius at each
+!                                    axial sub-node (m)
+!                                  average wall thickness at each
+!                                    axial sub-node (m)
+!                                  value of kntbal
+!                                  cladding failure location
+!                                  cladding tangential stress
+!                                    at failure (pa)
+!                        2  in addition to the information printed
+!                            when nprntb = 1 values of the following
+!                            arguments are printed for each time
+!                                  ctemp(k,j) in kelvins
+!                                  stresf(k,j) in n/(m**2)
+!                                  rad(k,j) in meters
+!                                  twall(k,j) in meters
+!                                  delz(k,j) in meters
+!                        3  in addition to the information printed
+!                            when nprntb = 2 values of the following
+!                            arguments are printed for each time
+!                            step
+!                                  cwnf(k,j)
+!                                  cwkf(k,j)
+!                        4  in addition to the information printed
+!                            when nprntb = 3 values of the following
+!                            arguments are printed for each time
+!                            step
+!                                  fncn(k,j) in neutrons/(m**2)
+!                                  fnck(k,j) in neutrons/(m**2)
+!     gmix(l)    = input mole fractions of the gas components
+!                   found in the gap (unitless).
+!                     l =  1 is helium
+!                     l =  2 is argon
+!                     l =  3 is krypton
+!                     l =  4 is xenon
+!                     l =  5 is hydrogen
+!                     l =  6 is nitrogen
+!                     l =  7 is oxygen
+!                     l =  8 is carbon monoxide
+!                     l =  9 is carbon dioxide
+!                     l = 10 is water vapor
+!     tgbal      = input gap gas temperature (degrees f)
+!     timbal     = input time at start of time step.
+!     dtbal      = input frap time step size (s)
+!     v          = input gas volume of swelling node at start of
+!                   time step (inches**3)
+!     delz(k,j)  = input axial length of node at k,j at
+!                   start of time step (inches)
+!     twall(k,j) = input wall thickness at node k,j at
+!                   start of time step (inches). used
+!                   only when nbncal = 1
+!     rad(k,j)   = input midwall radius of cladding
+!                   at node k,j at start of time step (inches).
+!                   used only when nbncal = 1.
+!     strnc(k,j) = input tangential component of true plastic strain
+!                   at node k,j at start of time step (unitless)
+!                   used only when nbncal = 1.
+!     strna(k,j) = input axial component of true plastic strain
+!                   at node k,j at start of time step (unitless)
+!                   used only when nbncal = 1.
+!     strnr(k,j) = input radial component of true plastic strain
+!                   at node k,j at start of time step (unitless)
+!                   used only when nbncal = 1.
+!     strnl(k,j) = input effective true plastic strain at node k,j
+!                   at start of time step (unitless).  used
+!                   only when nbncal = 1
+!     ctemp(k,j) = input cladding temperature at node k,j at midpoint
+!                   of previous time step. used only if nbncal = 1.
+!     kntbal     = input fuel - cladding contact index at end of
+!                   previous time step.  used only if nbncal = 1.
+!                      0  no contact
+!                      1  contact due to bowing
+!     ifbaln     = input failure index.  baloon does nothing but
+!                   return if ifbaln is not equal to 0
+!     ksub(i)    = number of subcodes used within the i th axial
+!                   node of frap (unitless)
+!     dz0(i,k)   = initial length of k th sub-node of the i th
+!                   axial node of frap (m)
+!     dtobal(i)  = previous time step size (s)
+!
+!  Local variables.
+       integer indx,j,jmin,k,kfail,m,maxx,nd,nj,nj1,njt,nk,nk1,nstep
+       real(kr) aad,aae,aas,acd,ace,acs,ai,ak,am,an,anl,ao,ard,are,ars,
+     * astres,caxrad,caxstr,cdens,cdpres,cinrad,cinwid,cp,ctemp,
+     * ctmpdf,ctstrt,cvt,cwkf,cwnf,dbyth,dbyz,dea,deh,delt,delto,
+     * deltmp,delz,dep,der,disp,dispa,dispfn,dspmx,dstres,dtcr,
+     * dtime,dum1,dum2,dum3,dum4,dum5,dum6,dum7,dum8,dum9,dum10,
+     * dum11,dz0,fap,fax,fcp,fnck,fncn,frp,ftemp,gmix,gpthk,gtemp,
+     * htcg,htcm,htcr,htcs,pr1,r,rad,radfn,radh,radh1,radhl,rai,
+     * rbar,rave,rhtr,ri,ri1,ri2,rmin,ro,rout,rsml,rstran,rvol1,
+     * rvol2,sq,stemp,stresa,stresf,stresr,strna,strnc,strnl,
+     * strnll,strnr,t,tave,tblkm,tce,tcl0,tfl0,timax,titest,tstres,
+     * tshrdk,tstm,twala,twall,twallf,vc,w0,zbend
+       real(kr) ccp,ccpr,gthcon,polate
+!
+!    add dimensions for ri1 and ri2 used in **clddfm** model
+!
+       dimension  ri1(9),ri2(9)
+!
+!  arrays for full circumferential nodalization data
+!
+       dimension  radfn(16),dispfn(16),twallf(16)
+!
+       data indx /1/
+!
+!     the equations used in this subroutine are based on
+!     results discussed in
+!     (1) j. m. kramer and l. w. deitrich, cladding failure by
+!         local plastic instability, anl-77-95 (december 1977)
+!     (2) l. j. siefken, et. al., frap-t5 a computer code for the
+!         transient analysis of oxide fuel rods, tree-1281 and
+!         nureg/cr-0840  (june 1979)
+!
+!     the following subcodes are called in this subroutine
+!     caniso of july 1979
+!     cstrni of october 1978
+!     caneal of june 1978
+!     cmlimt of february 1980
+!     celmod of december 1977
+!     ckmn of october 1978
+!     ccp of febuary 1980
+!     polate of to be published
+!     gthcon of october 1979
+!
+!     coded by j. a. dearien
+!     modified by d. l. hagrman december 1980
+!     modified by j. e. tolli  august 1983
+!
+!     an modified for small strains option in cstrni
+!
+!     the following are dummy arguments for cmlimt
+      cinwid = 1.2e-04
+      cinrad = 1.0e-02
+      caxrad = 1.0e+03
+      caxstr = 1.0e+06
+      deltmp = 50.
+      kfail = 0
+!
+!     nj = number of circumferential nodes used
+!     number of axial subnodes set to 16
+      nk = 9
+      nj = 9
+      nd = 8
+      njt = 16
+      nj1 = nj - 1
+!   tshrdk is the shroud temperature (k)
+      tshrdk = tc0bal
+      if (nradsh .ne. 0) tshrdk = polate(tshrda ,timbal ,nradsh ,indx)
+!
+      htcm  = htcbal
+      tblkm = tbkbal
+      rhtr  = rfbal
+      rout  = r0bal
+      w0    = h0bal
+      fax   = fabal
+      rbar = rout - 0.5 * w0
+      gtemp = tgbal
+!
+!     allow for future input of space varying parameters
+       htcs = htcm
+       tstm = tblkm
+       stemp = tshrdk
+      do 50 k=1,nk
+          do 50 j=1,nj
+              rstran(k,j) = 1.0e-02
+ 50    continue
+!
+!     set up quantities required for each call
+      dtime = 0.0
+      nstep = 0
+!     cladding density from wcap-3269-41 (converted to kg/(m**3))
+         cdens = 6.55e+03
+!     zbend is the bending radius assumed to estimate cladding bending
+         zbend = 1.0e-01
+!     pr1    = beginning of time step inside pressure
+         pr1 = pgbal
+      maxx = 600
+!
+      if (nbncal .eq. 0)  then
+!        convert input required only for initialization
+!         and find axial sub-node lengths
+         tcl0  = tc0bal
+         tfl0  = tf0bal
+         rai   = rmpbal
+          dz0 = zbaln/float(2*nk-1)
+         delto = dtbal
+!
+!        initialize assumeng a theta invarient initial geometry
+!        and temperature
+!        note no symmetry break in here yet
+         ifbaln = 0
+         kntbal = 0
+         do 60 k=1,nk
+         do 60 j=1,nj
+           ctemp(k,j) = tcl0
+           ftemp(k,j) = tfl0
+           delz(k,j) = dz0
+!          the following are texture initializations based on
+!          the effect of deformation on anisotropy using
+!          the matrpo subroutine caniso
+           fcp(k,j) = fcp1
+           frp(k,j) = frp1
+           fap(k,j) = fap1
+           acd(k,j) = acd1
+           aad(k,j) = aad1
+           ard(k,j) = ard1
+!          set up initial cold works and fluences
+           fnck = 0.
+           fncn = 0.
+           cwkf = 0.
+           cwnf = 0.
+!          set up initial strains, dimensions
+           strnc(k,j) = log(rai/(rout - 0.5 * w0))
+           strna(k,j) = 0.0
+           strnr(k,j) = -strnc(k,j)
+           rad(k,j) = rai
+           twall(k,j) = w0 *  exp(strnr(k,j))
+!
+           call caniso(strnc(k,j),strna(k,j),strnr(k,j),ctemp(k,j)
+     #        ,fcp(k,j),fap(k,j),frp(k,j),acd(k,j),aad(k,j),ard(k,j)
+     #        ,acs(k,j),aas(k,j),ars(k,j),ace(k,j),aae(k,j),are(k,j) )
+!
+           sq = ace(k,j)*((aae(k,j)*strnc(k,j)-are(k,j)*strna(k,j))**2)+
+     #       aae(k,j)*((are(k,j)*strna(k,j)- ace(k,j)*strnr(k,j)  )**2)+
+     #       are(k,j)*((ace(k,j)*strnr(k,j)-aae(k,j)*strnc(k,j) )**2)
+!
+           if(sq .lt. 1.0e-20) strnl(k,j) = 0.0
+           if(sq .ge. 1.0e-20) strnl(k,j) = (sq**0.5)/(ace(k,j)*aae(k,j)
+     #           + aae(k,j)*are(k,j) + are(k,j)*ace(k,j))
+   60    continue
+       tcebal = strnc(1,4)
+!
+      else
+!        convert input required only for updates
+         delto = dtobal
+         ctmpdf = 0.0
+       if (ctemp(1,4).lt.tc0bal)  ctmpdf = tc0bal - ctemp(1,4)
+         do 30 k=1,nk
+         do 30 j=1,nj
+           ctemp(k,j) = ctemp(k,j) + ctmpdf
+   30    continue
+      end if
+!
+  100 nstep = nstep + 1
+!
+      if (nstep .ge. maxx) go to 800
+      if (ifbaln .gt. 0) go to 800
+!
+      cdpres = pgbal - pcbal
+!
+!     find local stress and maximum time step size
+!     first find azmuthal radii of curvature
+      nk1 = nk - 1
+      do 260 j =1,nj
+!        assume top and bottom axial nodes have a virtual neighbor
+!        with a radius that preserves the slope
+         dbyz(1,j) = 0.0
+         dbyz(nk,j) = 0.0
+         do 260 k=2,nk1
+            dbyz(k,j) = (rad(k+1,j) - 2.0*rad(k,j) + rad(k-1,j))/
+     #                  (dz0*dz0)
+  260 continue
+!     find stress components
+!     find average thickness, inside and outside radii
+      do 308 k=1,nk
+        t = 0.0
+        r = 0.0
+        do 305 j=2,nj-1
+          r = r + exp(strnc(k,j))
+          t = t + twall(k,j)
+  305   continue
+        r = 2*r + exp(strnc(k,1)) + exp(strnc(k,nj))
+        t = 2*t + twall(k,1) + twall(k,nj)
+        rave(k) = r*rbar/njt
+        twala = t/njt
+        ri = rave(k) - (twala/2.)
+        ro = rave(k) + (twala/2.)
+        stresr(k) = -(pgbal*ri + pcbal*ro)/(ri + ro)
+        stresa(k)=(pgbal*ri*ri - pcbal*ro*ro + fax/pi)/(ro*ro - ri*ri)
+        do 307 j=1,nj
+          stresf(k,j) = cdpres * rave(k)/twala
+     #     - rave(k) * cdpres * (twall(k,j) - twala)/(twala * twala)
+     #     + rave(k) * stresa(k) * dbyz(k,j) / (( exp(strna(k,j)))**2)
+     #     - (pgbal + pcbal)/2.
+  307   continue
+!
+!       set beginning of time step average inside radius
+        if (nstep .eq. 1)  ri1(k) = ri
+  308 continue
+!   modifications to take into account reduction in internal
+!   gas pressure due to balooning during a component timestep.
+      if(nstep .gt. 1) go to 315
+      rvol1= 0.0
+      do 310 k = 1,(nk-1)
+      rvol1 = rvol1 + 2.0*(ri1(k)**2)
+  310 continue
+      rvol1 = rvol1 +  ri1(nk)**2
+  315 continue
+!
+!     determine size of possible time step subdivision
+!
+!     calculate cladding temperatures using constant heat flux
+!     assumption
+!
+!     start by determining the maximum size of the time step
+!     using new dimensions and new stress but old temperatures
+!
+!     if outside pressure is not less than inside pressure skip
+!     to deformation calculatioin
+       delt=dtbal
+       delto=delt
+      if  ( cdpres .le. 0 )  then
+          kfail = 2
+          go  to  800
+      endif
+!
+!
+       timax = dtbal - dtime
+       if (kntbal.eq.1 .and. timax.gt.1.00) timax = 1.00
+       do k = 1,nk
+         do j = 1,nj
+           if (chngno(70)) then
+             call ckmnr (ctemp(k,j),doxcfr,fnck,fncn,cwkf,cwnf,
+     &       rstran(k,j),ak,an,am)
+           else
+             call ckmn (ctemp(k,j),doxcfr,fnck,fncn,cwkf,cwnf,
+     &       rstran(k,j),ak,an,am)
+           endif
+!
+!  Revise 'an' for small strains.
+      if (strnc(k,j) .lt. (an/(1. + am)))
+     #        an = an*an/((1. + am)*strnc(k,j))
+       if(strnc(k,j).lt.1.0e-6)strnc(k,j)=1.0e-6
+      anl = 0.17
+!***  if (ctemp(k,j) .gt. 730.) anl = 1.56e-02*ctemp(k,j) - 11.218
+!***  if (ctemp(k,j) .gt. 780.) anl = 0.95
+      if (an .gt. anl) an = anl
+!
+      dstres = ((abs(strnc(k,j)))**an)*ak
+      astres = abs(stresf(k,j))
+      if(astres .lt. dstres) cycle
+      titest = ((dstres/astres)**(1.0/am))*50.
+      if ((ctemp(k,j) .gt. 1090.) .and. (ctemp(k,j) .lt. 1255.))
+     &            titest = titest*5.0
+      if(titest .lt. timax) timax = titest
+         enddo
+       enddo
+      delt = timax
+      if(delt .lt. 5.0e-04) delt = 5.0e-04
+      dtcr = (delt + delto)/2.0
+      delto = delt
+!
+!      get new temperatures using time step just selected
+!      and constant-fuel-surface-temperature assumption
+      do 350 k=1,nk
+      do 350 j=1,nj
+      gpthk = rad(k,j) - twall(k,j) / 2. - rhtr
+      if(nncrum .eq. 1) gpthk= 0.0002146
+       if (chngno(70)) then
+         cp = ccpr(ctemp(k,j))
+       else
+         cp = ccp(ctemp(k,j))
+       endif
+      cvt = cp * cdens / dtcr
+!   area(inside clad surface) = 2*pi*r(i)
+      ai = twopi*(rad(k,j) - twall(k,j)/2.)
+!   area(outside clad surface) = 2*pi*r(o)
+      ao = twopi*(rad(k,j) + twall(k,j)/2.)
+!   clad volume = pi*(r(o)**2 - r(i)**2) = 2*pi*rad*twall
+      vc = twopi*rad(k,j)*twall(k,j)
+!
+      htcg=gthcon(gmix,gtemp,pgbal,gpthk)
+      htcg = htcg + 0.8 * 5.67e-08 * (ftemp(k,j) + ctemp(k,j))
+     # * (ftemp(k,j)*ftemp(k,j) + ctemp(k,j)*ctemp(k,j))
+!     htcg modification is radiation heat transfer heater to cladding
+!
+!     htcr is effective heat transfer coeff to shroud by radiation
+       htcr = 0.4*5.67e-08 * (ctemp(k,j) + stemp)
+     #        * (ctemp(k,j)*ctemp(k,j) + stemp*stemp)
+               if (nradsh .eq. 0) htcr = 0.0
+!
+      ctemp(k,j) = (  vc*cvt*ctemp(k,j) + ai*htcg*ftemp(k,j)
+     #        + ao * (htcs*tstm + htcr*stemp) + emwbal)
+     #        / (  vc*cvt + ai*htcg + ao*(htcs+htcr) )
+!
+!
+  350 continue
+!
+!  cold work is ignored since annealing effects are assumed to
+!  be finished within first second
+!
+!
+      timbal = timbal + delt
+!
+!      print start-of-step information if desired
+!
+  400 if(nprntb .eq. 0) go to 405
+      write (output,905) nstep,delt,timbal,cdpres
+  905  format('0                  time step  ',i3,'     duration',
+     & es16.5,4h sec,10h     net =,es15.4,16h pressure diff =,es15.5)
+      if(nprntb .lt. 2) go to 405
+      write (output,917)
+  917 format('0         temperatures during time step -- axial nodes acr
+     *oss  circumferential nodes down the table')
+       write (output,906) ((ctemp(k,j),k=1,nk),j=1,nj)
+  906  format (9es14.5)
+      write (output,907)
+  907 format (3h   )
+      if(nprntb .lt. 3) go to 404
+      write (output,908)
+  908 format('0         tangential stress components during time step')
+       write (output,906) ((stresf(k,j),k=1,nk),j=1,nj)
+      write (output,907)
+      if(nprntb .lt. 4) go to 404
+      write (output,915)
+  915 format('0     fast neutron fluence for strength during time step')
+      write (output,907)
+      write (output,916)
+  916 format('0       fast neutron fluence for strain hardening exponent
+     * during time step')
+      write (output,907)
+  404 if (ifbaln .ne. 1) go to 405
+      do 402 k=1,nk
+      t = 0.0
+      r = 0.0
+      do 401 j=2,nj-1
+      r = r + exp(strnc(k,j))
+  401 t = t + twall(k,j)
+      r = 2*r + exp(strnc(k,1)) + exp(strnc(k,nj))
+      t = 2*t + twall(k,1) + twall(k,nj)
+      rave(k) = r*rbar/njt
+      tave = t/njt
+      tce = (rave(k) - rbar)/rbar
+      write (output,911) k,rave(k),tave,kntbal,tce
+  402 write (output,912) (j,rad(k,j),twall(k,j),delz(k,j),j=1,nj)
+  405 continue
+!
+!      test for failure
+!
+      if (ifbaln .gt. 0) go to 800
+      do 410 k=1,nk
+      do 410 j=1,nj
+       call  cmlimt (ctemp(k,j), doxcfr, fnck, fncn,
+     #         cwkf, cwnf, cinwid, cinrad, cdpres, caxrad, caxstr,
+     #  rstran(k,j),deltmp,dum1,dum2,dum3,dum4,dum5,dum6,dum7,
+     #  dum8,dum9,dum10,dum11,ctstrt)
+!
+        if (stresf(k,j) .lt. ctstrt) go to 409
+          ifbaln = 1
+      write (output,9909)
+          write (output,910) j,k,stresf(k,j),ctstrt
+      write (output,9911)
+  409   if(nprntb .eq. 0) go to 410
+        if (k.eq.9 .and. j.eq.1) write (output,918) stresf(9,1),ctstrt
+  410 continue
+!
+ 9909  format ('0 ',120('*')/'0',50x,' In    subroutine    balon2')
+ 9911  format ('0',120('*'))
+  910 format(53h  failed due to local stress at circumferential node ,i2
+     &,12h axial node ,i2,9h stress =,es13.5,17h failure stress =,
+     & es12.5)
+  918 format('0         hoop stress at k=8 j=4 is = ',1p,g14.6,
+     # '    failure at ,',g14.6,' n/m**2')
+!
+!     if failure is predicted then print results and call exit
+      if (ifbaln .eq. 0) go to 415
+           nprntb = 2
+           go to 400
+  415 continue
+        tcebal=0.0
+      do 490 k=1,nk
+      do 420 j=1,nj
+!      call caniso for temperature effect only
+      call caniso(0.0,0.0,0.0,ctemp(k,j),fcp(k,j),fap(k,j),
+     # frp(k,j),acd(k,j),aad(k,j),ard(k,j),acs(k,j),aas(k,j),ars(k,j),
+     # ace(k,j),aae(k,j),are(k,j))
+!      find true effective stress
+      tstres(k,j) = (acs(k,j)*((stresf(k,j)-stresa(k))**2)
+     #  +aas(k,j)*((stresa(k) - stresr(k))**2)
+     #  +ars(k,j)*((stresr(k) - stresf(k,j))**2)
+     #  )**0.5
+!
+!      find deformations during time step
+!
+!     insert creep-down calculation here if it is desired
+!
+      strnll = strnl(k,j)
+       call  cstrni (delt, ctemp(k,j), doxcfr, fnck, fncn,
+     #         cwkf, cwnf, tstres(k,j), strnll)
+      if(strnll.lt.strnl(k,j)) strnll = strnl(k,j)
+      dep = strnll - strnl(k,j)
+      rstran(k,j) = dep/delt
+      deh(j) = dep * (ace(k,j) * (stresf(k,j) - stresa(k))
+     # + are(k,j) * (stresf(k,j) - stresr(k)))
+     # /tstres(k,j)
+      dea(j) = dep * (aae(k,j) * (stresa(k) - stresr(k))
+     # +    ace(k,j) * (stresa(k) - stresf(k,j)))
+     # /tstres(k,j)
+      der = dep * (are(k,j) * (stresr(k) - stresf(k,j))
+     # + aae(k,j) * (stresr(k) - stresa(k)))
+     # /tstres(k,j)
+      strnc(k,j) = strnc(k,j) + deh(j)
+       if(strnc(k,j).lt.1.0e-6)strnc(k,j)=1.0e-6
+      strna(k,j) = strna(k,j) + dea(j)
+      strnr(k,j) = strnr(k,j) + der
+      strnl(k,j) = strnll
+!      call caniso for effect of deformation on texture
+      call caniso(deh(j),dea(j),der,ctemp(k,j),fcp(k,j),fap(k,j),
+     # frp(k,j),acd(k,j),aad(k,j),ard(k,j),acs(k,j),aas(k,j),ars(k,j),
+     # ace(k,j),aae(k,j),are(k,j))
+!
+!      find end of time step dimensions
+!
+      twall(k,j) = twall(k,j) * exp(der)
+      rad(k,j) = rad(k,j) * exp(deh(j))
+  420 delz(k,j) = delz(k,j) * exp(dea(j))
+      t = 0.0
+      r = 0.0
+      do 421 j=2,nj-1
+      r = r + exp(strnc(k,j))
+  421 t = t + twall(k,j)
+      r = 2*r + exp(strnc(k,1)) + exp(strnc(k,nj))
+      t = 2*t + twall(k,1) + twall(k,nj)
+      rave(k) = r*rbar/njt
+      tave = t/njt
+      ri2( k ) = rave( k ) - tave/2.
+!
+!     ri2(k) = average inside cladding radius at the end of timestep
+!              at node k
+!
+      tce = (rave(k) - rbar)/rbar
+      if (tce .gt. tcebal) tcebal = tce
+!      find radial displacement due to bending
+      if(kntbal .eq. 1) go to 458
+      do 430 j=1,nd
+      m = nd + 2 - j
+      disp(k,j) = (dea(j) - dea(m) - (strna(k,j) - strna(k,m)) *
+     # (deh(j) + deh(m))/2.0) * (zbend**2) /
+     # ((rad(k,j) + rad(k,m)) * 4.0)
+  430 continue
+      disp(k,9) = -disp(k,1)
+!      add bending increment to radius
+!
+!  set full nodalization data
+!
+      do 432 j=1,16
+      m = 5 - j
+      if (j.gt.4)  m = j - 3
+      if (j.gt.12)  m = 21 - j
+      radfn(j) = rad(k,m)
+      dispfn(j) = disp(k,m)
+  432 twallf(j) = twall(k,m)
+!
+      do 440 j=1,nd
+      m = j + nd
+      radfn(j) = radfn(j) + dispfn(j)
+      rmin = rhtr + (twallf(j)/2.)
+      if (radfn(j).ge.rmin) go to 440
+      radfn(m) = radfn(m) - (rmin - radfn(j))
+      kntbal = 1
+      radfn(j) = rmin
+  440 continue
+      do 450 j=nj,2*(nj-1)
+      m = j - nd
+      radfn(j) = radfn(j) + dispfn(j)
+      rmin = rhtr + (twallf(j)/2.)
+      if (radfn(j).ge.rmin) go to 450
+      radfn(m) = radfn(m) - (rmin - radfn(j))
+      kntbal = 1
+      radfn(j) = rmin
+  450 continue
+      do 452 j=1,nj
+  452 rad(k,j) = radfn(j+3)
+!     smooth pre-contact radii to compensate for
+!     failure of bending model to consider azmuthal neighbor interaction
+      radh1 = rad(k,8)
+      radhl = rad(k,1)
+      rad(k,1) = (rad(k,1) + 2.*rad(k,2))/3.
+      do 451 j=2,nj1
+      radh = rad(k,j)
+      rad(k,j) = (radhl + rad(k,j) + rad(k,j+1) )/3.
+      radhl = radh
+  451 continue
+      rad(k,nj) = (radhl + rad(k,nj) + radh1 )/3.
+!
+!     circular cross section displacement model
+      rsml = 10.0
+      jmin = 0
+      do 453 j=1,nj
+      if(rad(k,j) .lt. rsml) jmin = j
+  453 if(rad(k,j) .lt. rsml) rsml = rad(k,j)
+  458 continue
+      if(kntbal .ne. 1) go to 457
+!  jmin hard wired to 1 (hot spot hard wired to radial node 1)
+      jmin = 1
+      rsml = rhtr + (twall(k,jmin) * 0.5)
+  457 dspmx = rave(k) - rsml
+!     find angle between j and jmax then calculate
+!     displaced circle radii
+!  jmin hard wired to 1
+      jmin = 1
+      do 455 j=1,nj
+        dispa = twopi*(jmin-j)/njt
+        rad(k,j) = (rave(k)*rave(k) - sin(dispa)*sin(dispa)
+     #            * dspmx*dspmx)**0.5  - cos(dispa) * dspmx
+  455 continue
+!
+!      print end of time step information if desired
+!
+      if(nprntb .eq. 0) go to 490
+      tce = (rave(k) - rbar)/rbar
+      write (output,911) k,rave(k),tave,kntbal,tce
+  911 format(12h axial node ,i2,16h    ave radius =,es13.5,24h    ave wa
+     &ll thickness =,es13.5,20h    contact switch =,i2,9h    tce =,
+     & es11.3)
+      if(nprntb .lt. 2) go to 490
+      write (output,912) (j,rad(k,j),twall(k,j),delz(k,j),j=1,nj)
+  912 format(5h  j =,i2,17h midwall radius =,es13.5,
+     & 17h wall thickness =,es13.5,7h delz =,es13.5)
+!
+  490 continue
+      rvol2 = 0.0
+      do 81 k =1,(nk-1)
+      rvol2 = rvol2 + 2.0*(ri2(k)**2)
+   81 continue
+      rvol2 = rvol2 + ri2(nk)**2
+!     dvv = change in void volume due to ballooning.
+      dvv = (rvol2 - rvol1)*dz0*pi
+      if(nprntb .eq. 1)write (output,1000)pgbal,dvv,rvol2,rvol1,gpthk
+ 1000 format(5x,14hgas pressure =,es15.7,5x,4es15.7)
+!
+!     con1 and con2 are defined in driveb.
+!     con1 = r*mg/pr1     and     con2 = delta*z(b)/t(b)
+!
+!     compare total time since call to input time step size and branch
+      dtime = dtime + delt
+      if((dtbal - dtime).gt.0) go to 100
+!
+!     store common block information for next call
+  800 dtobal = delto
+      if  ( kfail .gt. 1 )  then
+      write(output,919) pgbal,pcbal
+  919  format (' *** Failed in balon2 due to pressure reverse *** ',1x,
+     1 'pgbal= ',es13.5,' pcbal= ',es13.5)
+      endif
+!
+!
+      if (nstep .lt. maxx)              return
+!
+!     note max-out if it occured
+      write (output,914) maxx
+  914 format(15h     max steps-,i3,30h- exceeded in baloon-2 subcode)
+      fail = .true.
+      return
+      end
+*endif

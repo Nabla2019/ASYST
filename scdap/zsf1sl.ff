@@ -1,0 +1,178 @@
+*mlist
+*if def,selap
+       subroutine zsf1sl (fcn, z, fval, known, nmore, maxits, nfound,
+     *                   ep1, ep2, info)
+c
+c  zsf1sl finds the roots of a general real-valued equation of one real
+c  variable: f(x) = 0.
+c
+c  Cognizant engineer: ewc.
+c
+c  ...1...  arguments / parameters / constants  .......
+c  ...2...  notes / remarks  .......
+c
+       implicit none
+      external fcn
+      integer known, nmore, maxits, nfound, info
+      real fcn, fval(1), z(1), ep1, ep2
+c
+c  ...1...  function / purpose  .......
+c       finds the roots of a general real-valued equation of one real
+c       variable
+c                           f(x) = 0
+c  ...2...  arguments / parameters / constants  .......
+c     ..a..  input arguments  .....
+c          fcn  e  - user supplied function subprogram which evaluates
+c              f(z) for any z; must be declared external in the
+c              calling program
+c          z  r:lz  - real vector,
+c              z(1),...,z(known) contain the known roots
+c              z(known+1),...,z(known+guess) contain estimates of roots
+c              to be found
+c          known  i:1  - the number of roots already known
+c          nmore  i:1  - the number of roots to be found
+c              (i.e. in addition to those already known)
+c          maxits  i:1  - maximum number of function calls allowed
+c              for finding each root
+c          ep1  r:1  - relative x-convergence criterion
+c          ep2  r:1  - absolute f-convergence criterion
+c     ..b..  output arguments  .....
+c          z - vector of roots in first nfound positions;
+c              if info=31, z(nfound+1) contains the last approximation
+c              to the root which caused termination
+c          fval  r:lz  - vector containing the function values
+c              associated with the vector z
+c          nfound  i:1  - number of roots now known and stored in z
+c          info  i:1  - error condition / message code
+c              =0,  normal completion
+c                 << type 3 - terminal >>
+c              =31, maximum number of iterations has been reached
+c     ..c..  internal / local variables  .....
+      integer k, new, newm1
+       integer nfev
+       external zsf1df
+      real a, b, ctemp, cstep, denom, flast, fnew, four, fsave, f1,
+     *   f2, f21, f3, f32, hundrd, p5, radicl, step, temp, two,
+     *   xnew, x1, x2, x3, x32, zero
+c     ..d..  external / subprogram references  .....
+c          minerva subroutine - zsf1df
+c          fortran library - sqrt
+c          intrinsic function - abs, sign
+c     ..e..  constants  .....
+      data zero /0.0e0/, p5 /0.5e0/, two /2.0e0/, four /4.0e0/,
+     *   hundrd/1.0e2/
+c  ...3...  notes / remarks  .......
+c     ..a..  usage  .....
+c          (1) ep2 is also used by subroutine zsf1df to determine a
+c          current approximation is 'close' to a root already identified
+c          (2) form of fcn:
+c              real function fcn (z)
+c              real z
+c              calculate the function at z
+c              return
+c              end
+c     ..b..  algorithm  .....
+c          muller's method
+c     ..c..  portability  .....
+c     ..d..  references  .....
+c          (1) d.e. muller, a method of solving algebraic equations
+c          using an automatic computer, math tables aids comp 10(1956),
+c          pp208-215.
+c          (2) i. barrodale and k.b. wilson, a fortran program for
+c          solving a nonlinear equation by muller's method,
+c          j. comput. appl. math. 4(1978), pp159-166.
+c     ..e..  history  .....
+c          origin - roots - (2)
+c          modified - header, structure - e.s. marwil, 12/1/81
+c
+c  1  initialize
+      nfound = 0
+      step = p5
+c  2  attempt to find nmore roots
+      do 80 k = 1, nmore
+         new = k + known
+         newm1 = new - 1
+         ctemp = z(new)
+         x1 = ctemp - step
+         x2 = ctemp + step
+         x3 = ctemp
+c     a  use first estimates
+         f1 = fcn (x1)
+         f2 = fcn (x2)
+         f3 = fcn (x3)
+         nfev = 3
+         flast = f3
+         if (new .le. 1) go to 10
+            call zsf1df (fcn, x1, f1, fsave, z, newm1, ep2, nfev)
+            call zsf1df (fcn, x2, f2, fsave, z, newm1, ep2, nfev)
+            call zsf1df (fcn, x3, f3, flast, z, newm1, ep2, nfev)
+   10    continue
+         f21 = (f2 - f1) / (x2 - x1)
+   20    continue
+c     b  find the roots of the quadratic
+         x32 = x3 - x2
+         f32 = (f3 - f2) / x32
+         a = (f32 - f21) / (x3 - x1)
+         b = f32 + x32 * a
+         radicl = b ** 2 - four * a * f3
+c        for real roots, apply "double zero" version of newton method
+         if (radicl .lt. zero) radicl = zero
+         radicl = sqrt (radicl)
+         radicl = sign (radicl, b)
+         denom = b + radicl
+         if (denom .ne. zero) go to 30
+            temp = abs(f3)
+            if (temp .lt. ep2) xnew = x3
+c           (heuristic from muller)
+            if (temp .ge. ep2) xnew = x3 + x32
+            go to 40
+   30    continue
+            cstep = two / denom
+            if (f32 .ne. zero)
+     *         cstep = sign (cstep, f32)
+            cstep = f3 * cstep
+            xnew = x3 - cstep
+   40    continue
+         fnew = fcn (xnew)
+         nfev = nfev + 1
+         fsave = fnew
+         if (new .gt. 1)
+     *      call zsf1df (fcn, xnew, fnew, fsave, z, newm1, ep2, nfev)
+c     c  check for maximum number of iterations
+         if (nfev .le. maxits) go to 50
+            z(new) = xnew
+            fval(new) = fsave
+            info = 31
+            go to 90
+   50    continue
+c     d  check for convergence (relative x and absolute f)
+         if (abs(xnew - x3) .lt. ep1 * abs(xnew)) go to 70
+         if (abs(fsave)     .lt. ep2)             go to 70
+c     e     check for divergence
+            if (abs(fsave) .lt. hundrd * abs(flast))
+     *         go to 60
+c              divergence 'fix' (heuristic from muller)
+               cstep = cstep * p5
+               xnew = xnew + cstep
+               go to 40
+   60       continue
+c     f     continue the iteration
+            x1 = x2
+            x2 = x3
+            x3 = xnew
+            f1 = f2
+            f2 = f3
+            flast = fsave
+            f21 = f32
+            go to 20
+   70    continue
+c     g  convergence to one more root
+         z(new) = xnew
+         fval(new) = fsave
+         nfound = new
+   80    continue
+c
+   90 continue
+      return
+      end
+*endif

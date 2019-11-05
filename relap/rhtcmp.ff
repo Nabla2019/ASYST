@@ -1,0 +1,1227 @@
+*mlist
+       subroutine rhtcmp
+c
+c
+c  Processes input data and set storage for heat structures.
+c
+c  Cognizant engineer: rjw.
+c
+c  Modifications with respect to option type implementation of
+c  PG CHFR correlation. M. Kyncl, NRI Rez, March 1996
+c
+*in32 iscr
+*in32end
+c
+c
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'htsrcm.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'htrflb.h'
+c
+c  Local variables.
+       real conv(3),scr(1188)
+       integer l3a(14),l3b(13),l5a(6),iscr(1188),ihlp(12),
+     & l3c(20),l3d(9),l3e(7),l3f(12)
+       integer i,ierr,igeom,ij,inp10,inp9,ipn,irf,irsave,isfdes,
+     & iuse,ix,j,jj,k,k2,kx,l,l1,lcontg,lcntgs,lp,lpx,lx,ly,lz,m,
+     & n,n3,n4,nh,nhh,nhs,nsiz,nx
+       real degf1,degf2,fr,ftbnid
+       equivalence (iscr(1),scr(1))
+       logical fil,hcorl(2),idkht,ins,insx,lhed,terr,tfail,tfail2,
+     & hpgchf(2)
+       character lr(2)*6,lrl(2)*6,lb2(2)*5,chwrd*8
+c  Data statements.
+       data l3a/2*0,5,8,0,1,4*0,1,3*0/
+       data l3b/2*0,6,0,0,1,6,4*0,1,0/
+       data l3c/2*0,0,0,0,1,9,8*1,0,1,1,0,0/
+       data l3d/2*0,2*0,0,1,2,1,1/
+       data l3e/2*0,2*1,0,1,-1/
+       data l3f/5*0,1,5,4*1,0/
+       data l5a/5,0,3*1,0/
+       data lr/'Left','Right'/,lrl/'left','right'/
+       data lb2/' (m)',' (ft)'/
+       data conv/9.290304e-2,0.3048,1.0/
+       data degf1/0.5555555555555/, degf2/255.3722222222/
+c
+c  Set for beginning of scan for heat structures.
+       fil = .false.
+       lhed = .false.
+       terr = .false.
+       nhs = 0
+       nh = 10
+c  See if heat structure/geometry nh is entered.
+   10  l3a(1) = nh*1000 + 10000000
+       call inplnk (l3a(1),ix,n3,n4,fa(filndx(1)))
+       if (n4 .eq. 0) then
+c  See if first card is missing but other cards are entered.
+         if (ix .eq. -1) go to 32
+         ix = (ix-10000000)/1000
+         if (ix .eq. nh) then
+           if (.not.lhed) then
+             lhed = .true.
+             if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &       write (output,2000)
+ 2000 format ('0',30x,'Edit of heat structure input data'/
+     &   15x,'(quantities printed are input values or set by error recov
+     &ery)')
+           endif
+           write (output,2001) l3a(1)
+ 2001  format ('0******** Card',i8,' is missing.')
+           go to 13
+         endif
+         nh = ix
+         go to 18
+       endif
+c  Get 1cccg000 card.
+       if (.not.lhed) then
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2000)
+         lhed = .true.
+       endif
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2007) nh
+ 2007  format ('0====================================================='
+     & '==================',/,
+     & 29x,'Input data for heat structure-geometry',i5)
+       insx = .false.
+       if (n4 .eq. 1) then
+         l3e(1) = l3a(1)
+         l3e(3) = 1
+         l3e(6) = 1
+         l3e(7) = -1
+         call inp2 (fa(filndx(1)),iscr,l3e)
+         if (l3e(6) .le. 0) go to 13
+         write (chwrd,'(a8)') scr(1)
+         if (chwrd .ne. 'delete') then
+           write (output,2018) l3a(1)
+ 2018  format ('0******** Delete expected but not found on card',i10,
+     &  ', delete assumed.')
+           fail = .true.
+         endif
+         insx = .true.
+         go to 16
+       endif
+       l3a(6) = 1
+       call inp2 (fa(filndx(1)),iscr,l3a)
+       if (l3a(6) .le. 0) go to 13
+c  Check number of heat structures for this geometry.
+       if (iscr(1).le.0 .or. iscr(1).ge.100) then
+         write (output,2002)
+ 2002  format ('0******** Incorrect number of structures specified.')
+         go to 13
+       endif
+c  Get space for directory and storage files.
+   16  iextra = ior(iextra,2)
+       if (fil) go to 100
+       nsiz = lcontg(1)
+       if (filid(8) .eq. 0.0) then
+         filid(8) = ftbnid(1)
+         call ftbrsv (filid(8),nsiz,1,filndx(8))
+         fil = .true.
+       else
+         call ftbsft (filid(8),nsiz,1,filndx(8))
+       endif
+c  If heat str file exist then read in reflood file if it exists.
+c  irsave will be nonzero later only if reflood file was read.
+       irsave=0
+       if (.not.fil .and. filid(32).ne.0.0) irsave=filndx(32)
+       if (.not.fil) then
+         fil = .true.
+         ins = .true.
+         nhs = nhtstr(filndx(8))
+         j = nhs + 1
+         k = filsiz(8) - j
+         lx = filndx(8)
+         lz = lx + nhs - 1
+         do i = lx,lz
+           n4 = ihtptr(i)
+           ihtptr(i) = ihtptr(i) - j
+           n3 = n4 + lx
+           htgom(n3) = htgom(n3) - j
+           htxft(n3) = htxft(n3) - j
+           htxit(n3) = htxit(n3) - j
+         enddo
+         filsiz(8) = j
+         go to 100
+       endif
+       if (nsiz .gt. iscr(1)+1+htfixa) go to 105
+       call ftbdel (filid(8))
+       filid(8) = 0.0
+       fil = .false.
+   21  write (output,2003) nh
+ 2003  format ('0******** Insufficient space for processing heat structu
+     &re-geometry',i5,'.')
+   13  write (output,2004) nh
+ 2004  format ('0******** Data for heat structure-geometry',i5,' cannot
+     &be processed.')
+   20  j = l3a(1) + 999
+       filsiz(1) = inp10(fa(filndx(1)),l3a(1),j)
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+       fail = .true.
+       go to 30
+  105  ins = .false.
+       filsiz(8) = 1
+       k = 0
+       go to 107
+  100  nsiz = lcntgs(filid(8),1)
+       call ftbsft (filid(8),nsiz,3,filndx(8))
+       if (.not.ins) go to 107
+       n3 = filndx(8)
+       j = nhs + filndx(8) + 1
+       do i = 1,nhs
+         m = ihtptr(n3)
+         kx = m + j
+         if (htstno(kx)/1000 - nh) 110,111,112
+  110    n3 = n3 + 1
+       enddo
+       ins = .false.
+       go to 107
+  111  k2 = htnusr(kx)*(2*htnmpt(kx) + htfixa)
+       l1 = htnusr(kx)
+       if (iand(htopt(kx),8) .eq. 0) k2 = k2 + htgskp*htnmpt(kx) -
+     & 2
+       n = m + k2
+       n4 = k - n
+       if (n4 .ne. 0) then
+         call ftbmov (fa(n+j),fa(m+j),n4)
+         n4 = filndx(8)
+         do l = 1,nhs
+           if (ihtptr(n4) .ge. n) then
+             kx = ihtptr(n4) - k2
+             ihtptr(n4) = kx
+             kx = kx + j
+             htgom(kx) = htgom(kx) - k2
+             htxft(kx) = htxft(kx) - k2
+             htxit(kx) = htxit(kx) - k2
+           endif
+           n4 = n4 + 1
+         enddo
+       endif
+       k = k - k2
+       nhs = nhs - l1
+       filsiz(8) = filsiz(8) - l1
+       n4 = k + nhs - i + 1
+       if (n4 .ne. 0) call ftbmov (fa(n3+l1+1),fa(n3+1),n4)
+c  If reflood file exists check it to see if the heat str-geom
+c  being deleted or overlayed is also a reflood set.  If it is
+c  then set strgeo to negative if heat str-geom is being over-
+c  layed and to zero if heat str-geom is being deleted.
+       if (irsave .ne. 0) then
+         irf = filndx(32)
+         do ipn =1,nrflht(irf)
+           if (strgeo(irf) .eq. nh) then
+             strgeo(irf) = -strgeo(irf)
+             if (insx) strgeo(irf) = 0
+           endif
+           irf = irf + nhtga
+         enddo
+       endif
+       if (.not.insx) go to 118
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2021) l1,nh
+ 2021  format (i4,' Heat structures for heat structure geometry',i5,
+     & ' have been deleted.')
+       go to 30
+  107  i = filsiz(8)
+       n3 = filndx(8) + i - 1
+  112  if (insx) then
+         write (output,2022)
+ 2022  format ('0******** Illegal delete attempt, either new problem or
+     &heat structure geometry is not present.')
+         go to 20
+       endif
+  118  n4 = k + filsiz(8)
+       filsiz(8) = filsiz(8) + iscr(1)
+       if (nsiz .lt. n4 + iscr(1) + htfixa) go to 21
+       nsiz = nsiz - n4
+       l = i - n4
+       if (l .ne. 0) call ftbmov (fa(n3+1),fa(n3+iscr(1)+1),l)
+       l = filndx(8) + filsiz(8)
+       kx = l + k
+       lx = kx + htfixa - 1
+       fa(kx:lx) = 0
+       if (iscr(4).ne.0 .and. iscr(4).ne.1) then
+         write (output,2006)
+ 2006  format ('0******** Indicator for steady state initialization inco
+     &rrect, set to 0 for no steady state calculation.')
+         fail = .true.
+         iscr(4) = 0
+       endif
+       lx = filndx(8) + i - 1
+       nhs = nhs + 1
+       nhh = nh*1000 + 1
+       ihtptr(lx) = k
+       htstno(kx) = nhh
+       htnusr(kx) = iscr(1)
+       htnmpt(kx) = iscr(2)
+       igeom = iscr(3)
+       htopt(kx) = ior(ior(ishft(iscr(3),24),4),iscr(4))
+       httots(kx) = scr(5)
+       htrflg(kx) = 0
+       htrflg(kx+1) = 0
+       htnaxl(kx) = 0
+       if (l3a(6) .ne. 5) then
+         if (iscr(6) .gt. 0) then
+           if (l3a(6) .ne. 8) then
+             write (output,3001) l3a(1)
+ 3001  format ('0******** Insufficient data on card',i9,' which specifie
+     &s reflood option.')
+             fail = .true.
+           elseif (iscr(7).ne.0 .and. iscr(7).ne.1) then
+             write (output,3003)
+ 3003  format ('0******** Incorrect reflood indicator, must be 0 or 1.')
+             fail = .true.
+           elseif (iscr(8) .lt. 2) then
+             write (output,3004)
+ 3004  format ('0******** Maximum number of axial fine mesh intervals mu
+     &st be greater than 1.')
+             fail = .true.
+           elseif (iscr(2) .lt. 3) then
+             write (output,3005)
+ 3005  format ('0******** Number of mesh points when using reflood optio
+     &n must be greater than 2.')
+             fail = .true.
+           elseif (iscr(3) .eq. 3) then
+             write (output,3006)
+ 3006  format ('0******** Spherical geometry not allowed with reflood op
+     &tion.')
+             fail = .true.
+           else
+             htrflg(kx) = iscr(6)
+             htopt(kx) = ior(htopt(kx),iscr(7)*512)
+             htnaxl(kx) = iscr(8)
+           endif
+         endif
+       endif
+       if (.not.uniti) httots(kx) = httots(kx)*conv(2)
+c  Call subroutine to process rest of geometry dependent input data.
+       call ht1inp (kx,l,nsiz,iuse,l3a(1),ierr)
+       fail = fail .or. ierr.ne.0
+c  Set up storage and data for remaining heat structures with this
+c  geometry.
+       htopt(kx) = ior(htopt(kx),ishft(ierr,1))
+       k = k + iuse
+       nx = iscr(1)
+       iscr(1) = iscr(1) - 1
+       lz = lx + iscr(1)
+       if (iscr(1) .ne. 0) then
+         k2 = kx + iuse
+         j = k + iscr(1)*(2*htnmpt(kx) + htfixa)
+         if (j .gt. nsiz) then
+           write (output,2008) nh
+ 2008  format ('0******** Insufficient space to process structures a sso
+     &ciated with heat structure-geometry',i5,'.')
+           j = l3a(1) + 499
+           filsiz(1) = inp10(fa(filndx(1)),l3a(1),j)
+           call ftbsft (2.0,filsiz(1),1,filndx(1))
+           fail = .true.
+           terr = .true.
+           go to 28
+         endif
+         ly = lx + 1
+         nhs = nhs + iscr(1)
+         do i = ly,lz
+           nhh = nhh + 1
+           ihtptr(i) = k
+           htstno(k2) = nhh
+           htopt(k2) = ior(htopt(kx),32)
+           htnmpt(k2) = htnmpt(kx)
+           htgmr(k2) = htgmr(kx)
+           htgom(k2) = htgom(kx)
+           httots(k2) = httots(kx)
+           htrado(k2) = htrado(kx)
+           htradn(k2) = htradn(kx)
+           htvatp(k2) = htvatp(kx)
+           oxti(k2) = oxti(kx)
+           oxtio(k2) = oxti(kx)
+           oxto(k2) = oxto(kx)
+           oxtoo(k2) = oxto(kx)
+           h2gen(k2) = h2gen(kx)
+           h2geno(k2) = h2gen (kx)
+           imw(k2) = imw(kx)
+           gapwd(k2) = gapwd(kx)
+           cladex(k2) = cladex(kx)
+           hetrat(k2) = hetrat(kx)
+           strnpl(k2) = strnpl(kx)
+           htxit(k2) = k + htfixa
+           k = htxit(k2) + htnmpt(kx)
+           htxft(k2) = k
+           htsrt(k2+1) = nh
+           htnusr(k2) = 0
+           k = k + htnmpt(kx)
+           k2 = k + l
+         enddo
+       endif
+       ly = ihtptr(lx) + l
+       if (iand(htopt(ly),64) .ne. 0) then
+         l3d(1) = l3a(1) + 401
+         l3d(3) = iscr(2)
+         l3d(4) = iscr(2)
+         lpx = iscr(2) - 1
+         do i = lx,lz
+           ly = ihtptr(i) + l
+           lp = htxft(ly) + l
+           htopt(ly) = iand(htopt(ly),not(96))
+           l3d(6) = lp
+           call inp2 (fa(filndx(1)),httmp,l3d)
+           if (l3d(6) .lt. 0) then
+             fail = .true.
+             htopt(ly) = ior(htopt(ly),2)
+           else
+             if (.not.uniti) then
+               ly = lp + lpx
+               do j = lp,ly
+                 httmp(j) = httmp(j)*degf1 + degf2
+               enddo
+             endif
+           endif
+           l3d(1) = l3d(1) + 1
+         enddo
+       endif
+   28  if (iand(htopt(kx),8) .ne. 0) go to 328
+       if (gpintp(htgom(kx)+l) .le. 0.0) go to 328
+c  Read gap deformation data.
+       l3f(1) =l3a(1) + 11
+       l3f(2) = -l3f(1) - 88
+       l3f(3) = 5
+       l3f(4) = 5*nx
+       l3f(6) = 1
+       call inp2 (fa(filndx(1)),scr,l3f)
+       if (l3f(6) .eq. -1) then
+         write (output,2034)
+ 2034  format ('0******** Gap deformation data cards are missing.')
+         go to 418
+       endif
+       l3f(2) = -l3f(2)
+       if (mod(l3f(6),5) .ne. 0) then
+         write(output,2027) l3f(1),l3f(2)
+         go to 418
+       endif
+       if (iscr(l3f(6)) .ne. nx) then
+       write(output,2010) l3f(1),l3f(2)
+       go to 418
+       endif
+       j = l3f(6)
+       n3 = 0
+       do i=1,j,5
+         if(iscr(i+4) .le. n3) go to 416
+         n3 = iscr(i+4)
+       enddo
+       go to 420
+  416  write (output,2011) l3f(1),l3f(2)
+  418  fail = .true.
+       gpintp(kx+htfixa) = 0.0
+       go to 328
+  420   ihlp(1:4) = 0
+       do i=1,j,5
+         if (scr(i) .lt. 0.0) then
+           ihlp(1) = 1
+           scr(i) = 1.0e-6
+           if (.not.uniti) scr(i) = 3.281e-6
+         endif
+         if (scr(i+1) .lt. 0.0) then
+           ihlp(2) = 1
+           scr(i+1) = 2.0e-6
+           if (.not.uniti) scr(i+1) = 6.5617e-6
+         endif
+         if (scr(i+2) .lt. 0.0) then
+           scr(i+2) = 0.0
+           ihlp(3) = 1
+         endif
+         if (scr(i+3) .gt. 0.0) then
+           ihlp(4) = 1
+           scr(i+3) = 0.0
+         endif
+       enddo
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       if (ihlp(1) .ne. 0) write (output,2036)
+ 2036  format ('0$$$$$$$$ Negative fuel roughness, default value being e
+     &ntered.')
+       if (ihlp(2) .ne. 0) write (output,2037)
+ 2037  format('0$$$$$$$$ Negative cladding roughness, default value bein
+     &g entered.')
+       if (ihlp(3) .ne. 0) write (output,2038)
+ 2038  format('0$$$$$$$$ Negative radial fuel displacement, default valu
+     &e being entered.')
+       if (ihlp(4) .eq. 0) write (output,2039)
+ 2039  format('0$$$$$$$$ Positive radial cladding creepdown displacement
+     &, default value being entered.')
+       endif
+       k2 = 1
+       j = 1
+       do i=lx,lz
+         ly = ihtptr(i) + l
+         gprouf(ly) = scr(k2) + scr(k2+1)
+         gpudis(ly) = -scr(k2+2) + scr(k2+3)
+         j = j + 1
+         if (j .gt. iscr(k2+4)) k2 = k2 + 5
+         if (.not.uniti) then
+           gprouf(ly) = gprouf(ly)*conv(2)
+           gpudis(ly) = gpudis(ly)*conv(2)
+         endif
+       enddo
+         write (output,2040)
+ 2040  format ('0Structure',5x,'fuel',13x,'cladding',9x,'fuel',11x,'clad
+     &ding creepdown '/'    number',5x,'roughness',8x,'roughness',8x,'di
+     &splacement   displacement')
+ 2041  format (i10,4(1p,g17.6))
+       k2 = 1
+       j = 1
+       do i=lx,lz
+         ly = ihtptr(i) + l
+         write (output,2041) htstno(ly),scr(k2),scr(k2+1),scr(k2+2),
+     &   scr(k2+3)
+         j = j + 1
+         if (j .gt. iscr(k2+4)) k2 = k2 + 5
+       enddo
+c  Process left and right boundary data.
+  328  fr = conv(2)
+       l3b(1) = l3a(1) + 401
+       lp = 0
+   41  l3b(1) = l3b(1) + 100
+       l3b(2) = -l3b(1) - 98
+       l3b(4) = 6*nx
+       l3b(6) = 1
+       call inp2 (fa(filndx(1)),iscr,l3b)
+       l3b(2) = -l3b(2)
+       if (l3b(6) .eq. -1) go to 42
+       if (mod(l3b(6),6) .ne. 0) then
+         write (output,2009) l3b(1),l3b(2)
+ 2009  format ('0******** Number of words on cards',i9,'-',i9,' is not a
+     & multiple of 6.')
+         go to 42
+       endif
+       if (iscr(l3b(6)) .ne. nx) then
+         write (output,2010) l3b(1),l3b(2)
+ 2010  format ('0******** Last word entered on cards',i9,'-',i9,' is not
+     & equal to the number of heat structures for the geometry.')
+         go to 42
+       endif
+       j = l3b(6)
+       n3 = 0
+       do i = 1,j,6
+         if (iscr(i+5) .le. n3) go to 46
+         n3 = iscr(i+5)
+       enddo
+       go to 47
+   46  write (output,2011) l3b(1),l3b(2)
+ 2011  format ('0******** Heat structure numbers not in increasing order
+     & on cards',i9,'-',i9,'.')
+   42  write (output,2012)
+ 2012  format (' ******** Default values being entered.')
+       fail = .true.
+       iscr(1) = 0
+       iscr(2) = 0
+       iscr(3) = 0
+       iscr(4) = 1
+       scr(5) = 1.0
+       iscr(6) = nx
+       j = 6
+   47    ihlp(1:4) = 0
+       do i = 1,j,6
+         if (iscr(i).le.-1000 .or. iscr(1).ge.1000000000) then
+           iscr(i) = 0
+           ihlp(1) = 1
+         endif
+         if (abs(iscr(i+1)) .ge. 1000000000) then
+           iscr(i+1) = 0
+           ihlp(1) = 1
+         endif
+         if (iscr(i+2).lt.0 .or. iscr(i+2).ge.5000) then
+           iscr(i+2) = 1
+           ihlp(2) = 1
+         endif
+         if (iscr(i+3).eq.0 .or. iscr(i+3).eq.1) go to 56
+         ihlp(3) = 1
+   52    iscr(i+3) = 1
+         scr(i+4) = 1.0
+         go to 57
+   56    if (scr(i+4) .ge. 0.0) go to 57
+         ihlp(4) = 1
+         go to 52
+   57    iscr(i+2) = ior(iscr(i+2),ishft(iscr(i+3),24))
+         if (iscr(i+3) .ne. 0) then
+           scr(i+3) = scr(i+4)
+           if (.not.uniti) scr(i+3) = scr(i+3)*conv(igeom)
+           scr(i+4) = 0.0
+         else
+           if (.not.uniti) scr(i+4) = scr(i+4)*conv(1)
+           scr(i+3) = 0.0
+         endif
+       enddo
+       if (ihlp(1) .ne. 0) then
+         write (output,2014) lr(lp+1)
+ 2014  format ('0********',a7,'boundary volume specification is incorrec
+     &t, set to 0.')
+         fail = .true.
+       endif
+       if (ihlp(2) .ne. 0) then
+         write (output,2015) lr(lp+1)
+ 2015  format ('0********',a7,'boundary condition type is incorrect, set
+     & to default value.')
+         fail = .true.
+       endif
+       if (ihlp(3) .ne. 0) then
+         write (output,2016) lr(lp+1)
+ 2016  format ('0********',a7,'surface area code is incorrect, set to 1.
+     &' )
+         fail = .true.
+       endif
+       if (ihlp(4) .ne. 0) then
+         write (output,2017) lr(lp+1)
+ 2017  format ('0********',a7,'surface area specification is negative, s
+     &et to default value.')
+         fail = .true.
+       endif
+       if (terr) lz = lx
+       k2 = 1
+       j = 1
+       do i = lx,lz
+         ly = ihtptr(i) + l
+         htbvc(ly+lp) = iscr(k2)
+         htbvo(ly+lp) = 0
+         htbnt(ly+lp) = iand(iscr(k2+2),16383)
+         htstyp(ly+lp) = ishft(iscr(k2+2),-24)
+         htrnro(ly+lp) = scr(k2+3)
+         htsrfo(ly+lp) = scr(k2+4)
+         j = j + 1
+         if (j .gt. iscr(k2+5)) then
+           k2 = k2 + 6
+         else
+           iscr(k2) = iscr(k2) + iscr(k2+1)
+         endif
+       enddo
+c  Process cards needed if heat transfer correlation subroutines are
+c  used.
+       l3e(1) = l3b(1) + 299
+       l3e(3) = 0
+       l3e(6) = 1
+       l3e(7) = 0
+       call inp2 (fa(filndx(1)),iscr,l3e)
+       tfail = .false.
+       if (l3e(6) .lt. 0) then
+         tfail = .true.
+       elseif (l3e(6) .eq. 0) then
+         nhh = 9
+       else
+         if (iscr(1) .eq. 0) then
+           nhh = 9
+         elseif (iscr(1) .eq. 1) then
+           nhh = 12
+         elseif (iscr(1) .eq. 2) then
+           nhh = 13
+         else
+           tfail = .true.
+         endif
+       endif
+       if (tfail) then
+         fail = .true.
+         write (output,2028) l3e
+ 2028  format ('0******** Card',i10,' is incorrect, default value of 1 i
+     &s assumed.')
+         nhh = 12
+       endif
+       hcorl(lp+1) = .false.
+       hpgchf(lp+1) = .false.
+       l3c(1) = l3e(1) + 1
+       l3c(2) = -l3c(1) - 98
+       l3c(4) = nhh*nx
+       l3c(6) = 1
+       if (nhh .eq. 9) then
+         l3c(7) = 9
+         l3c(14) = 1
+         l3c(15) = 1
+         l3c(16) = 0
+       elseif (nhh .eq. 12) then
+         l3c(7) = 12
+         l3c(14) = 1
+         l3c(15) = 1
+         l3c(16) = 1
+       elseif (nhh .eq. 13) then
+         l3c(7) = 13
+         l3c(14) = 0
+         l3c(15) = 0
+         l3c(16) = 1
+         hpgchf(lp+1) = .true.
+       endif
+       call inp2 (fa(filndx(1)),iscr,l3c)
+       l3c(2) = -l3c(2)
+       tfail = .false.
+       tfail2 = .false.
+       if (l3c(6) .lt. 0) then
+         tfail = .true.
+         tfail2 = .true.
+       elseif (l3c(6) .eq. 0) then
+         tfail = .true.
+       else
+         if (mod(l3c(6),nhh) .ne. 0) then
+         write (output,2027) l3c(1),l3c(2),nhh
+ 2027  format ('0******** Number of words on cards',i9,'-',i9,' is not a
+     & multiple of',i2,'.')
+         tfail = .true.
+         tfail2 = .true.
+         elseif (iscr(l3c(6)) .ne. nx) then
+           write (output,2010) l3c(1),l3c(2)
+           tfail = .true.
+           tfail2 = .true.
+         endif
+         j = l3c(6)
+         n3 = 0
+         do i = 1,j,nhh
+           if (iscr(i+nhh-1) .le. n3) then
+             write (output,2011)
+             tfail = .true.
+             tfail2 = .true.
+           endif
+           n3 = iscr(i+nhh-1)
+         enddo
+         hcorl(lp+1) = .true.
+           ihlp(1:12) = 0
+         do 149 i = 1,j,nhh
+           if (.not.uniti) then
+             if (nhh .lt. 13) then
+               do k2 = 1,5
+                 scr(i+k2-1) = scr(i+k2-1)*conv(2)
+               enddo
+             else
+               do k2 = 1,3
+                 scr(i+k2-1) = scr(i+k2-1)*conv(2)
+               enddo
+             endif
+             if (nhh .gt. 9) then
+               scr(i+8) = scr(i+8)*conv(2)
+             endif
+           endif
+           if (scr(i) .lt. 0.0) then
+             scr(i) = fr
+             ihlp(1) = 1
+           endif
+           if (scr(i+1) .le. 0.0) then
+             scr(i+1) = fr
+             ihlp(2) = 1
+           endif
+           if (scr(i+2) .le. 0.0) then
+             scr(i+2) = fr
+             ihlp(3) = 1
+           endif
+           if (scr(i+3) .lt. 0.0) then
+             scr(i+3) = 0.0
+             ihlp(4) = 1
+           endif
+           if (scr(i+4) .lt. 0.0) then
+             scr(i+4) = fr
+             ihlp(5) = 1
+           endif
+           if (scr(i+5) .lt. 0.0) then
+             scr(i+5) = fr
+             ihlp(6) = 1
+           endif
+           if (nhh .lt. 13) then
+             if (scr(i+6) .lt. 0.0) then
+               scr(i+6) = fr
+               ihlp(7) = 1
+             endif
+             if (scr(i+7) .le. 0.0) then
+               scr(i+7) = 1.0
+               ihlp(8) = 1
+             endif
+           endif
+           if (nhh .gt. 9) then
+             if (scr(i+8) .lt. 0.0) then
+               scr(i+8) = fr
+               ihlp(9) = 1
+             endif
+             if (scr(i+9) .le. 0.0) then
+               scr(i+9) = fr
+               ihlp(10) = 1
+             endif
+             if (scr(i+10) .le. 0.0) then
+               scr(i+10) = 1.0
+               ihlp(11) = 1
+             endif
+           endif
+           if (nhh .eq. 13) then
+             if (iscr(i+6) .ge. 1000000000) then
+               iscr(i+6) = 0
+               ihlp(7) = 1
+             endif
+             if (iscr(i+7) .ge. 1000000000) then
+               iscr(i+7) = 0
+               ihlp(8) = 1
+             endif
+             if ((iscr(i+11).ge.11 .and. iscr(i+11).le.15) .or.
+     &       (iscr(i+11).ge.21 .and.iscr(i+11).le.24) .or.
+     &       (iscr(i+11).ge.31 .or. iscr(i+11).le.34) .or.
+     &       (iscr(i+11).ge.41 .or. iscr(i+11).le.44)) then
+$if -def,newnrc
+         fail = .true.
+         write (output,2151) l3c(1),l3c(2)
+ 2151  format ('0******** 13 words on cards',i9,'-',i9,' is not'
+     & ' allowed in this code version.')
+$endif
+               go to 149
+             else
+               iscr(i+11) = 0
+               ihlp(12) = 1
+             endif
+           endif
+  149    continue
+         if (ihlp(1) .ne. 0) then
+           write (output,2051) lr(lp+1)
+ 2051  format ('0********',a7,'boundary heated equivalent diameter is le
+     &ss than 0.0, set to 1.0 m.')
+           fail = .true.
+         endif
+         if (ihlp(2) .ne. 0) then
+           write (output,2052) lr(lp+1)
+ 2052  format ('0********',a7,'boundary heated length from inlet in forw
+     &ard direction is less than or equal to 0.0, set to 1.0 m.')
+           fail = .true.
+         endif
+         if (ihlp(3) .ne. 0) then
+           write (output,2053) lr(lp+1)
+ 2053  format ('0********',a7,'boundary heated length from inlet in reve
+     &rse direction is less than or equal to 0.0, set to 1.0 m.')
+           fail = .true.
+         endif
+         if (ihlp(4) .ne. 0) then
+           if (nhh .lt. 13) then
+             write (output,2054) lr(lp+1)
+ 2054  format('0********',a7,'boundary length from grid spacer in forwar
+     &d direction is less than 0.0, set to 1.0 m.')
+           else
+             write (output,2154) lr(lp+1)
+ 2154  format('0********',a7,'boundary grid spacer factor in forwar
+     &d direction is less than 0.0, set to 1.0.')
+           endif
+           fail = .true.
+         endif
+         if (ihlp(5) .ne. 0) then
+           if (nhh .lt. 13) then
+             write (output,2055) lr(lp+1)
+ 2055  format('0********',a7,'boundary length from grid spacer in revers
+     &e direction is less than 0.0, set to 1.0 m.')
+           else
+             write (output,2155) lr(lp+1)
+ 2155  format('0********',a7,'boundary grid spacer factor in revers
+     &e direction is less than 0.0, set to 1.0.')
+           endif
+           fail = .true.
+         endif
+         if (ihlp(6) .ne. 0) then
+           if (nhh .lt. 13) then
+             write (output,2056) lr(lp+1)
+ 2056  format('0********',a7,'grid spacer forward form loss coefficient
+     &is less than 0.0, set to 1.0.')
+           else
+             write (output,2156) lr(lp+1)
+ 2156  format('0********',a7,'radial heat flux distribution factor
+     & is less than 0.0, set to 1.0.')
+           endif
+           fail = .true.
+         endif
+         if (ihlp(7) .ne. 0) then
+           if (nhh .lt. 13) then
+             write (output,2057) lr(lp+1)
+ 2057  format('0********',a7,'grid spacer reverse form loss coefficient
+     &is less than 0.0, set to 1.0.')
+           else
+             write (output,2157) lr(lp+1)
+ 2157  format('0********',a7,'forward boundary volume specification
+     &is incorrect, set to 0.')
+           endif
+           fail = .true.
+         endif
+         if (ihlp(8) .ne. 0) then
+           if (nhh .lt. 13) then
+             write (output,2058) lr(lp+1)
+ 2058  format('0********',a7,'Local boiling factor is less than or equal
+     & to 0.0, set to 1.0.')
+           else
+             write (output,2158) lr(lp+1)
+ 2158  format('0********',a7,'reverse boundary volume specification is i
+     &correct, set to 0.')
+           endif
+           fail = .true.
+         endif
+         if (ihlp(9) .ne. 0) then
+           write (output,2060) lr(lp+1)
+ 2060  format('0********',a7,'natural convection length is less'
+     &,' than 0.0, set to 1.0 m.')
+           fail = .true.
+         endif
+c        if (ihlp(10) .ne. 0) then
+c          write (output,2061) lr(lp+1)
+c2061  format('0********',a7,'rod pitch to diameter ratio is less
+c    &than 0.0, set to 1.0.')
+c          fail = .true.
+c        endif
+         if (ihlp(11) .ne. 0) then
+           write (output,2062) lr(lp+1)
+ 2062  format('0********',a7,'fouling factor is less than or equal to 0.
+     &0, set to 1.0.')
+           fail = .true.
+         endif
+         if (ihlp(12) .ne. 0) then
+           write (output,2063) lr(lp+1)
+ 2063  format('0********',a7,'pg chfr correlation option is incorrect,
+     &set to 0.')
+           fail = .true.
+         endif
+       endif
+       if (tfail2) then
+         write (output,2012)
+         fail = .true.
+       endif
+       if (tfail) then
+         scr(1) = fr
+         scr(2) = fr
+         scr(3) = fr
+         scr(4) = fr
+         scr(5) = fr
+         if (nhh .lt. 13) then
+           scr(6) = fr
+           scr(7) = fr
+           scr(8) = 1.0
+         endif
+         if (nhh .le. 9) then
+           iscr(9) = nx
+         else
+           scr(9) = fr
+           scr(10) = fr
+           scr(11) = fr
+           if (nhh .le. 12) then
+             scr(6) = 1.0
+             iscr(7) = 0
+             iscr(8) = 0
+             iscr(12) = 0
+             iscr(13) = nx
+           else
+             iscr(12) = nx
+           endif
+         endif
+       endif
+       k2 = 1
+       j = 1
+       ihlp(1) = 0
+       if (hcorl(lp+1)) ihlp(1) = (lp+1)*128
+       do 161 i = lx,lz
+         ly = ihtptr(i) + l
+         htopt(ly) = ior(htopt(ly),ihlp(1))
+         hthdmo(ly+lp) = scr(k2)
+         htlnfo(ly+lp) = scr(k2+1)
+         htlnro(ly+lp) = scr(k2+2)
+         grdzfo(ly+lp) = scr(k2+3)
+         grdzro(ly+lp) = scr(k2+4)
+         if (nhh .lt. 13) then
+           grdkfo(ly+lp) = scr(k2+5)
+           grdkro(ly+lp) = scr(k2+6)
+           if (scr(k2+7).le.0.0) then
+             apfaco(ly+lp) = 1.0
+             fail = .true.
+             write (output,2059) lrl(lp+1)
+ 2059  format ('0******** Axial power peaking factor on the ',a5,
+     &' side set to 1.0')
+           else
+             apfaco(ly+lp) = scr(k2+7)
+           endif
+           htchfo(ly+lp) = 0.0
+           htivfc(ly+lp) = 0
+           htivfo(ly+lp) = 0
+           htivrc(ly+lp) = 0
+           htivro(ly+lp) = 0
+           pgopti(ly+lp) = 0
+           pgcall(ly+lp) = 0
+           if (nhh .eq. 9) then
+             htlncf(ly+lp) = hthdmo(ly+lp)
+             htpovd(ly+lp) = 1.1
+             htfftr(ly+lp) = 1.0
+           else
+             htlncf(ly+lp) = scr(k2+8)
+             htpovd(ly+lp) =  scr(k2+9)
+             htfftr(ly+lp) = scr(k2+10)
+           endif
+         else
+           grdkfo(ly+lp) = scr(k2+3)
+           grdkro(ly+lp) = scr(k2+4)
+           if (scr(k2+5).le.0.0) then
+             apfaco(ly+lp) = 1.0
+             fail = .true.
+             write (output,2159) lrl(lp+1)
+ 2159  format ('0******** Radial power peaking factor on the ',a5,
+     &' side set to 1.0')
+           else
+             apfaco(ly+lp) = scr(k2+5)
+           endif
+           htivfc(ly+lp) = iscr(k2+6)
+           htivfo(ly+lp) = 0
+           htivrc(ly+lp) = iscr(k2+7)
+           htivro(ly+lp) = 0
+           htlncf(ly+lp) = scr(k2+8)
+           htpovd(ly+lp) =  scr(k2+9)
+           htfftr(ly+lp) = scr(k2+10)
+           pgopti(ly+lp) = iscr(k2+11)
+           pgcall(ly+lp) = 0
+           htchfo(ly+lp) = 0.0
+         endif
+         j = j + 1
+         if (j .gt. iscr(k2+nhh-1)) k2 = k2 + nhh
+  161  continue
+       if (lp .eq. 0) then
+         lp = 1
+         go to 41
+       endif
+c  Obtain source factors.
+       l3b(1) = l3b(1) + 100
+       l3b(2) = -l3b(1) - 98
+       jj = 1
+       call inp5 (l3b(1),l3b(2),1,4,0,nx,4,1,1,jj,fa(filndx(1)),
+     & scr(1),l5a,scr(397),495)
+       if (jj .eq. -1) then
+         write (output,2013)
+ 2013  format ('0******** Default values being entered.')
+         fail = .true.
+         j = 0
+         do i = 1,nx
+           iscr(j) = 0
+           scr(j+1) = 0.0
+           scr(j+2) = 0.0
+           scr(j+3) = 0.0
+           j = j + 4
+         enddo
+       else
+         ihlp(1) = 0
+         ihlp(2) = 0
+         j = 1
+         do i = 1,nx
+           if (iscr(j).lt.0 .or. iscr(j).ge.200000) then
+             iscr(j) = 0
+             ihlp(1) = 1
+           endif
+           if (scr(j+1).lt.0.0 .or. scr(j+2).lt.0.0 .or.
+     &     scr(j+3).lt.0.0) ihlp(2) = 1
+           j = j + 4
+         enddo
+         if (ihlp(1) .ne. 0) then
+           write (output,2019)
+ 2019  format ('0******** Source code is incorrect, set to 0.')
+           fail = .true.
+         endif
+         if (ihlp(2) .ne. 0) then
+           write (output,2020)
+ 2020  format ('0******** Source factor is negative.')
+           fail = .true.
+         endif
+       endif
+       j = 1
+       idkht = htsrt(ihtptr(lx)+l) .eq. 1
+       tfail = .false.
+       do i = lx,lz
+         ly = ihtptr(i) + l
+         htsrt(ly) = iscr(j)
+         htfctr(ly) = scr(j+1)
+         htftro(ly) = scr(j+2)
+         htftrn(ly) = scr(j+3)
+         if (idkht) then
+           tfail = tfail .or. htsrt(ly) .ne. 0
+           htsrt(ly) = -1
+         endif
+         j = j + 4
+       enddo
+       if (tfail) then
+         fail = .true.
+         write (output,2005)
+ 2005  format ('0******** Source code must be zero when aerosol decay he
+     &at specified.')
+       endif
+c  Edit heat structure data.
+       j = 0
+       if (.not.unito) j = 1
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output,2023)
+ 2023  format ('0Structure      source       internal source'/
+     & '    number        code       factor')
+       do i = lx,lz
+         ly = ihtptr(i) + l
+         write (output,2024) htstno(ly),htsrt(ly),htfctr(ly)
+ 2024  format (i10,i12,2x,1p,g17.6)
+       enddo
+       lp = 0
+   82  write (output,2025) (lrl(lp+1),i=1,5)
+ 2025  format ('0Structure ',a7,'vol.      ',a6,6x,a6,4x,a7,'surface',3x
+     &,a7,   'direct'/
+     &       4x,'number',6x,'number  bdry. type  srfc. code',5x,'area en
+     &try',7x      ,'source factor')
+       do i = lx,lz
+         ly = ihtptr(i) + l
+         if (htstyp(ly+lp) .ne. 0) then
+           scr(5) = htrnro(ly+lp)
+           if (.not.unito) scr(5) = scr(5)/conv(igeom)
+         else
+           scr(5) = htsrfo(ly+lp)
+           if (.not.unito) scr(5) = scr(5)/conv(1)
+         endif
+         write (output,2026) htstno(ly),htbvc(ly+lp),htbnt(ly+lp),
+     &   htstyp(ly+lp),scr(5),htftro(ly+lp)
+ 2026  format (i10,3i12,1p,2g17.6)
+       enddo
+       if (hcorl(lp+1)) then
+         if (hpgchf(lp+1)) then
+           write (output,2133) (lrl(lp+1),ij=1,8)
+ 2133  format ('0',11x,a5,7(9x,a5)/
+     & '            heated        heat. length',
+     & '  heat. length  grid spacer   grid spacer',
+     & '   radial power  inlet volume  inlet volume'/
+     & ' structure  equivalent    from inlet  ',
+     & '  from inlet    factor        factor      ',
+     & '  peaking       input code    input code  '/
+     & '    number  diameter      (forward)   ',
+     & '  (reverse)     (forward)     (reverse)   ',
+     & '  factor        (forward)     (reverse)   ')
+           do i = lx,lz
+             ly = ihtptr(i) + l
+             scr(1) = hthdmo(ly+lp)
+             scr(2) = htlnfo(ly+lp)
+             scr(3) = htlnro(ly+lp)
+             scr(4) = grdkfo(ly+lp)
+             scr(5) = grdkro(ly+lp)
+             scr(6) = apfaco(ly+lp)
+             iscr(7) = htivfc(ly+lp)
+             iscr(8) = htivrc(ly+lp)
+             if (.not.unito) then
+               scr(1) = scr(1)/conv(2)
+               scr(2) = scr(2)/conv(2)
+               scr(3) = scr(3)/conv(2)
+             endif
+             write (output,2135) htstno(ly),(scr(ij),ij=1,6),
+     &       (iscr(ij),ij=7,8)
+ 2135        format (i10,1p,6g14.6,2i14)
+           enddo
+           write (output,2132) (lrl(lp+1),ij=1,4)
+ 2132  format ('0',11x,a5,3(9x,a5)/
+     & '            natural       rod           fouling',
+     & '       pg chfr'/
+     & ' structure  convection    pitch/        factor',
+     & '        correlation'/
+     & '    number  length        diameter ',
+     & '                   option')
+           do i = lx,lz
+             ly = ihtptr(i) + l
+             if (htlncf(ly+lp) .lt. hthdmo(ly+lp)) then
+               htlncf(ly+lp) = hthdmo(ly+lp)
+             endif
+             scr(1) = htlncf(ly+lp)
+             scr(2) = htpovd(ly+lp)
+             scr(3) = htfftr(ly+lp)
+             iscr(4) = pgopti(ly+lp)
+             if (.not.unito) then
+               scr(1) = scr(1)/conv(2)
+             endif
+             write (output,2136) htstno(ly),(scr(ij),ij=1,3),
+     &       iscr(4)
+ 2136        format (i10,1p,3g14.6,i6)
+           enddo
+         else
+           write (output,2033) (lrl(lp+1),ij=1,8)
+ 2033  format ('0',11x,a5,7(9x,a5)/
+     & '            heated        heat. length',
+     & '  heat. length  length from   length from ',
+     & '  grid spacer   grid spacer   axial power '/
+     & ' structure  equivalent    from inlet  ',
+     & '  from inlet    grid spacer   grid spacer ',
+     & '  loss coef.    loss coef.    peaking     '/
+     & '    number  diameter      (forward)   ',
+     & '  (reverse)     (forward)     (reverse)   ',
+     & '  (forward)     (reverse)     factor      ')
+           do i = lx,lz
+             ly = ihtptr(i) + l
+             scr(1) = hthdmo(ly+lp)
+             scr(2) = htlnfo(ly+lp)
+             scr(3) = htlnro(ly+lp)
+             scr(4) = grdzfo(ly+lp)
+             scr(5) = grdzro(ly+lp)
+             scr(6) = grdkfo(ly+lp)
+             scr(7) = grdkro(ly+lp)
+             scr(8) = apfaco(ly+lp)
+             if (.not.unito) then
+               scr(1) = scr(1)/conv(2)
+               scr(2) = scr(2)/conv(2)
+               scr(3) = scr(3)/conv(2)
+               scr(4) = scr(4)/conv(2)
+               scr(5) = scr(5)/conv(2)
+             endif
+             write (output,2035) htstno(ly),(scr(ij),ij=1,8)
+ 2035        format (i10,1p,8g14.6)
+           enddo
+           write (output,2131) (lrl(lp+1),ij=1,3)
+ 2131  format ('0',11x,a5,2(9x,a5)/
+     & '            natural       rod           fouling'/
+     & ' structure  convection    pitch/        factor'/
+     & '    number  length        diameter ')
+           do i = lx,lz
+             ly = ihtptr(i) + l
+             if (htlncf(ly+lp) .lt. hthdmo(ly+lp)) then
+               htlncf(ly+lp) = hthdmo(ly+lp)
+             endif
+             scr(1) = htlncf(ly+lp)
+             scr(2) = htpovd(ly+lp)
+             scr(3) = htfftr(ly+lp)
+             if (.not.unito) then
+               scr(1) = scr(1)/conv(2)
+             endif
+             write (output,2035) htstno(ly),(scr(ij),ij=1,3)
+           enddo
+         endif
+           write (output,2077)
+ 2077  format (/' Warning; If any of the above lengths were zero they'
+     & ' are defaulted to the Heated Equivalent Diameter.')
+         if (htbnt(ly+lp) .gt. 109 .and. htbnt(ly+lp) .lt. 114) then
+           if (htpovd(ly+lp) .lt. 1.1) then
+             write(output,2078)
+ 2078  format(/' P/D s less than 1.1 are later defaulted to 1.1 '/)
+           endif
+         endif
+       endif
+c
+       if (lp .eq. 0) then
+         lp = 1
+         go to 82
+       endif
+       endif
+c  See if there can be more heat structures.
+   30  nh = nh + 1
+   18   if (nh .lt. 10000) go to 10
+c  Delete input cards.
+   32  filsiz(1) = inp9(fa(filndx(1)))
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+c  If heat structures present, write combined directory and storage
+c  block.
+       if (.not.fil) return
+       if (nhs .eq. 0) then
+         filsiz(8) = 0
+         if (filid(8) .eq. 0) return
+         if (isfdes(filid(8)) .ne. 0) call ftbdel (filid(8))
+         filid(8) = 0.0
+         return
+       endif
+       j = filsiz(8)
+       filsiz(8) = filsiz(8) + k
+       nhtstr(filndx(8)) = nhs
+c  Modify pointers for combined filid(8) and fid.
+       lx = filndx(8)
+       lz = filndx(8) + nhs - 1
+       do i = lx,lz
+         l = ihtptr(i) + j
+         ihtptr(i) = l
+         k = l + lx
+         htgom(k) = htgom(k) + j
+         htxft(k) = htxft(k) + j
+         htxit(k) = htxit(k) + j
+       enddo
+       call ftbsft (filid(8),filsiz(8),2,filndx(8))
+       return
+       end

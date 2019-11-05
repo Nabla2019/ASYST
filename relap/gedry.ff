@@ -1,0 +1,167 @@
+*mlist
+       subroutine gedry (i1, n, i)
+c
+c  Computes the needed input to the GE mechanistic separator
+c  model and calls the GE subroutines plus the dryer model.
+c
+c  Cognizant engineer: wlw.
+c
+*in32 ih1
+*in32 ih2
+*in32end
+c
+       implicit none
+c
+       integer i1,n,i
+        include 'fast.h'
+        include 'cmpdat.h'
+        include 'comctl.h'
+        include 'contrl.h'
+        include 'jundat.h'
+        include 'lvectr.h'
+        include 'przdat.h'
+        include 'separ.h'
+        include 'statec.h'
+        include 'ufiles.h'
+        include 'voldat.h'
+c
+       real wi, xi, pi, rovi, roli, visli, visvi
+       real vorn, dppa, wfcut, wfcot, wgcut
+       real tenm6
+       real alpi, wvi, wmi, vli, vvi, fai, wli, alp
+       real rmtop, rmdis, ptop, pdis
+       real wgcot, alpgj1, alpfj1, alpgj2, alpfj2
+       real hrhogs(3)
+       real rolj, rovj
+       real cdim, vvj, dim, alpj, gdry
+       real vel
+       integer i1j, i2j, i3j, isoln, istage, ix, k, l, k1, k2, l1, l2
+       integer ih1(1),ih2(2)
+       equivalence (ih1(1),ia(4)),(ih2(1),ia(6))
+c
+       if (isepst(n).eq.2 .or. isepst(n).eq.5) istage = 2
+       if (isepst(n).eq.3 .or. isepst(n).eq.6) istage = 3
+c
+       i1j = i
+       i2j = i + ijskp
+       i3j = i2j + ijskp
+       k = ij1nx(i3j)
+       l = ij2nx(i3j)
+       vorn = 0.5
+c  Get separator inlet properties.
+       tenm6 = .000001
+       alpi = voidgj(i3j)
+       roli = rhofj(i3j)
+       rovi = rhogj(i3j)
+       vli = velfj(i3j)
+       vvi = velgj(i3j)
+       fai = ajun(i3j)
+       wli = fai*(1. - alpi)*roli*vli
+       wvi = fai*alpi*rovi*vvi
+       wmi = wli + wvi
+       alp = voidg(l)
+       pi = 0.5*(p(k) + p(l))
+c  Determine whether to perform separator solution.
+       wi = wmi
+       xi = wvi/wmi
+       xim(n) = 1. - xi
+       if (wi.lt.0. .or. xi.lt.0. .or. xim(n).lt.tenm6 .or. alp.lt.0.05)
+     & then
+         isoln = 0
+       else
+         isoln = 1
+       endif
+       if (isoln .ne. 0) then
+c  Perform separator solution.
+c  Mechanistic separator.
+c  Compute liquid level on outside of separator.
+         k1 = ij1nx(i1j)
+         l1 = ij2nx(i1j)
+         rmtop = voidg(l1)*rhog(l1) + voidf(l1)*rhof(l1)
+         ptop = p(l1) + rmtop*gravcn*hydzc(l1)
+         k2 = ij1nx(i2j)
+         l2 = ij2nx(i2j)
+         rmdis = voidg(l2)*rhog(l2) + voidf(l2)*rhof(l2)
+         pdis = p(l2) - rmdis*gravcn*hydzc(l2)
+         hrhogs(1) = ptop - pdis
+         hrhogs(2) = 0.
+         hrhogs(3) = 0.
+         visvi = viscg(k)
+         visli = viscf(k)
+         wfcut = 0.
+         wfcot = 0.
+         wgcut = 0.
+         wgcot = 0.
+c  Do separator solution.
+         isoln = 1
+         call gesub (wi, xi, pi, rovi, roli, visli, visvi, istage,
+     &   gerr1(n), geai(n), gean(n), gerh(n), geang(n), gerws(n),
+     &   gerrss(n), geads(n), gedds(n), hrhogs, gehds(n), gehsks(n),
+     &   gecks(n), geefflds(n), geaas(n), gebbs(n), vorn, cwfco(n),
+     &   cwgcu(n), dppa, wfcut, wfcot, wgcut, wgcot, isoln, gravcn)
+c
+         if (isoln .ne. 0) then
+           xco(n) = wfcot/(wgcot + wfcot)
+           xcu(n) = wgcut/(wgcut + wfcut)
+c  Load the volume fractions into arrays.
+           wgcot = abs(wgcot)
+           wgcut = abs(wgcut)
+           wfcot = abs(wfcot)
+           wfcut = abs(wfcut)
+           alpgj1 = wgcot/(wgcot + wfcot*(rhogj(i1j)/rhofj(i1j)))
+           alpfj1 = 1.0 - alpgj1
+           alpgj2 = wgcut/(wgcut + wfcut*(rhogj(i2j)/rhofj(i2j)))
+           alpfj2 = 1.0 - alpgj2
+         endif
+       endif
+       if (isoln .eq. 0)
+     & write(*,*) ' ******** GE Separator model did not converge.'
+       vvj = velgo(l)*alpgj1 + velfo(l)*alpfj1
+       vvj = max(vvj, 0.0)
+       alpj = alpgj1
+       rolj = rhof(l)
+       rovj = rhog(l)
+c  Compute dryer capacity factor and donor void fraction.
+       cdim = 1. - (vvj - vdryl(n))/(vdryu(n) - vdryl(n))
+       cdim = max(0.0, min(1.0, cdim))
+       dim = 1. - alpj/(alpj + (1. - alpj)*rolj/rovj)
+       gdry = 1.
+       if (dim .gt. cdim) then
+         gdry = 1. + (cdim - dim)/deldim(n)
+         gdry = max(0.0, gdry)
+c  Now compute exit volume fractions.
+         ix = jcnxs(i1j)
+         voidgj(i1j) = 1.0
+         vodgjr(i1j) = voidgj(i1j)/voidg(ih2(ix))
+         voidfj(i1j) = 0.0
+         vodfjr(i1j) = voidfj(i1j)/voidf(ih1(ix))
+         ix = jcnxs(i2j)
+         voidgj(i2j) = 0.0
+         vodgjr(i2j) = voidgj(i2j)/voidg(ih2(ix))
+         voidfj(i2j) = 1.0
+         vodfjr(i2j) = voidfj(i2j)/voidf(ih1(ix))
+         alpgj1 = 1.0
+         alpgj2 = 0.0
+         if (velfj(i1j) .gt. 1.e-3) then
+           alpgj1 = gdry + alpj * (1.0 - gdry)
+           vel = max(abs(velgj(i1j)) , 1.0e-20)
+           alpgj1 = min(alpgj1, 0.9*voidg(l)*v(l)/(ajun(i1j)*vel*dt))
+           alpfj1 = 1.0 - alpgj1
+           alpfj2 = 1.0
+           alpgj2 = 0.0
+         endif
+         if (velfj(i1j) .gt. 1.e-3) then
+           ix = jcnxs(i1j)
+           voidgj(i1j) = alpgj1
+           vodgjr(i1j) = voidgj(i1j)/voidg(ih2(ix))
+           voidfj(i1j) = alpfj1
+           vodfjr(i1j) = voidfj(i1j)/voidf(ih1(ix))
+           ix = jcnxs(i2j)
+           voidgj(i2j) = alpgj2
+           vodgjr(i2j) = voidgj(i2j)/voidg(ih2(ix))
+           voidfj(i2j) = alpfj2
+           vodfjr(i2j) = voidfj(i2j)/voidf(ih1(ix))
+         endif
+       endif
+       return
+       end

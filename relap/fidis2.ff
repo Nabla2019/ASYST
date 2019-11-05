@@ -1,0 +1,164 @@
+*mlist
+       subroutine fidis2(fic,vfg,alp,surfa,i,k,kk,diamjt,reflod)
+c
+c
+c  fidis2 computes the junction interphase drag term for bubbles and
+c  droplets.
+c
+c  Cognizant engineer:  rar, rws.
+c
+       implicit none
+c
+c     k=0 bubbles   k=1 droplets  k=2 postchf droplets
+c
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'jundat.h'
+       include 'stcom.h'
+       include 'voldat.h'
+c
+c  local variables.
+      real alp,fic,rdiam,rey,surfa,vfg,vfg2,voidx,xa
+      real cd,diam,diamjt,dmin,preduc
+      real web(3),dcon(3)
+      integer i,k,kk
+      logical reflod
+c
+c  data statements
+      if (reflod) then
+                      dcon(1) = 5.e-03
+                      dcon(2) = 1.5e-03
+                      dcon(3) = 2.e-04
+                      web(1) = 5.0
+                      web(2) = 1.5
+                      web(3) = 1.5
+      else
+                      dcon(1) = 5.e-03
+                      dcon(2) = 2.5e-03
+                      dcon(3) = 2.e-04
+                      web(1) = 5.0
+                      web(2) = 1.5
+                      web(3) = 6.0
+      endif
+c
+c
+      xa        = max(web(k+1)*sigma(kk),1.0e-10)
+c  in postchf limit drop diameters to be min 0f 0.1 in = 0.00254 m
+c  Increase Weber Number from 3.0 to 12. Average drop=1/2 max size.
+c  Drop drag max=0.45
+c  Suggestion of Len Ward NE Utilites
+      if(k .eq. 2) then
+         vfg  = max(abs(vfg),.001)
+         diam = xa/(rhogj(i)*vfg**2)
+c  The following is for mist (dry wall) flow k=2.
+c  FLECHT steam temperatures are high indicating possibly big drops
+c  at low pressure.
+c  On the RIT heated tube test the wall temperatures do not turn over
+c  because the steam temperature is high so we need
+c  small drops at high pressure.  We can lower the minimum drop size
+c  as a function of pressure.
+c  The pressure range to interpolate over is unknown.
+c  Use an interolation range p-reduced from .25 to .025 as a quess.
+c
+        preduc = p(kk)/pcrit
+        if(preduc .lt. 0.25) then
+          if(preduc .lt. 0.025) then
+            dmin = dcon(2)
+          else
+            dmin = dcon(2) + (dcon(3) - dcon(2))*4.44444*(preduc-0.025)
+          endif
+        else
+          dmin = dcon(3)
+        endif
+         diam = max(diam,dmin)
+         diam = min(diamj(i),diam,dcon(2))
+         surfa= 3.6*alp/diam
+c
+c ----   DSL,3/20/96 change Re number to fit R5 manual and Ishii-Chalwa
+c ----   paper, (NUREG/CR-1230) on dispersed droplet flow, change in
+c ----   fidisv.F also
+c
+             rey  = rhogj(i)*vfg*diam*((1.-alp)**2.5)/viscg(kk)
+c
+c ----   old (incorrect) relation follows
+c
+c            rey  = rhogj(i)*vfg*diam/viscg(kk)
+c
+c ----   DSL, continued, cd is from Ishii-Chawla NUREG/CR-1230
+c
+         cd   = 3.*(1. + .1*rey**.75)/rey
+c
+c        the above is 1/8 of cd; since we are using surface area
+c        which is 1/4 the frontal area of drops
+c        0.45/8= 0.05625
+c
+         cd   = max(cd,0.05625)
+         fic  = rhogj(i)*surfa*cd
+c
+c --- DSL 3/20/96, multiplier on fic, for dispersed drops
+c     changes for alpha limits, original used 100,000.0 as
+c     a multiplier at alp = .0001, alp is the liquid void fraction
+c     can use ramp from .001 to .0001
+c     original used linear ramp from ficmult =1 at alp = .001 to ficmult
+c     = 100,000.0 at alp = .0001, resulting relation is:
+c     ficmult = 1.0 -(1.1111e+8)*alp + 1.1111e+5
+c     note that on calculators there is a precision error, that is why
+c     1.0 is added to the formula, ficmult = 0.0 results without adding
+c     can add the linear ramp if desired
+c     coding will be, add local variable ficmult at top of code
+c
+c     if(chngno(56).and.alp.le..001) then
+c     ficmult = 1.0 -(1.1111e+8)*alp + 1.1111e+5
+c     fic = ficmult*fic
+c     endif
+c
+         if(chngno(56).and.alp.le..0001) then
+         fic = fic*1.e+3
+         endif
+c
+         go to 999
+      endif
+      vfg2      = max(vfg**2,xa/(rhofj(i+k)*min(dcon(k+1)
+     1           *alp**0.333333333,diamjt)))
+      rdiam = rhofj(i+k)*vfg2/xa
+           if (chngno(55)) then
+c
+c     Limit drop diameter to > 84 microns (TRAC)
+c
+              rdiam = min(rdiam,1.0/84.0e-6)
+c
+           endif
+      if (chngno(13)) rdiam = min(rdiam,1.0/dcon(k+1))
+      voidx = 1.0-alp
+      if(k.eq.1) go to 102
+      rey = xa*voidx/(viscf(kk)*sqrt(vfg2))
+      go to 104
+  102 rey = xa*voidx**3/(viscg(kk)*sqrt(vfg2*voidx))
+  104 surfa = 10.8*alp*rdiam
+c 3.*3.6=10.8;  3.6 from surface area/vol and 3. from drag coeff.
+      fic = rhofj(i+k)*surfa*(1.0+0.1*rey**0.75)/rey
+c
+c --- DSL 3/20/96, multiplier on fic, for dispersed drops
+c     changes for alpha limits, original used 100,000.0 as
+c     a multiplier at alp = .0001, alp is the liquid void fraction
+c     can use ramp from .001 to .0001
+c     original used linear ramp from ficmult =1 at alp = .001 to ficmult
+c     = 100,000.0 at alp = .0001, resulting relation is:
+c     ficmult = 1.0 -(1.1111e+8)*alp + 1.1111e+5
+c     note that on calculators there is a precision error, that is why
+c     1.0 is added to the formula, ficmult = 0.0 results without adding
+c     can add the linear ramp if desired
+c     coding will be, add local variable ficmult at top of code
+c
+c     if(chngno(56).and.alp.le..001) then
+c     ficmult = 1.0 -(1.1111e+8)*alp + 1.1111e+5
+c     fic = ficmult*fic
+c     endifc
+c
+      if(chngno(56).and.k.eq.1.and.alp.le..0001) then
+          fic = fic*1.e3
+         endif
+999   continue
+      return
+      end

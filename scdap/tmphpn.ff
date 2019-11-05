@@ -1,0 +1,375 @@
+*mlist
+*if def,selap
+       subroutine tmphpn (tsatlp, dt, timehy, j, pitch1, rcos1, nsigl1,
+     *    dqpool, wurod, wzrod, wuslg, wzslg, nhrdpn, wincl,
+     *    dzcond, tmpblk, igrinc,tm1sur)
+c
+c
+c  calculates temperature distribution through hardpan that supports
+c  liquefied core debris. it also calculates change in thickness of this
+c  hardpan and amount of heat transfer from bottom of hardpan into
+c  coolant. it also calculates variables in equation to calculate heat
+c  transfer from liquefied core debris into hardpan.
+c
+c  Cognizant engineer: ewc.
+c
+c     tsatlp=sink temperature for heat transfer calculations for lower
+c            crust (K)
+c     dt=time step (s)  input
+c     j = number of component under consideration  input .
+c     pitch1=spacing of fuel rods (m)  input .
+c     rcos1=original outer radius of fuel rods (m)  input .
+c     nsigl1=number of rods in component j  input .
+c     dqpool=heat transferred from liquid debris pool to hardpan
+c            for all rods in component (joules)  output
+c       since hnpool(j) and tupool are input, dqpool is effectively
+c      also an input variable.
+c      wurod = mass of uo2 per rod per unit length (kg/m) input .
+c      wzrod = mass of zr per rod per unit length (kg/m)  input .
+c      wuslg = mass of uo2 in space between rods (kg/m)  input .
+c      wzslg = mass of zr in space between rods (kg/m)  input .
+c      tmltuo = melting temperature of mixture of zr-u-o (k)
+c      wincl  = mass of as-fabricated grid spacer at this axial node.
+c      tmpblk = temp of debris mixture
+c      igrinc = indicator of grid spacer material; 0=Zr, 1+inconel.
+c      tm1sur = surface temperature of axial node just below crust (K).
+c
+       implicit none
+*call cons
+*call scddat
+*call cpmdat
+*call hardpn
+*call ufiles
+*call scdpow
+       integer j,nhrdpn,nsigl1,igrinc
+       real tsatlp,dt,timehy,pitch1,rcos1,dqpool,tmpblk,wurod,
+     * wzrod,wuslg,wzslg,wincl,dzcond
+       real tm1sur
+c
+*call slumpv
+       real c,d
+       dimension nhrdpn(ncomp), c(3,3), d(3)
+c
+c  Local variables.
+       integer itcnt,nconv
+       real a0,a1,a1prev,afru1,afru2,afrz1,afrz2,alpha,arad,b0,b1,c0,
+     * c1,dtdxi,dtdxo,dthkdt,fdenmt,femiss,fnumrt,hrad,thk0,thk1,
+     * thkold,tihpn0,tmpnew,tmpold,tmprad,tsatp0,wag1,wag2,
+     * wbc1,wbc2,wss1,wss2,wsso1,wsso2,wuo1,wuo2,wzr1,wzr2,wzro1,
+     * wzro2,wzruo1,wzruo2,qdhdp1
+       external mixtmp
+c
+c     define stefan-boltzmann constant
+       real acclim
+       integer itmax
+       real sigrad
+       data sigrad / 5.6697e-8/
+c
+c      acclim = convergence criteria (fraction)
+c      itmax=maximum iteration limit
+       data acclim / 0.005/, itmax/ 25/
+       tsatp0 = tsatlp
+       itjump(j) = 0
+c
+       if(thkhpn(j).lt.1.e-6)then
+c  meltthrough of hardpan.
+       achdpn(j)=tupool
+       bchdpn(j)=0.0
+       cchdpn(j)=0.0
+       qgmhpn(j)=0.0
+       qchdpn(j)=0.0
+       ibhdpn(j)=1
+       tihdpn(j)=tupool
+       dqpool=0.0
+       go to 800
+       end if
+        if(tupool.lt.(tmltuo+1.))then
+c       case of negligible heat transfer into crust from molten pool
+        achdpn(j)=tm1sur
+       bchdpn(j)=0.0
+       cchdpn(j)=0.0
+       qgmhpn(j)=0.0
+       qchdpn(j)=0.0
+       ibhdpn(j)=0
+       tihdpn(j)=tm1sur
+       dqpool=0.0
+       go to 800
+       end if
+       if(nshdpn(j).eq.0)then
+c
+c      Calculate jump increase in temperature of grid spacer due to
+c      contact with slumping material.
+c
+c     Note. In HEATLD t0hdpn set equal to tcond3(1,k1,j)
+       tmpold = t0hdpn(j)
+       tmpnew = tmpslg(j)
+       wuo1   = wurod*dzcond
+       wuo2   = wuslg*thkhpn(j)
+       wzr1   = wzrod*dzcond
+       wzr2   = wzslg*thkhpn(j)
+       if(igrinc.eq.1)then
+       wss1   = wincl
+       else
+       wzr1=wzr1+wincl
+       wss1=0.0
+       end if
+       wss2   = 0.0
+       wzro1  = 0.0
+       wzro2  = 0.0
+       wag1   = 0.0
+       wag2   = 0.0
+       wsso1  = 0.0
+       wsso2  = 0.0
+       wzruo1 = 0.0
+       wzruo2 = 0.0
+       afru1  = 0.33333334
+       afru2  = 0.33333334
+       afrz1  = 0.0
+       afrz2  = 0.0
+       wbc1   = 0.0
+       wbc2   = 0.0
+c  calculate equilibrium temperature of mixture
+       call mixtmp(wuo1, wuo2, wzr1, wzr2, wzro1, wzro2, wag1,
+     # wag2, wss1, wss2, wsso1, wsso2, wzruo1, wzruo2, afru1,
+     # afru2, afrz1, afrz2, wbc1, wbc2, tmpold, tmpnew, tmpblk)
+c  set Flag indicating jump in temperature
+       itjump(j) = 1
+       a0=tmpblk
+       b0=0.0
+       c0=0.0
+       nshdpn(j)=1
+          else
+       a0=achdpn(j)
+       b0=bchdpn(j)
+       c0=cchdpn(j)
+          end if
+       thk0=thkhpn(j)
+       tihpn0=a0+b0*thk0+c0*thk0**2
+c
+c      alpha=thermal diffusivity of hardpan(m**2/s)
+c
+       alpha=cnhdpn(j)/(rhohpn(j)*cphdpn(j))
+       itcnt=0
+       a1=a0
+  100  continue
+       itcnt=itcnt+1
+       a1prev=a1
+c
+c      define coefficient matrix and d vector.
+c
+       if(iswlay(j).ne.1)then
+       c(1,1)=1./thkhpn(j)
+       c(2,1)=0.5
+       c(3,1)=0.33333333*thkhpn(j)-2.*alpha*dt/thkhpn(j)
+       qdhdp1=qdhdpn(j)
+       if(nspowi.eq.3)qdhdp1=qdhdp1*powtot(j)
+       d(1)=a0*thk0/thkhpn(j)**2 + 0.5*b0*(thk0/thkhpn(j))**2
+     # +0.33333333*c0*(thk0**3)/thkhpn(j)**2
+     # +qdhdp1*dt/(rhohpn(j)*cphdpn(j)*thkhpn(j))
+c
+c
+       else
+c
+c      case of new layer on top of hardpan.
+c      calculate bulk average temperature of old and new layer.
+c
+       thkold=thkhpn(j)-thklay(j)
+c***   tmpold=a0+0.5*b0*thkold + c0*thkold**2/3.
+c***   if(tmpold.lt.t0hdpn(j))tmpold=t0hdpn(j)
+c      Note.  Cohesive debris is modeled by intact rod component until
+c             it supports molten pool.
+       tmpold=t0hdpn(j)
+       tmpnew=tmpslg(j)
+       wuo1=(wurod+wuslg)*thkold
+       wuo2=(wurod+wuslg)*thklay(j)
+       wzr1=(wzrod+wzslg)*thkold
+       wzr2=(wzrod+wzslg)*thklay(j)
+       wzro1=0.0
+       wzro2=0.0
+       wag1=0.0
+       wag2=0.0
+c      Consider weight of grid spacer.
+       if(igrinc.eq.1)then
+       wss1=wincl
+       else
+       wzr1=wzr1+wincl
+       wss1=0.0
+       end if
+       wss2=0.0
+       wsso1=0.0
+       wsso2=0.0
+       wzruo1=0.0
+       wzruo2=0.0
+       afru1=0.33333333334
+       afru2=0.3333333334
+       afrz1=0.0
+       afrz2=0.0
+       wbc1=0.0
+       wbc2=0.0
+       call mixtmp(wuo1, wuo2, wzr1, wzr2, wzro1, wzro2, wag1,
+     # wag2, wss1, wss2, wsso1, wsso2, wzruo1, wzruo2, afru1,
+     # afru2, afrz1, afrz2, wbc1, wbc2, tmpold, tmpnew, tmpblk)
+c  Find new equilibrium temperature for mixture of cohesive debris,
+c  intact rods, and grid spacer.
+       tmpold = tmpblk
+       tmpnew = t0hdpn(j)
+       wuo1   = wuo1 + wuo2
+       wuo2   = wurod*(dzcond-thkhpn(j))
+       wzr1   = wzr1 + wzr2
+       wzr2   = wzrod*(dzcond-thkhpn(j))
+c      Note.  Value of wss1 still holds from previous case.
+       wss2=0.0
+c  mass of other constituents are zero as for the first call to mixtmp
+       call mixtmp(wuo1, wuo2, wzr1, wzr2, wzro1, wzro2, wag1,
+     # wag2, wss1, wss2, wsso1, wsso2, wzruo1, wzruo2, afru1,
+     # afru2, afrz1, afrz2, wbc1, wbc2, tmpold, tmpnew, tmpblk)
+c  set Flag indicating jump in temperature
+       itjump(j) = 1
+c***   write(output,934)j,nhrdpn(j),timehy
+c***934    format(' tmphpn',
+c*** # ' Relocation of fuel rod material for component #',
+c*** # i3,/,' from higher elevation to axial node #',i3,
+c*** # ' event time=',g18.10)
+c***   write(output,932)tmpblk,tmpslg(j),tmpnew
+c***932    format(' tmphpn  temperature (K) after relocation =',e10.4,/
+c*** # ' tmphpn temperature of slumping material =',e10.4,/
+c*** # ' tmphpn  temperature at location before slumping =',e10.4)
+       a0=tmpblk
+       c(1,1)=1./thkhpn(j)
+       c(2,1)=0.5
+       c(3,1)=thkhpn(j)/3.
+       d(1)=tmpblk/thkhpn(j)
+       end if
+c
+c      calculate radiation h.t.c.
+c
+c      femiss=emissivity factor
+c
+       femiss=0.7
+       if(itcnt.le.1)then
+       tmprad=a0
+       else
+       tmprad=a1
+       end if
+       tsatlp=tchdpn(j)
+c    Code corrected in January 1992 by eliminating following IF logic.
+c    Sink temperature should not be dependent on whether slumping debris
+c    breaks up or remains intact.
+c***   if (nstslp(mcp) .eq. 1) then
+c***     tsatlp = tmprad
+c***   else
+c***     tsatlp = tchdpn(j)
+c***   end if
+       hrad=sigrad*fahdpn(j)*femiss*(tmprad**2+tsatlp**2)
+     # *(tmprad+tsatlp)
+       c(1,2)=(hrad+hchdpn(j))/cnhdpn(j)
+       c(2,2)=-1.
+       c(3,2)=0.0
+       d(2)=hrad*tsatlp/cnhdpn(j)+hchdpn(j)*tchdpn(j)/cnhdpn(j)
+c
+c      check to see whether hardpan is melting.
+c
+       if(tihpn0.lt.(tmhdpn(j)-1.))then
+c
+c      case of hardpan not melting.
+c
+       c(1,3)=0.0
+       c(2,3)=1.
+       c(3,3)=2.*thk0
+       if(tupool.gt.tmltuo)then
+       d(3)=(hnpool(j)/cnhdpn(j))*(tupool-tmltuo)
+       else
+c      heat transfer from top surface of hardpan is not modeled.
+       d(3)=0.0
+       end if
+c
+c      case of hardpan melting.
+c
+       else
+       c(1,3)=1./thkhpn(j)
+       c(2,3)=1.
+       c(3,3)=thkhpn(j)
+       d(3)=tmhdpn(j)/thkhpn(j)
+       end if
+c
+c      solve for a, b, c
+c
+       fnumrt=d(3)-c(2,3)*d(2)/c(2,2) - c(3,3)*d(1)/c(3,1)
+     # +c(3,3)*c(2,1)*d(2)/(c(3,1)*c(2,2))
+       fdenmt=c(1,3)-c(2,3)*c(1,2)/c(2,2)
+     # +c(3,3)*c(2,1)*c(1,2)/(c(3,1)*c(2,2))
+     # -c(3,3)*c(1,1)/c(3,1)
+       a1=fnumrt/fdenmt
+       b1=d(2)/c(2,2) - c(1,2)*a1/c(2,2)
+       c1=(c(2,1)*c(1,2)/(c(3,1)*c(2,2))-c(1,1)/c(3,1))*a1
+     # +d(1)/c(3,1) - c(2,1)*d(2)/(c(3,1)*c(2,2))
+c
+c     calculate temperature gradients at inner and outer surface
+c     of hardpan.
+c
+       dtdxo=b1
+       dtdxi=b1+2.*c1*thkhpn(j)
+       if(tihpn0.lt.(tmhdpn(j)-1.))then
+       dthkdt=0.0
+       thk1=thk0
+       else
+c
+c      update thickness of hardpan.
+c
+       if(tupool.gt.tmltuo)then
+       dthkdt=(1./(hfhdpn(j)*rhohpn(j)))*
+     # (cnhdpn(j)*(b1+2.*c1*thkhpn(j))
+     # -hnpool(j)*(tupool-tmltuo))
+       else
+       dthkdt=0.0
+       end if
+       thk1=thk0+dthkdt*dt
+       end if
+       nconv=0
+       if(iswlay(j).eq.1)nconv=1
+       if(abs((a1-a1prev)/a1).lt.acclim)then
+       nconv=1
+       end if
+       if(itcnt.ge.itmax.and.nconv.eq.0)then
+       write(output,921)itcnt,a0,a1,a1prev
+  921  format ('0 *** nonconvergence in subroutine tmphpn ***',
+     # ' itcnt=',i5,' a0=',e10.4,' a1=',e10.4,' a1prev=',e10.4)
+       nconv=1
+       end if
+       thkhpn(j)=thk1
+       if(nconv.eq.0)go to 100
+c
+c      update variables.
+c
+       achdpn(j)=a1
+       bchdpn(j)=b1
+       cchdpn(j)=c1
+       tihdpn(j)=a1+b1*thk1+c1*thk1**2
+c      to protect against case of solution for rate of crust melting
+c      going unstable and calculating complete meltthrough in one time
+c      step, set maximum reduction in thickness to 10% of start of time
+c      step value.
+       if(thkhpn(j).lt.(0.9*thk0))then
+       thkhpn(j)=0.9*thk0
+       end if
+         if(thkhpn(j).le.1.e-6)then
+         write(output,950)timehy,j,thkhpn(j),thk1,thk0
+950   format(' tmphpn  at event time =',g18.10,' for component #'
+     #,i3,/,' tmphpn meltthrough of crust supporting molten pool',
+     # ' thkhpn=',e10.4,' thk1=',e10.4,' thk0=',e10.4)
+         write(output,952)hnpool(j),tupool,cnhdpn(j),hfhdpn(j)
+952      format(' tmphpn   hnpool=',e10.4,' tupool=',e10.4,
+     # ' cnhdpn=',e10.4,' hfhdpn=',e10.4)
+         end if
+       arad=fahdpn(j)*float(nsigl1)*(pitch1**2-pi*rcos1**2)
+       qgmhpn(j) = arad * femiss * sigrad * (a1**4 - tsatlp**4)
+c      add on convective heat transfer.
+c     Note. tsatlp may be cooler than fluid in contact with lower crust.
+       qgmhpn(j)=qgmhpn(j)+arad*hchdpn(j)*(a1-tsatlp)
+       qchdpn(j)=0.0
+       dqpool=qgmhpn(j)*dt
+  800  continue
+       tsatlp = tsatp0
+       return
+       end
+*endif

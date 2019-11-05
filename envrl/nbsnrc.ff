@@ -1,0 +1,591 @@
+*deck nbsnrc
+c-----------------------------------------------------------------------
+c
+c     NBS/NRC water properties routines.
+c
+c     Following modifications made for INEL version:
+c
+c     1) source code converted to lower case
+c
+c     2) "implicit double precision" changed to "implicit real*8"
+c
+c     3) "$if def,in32" inserted before each "implicit real*8"
+c
+c     4) explicit "double precision" changed to explicit "real"
+c
+c     5) "d" exponent designator changed to "e" in literal constants
+c        ("d0" deleted)
+c
+c     6) double precision intrinsic function names changed to generic
+c        names, e.g., dsqrt -> sqrt
+c
+c     7) message for possible inaccurate density commented out in S.R.
+c        dfind
+c
+c     8) iteration logic modified in S.R. tcorr to allow calculation
+c        of saturation temperature at/near critical pressure
+c
+c     9) "if(p.gt.22.05)" replaced with "if(p.gt.22.054915)" in function
+c        tsat to allow calculation of saturation properties at critical
+c        pressure
+c
+c                                        John Tolli, EG&G Idaho, Inc.
+c                                        2/94
+c-----------------------------------------------------------------------
+c  Anamolous contribution to thermal cond. from iaps 1977 scientific
+c  form.
+c
+      subroutine anathc(ts,r1,dt,dr,visc,dpdt,chi,delth)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+       real visc,dpdt
+      data tref,rref,pref/647.27,317.763,22.115/
+      data a,b,c,omega/18.66,1.00,3.7711e-08,0.4678/
+c
+      dpdtr=dpdt*tref/pref
+      chir=abs(chi*pref/rref/rref)**omega
+      ex=-a*dt**2-b*dr**4
+      fac=(ts/r1*dpdtr)**2*chir*sqrt(r1)
+      delth=c*fac*exp(ex)/visc
+      return
+      end
+c
+      function base(d,t)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+c this function calculates z (=pbase/(drt) of eq. q) (called base),
+c   and also abase,gbase,sbase,ubase,hbase,cvbase, and 1/(drt) * dp/dt
+c the ab,gb,sb,ub,hb and cvb are calculated in dimensionless units:
+c   ab/rt, gb/rt, sb/r, etc.
+      common /ellcon/ b1,b2,b1t,b2t,b1tt,b2tt
+      common /basef/ ab,gb,sb,ub,hb,cvb,dpdtb
+      common /aconst/ wm,gascon,tz,z,dz,y,uref,sref
+      data g1,g2,gf/11.,44.333333333333,3.5/
+      y=.25*b1*d
+      x=1.-y
+      z0=(1.+g1*y+g2*y*y)/x**3
+      z=z0+4.*y*(b2/b1-gf)
+      dz0=(g1+2.*g2*y)/x**3 + 3.*(1.+g1*y+g2*y*y)/x**4
+      dz=dz0+4.*(b2/b1-gf)
+      ab = -log(x)-(g2-1.)/x+28.16666667/x/x+4.*y*(b2/b1-gf)
+     1  +15.166666667 + log(d*t*gascon/.101325)
+      gb = ab + z
+      base = z
+      bb2tt=t*t*b2tt
+      ub= -t*b1t*(z-1.-d*b2)/b1-d*t*b2t
+      hb=z+ub
+      cvb=2.*ub+(z0-1.)*((t*b1t/b1)**2-t*t*b1tt/b1)
+     1 - d*(bb2tt - gf*b1tt*t*t) -(t*b1t/b1)**2*y*dz0
+      dpdtb=base/t + base*d/z*(dz*b1t/4.+b2t-b2/b1*b1t)
+      sb = ub - ab
+      return
+      end
+c
+      subroutine bb(t)
+c     - - - -  the b's calculated here are in cm3/g.
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /ellcon/ b1,b2,b1t,b2t,b1tt,b2tt
+      common /aconst/ wm,gascon,tz,z,dz,y,uref,sref
+      dimension v(6),p(7),q(7)
+      data p/.7478629,-.3540782,2*0.,.007159876,0.,
+     1 -.003528426/
+      data q/1.1278334,0.,-.5944001,-5.010996,0.,.63684256
+     1 ,0./
+      v(1)=1.
+      do 2 i=2,6
+   2  v(i)=v(i-1)*tz/t
+      b1=p(1)+p(2)*log(1./v(2))
+      b2=q(1)
+      b1t=p(2)*v(2)/tz
+      b2t=0.
+      b1tt=0.
+      b2tt=0.
+      do 4 i=3,7
+      b1=b1+p(i)*v(i-1)
+      b2=b2+q(i)*v(i-1)
+      b1t=b1t-(i-2)*p(i)*v(i-1)/t
+      b2t=b2t-(i-2)*q(i)*v(i-1)/t
+      b1tt=b1tt+p(i)*(i-2)**2*v(i-1)/t/t
+   4  b2tt=b2tt+q(i)*(i-2)**2*v(i-1)/t/t
+      b1tt=b1tt-b1t/t
+      b2tt=b2tt-b2t/t
+      return
+      end
+      subroutine calc(d,t,prop)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /units/ it,id,ip,ih,ft,fd,fp,fh,/unitc/nt,nd,np,nh
+      common /fcts/ad,gd,sd,ud,hd,cvd,cpd,dpdt,dvdt,cjtt,cjth
+      common /aconst/ wm,gascon,tz,z,dz,y,uref,sref
+      common /qqqq/ qp,q5
+      character*8 nt,nd,np,nh
+      dimension prop(20)
+      rt=gascon*t
+      call bb(t)
+      call qq(t,d)
+      p = rt*d*base(d,t)+qp
+      dd=d/fd
+ 111  call therm(d,t)
+      u = ud*fh*rt
+      h = hd*fh*rt
+      s = sd*fh*ft*gascon
+      cp=cpd*fh*ft*gascon
+      cv=cvd*fh*ft*gascon
+      vl=1./dd
+      a = ad*fh*rt
+      gg = gd*fh*rt
+      dpdd=gascon*t*(z+y*dz)+q5
+      dpdd1 = dpdd*fd*fp
+      comp = 1./dd/dpdd1
+      dpdt1=dpdt*fp*ft
+      w=sqrt(abs(dpdd*cpd*1000./cvd))
+      if(id.eq.4) w=w*3.280833
+      call transp(t,d,dpdt,dpdd,visc,thcond)
+      prop(1) = t
+      prop(2) = p*fp
+      prop(3)=dd
+      prop(4)=vl
+      prop(5)=h
+      prop(6)=s
+      prop(7)=u
+      prop(8)=cv
+      prop(9)=cp
+      prop(10)=a
+      prop(11)=gg
+      prop(12)=dpdd1
+      prop(13)=dpdt1
+      prop(14)=comp
+      prop(15)=w
+      prop(16)=thcond
+      if(it.eq.4) prop(16)=thcond*.5777892
+      prop(17)=visc
+      if(it.eq.4) prop(17)=visc*1.450377e-4
+      prop(18)=cjth*ft*fd/fp
+      return
+      end
+c
+c             background thermal conductivity calculation
+c                using international scientific form
+c
+      subroutine condbk(redt,r1,dr,dt,thcond,delth,m)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+       real thcond
+      dimension b(5,6)
+      data b/1.3293046,1.7018363,5.2246158,8.7127675,-1.8525999,
+     1    -0.40452437,-2.2156845,-10.124111,-9.5000611,.9340469,
+     2     .24409490,1.6511057,4.9874687,4.3786606,0.,
+     3       .018660751,-.76736002,-.27297694,-.91783782,0.,
+     4     -.12961068,.37283344,-.43083393,0.,0.,
+     5      .044809953,-.1120316,.13333849,0.,0./
+      data a0,a1,a2,a3/2.02223,14.11166,5.25597,-2.01870/
+c
+      thcond = a0+a1*redt+a2*redt**2+a3*redt**3
+      thcond = sqrt(1./redt)/thcond
+      if(m.eq.1.)return
+      sum = 0.
+      do 10 i=1,5
+      do 10 j=1,6
+   10 sum = sum+b(i,j)*dr**(j-1)*dt**(i-1)
+      thcond = thcond*exp(r1*sum)
+      thcond = thcond+delth
+      return
+      end
+      subroutine corr(t,p,dl,dv,delg)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /qqqq/ q00,q11
+      common /aconst/ wm,gascon,tz,zb,dzb,yb,uref,sref
+      common /fcts/ ad,gd,sd,ud,hd,cvd,cpd,dpdt,dvdt,cjtt,cjth
+      if(t.gt.646.3) go to 101
+      dliq=dl
+      dvap=dv
+      rt=gascon*t
+      call dfind(dl,p,dliq,t,dq)
+      call therm(dl,t)
+      gl=gd
+      dvap=dv
+      if(dv.le.0.) dvap=p/gascon/t
+      call dfind(dv,p,dvap,t,dq)
+      if(dv.lt.5.e-7) dv=5.e-7
+      call therm(dv,t)
+      gv=gd
+      delg = gl-gv
+      return
+  101 p=0.
+      if(t.gt.647.126) return
+      delg=0.
+      call bb(t)
+      tau=.657128*(1.-t/647.126)**.325
+      dl=.32189+tau
+      dv=.32189-tau
+      psb= base(dv,t)
+      call qq(t,dv)
+      p=gascon*t*dv*zb + q00
+      call therm(dv,t)
+      return
+      end
+c
+       subroutine dfind(dout,p,d,t,dpd)
+c  routine to find density corresponding to input pressure p(mpa), and
+c    temperature t(k), using initial guess density d(g/cm3). the output
+c    density is in g/cm3, also, as a byproduct, dp/drho is calculated
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /qqqq/ q0,q5
+      common /aconst/ wm,gascon,tz,z,dz,y,uref,sref
+      dd=d
+      call bb(t)
+      rt=gascon*t
+      if(dd.le.0.) dd=1.e-7
+      if(dd.gt.1.9) dd=1.9
+      l=0
+    9 l=l+1
+  11  if(dd.le.0.) dd=1.e-7
+      if(dd.gt.1.9) dd=1.9
+      call qq(t,dd)
+      pp = rt*dd*base(dd,t)+q0
+      dpd=rt*(z+y*dz)+q5
+      if(dpd.gt.0.) go to 13
+      if(d.ge..2967) dd=dd*1.02
+      if(d.lt..2967) dd=dd*.98
+      if(l.le.10) go to 9
+  13  dpdx=dpd*1.1
+      if(dpdx.lt..1) dpdx=.1
+      err=abs(1.-pp/p)
+      if(err.lt.1.e-8) go to 20
+      x=(p-pp)/dpdx
+      if(abs(x).gt..02) x=x*.02/abs(x)
+      dd=dd+x
+      if(dd.le.0.) dd=1.e-8
+  19  if(l.le.30) go to 9
+c nbs      if(err.gt.1.e-4) write(*,18) p,pp,dd,x
+c nbs  18  format(' possible inaccurate iteration for density',
+c nbs      2f10.5,2f10.6)
+   20 continue
+      dout=dd
+      return
+      end
+      subroutine dguess(t,dl,dv)
+c  provides initial guesses for coexisting densities as fct of t
+c  from wagner formulations of 1985.
+$if def,in32,1
+       implicit real*8 (a-h,o-z)
+      dimension dl1(6),dv1(6)
+      data dl1/1.99206,1.10123,-.512506,-1.75263,-45.4485
+     1,-675615./,dv1/-2.02957,-2.68781,-5.38107,-17.3151
+     2,-44.6384,-64.3486/,dc,tc/.322,647.14/
+      tau6=(1.-t/tc)**(.1666666667)
+      tau3=tau6*tau6
+      dl2=dl1(1)*tau3+dl1(2)*tau3**2+dl1(3)*tau3**5+dl1(4)*tau3**16
+     1 +dl1(5)*tau3**43+dl1(6)*tau3**110
+      dl = dc*(1.+dl2)
+      dv2=dv1(1)*tau3+dv1(2)*tau3**2+dv1(3)*tau3**4+dv1(4)*tau3**9
+     1 +dv1(5)*tau6**37+dv1(6)*tau6**71
+      dv = dc*exp(dv2)
+      return
+      end
+c
+      subroutine ideal(t)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+c   this subroutine calculates the thermodynamic properties for
+c    water in the ideal gas state from function of h.w. woolley
+      common /idf/ ai,gi,si,ui,hi,cvi,cpi
+      dimension c(18)
+      data c/19.730271018,20.9662681977,-.483429455355
+     1,6.05743189245,22.56023885,-9.87532442,-4.3135538513
+     2,.458155781,-.047754901883,.41238460633e-2,-.27929052852e-3
+     3,.14481695261e-4,-.56473658748e-6,.16200446e-7,-.3303822796e-9
+     4,.451916067368e-11,-.370734122708e-13,.137546068238e-15/
+      tt=t/100.
+      tl=log(tt)
+      gi=-(c(1)/tt+c(2))*tl
+      hi=(c(2)+c(1)*(1.-tl)/tt)
+      cpi=c(2)-c(1)/tt
+      do 8 i=3,18
+      gi=gi-c(i)*tt**(i-6)
+      hi=hi+c(i)*(i-6)*tt**(i-6)
+   8  cpi=cpi+c(i)*(i-6)*(i-5)*tt**(i-6)
+      ai=gi-1.
+      ui=hi-1.
+      cvi=cpi-1.
+      si=ui-ai
+      return
+      end
+cc
+      subroutine pcorr(t,p,dl,dv)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /aconst/ wm,gascon,tz,zb,dzb,yb,uref,sref
+      p = ps(t)
+      call dguess(t,dl,dv)
+   2  call corr(t,p,dl,dv,delg)
+      if(p.le.0.) return
+      delv=1./dv - 1./dl
+      if(delv.lt.1.e-13) delv=1.e-13
+      dp=delg*gascon*t/delv
+      if(abs(dp).gt..01) dp=.01*abs(dp)/dp
+      p = p+.95*dp
+      if(abs(dp/p).lt.1.e-7) return
+      goto 2
+      end
+c
+      function ps(t)
+$if def,in32,1
+       implicit real*8 (a-h,o-z)
+      dimension a(6)
+      data a/-7.85823,1.83991,-11.7811
+     1,22.6705,-15.9393,1.77516/
+   2  v=t/647.14
+      w=abs(1.-v)
+      b=a(1)*w + a(2)*w**(1.5) + a(3)*w**3 + a(4)*w**(3.5)
+     1 + a(5)*w**4 + a(6)*w**(7.5)
+      q=b/v
+      ps=22.064*exp(q)
+      return
+      end
+c
+      subroutine qq(t,d)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /resf/ ar,gr,sr,ur,hr,cvr,dpdtr
+      common /qqqq/ q,q5
+      dimension qr(11),qt(10),qzr(9),qzt(9),g(40),ii(40),jj(40)
+      equivalence (qr(3),qzr(1)),(qt(2),qzt(1))
+      common /aconst/ wm,gascon,tz,z,dz,y,uref,sref
+      dimension atz(4),adz(4),aat(4),aad(4)
+      data g/-530.62968529023,2274.4901424408,787.79333020687
+     1,-69.830527374994,.17863832875422e5,-.39514731563338e5
+     2,.33803884280753e5,-.13855050202703e5,-.25637436613260e6
+     3,.48212575981415e6,-.34183016969660e6, .12223156417448e6
+     4,.11797433655832e7,-.21734810110373e7, .10829952168620e7
+     5,-.25441998064049e6,-.31377774947767e7,.52911910757704e7
+     6,-.13802577177877e7,-.25109914369001e6, .46561826115608e7
+     7,-.72752773275387e7,.41774246148294e6,.14016358244614e7
+     8,-.31555231392127e7,.47929666384584e7,.40912664781209e6
+     9,-.13626369388386e7, .69625220862664e6,-.10834900096447e7
+     a,-.22722827401688e6,.38365486000660e6,.68833257944332e4
+     b,.21757245522644e5,-.26627944829770e4,-.70730418082074e5
+     c,-.225,-1.68,.055,-93./
+      data ii/4*0,4*1,4*2,4*3,4*4,4*5,4*6,4*8,2*2,0,4,3*2,4/
+      data jj/2,3,5,7,2,3,5,7,2,3,5,7,2,3,5,7,2,3,5,7,2,3,5,7,2,3,5,7
+     1,2,3,5,7,1,3*4,0,2,0,0/
+      data atz/2*64.e1,641.6,27.e1/,adz/3*.319,1.55/,aat/2*2.e4
+     1,4.e4,25./,aad/34.,40.,30.,1050./
+      rt=gascon*t
+      qr(1)=0.
+      q5=0.
+      q=0.
+      ar=0.
+      dadt=0.
+      cvr=0.
+      dpdtr=0.
+      e=exp(-d)
+      q10=d*d*e
+      q20=1.-e
+      qr(2)=q10
+      v=tz/t
+      qt(1)=t/tz
+      do 4 i=2,10
+      qr(i+1)=qr(i)*q20
+   4  qt(i)=qt(i-1)*v
+      do 10 i=1,36
+      k=ii(i)+1
+      l=jj(i)
+      zz=k
+      qp=g(i)*qzr(k-1)*qzt(l)
+      q=q+qp
+      q5 = q5 + (2./d-(1.-e*(zz-1.)/q20))*qp
+      ar=ar+g(i)*qzr(k)*qzt(l)/q10/zz/rt
+      dfdt=q20**k*(1-l)*qzt(l+1)/tz/zz
+      d2f=l*dfdt
+      dpt=dfdt*q10*zz/q20
+      dadt=dadt+g(i)*dfdt
+      dpdtr=dpdtr+g(i)*dpt
+  10  cvr=cvr+g(i)*d2f/gascon
+      qp=0.
+      q2a=0.
+c
+      do 20 j=37,40
+      if(t.gt.8.e2) goto 20
+      if(j.le.39 .and. t.lt.6.e2) goto 20
+      if(j.eq.40 .and. t.gt.4.e2) goto 20
+      k=ii(j)
+      km=jj(j)
+      dz = adz(j-36)
+      del = d/dz - 1.
+      if(abs(del).lt.1.e-7) del=1.e-7
+      ex1 = -aad(j-36)*del**k
+      dex=exp(ex1)*del**km
+      att = aat(j-36)
+      tx = atz(j-36)
+      tau = t/tx-1.
+      ex2 = -att*tau*tau
+      tex = exp(ex2)
+      q10 = dex*tex
+      qm = km/del - k*aad(j-36)*del**(k-1)
+      fct=qm*d**2*q10/dz
+      q5t = fct*(2./d+qm/dz)-(d/dz)**2*q10*(km/del/del+
+     1  k*(k-1)*aad(j-36)*del**(k-2))
+      q5 = q5 + q5t*g(j)
+      qp = qp + g(j)*fct
+      dadt = dadt - 2.*g(j)*att*tau*q10/tx
+      dpdtr = dpdtr - 2.*g(j)*att*tau*fct/tx
+      q2a = q2a + t*g(j)*(4.*att*ex2+2.*att)*q10/tx/tx
+      ar = ar + q10*g(j)/rt
+  20  continue
+      sr=-dadt/gascon
+      ur=ar+sr
+      cvr=cvr+q2a/gascon
+      q=q+qp
+      return
+      end
+cc
+      subroutine tcorr(t,p,dl,dv)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /aconst/ wm,gascon,tz,zb,dzb,yb,uref,sref
+      t = tsat(p)
+      if(t.eq.0.) return
+      if(t.gt.646.3) go to 4
+      call dguess(t,dl,dv)
+   2  call corr(t,p,dl,dv,delg)
+      dp=delg*gascon*t/(1./dv-1./dl)
+      t = t*(1.-dp/tdpsdt(t))
+      if(abs(dp/p).lt.1.e-7) return
+      go to 2
+   4  call pcorr(t,pp,dl,dv)
+c nbs      dp=pp-p
+c nbs      if(pp.le.0.) dp=0.
+       if(pp.le.0.) then
+         t = 647.126
+         go to 4
+       endif
+      dp=pp-p
+      if(abs(dp/p).lt.1.e-5) return
+      tdps=200.
+      t = t*(1.-dp/tdps)
+      if(t.le.646.3) go to 2
+c nbs      if(abs(dp/p).gt.1.e-5) go to 4
+      go to 4
+c nbs      call pcorr(t,pp,dl,dv)
+c nbs      return
+      end
+c
+      function tdpsdt(t)
+$if def,in32,1
+       implicit real*8 (a-h,o-z)
+      p1=ps(t)
+      p2=ps(t+.1)
+      tdpsdt=t*(p2-p1)*1.e1
+      return
+      end
+c
+      subroutine therm(d,t)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /aconst/ wm,gascon,tz,zb,dzb,y,uref,sref
+      common /qqqq/ qp,qdp
+      common /basef/ab,gb,sb,ub,hb,cvb,dpdtb
+      common /resf/ar,gr,sr,ur,hr,cvr,dpdtr
+      common /idf/ ai,gi,si,ui,hi,cvi,cpi
+      common /fcts/ad,gd,sd,ud,hd,cvd,cpd,dpdt,dvdt,cjtt,cjth
+c   this subroutine calculates the thermodynamic functions in
+c     dimensionless units (ad=a/rt, gd=g/rt, sd=s/r, ud=u/rt,
+c     hd=h/rt, cvd=cv/r, and cpd=cp/r)
+      call ideal(t)
+      rt = gascon*t
+      z = zb + qp/rt/d
+      dpdd = rt*(zb+y*dzb) + qdp
+      ad = ab + ar + ai - uref/t + sref
+      gd = ad + z
+      ud = ub + ur + ui - uref/t
+      dpdt = rt*d*dpdtb + dpdtr
+      cvd = cvb + cvr + cvi
+      cpd = cvd + t*dpdt**2/(d*d*dpdd*gascon)
+      hd = ud + z
+      sd = sb + sr + si - sref
+      dvdt=dpdt/dpdd/d/d
+      cjtt=1./d-t*dvdt
+      cjth=-cjtt/cpd/gascon
+       return
+       end
+      subroutine transp(t,d,dpdt,dpdd,visc,thcond)
+c  Program for calculating transport properties of steam :
+c    dynamic viscosity from 1975 iaps formulation,
+c    thermal conductivity from 1977 iaps formulation for scientific use.
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+       real t,d,dpdt,dpdd,visc,thcond
+      data tref,dref/647.27,.317763/
+c
+      ts=t/tref
+      ts1=1./ts
+      r1=d/dref
+      dr=r1-1.
+      dt1=ts1-1.
+      call visc75(ts1,r1,dt1,dr,visc,m)
+      chi=d/dpdd *1.e6
+      dt=ts-1.
+      call anathc(ts,r1,dt,dr,visc,dpdt,chi,delth)
+      call condbk(ts1,r1,dr,dt1,thcond,delth,m)
+       return
+      end
+c
+      function tsat(p)
+$if def,in32,1
+       implicit real*8 (a-h,o-z)
+      tsat=0.
+cinel      if(p.gt.22.05) return
+      if(p.gt.22.054915) return
+      k=0
+      pl=2.302585093+log(p)
+      tg=372.23+pl*(27.7589+pl*(2.3819+pl*(.24834+pl*.0193855)))
+   1  if(tg.lt.273.15) tg=273.15
+      if(tg.gt.647.1) tg=647.1
+      if(k.lt.3) go to 2
+      go to 8
+   2  k=k+1
+      pp=ps(tg)
+      dp=tdpsdt(tg)
+      if(abs(1.-pp/p).lt.1.e-5) go to 8
+      tg = tg*(1.+(p-pp)/dp)
+      go to 1
+   8  tsat=tg
+      return
+      end
+cc
+       subroutine visc75 (ts1,r1,dt1,dr,visc,m)
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+       real ts1,r1,dt1,dr,visc
+       integer m
+c
+      integer i,k
+      real dt1i,sum
+      real a(4),b(6,5)
+      data a/0.0181583,0.0177624,0.0105287,-0.0036744/
+      data b/0.501938,0.162888,-0.130356,0.907919,-0.551119,0.146543,
+     1  0.235622,0.789393,0.673665,1.207552,0.0670665,-0.0843370,
+     2  -0.274637,-0.743539,-0.959456,-0.687343,-0.497089,0.195286,
+     3  0.145831,0.263129,0.347247,0.213486,0.100754,-0.032932,
+     4  -0.0270448,-0.0253093,-0.0267758,-0.0822904,0.0602253,
+     5  -0.0202595/
+c
+      sum=0.
+      do 10 k=1,4
+ 10   sum=sum+a(k)*ts1**(k-1)
+      visc=1.e-06*sqrt(1./ts1)/sum
+      if(m.eq.1) return
+      sum=0.
+      do 20 i=1,6
+      dt1i=dt1**(i-1)
+      do 20 j=1,5
+ 20   sum=sum+b(i,j)*dt1i*dr**(j-1)
+      visc=visc*exp(r1*sum)
+      return
+      end

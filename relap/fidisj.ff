@@ -1,0 +1,455 @@
+*mlist
+       subroutine fidisj (fic,c0,i,output,kk,mz,velgjt,velfjt,diamjt,
+     & k,l,reflod)
+c
+c
+c  fidisj calculates the effective interphase drag coefficient for
+c  dispersed vapour flows using best-estimate void fraction
+c  correlations.
+c
+c  Cognizant engineer: rar,wlw (jmp)
+c
+      implicit none
+c
+c************************** prologue ***********************************
+c    title   fidisj - calcs interphase fric coeffs in bubbly/slug flow
+c    author  j. m. putney (cerl)
+c    purpose
+c     this subroutine calculates effective interphase drag
+c     coefficient for dispersed vapour flows using best-estimate
+c     void fraction correlations. the coefficient is appropriate to a
+c     constitutive equation for the interphase friction force which
+c     (see ref 3)
+c     (a) explicitly accounts for the effects of phase and velocity
+c         distribution on the local drag (ie uses the area average of
+c         the local relative velocity rather than the difference
+c         between the void-fraction-weighted mean values of the local
+c         phase velocities)
+c     (b) represents the interfacial shear force separately from the
+c         drag force
+c     the coefficient is determined by
+c     (1) reducing the code's momentum equations to the case of steady,
+c         fully developed flow
+c     (2) eliminating the spatial pressure gradient to obtain a
+c         momentum difference equation
+c     (3) equating the drag force to the buoyancy force and the shear
+c         forces to the wall friction terms
+c     (4) applying the appropriate correlation(s) to eliminate the
+c         phase and drift velocities in terms of void fraction,
+c         mixture mass flux and fluid properties
+c     the distribution coefficient is also returned so that the average
+c     local relative velocity may be calculated.
+c     note that the drift velocity and distribution coefficient
+c     calculated by this subroutine may not necessarily comply
+c     with the definitions arising from drift flux theory, but
+c     will always provide a total interphase friction force consistent
+c     with the best-estimate void fraction correlation(s).
+c     the calculational procedure is as follows. depending on the
+c     geometry and mass flux, the appropriate correlation(s) is
+c     selected and applied to determine the drift velocity and
+c     distribution coefficient. this calculation is perfomed by
+c     subroutine brycej, eprij, zfslgj, katokj or grdnrj. if the flow
+c     channel is a vertical pipe and a transition between high and
+c     low flow conditions is taking place, interpolated values are
+c     formed. in the case of vertical counter-current flow, a ccfl
+c     appropriate to a straight uniform flow channel is imposed (ccfl
+c     caused by a singularity in the channel geometry may
+c     subsequently be imposed by subroutine ccfl).
+c     finally, the calculated forces and velocities are used
+c     to determine effective interphase drag
+c     from the reduced momentum difference equation.
+c
+c     the separate geometries and flow conditions considered (indicated
+c     by ireg), and the correlations applied in each case, are as
+c     follows:
+c
+c      ireg  geometry and flow conditions             correlations used
+c
+c        1   horizontal pipes                         bryce
+c        2   rod bundles                              epri
+c        3   high up/down flows in small pipes        epri
+c        4   low up/down/cc flows in small pipes      zuber-findlay slug
+c        5   transition regions between 3 and 4       epri & z-f slug
+c        6   high up/down flows in very large pipes   epri
+c        7   low up/down/cc flows in very large pipes gardner
+c        8   transition regions between 6 and 7       epri & gardner
+c        9   high up/down flows in intermed. pipes    epri
+c       10   low up/down/cc flows in intermed. pipes  churn-turb bubbly
+c       11   transition regions between 10 and 12     c-t bubbly & k-i
+c       12   low up/down/cc flows in intermed. pipes  kataoka-ishii
+c       13   transition regions between 9 & 10-11-12  epri & c-tbub/k-i
+c       14   large pipes                              churn-turb bubbly
+c       15   transition regions between 14 and 16     c-t bubbly & k-i
+c       16   large pipes                              kataoka-ishii
+c
+c     this subroutine is called by phantj to calculate junction values
+c     of the effective interphase drag  in the
+c     vertical bubbly and slug flow regimes, but not the high mixing
+c     flow regime (ie pumps). if appropriate, the interpolation
+c     procedures in the transition regions leading into
+c     the annular-mist and post-dryout regimes
+c     are subsequently applied to the calculated drag coefficient
+c     in the normal way. the junction effective drag coefficients
+c     are also formed in the normal way, as are the various special
+c     case modifications, including under-relaxation. appropriate
+c     transition and junction values of the shear and distribution
+c     coefficients are also calculated.
+c
+c     The subroutine is not called for a time dependent volume (tdv) as
+c     the interphase friction coefficients for a tdv makes no
+c     contribution to the junction interphase friction (and dl(kk) and
+c     and elevation change  is zero for a tdv, which causes problems
+c     below).
+c     neither is it called for a horizontal
+c     volume, as the modelling for this situation
+c     (ie interfacial shear from bryce correlation with zero
+c     interfacial drag) has not been tested - and the bryce correlation
+c     may not be appropriate when non-condensible gases are present.
+c     also, the relap5/mod2 bubbly-slug interfacial friction
+c     model is believed to be adequate for horizontal flow.
+c
+c     dlarge is now set to 1.0e6 to force churn-turbulent bubbly
+c     and kataoka-ishii correlations to be used for both intermediate
+c     and large diameter pipes.
+c
+c    documentation
+c     1. putney, j. m., 1988, proposals for improving interphase drag
+c        modelling for the bubbly and slug regimes in relap5.
+c        cegb report rd/l/3306/r88, pwr/htwg/p(88)597.
+c
+c     2. putney. j. m., 1988, implementation of a new bubbly/slug
+c        interphase drag model in relap5/mod2.
+c        cegb report rd/l/3369/r88, pwr/htwg/p(88)622.
+c
+c     3. putney. j. m., 1988, equations for calculating interfacial
+c        drag and shear from void fraction correlations.
+c        cegb report rd/l/3429/r88, pwr/htwg/p(88)630.
+c
+c     4. putney, j.m., l988, uk interphase friction model.
+c        fax to walt weaver, may 8, l988.
+c
+c    argument list
+c     fic    = effective interphase drag coefficient
+c     c0     = distribution coefficient
+c     i      = junction index in junction block arrays
+c     output = unit number for error/warning messages
+c     kk     = donor volume index in volume block arrays
+c     mz      = junction scratch index in scratch block arrays
+c     velgjt = physical junction vapor velocity
+c     velfjt = physical junction liquid velocity
+c     diamjt = physical junction diameter
+c     k      = from volume index in volume block arrays
+c     l      = to volume index in volume block arrays
+c
+c    direct outputs
+c     fic
+c     c0
+c
+c    note: on input fic is the junction effective interphase drag
+c    coeffiecient calculated from the models used in
+c    relap5/mod2. this value is not used at present.
+c
+c************************** common blocks etc **************************
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'jundat.h'
+       include 'scrtch.h'
+       include 'voldat.h'
+c
+c  Declarations.
+       integer output,i,id,ix,kk,mz,k,l,iflag
+       integer idans
+       real dlim,kucrit,kuc(7),dst(7),dsmall,dlarge,dstarr,guhigh,
+     & gulow,sinbhv,alpmin,remin,alp1,alp2,alpg,alpf,gflux,
+     & vgj,c0,vgjh,c0h,vgjl,c0l,xlow,xhigh,vc,vgjfld,fic,gdhigh,
+     & gdlow,rfg,velgjt,velfjt,diamjt,span1,width
+       real ficb,pdif,ficbes,phigh,plow,c0epri,c0bes
+       logical bundle,hzpipe,upchan,reflod
+       external brycej,eprij,zfslgj,grdnrj,katokj,griftj
+c
+c************************** data ***************************************
+       data phigh,plow,c0bes/20.e+05,10.e+05,1.2/
+       data dsmall/0.018e0/
+       data dlarge/1.000e6/
+       data dlim/0.080e0/
+       data guhigh/100.0e0/
+       data gulow/50.0e0/
+       data gdhigh/-100.0e0/
+       data gdlow/-50.0e0/
+       data sinbhv/0.5e0/
+       data alpmin/1.0e-02/
+       data remin/4000.0e0/
+       data alp1/0.3e0/
+       data alp2/0.5e0/
+       data dst/2.0e0, 4.0e0, 10.0e0, 14.0e0, 20.0e0, 28.0e0, 50.0e0/
+       data kuc/0.0e0, 1.0e0,  2.1e0,  2.5e0,  2.8e0,  3.0e0,  3.2e0/
+c
+c************************** execution **********************************
+c
+c  Determine channel geometry.
+c (the channel is deemed to be horizontal if its inclination < 30 deg.
+       bundle = iand(vctrl(kk),ishft(1,30)) .ne .0
+       upchan = sinbt(mz) .gt. sinbhv
+       hzpipe = abs(sinbt(mz)) .le. sinbhv
+       idans = iand(ishft(imap(kk),-27),1)
+c
+c  Limit void fraction and determine mixture mass flux.
+       alpg = max(voidj(i),alpmin)
+       alpf = max(1.0-alpg,alpmin)
+       gflux = voidgj(i)*rhogj(i)*velgjt + voidfj(i)*rhofj(i)*velfjt
+       rfg = max((rhofj(i) - rhogj(i)),1.0e-05)
+c
+c  Determine geometry and flow conditions and calculate drift velocity
+c  and distribution coefficient from approppriate correlations.
+c
+c horizontal flow (inclination less than 45 deg)
+       if (hzpipe) then
+         call brycej (vgj,c0,alpg,alpf,gflux,i,kk)
+         ireg(mz) = 1
+c
+c vertical flow in rod bundle
+c
+c vertical flow in rod bundle or in advanced neutron source reactor
+c       use epri correlation for rod bundles,
+c       use griffith correlation for thin rectangular channels
+       elseif (idans .eq. 1) then
+         width = ptans(kk)
+         span1 = span(kk)
+         call griftj (vgj,c0,rhofj(i),rhogj(i),gravcn,width,span1)
+         ireg(mz) = 2
+       elseif (bundle) then
+         call eprij(vgj,c0,alpg,alpf,upchan,i,output,kk,velgjt,velfjt,
+     &   diamjt)
+         ireg(mz) = 2
+c
+c vertical flow in pipe
+       else
+c
+c small vertical pipe
+         if (diamjt .le. dsmall) then
+c
+c high up or down flow in small vertical pipe
+c
+           if (gflux.ge.guhigh .or. gflux.le.gdhigh) then
+             call eprij (vgj,c0,alpg,alpf,upchan,i,output,kk,velgjt,
+     &       velfjt,diamjt)
+             ireg(mz) = 3
+c
+c low up, down or counter-current flow in small vertical pipe
+c
+           elseif (gflux.le.gulow .and. gflux.ge.gdlow) then
+             call zfslgj (vgj,c0,alpg,i,kk,diamjt)
+             ireg(mz) = 4
+c
+c transition flow regions in small vertical pipe
+c
+           else
+             call eprij (vgjh,c0h,alpg,alpf,upchan,i,output,kk,velgjt,
+     &       velfjt,diamjt)
+             call zfslgj (vgjl,c0l,alpg,i,kk,diamjt)
+             ireg(mz) = 5
+             if (gflux.gt.gulow) then
+               xlow = (guhigh - gflux)/(guhigh - gulow)
+             else
+               xlow = (gdhigh - gflux)/(gdhigh - gdlow)
+             endif
+             xhigh = 1.0e0 - xlow
+             vgj = xlow*vgjl + xhigh*vgjh
+             c0 = xlow*c0l + xhigh*c0h
+c
+c all flow regions in small vertical pipe
+           endif
+c
+c very large vertical pipe
+         elseif (diamjt .ge. dlarge) then
+c
+c high up or down flow in very large vertical pipe
+c
+           if (gflux.ge.guhigh .or. gflux.le.gdhigh) then
+             call eprij (vgj,c0,alpg,alpf,upchan,i,output,kk,velgjt,
+     &       velfjt,diamjt)
+             ireg(mz) = 6
+c
+c low up, down or counter-current flow in very large vertical pipe
+c
+           elseif (gflux.le.gulow .and. gflux.ge.gdlow) then
+             call grdnrj (vgj,c0,alpg,alpf,i,kk)
+             ireg(mz) = 7
+c
+c transition flow regions in very large vertical pipe
+c
+           else
+             call eprij (vgjh,c0h,alpg,alpf,upchan,i,output,kk,velgjt,
+     &       velfjt,diamjt)
+             call grdnrj (vgjl,c0l,alpg,alpf,i,kk)
+             ireg(mz) = 8
+             if (gflux .gt. gulow) then
+               xlow = (guhigh - gflux)/(guhigh - gulow)
+             else
+               xlow = (gdhigh - gflux)/(gdhigh - gdlow)
+             endif
+             xhigh = 1.0e0 - xlow
+             vgj = xlow*vgjl + xhigh*vgjh
+             c0 = xlow*c0l + xhigh*c0h
+c
+c all flow regions in very large vertical pipe
+           endif
+c
+c intermediate vertical pipe
+         else
+c
+           if (diamjt .le. dlim) then
+c
+c high up or down flow in intermediate vertical pipe
+             if (gflux.ge.guhigh .or. gflux.le.gdhigh) then
+               call eprij (vgj,c0,alpg,alpf,upchan,i,output,kk,velgjt,
+     &         velfjt,diamjt)
+               ireg(mz) = 9
+c
+c low up, down or counter-current flow in intermediate vert pipe
+c
+             elseif (gflux.le.gulow .and. gflux.ge.gdlow) then
+               call katokj (vgj,c0,alpg,i,kk,velgjt,velfjt,diamjt,iflag)
+               if (iflag .eq. 1) then
+                 ireg(mz) = 10
+               elseif (iflag .eq. 2) then
+                 ireg(mz) = 11
+               elseif (iflag .eq. 3) then
+                 ireg(mz) = 12
+               endif
+c
+c transition flow regions in intermediate vertical pipe
+c
+             else
+               call eprij (vgjh,c0h,alpg,alpf,upchan,i,output,kk,velgjt,
+     &         velfjt,diamjt)
+               call katokj (vgjl,c0l,alpg,i,kk,velgjt,velfjt,diamjt,
+     &         iflag)
+               ireg(mz) = 13
+               if (gflux .gt. gulow) then
+                 xlow = (guhigh - gflux)/(guhigh - gulow)
+               else
+                 xlow = (gdhigh-gflux)/(gdhigh-gdlow)
+               endif
+               xhigh = 1.0e0 - xlow
+               vgj = xlow*vgjl + xhigh*vgjh
+               c0 = xlow*c0l + xhigh*c0h
+c
+c all flow regions in intermediate vertical pipe
+c
+             endif
+c
+c large vertical pipe
+c
+           else
+             call katokj (vgj,c0,alpg,i,kk,velgjt,velfjt,diamjt,iflag)
+             if (iflag .eq. 1) ireg(mz) = 14
+             if (iflag .eq. 2) ireg(mz) = 15
+             if (iflag .eq. 3) ireg(mz) = 16
+           endif
+c  All vertical pipes.
+         endif
+c
+c  All geometries.
+       endif
+c
+c  Limit c0 to the range 0 to 1/alpg (may not be necessary).
+c  If vertical counter-current flow, impose a ccfl on vgj.
+c  Limits on c0.
+       c0 = max(0.0e0,c0)
+c  If not in subcooled boiling, c0 greater than 1.0.
+       ix = vctrls(kk)
+       if (gammsw(ix) + gammsc(ix) .le. 0.0) c0 = max(1.0,c0)
+c  If not a bundle, c0 less than 1.33.
+       if (.not.bundle) c0 = min(1.33,c0)
+       c0 = min(1.0e0/alpg,c0)
+c
+c  Conditions for no ccfl.
+       if (hzpipe .or. velfjt*velgjt.ge.0.0e0 .or. alpg.le.alp1 .or.
+     & abs(gflux).le.gulow) go to 150
+c
+c critical katateladze number
+c
+       dstarr = diamjt*sqrt(gravcn*rfg/sigma(kk))
+       if (dstarr .le. dst(1)) then
+         kucrit = kuc(1)
+       elseif (dstarr .ge. dst(7)) then
+         kucrit = kuc(7)
+       else
+         do 100 id = 2,7
+         if (dstarr .lt .dst(id)) then
+           kucrit = kuc(id-1) + (dstarr - dst(id-1))*(kuc(id) -
+     &     kuc(id-1))/(dst(id) - dst(id-1))
+           goto 110
+         endif
+  100  continue
+      endif
+c
+c  ccfl (note alpg > alp1, abs(gflux) > gulow).
+  110  vc = (gravcn*rfg*sigma(kk)/(rhofj(i)*rhofj(i)))**0.25
+       vgjfld = ((1.0e0 - alpg*c0)*c0*kucrit*vc)/
+     & (sqrt(rhogj(i)/rhofj(i))*alpg*c0 + 1.0e0 - alpg*c0)
+       vgjfld = min(vgj,vgjfld)
+       if (abs(gflux) .lt. guhigh) then
+         vgjfld = vgj + (abs(gflux) - gulow)*(vgjfld - vgj)/(guhigh -
+     &   gulow)
+       endif
+       if (alpg .lt. alp2) then
+         vgj = vgj + (alpg - alp1)*(vgjfld - vgj)/(alp2 - alp1)
+       else
+         vgj = vgjfld
+       endif
+       vgj = max(alpf*1.0e-2,vgj)
+  150  vgjj(i) = vgj
+c
+c  Calculate effective interphase drag.
+c interphase drag coefficient
+       if (.not.upchan .and. .not.hzpipe) vgj = - vgj
+       if (.not.hzpipe) then
+         if (vgj .eq. 0.0) then
+           fic = 100.0
+         else
+           fic = alpg*alpf*alpf*alpf*rfg*gravcn*sinbt(mz)/(vgj*abs(vgj))
+         endif
+       else
+         fic = 0.0e0
+       endif
+       if (reflod)  then
+         if (bundle) then
+           ficb = fic
+           c0epri = c0
+           fic = 65.0*alpg*alpf*alpf*alpf*rhogj(i)/diamjt
+           c0 = 1.2
+           pdif = phigh - plow
+           ficbes = fic
+             if(p(kk) .le. plow) then
+               fic = ficbes
+               c0 = c0bes
+             else if(p(kk).ge.phigh) then
+               fic = ficb
+               c0 = c0epri
+             else
+               fic = (p(kk)-plow)*ficb/pdif+(phigh-p(kk))*ficbes/pdif
+               c0 = (p(kk)-plow)*c0epri/pdif+(phigh-p(kk))*c0bes/pdif
+             endif
+         endif
+       else
+         if (chngno(19) .and. bundle) then
+           fic=65.*alpg*alpf*alpf*alpf*rhogj(i)/diamjt
+           c0 = 1.2
+         endif
+       endif
+c  Check for negative coefficients (should never occur).
+       if (fic.lt.0.0 .or. c0.lt.0.0) then
+         write(output,1000) junno(i),sinbt(mz),ireg(mz),
+     &   voidj(i),gflux,velgjt,velfjt,vgj,fic,c0,timehy
+ 1000  format ('0******** Negative interphase friction coefficient in ',
+     & 'fidisj - junction ',i10/
+     & ' sinbt = ',g13.5/' ireg = ',i8,' voidj = ',g13.5,
+     & ' gflux = ',g13.5/' velgjt = ',g13.5,' velfjt = ',g13.5,
+     & ' vgj = ',g13.5/' fic = ',g13.5,
+     & ' c0 = ',g13.5,' time = ',g13.5)
+       endif
+       return
+       end

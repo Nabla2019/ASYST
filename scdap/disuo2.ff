@@ -1,0 +1,188 @@
+*mlist
+*if def,selap
+       subroutine disuo2 (denuo2,disflg,dz,naz,rpel,tsur,ruliq,wuo2,
+     * wzr, woxzr,daxdis,ifrag,kfail1,idcomp)
+c
+c  disuo2 calculates the mass and volume of dissolved UO2 in each axial
+c  zone in the intact portion of the fuel rod.  Fuel and cladding are
+c  assumed to be in contact.
+c
+c  Cognizant engineer: ljs (wjs).
+c
+c  Calling routine:     liqsol
+c  Subroutines called:  atomfr , uo2dis
+c
+c#    input variables:        description
+c#    denuo2              density of u-o2.
+c#    disflg              dissolution model flag:
+c#                        0.0 = dissolution front (default)
+c#                        1.0 = wt.% liquid UO2
+c#                        0.0< disflg <1.0 = calculate both and combine
+c#    dt                  relap time step (common /contrl/).
+c#    dz                  height of each axial zone.
+c#    naz                 number of axial nodes.
+c#    rpel                radius to outside surface of the fuel pellets.
+c#    tsur(z)             temperature of surface over which slug flows a
+c#    ifrag(z)            variable indicating whether or not intact fuel
+c#                        rod, debris or void exists in axial zone k.
+c#                        0 = intact fuel rod
+c#                        1 or 2 = debris bed
+c#                        3 = void region
+c#    woxzr(z)            mass of oxygen absorbed by in situ
+c#                        cladding in axial zone k. (kg)
+c#    daxdis(k)           height of cladding-spacer grid interaction (m)
+c#    wzr(z)              weight of melted Zr.
+c#
+c    idcomp = identification of type of component;
+c             idcomp = 0 = fuel rod, idcomp = 6 = electrical heater rod.
+c    kfail1(k)=indicator of breach in oxide shell at node k, 0=no, 1=yes
+c#    output variables:       description
+c#    ruliq (input/output) inner radius of annulus of dissolved uo2(m).
+c#    wuo2  (output)       weight of dissolved uo2.
+c
+       implicit none
+*call cons
+*call contrl
+*call scddat
+*call ufiles
+*call cora
+*call buntim
+*call miscon
+c
+       real disflg,dz(ndax),rpel(ndax),tsur(ndax),ruliq(ndax),
+     * wuo2(ndax),wzr(ndax),woxzr(ndax),daxdis(ndax)
+       integer naz,ifrag(ndax),idcomp
+       integer kfail1(ndax)
+c
+c  Local variables.
+       integer k
+       integer nsmdf1
+       real adsfnt,afrco,afrcu,afrcz,akinp,atwto,atwtuo,atwtzo,atwtzr,
+     * awtpct,bdsfnt,bwtpct,denuo2,fuo2ds,per1,per2,rconst,
+     * roffer,wdisu,wdumu,wpel,wtfruo,wuo2mx,xfrnt1,xfrnt2,xfrntd,
+     * xfrntm,xfrntw
+       real rumin,rliqsw,rliqs1
+       external atomfr,uo2dis
+c
+c     U.33 O.66 atom atomic weight = .33*238 + .66*16 = 90.
+c     units of awtpct are (wt.% uo2)**2, of adsfnt are m**2/s
+c
+c  Data statements.
+      data atwto/16./, atwtzr/91.22/, atwtuo/90./
+      data awtpct/1.0196e+15/, bwtpct/677200./ , rconst/8.314/
+      data adsfnt/3.84e+15/  , bdsfnt/1067000./, roffer/1.0e-16/
+      data rliqsw / 0.90/
+c
+c      idebug = 0
+       nsmdf1 = 0
+       rliqs1=rliqsw
+       if(nsmdf1.ge.1)rliqs1=0.1
+       do 100 k = 1,naz
+c     if "water rod" being analyzed, bypass fuel dissolution calculation
+      if(rpel(k).lt.0.178e-3)go to 100
+         if (ifrag(k) .ne. 0) go to 100
+c     if double-sided oxidation, assume inner oxide layer prevents
+c     fuel dissolution.
+         if(int(brchv(k,icomp)).eq.1.and.nsmdf1.ge.1)go to 100
+         if(kfail1(k).eq.1)go to 100
+         if (wzr(k) .lt. 1.0e-10) go to 100
+c  Intact fuel rods exist with melted Zry:
+c  Calculate maximum dissolution front based on the solidus composition
+c  from the U-Zr-O phase diagram.
+         wdumu = 0.0
+         call atomfr (wdumu, wzr(k), woxzr(k), afrcu, afrcz, afrco)
+         call uo2dis (tsur(k), afrcz, afrco, fuo2ds)
+         if (fuo2ds .gt. 0.999)  fuo2ds = 0.999
+c
+         atwtzo = afrcz*atwtzr + afrco*atwto
+         wtfruo = fuo2ds*atwtuo/(fuo2ds*atwtuo + (1.- fuo2ds)*atwtzo)
+         wuo2mx = (wzr(k) + woxzr(k))*wtfruo/(1.0 - wtfruo)
+         wpel = denuo2*pi*(rpel(k)**2)*dz(k)*(1.0 - roffer)
+         if (wuo2mx .gt. wpel) wuo2mx = wpel
+         if (wuo2mx/(denuo2*pi*dz(k)) .lt. rpel(k)**2) then
+           xfrntm = rpel(k) - sqrt(rpel(k)**2 - wuo2mx/(denuo2*pi*
+     *     dz(k)))
+         else
+           xfrntm = rpel(k)
+         end if
+c
+c  Calculate dissolution of uo2 based on Hofmann's model for the
+c  dissolution rate of UO2 in pure Zry (no oxygen uptake).  Determine
+c  the dissolution front from the model for wt.% of UO2 in the melt and
+c  the model for a dissolution front and combine the two based on user
+c  input (disflg).
+         xfrnt1 = rpel(k) - ruliq(k)
+         if (xfrnt1 .le. xfrntm) then
+           xfrntw = 0.0
+           if (disflg .gt. 0.0001) then
+             wdisu = denuo2*pi*(rpel(k)**2-ruliq(k)**2)*dz(k)
+             per1 = 100.*wdisu/(wdisu+wzr(k))
+             if (per1 .lt. 35.8) per1 = 35.8
+             akinp = awtpct*exp(-bwtpct/(rconst*tsur(k)))
+             if (((per1 - 35.8)**2 + akinp*dt) .gt. 0.0) then
+               per2 = 35.8 + sqrt((per1-35.8)**2 + akinp*dt)
+             else
+               per2 = per1
+             end if
+             wdisu = wzr(k)*per2/(100.0 - per2)
+             if (wdisu .gt. wuo2mx) wdisu = wuo2mx
+             if (rpel(k)**2 - wdisu/(denuo2*dz(k)*pi) .gt. 0.0) then
+               xfrntw = rpel(k) - sqrt(rpel(k)**2 - wdisu/(denuo2*dz(k)*
+     *         pi))
+             else
+               xfrntw = rpel(k)
+             end if
+           end if
+c
+           xfrntd = 0.0
+           if (disflg .lt. 0.9999) then
+             akinp = adsfnt*exp(-bdsfnt/(rconst*tsur(k)))
+             if (xfrnt1**2 + akinp*dt .gt. 0.0) then
+               xfrntd = sqrt(xfrnt1**2 + akinp*dt)
+             else
+               xfrntd = xfrnt1
+              end if
+              if (xfrntd .gt. xfrntm) xfrntd = xfrntm
+            end if
+c
+            xfrnt2 = disflg*xfrntw + (1.-disflg)*xfrntd
+          else
+            xfrnt2 = xfrntm
+          end if
+c
+          ruliq(k) = rpel(k) - xfrnt2
+c     limit dissolution in manner consistent with failure of oxide
+c     shell containing liquefied material.
+c     set rliqs1 to same values as in subroutines rubtrn and heatld.
+          rumin=rliqs1*rpel(k)-1.e-4
+          if(rumin.lt.1.e-3)rumin=1.e-3
+          if(ruliq(k).lt.rumin)ruliq(k)=rumin
+          if (ruliq(k) .lt. 1.01*sqrt(roffer)*rpel(k)) ruliq(k) = 1.e-4
+          if(idcomp.eq.6)then
+cljs rhwire = heater wire radius (m)
+          if(ruliq(k).lt.rhwire(k,icomp))ruliq(k)=rhwire(k,icomp)
+          end if
+          wuo2(k)=denuo2*pi*(rpel(k)**2-ruliq(k)**2)*(dz(k)-daxdis(k))
+c
+c        if (idebug .eq. 1 .and. icomp .eq. 1) then
+c          write(output,220) dt, timehy, k, tsur(k), rpel(k), wzr(k)
+c 220  format(' in disuo2  dt =',e10.4,' timehy =',e10.4,' k =',i4,
+c    * ' tsur =',e10.4,' rpel =',e10.4,' wzr =',e10.4)
+c          write(output,230) woxzr(k), afrcu, afrcz, afrco
+c 230  format('     woxzr =',e10.4,' afrcu =',e10.4,
+c    * ' afrcz =',e10.4,' afrco =',e10.4)
+c          write(output,240) fuo2ds, wtfruo, wuo2mx, wpel, xfrntm
+c 240  format('     fuo2ds =',e10.4,' wtfruo =',e10.4,
+c    * ' wuo2mx =',e10.4,' wpel =',e10.4,' xfrntm =',e10.4)
+c          write(output,250) xfrnt1, akinp, xfrntd, xfrnt2, disflg
+c 250  format('     xfrnt1 =',e10.4,' akinp =',e10.4,
+c    * ' xfrntd =',e10.4,' xfrnt2 =',e10.4,' disflg =',e10.4)
+c          if (disflg .gt. 0.0001) write(output,260) wdisu,per1,per2,
+c    *     xfrntw
+c 260  format('     wdisu =',e10.4,' per1 =',e10.4,
+c    * ' per2 =',e10.4,' xfrntw =',e10.4)
+c        end if
+  100  continue
+       return
+       end
+*endif

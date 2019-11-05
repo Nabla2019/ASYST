@@ -1,0 +1,1408 @@
+*mlist
+*if def,selap
+       subroutine rfuel(nptim,timp,ptim,ttpptmp)
+!
+!  Processes input data for the fuel rod component.
+!  Cognizant engineer: ewc.
+! 
+!  All flxwid is replaced by flxwid(icomp) by H.Madokoro		
+*in32 idat
+*in32end
+       use scdmod
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'scddat.h'
+       include 'cmatp.h'
+       include 'fpmas.h'
+       include 'grscgr.h'
+       include 'intcom.h'
+       include 'ndxara.h'
+       include 'scdout.h'
+       include 'scdcom.h'
+       include 'scntl.h'
+       include 'tblsp.h'
+       include 'ufiles.h'
+       include 'nhtara.h'
+       include 'miscon.h'
+       include 'dbacct.h'
+       include 'debcom.h'
+       include 'cora.h'
+       include 'farays.h'
+       integer nptim
+       real timp(50),ptim(50),ttpptmp(50,3+ndax)
+c  Local variables.
+       character itype*8,tunit*1,line*120
+       logical errck1, errck2, start
+       external inp2,rswtch
+       integer knt,k1,knt2,knt3,i,inode,icrd2
+       real dxmat, burnaa, fpmass(16)
+       real rdat(80)
+       integer idat(80)
+       integer l1(11),l1a(7),l2(9),l2a(8),l2b(8),l3(10),
+     & l5a(ndrd+7),l7a(ndax+6),l7a1(10),l7a2(13),l7a3(11), l7b1(10),
+     & l7b2(13),l7b3(11),
+     & l8(ndmatr+6),l30(8), l32(9+ndax),l7d(9),l7e(10),
+     & l90(16),l90a(17)
+       integer l3a(10)
+cljs generalized simulator input
+       integer lsm(14)
+       integer npptim,inext,nstart,ndata,last,istart
+       integer kntmax
+       integer iknt,mkt
+       integer iselct
+       integer ifaili
+       integer ndbg
+       real pptim(50),timpp(50)
+       equivalence (idat(1),rdat(1))
+       real specier(7)
+       character*8 fptyp1(4),fptyp2(7),fptyp3(5),specie(7)
+       character*8 nopt(10),onoff(10)
+      data l1/0,0,2,3,0,1,0,3*1,0/
+      data l3a/0,0,4,4,0,1,3*1,0/
+      data l1a/0,0,1,1,0,1,1/
+      data l2/0,0,2,3,0,1,3*1/
+      data l2a/0,0,2,2,0,1,-1,0/
+      data l2b/0,0,1,2,0,1,-1,0/
+cljs generalized simulator input
+      data l3/0,0,4,4,0,1,3*1,0/
+      data l5a/0,0,2,ndrd,0,1,ndrd*1,0/
+      data fptyp1/'xe','kr','cs','i'/
+      data fptyp2/'te','zr','sr','fe','ru','zr*','ba'/
+      data fptyp3/'xe','kr','cs','i','te'/
+      data l7a1/0,0,0,4,0,1,4*-1/
+      data l7b1/0,0,0,4,0,1,4*1/
+      data l7a2/0,0,0,7,0,1,7*-1/
+      data l7b2/0,0,0,7,0,1,7*1/
+      data l7a3/0,0,0,5,0,1,5*-1/
+      data l7b3/0,0,0,5,0,1,5*1/
+      data l7d/0,0,0,ndax,0,1,ndax,1,0/
+      data l7e/0,0,0,ndax,0,1,ndax,1,1,0/
+      data l8/0,0,0,ndmatr,0,1,ndmatr*0/
+      data l30/0,0,2,2,0,1,1,1/
+      data l32/0,0,0,12,0,1,50,1,ndax*1,1/
+      data l90/0,0,0,10,0,1,10*1/
+      data l90a/0,0,0,11,0,1,11*1/
+c
+c  Initialize prior and prompt power.
+      ndbg=0
+      if(.not.scntrl(7))then
+        nptim =0
+        npptim =0
+        do 10 i=1,50
+          ptim(i) = 0.0
+          pptim(i)= 0.0
+          timp(i) = 0.0
+   10   timpp(i)= 0.0
+      endif
+c 4ccc0100 Number of rods
+      iselct=1
+      if(modidx(1).ne.1.or.idcomp(icomp).ne.6)iselct=2
+      select case(iselct)
+      case(1)
+      if(.not.scntrl(7))then
+        l1(1)= scd1(icomp)%cmpno*10000 + 40000100
+        if(idcomp(icomp).eq.6) then
+          l1(3)=2
+          l1(4)=5
+        endif
+        l1(6)=1
+        call inp2(fa(filndx(1)),rdat,l1)
+        if(l1(6).lt.0)then
+          fail=.true.
+        elseif(l1(6).eq.0)then
+          write(output,9090) l1(1)
+          fail=.true.
+        elseif(idat(1).lt.1.or.rdat(2).lt.0.0)then
+          write(output,9100)l1(1),l1(1)
+          fail=.true.
+        else
+          nsigl(icomp)=idat(1)
+          if(.not.uniti)rdat(2)=rdat(2)*0.3048
+          pitch(icomp)=rdat(2)
+          if(pitch(icomp).lt.0. 0126.or. pitch(icomp).gt.0.0187)then
+            write(output,9110)l1(1),' pitch'
+          endif
+          if(pitch(icomp).le.0.0)then
+            write(output,9130)l1(1),l1(1)
+            pitch(icomp)=0.0126
+            write(output,*)'pitch reset to ',pitch(icomp),
+     &      'to allow further input processing.'
+            fail=.true.
+          endif
+          burnaa=0.0
+          if(idcomp(icomp).ne.6)then
+            if(l1(6).eq. 3.and. nvirn .ne.  6)then
+              burnaa=rdat(3)
+            endif
+            if(burnaa.lt.0.0) then
+              write(output,9130)l1(1),l1(1)
+              fail=.true.
+            endif
+            if(burnaa.gt.4752000.0)then
+              write(output,9110)l1(1),' burnup'
+            endif
+          end if
+          write(output,'(/,a,i8)')
+     &    'Number of rods modeled by this component',nsigl(icomp)
+          if (unito) then
+            write(output,'(a,e10.4,a)') ' Rod pitch ',
+     &      pitch(icomp),' m.'
+          else
+            write(output,'(a,e10.4,a)') ' Rod pitch ',
+     &      pitch(icomp)*3.28084, ' ft.'
+          endif
+          if (idcomp(icomp) .ne. 6) then
+            write(output,'(a,e10.4)') ' Burnup ',burnaa
+          endif
+        endif
+      endif
+      case(2)
+      if(.not.scntrl(7))then
+        l1(1)= scd1(icomp)%cmpno*10000 + 40000100
+        if(idcomp(icomp).eq.6) then
+          l1(3)=3
+          l1(4)=5
+        else
+          l1(3)=2
+          l1(4)=3
+        endif
+        l1(6)=1
+        call inp2(fa(filndx(1)),rdat,l1)
+        if(l1(6).lt.0)then
+          fail=.true.
+        elseif(l1(6).eq.0)then
+          write(output,9090) l1(1)
+          fail=.true.
+        elseif(idat(1).lt.1.or.rdat(2).lt.0.0)then
+          write(output,9100)l1(1),l1(1)
+          fail=.true.
+        else
+          nsigl(icomp)=idat(1)
+          if(.not.uniti)rdat(2)=rdat(2)*0.3048
+          pitch(icomp)=rdat(2)
+          if(pitch(icomp).lt.0. 0126.or. pitch(icomp).gt.0.0187)then
+            write(output,9110)l1(1),' pitch'
+          endif
+          if(pitch(icomp).le.0.0)then
+            write(output,9130)l1(1),l1(1)
+            pitch(icomp)=0.0126
+            write(output,*)'pitch reset to ',pitch(icomp),
+     &      'to allow further input processing.'
+            fail=.true.
+          endif
+          burnaa=0.0
+          if(idcomp(icomp).ne.6)then
+            if(l1(6).eq. 3.and. nvirn .ne.  6)then
+              burnaa=rdat(3)
+            endif
+            if(burnaa.lt.0.0) then
+              write(output,9130)l1(1),l1(1)
+              fail=.true.
+            endif
+            if(burnaa.gt.4752000.0)then
+              write(output,9110)l1(1),' burnup'
+            endif
+          else
+            rtungs = rdat(3)
+            if (.not.uniti) rtungs = rtungs*0.3048
+ccma  Add option to obtain original results if rtungs is input as
+c     negative number.
+            if (rtungs.lt.-1.0 .or. rtungs.gt.1.0) then
+              write (output,9130) l1(1),l1(1)
+              fail = .true.
+            endif
+            flxwid(icomp) = 0.0005
+            iuorho = 0
+ccma  Set icrmod to -1 if rtungs is negative.
+            if (rtungs .lt. 0.0) then
+              write (output,9111) l1a(1),' Tungsten radius'
+ 9111  format ('0$$$$$$$$ Warning, Card',i9,a,' selects an option that u
+     &ses the user specified axial power profile rather than one compute
+     &d using resistivity.')
+              icrmod = -1
+              rtungs = -rtungs
+            endif
+ccmaend
+            if (l1(6) .ge. 4) then
+              if (rtungs.gt.1.0e-05 .and. rdat(4).ge.0.0) then
+              	      flxwid(icomp)=rdat(4)
+              endif  	      
+              if (flxwid(icomp).lt.-1.0e-5 
+     &              .or. flxwid(icomp).gt.0.1) then
+                write (output,9130) l1(1),l1(1)
+                fail=.true.
+              endif
+            endif
+            if (l1(6) .eq. 5) iuorho = idat(5)
+          endif
+          write(output,'(/,a,i8)')
+     &    'Number of rods modeled by this component',nsigl(icomp)
+          if (unito) then
+            write(output,'(a,e10.4,a)') ' Rod pitch ',
+     &      pitch(icomp),' m.'
+          else
+            write(output,'(a,e10.4,a)') ' Rod pitch ',
+     &      pitch(icomp)*3.28084, ' ft.'
+          endif
+          if (idcomp(icomp) .ne. 6) then
+            write(output,'(a,e10.4)') ' Burnup ',burnaa
+          else
+            if (rtungs .gt. 1.0e-05) then
+              write (output,'(a,e10.4)') ' Radius of Tungsten wire',
+     &        rtungs
+              write (output,'(a,e10.4)') ' Contact resistance',
+     &        flxwid(icomp)
+            endif
+          endif
+        endif
+      endif
+      end select
+c 4ccc0200 Fuel Rod Geometry
+      if(.not.scntrl(7))then
+        l2(1)= scd1(icomp)%cmpno*10000 + 40000200
+        l2(6)=1
+        call inp2(fa(filndx(1)),rdat,l2)
+        if(l2(6).eq.0)then
+          write(output,9090) l2(1)
+          fail=.true.
+        elseif(rdat(1).lt.0. 0.or. rdat(2).lt.0.0)then
+          write(output,9100)l2(1),l2(1)
+          fail=.true.
+        else
+          if(.not.uniti)then
+            rdat(1)=rdat(1)*0.3048
+            rdat(2)=rdat(2)*0.3048**3
+            if(l2(6).eq.3)rdat(3)=rdat(3)*0.3048**3
+          endif
+          vpleni(icomp)=rdat(2)
+          write(output,'(1x,a,e10.4)') 'Plenum Volume ',vpleni(icomp)
+          pllnth(icomp)=rdat(1)
+          write(output,'(/,a,e10.4)') 'Plenum Length ',pllnth(icomp)
+          if(l2(6).eq.3)then
+            vlplen(icomp)=rdat(3)
+            write(output,'(1x,a,e10.4)') 'Lower Plenum Volume ',
+     &          vpleni(icomp)
+            if (vpleni(icomp) .lt. 0.0) then
+              write (output,9130) l2(1),l2(1)
+              fail = .true.
+            endif
+          else
+            vlplen(icomp)=0.0
+          endif
+        endif
+      endif
+c 4ccc0250 upper plenum boundary cond
+c make sure simulator component
+      if(.not.scntrl(7))then
+        if (idcomp(icomp) .eq. 6) then
+          write(output,'(/,a)') 'Plenum boundary conditions'
+          l2a(1) = scd1(icomp)%cmpno*10000 + 40000250
+          call inplnk(l2a(1),inext,istart,ndata,fa(filndx(1)))
+          if(ndata .le. 0)then
+            scd1(icomp)%ibndtb(2) = 0
+            write(output,'(a)')' zero heat flux imposed on upper plenum'
+          else
+            l2a(6)=1
+            call inp2(fa(filndx(1)),rdat,l2a)
+            write(itype,'(a8)') rdat(1)
+            if(l2a(6) .ne. 2) then
+              write(output,9100)l2a(1),l2a(1)
+              fail=.true.
+              scd1(icomp)%ibndtb(2) = 0
+            endif
+            if(itype .eq. 'control') then
+              write(output,9000) 'upper',idat(2)
+ 9000 format (1x,a,' plenum bounded by RELAP control variable ',i8)
+              scd1(icomp)%ibndtb(2) = -idat(2)
+            else if(itype .eq. 'table') then
+              write(output,9010)'upper',idat(2)
+ 9010 format (1x,a,' plenum bounded by RELAP general table ',i8)
+              scd1(icomp)%ibndtb(2) = idat(2)
+            else
+              write(output,'(a)') ' Unrecognized upper plenum B.C.'
+              fail=.true.
+              scd1(icomp)%ibndtb(2) = 0
+            endif
+          endif
+c 4ccc0251 lower plenum boundary cond
+          l2b(1) = scd1(icomp)%cmpno*10000 + 40000251
+          call inplnk(l2b(1),inext,istart,ndata,fa(filndx(1)))
+          if(ndata .le. 0)then
+            scd1(icomp)%ibndtb(1) = 0
+            write(output,'(a)')' zero heat flux imposed on lower plenum'
+          else
+            l2b(6)=1
+            call inp2(fa(filndx(1)),rdat,l2b)
+            write(itype,'(a8)') rdat(1)
+            if(l2b(6) .ne. 2) then
+              write(output,9100)l2b(1),l2b(1)
+              scd1(icomp)%ibndtb(1) = 0
+              fail=.true.
+            endif
+            if(itype .eq. 'control') then
+              write(output,9000) 'lower',idat(2)
+              scd1(icomp)%ibndtb(1) = -idat(2)
+            else if(itype .eq. 'table') then
+              write(output,9010)'lower',idat(2)
+              scd1(icomp)%ibndtb(1) = idat(2)
+            else
+              write(output,'(a)') ' Unrecognized lower plenum B.C.'
+              fail=.true.
+            endif
+          endif
+        endif
+      endif
+c 4ccc0300 Heating element
+cljs  case for more generalized material distribution in simulator
+      select case(iselct)
+      case(1)
+      if (idcomp(icomp).eq.6)then
+        if (.not.scntrl(7)) then
+        icrmod=0
+        flxwid(icomp)=0.0
+        iuorho=0
+          l1a(1) = scd1(icomp)%cmpno*10000 + 40000300
+          l1a(6) =1
+          call inp2 (fa(filndx(1)),rdat,l1a)
+          if (l1a(6) .lt. 0) then
+            fail = .true.
+          else
+            if(l1a(6).ge.1)then
+            flxwid(icomp)=rdat(1)
+            write(output,9511)flxwid(icomp)
+9511        format(/,' external resistance (ohms per rod) of',
+     &      ' flexible cable =',e10.4)
+            else
+            write(output,9513)
+9513        format(/,' external resistance in flexible cable',
+     &      ' not modeled')
+            end if
+          end if
+        end if
+      end if
+      case(2)
+cma  Adding in new input option for simulator rod
+c 4ccc0300 Heating element
+      if (idcomp(icomp).eq.6 .and. rtungs.le.1.0e-05) then
+        if (.not.scntrl(7)) then
+          l3a(1) = scd1(icomp)%cmpno*10000 + 40000300
+          l3a(6) =1
+          call inp2 (fa(filndx(1)),rdat,l3a)
+          if (l3a(6) .lt. 0) then
+            fail = .true.
+          elseif (l3a(6) .eq. 0) then
+            write (output,9090) l3a(1)
+            fail = .true.
+          elseif (rdat(1).lt.0.0 .or. rdat(2).lt.0.0 .or.
+     &    rdat(3).eq.0.0) then
+            write (output,9100) l3a(1),l3a(1)
+            fail = .true.
+          else
+            ielec = idat(4)
+            if (rdat(3).ge.0.0) then
+c   ZrO2 pellets
+              if (ielec .gt. 0) icrmod = 3
+              if (ielec .lt. 0) icrmod = 2
+            else
+c   UO2 pellets
+              if (ielec .gt. 0) icrmod = 4
+              if (ielec .lt. 0) icrmod = 1
+              rdat(3) = - rdat(3)
+            endif
+            if (ielec .lt. 0) ielec = - ielec
+            if(.not.uniti) then
+              rdat(3) = rdat(3)*0.3048
+              rdat(1) = rdat(1)*0.3048
+            endif
+            rtungs = rdat(1)
+            flxwid(icomp) = rdat(2)
+            relec = rdat(3)
+            if(rtungs.lt.0.002.or.rtungs.gt.0.00685)
+     &         write(output,9110)l3a(1),' Tungsten radius'
+            if(relec.lt.0.002.or.relec.gt.0.00685)
+     &         write(output,9110)l3a(1),' Molybdenum/copper radius'
+            if(flxwid(icomp).lt.0.0005.or.flxwid(icomp).gt.0.01)
+     &         write(output,9110)l3a(1),' Contact resistance'
+            if(rtungs.le.0.0.or.rtungs.gt.1.0)then
+               write(output,9130)l3a(1),l3a(1)
+               rtungs=0.003
+               write(output,*)'Tungsten radius reset to ',rtungs,
+     &        'to allow further input processing.'
+              fail=.true.
+            endif
+            if(relec.le.0.0.or.relec.gt.1.0)then
+               write(output,9130)l3a(1),l3a(1)
+               relec=0.003
+              write(output,*)'Moly/copper radius reset to ',relec,
+     &        'to allow further input processing.'
+              fail=.true.
+            endif
+            if(flxwid(icomp).lt.0.0.or.flxwid(icomp).gt.1.0)then
+               write(output,9130)l3a(1),l3a(1)
+               flxwid(icomp)=0.0005
+               write(output,*)'Contact resistance reset to ',
+     &         flxwid(icomp),'to allow further input processing.'
+               fail=.true.
+            endif
+           if(ielec.ge.naz/2)then
+               write(output,9130)l3a(1),l3a(1)
+               ielec=0
+              write(output,*)'There are more Moly/copper',
+     &        'electrode nodes than total number of axial nodes',
+     &        ielec, 'set to 0',
+     &        'to allow further input processing.'
+              fail=.true.
+            endif
+            if(unito)then
+              write(output,'(a,e10.4,a)') ' Tungsten radius ',
+     &        rtungs,' m.'
+              write(output,'(a,e10.4,a)') ' Moly/copper radius ',
+     &        relec,' m.'
+            else
+              write(output,'(a,e10.4,a)') ' Tungsten radius ',
+     &        rtungs*3.28084, ' ft.'
+              write(output,'(a,e10.4,a)') ' Moly/copper radius ',
+     &        relec*3.28084, ' ft.'
+            endif
+            write(output,'(a,e10.4,a)') ' Contact resistance ',
+     &        flxwid(icomp),' ohms.'
+            if (ielec.eq.0) then
+              write(output,'(a)') ' No moly/copper electrodes modeled'
+            else     
+              if (icrmod.ge.3)
+     &        write (output,"(a,i3,a)") ' Moly electrodes modeled with 
+     &',ielec,' electrodes top and bottom.'
+              if (icrmod .lt. 3)
+     &        write(output,"(a,i3,a)") ' Moly/copper electrodes modeled
+     & with', ielec-1,' Moly electrodes and 1 copper electrode top and b
+     &ottom.'
+          endif
+          if(icrmod.eq.2 .or. icrmod.eq. 3) 
+     &      write(output,'(a)') 'ZrO2 pellets modeled'
+          if(icrmod.eq.1 .or. icrmod.eq. 4) 
+     &      write(output,'(a)') 'UO2 pellets modeled'
+          endif
+        endif
+      else
+        if (idcomp(icomp).eq.6 ) then
+c  Use original wolfhe model.
+          icrmod = 0
+          ielec = 0
+          relec = 0.0
+          write (output,"('0Tungsten electrode assumed for bottom 1.0 m 
+     &and Moly electrode for 1.0 to 1.3 m; simulators longer than 1.3 m 
+     &should'/' not be used with this option.')")
+	endif
+      endif 
+cmaend
+c 4ccc0301-99 fuel rod dimensions
+      end select
+c 4ccc0301-99 fuel rod or simulator dimensions
+      select case(iselct)
+      case(1)
+cljs case for more generalized distribution of material
+cljs in simulator
+cljs  expand this card for electrical components
+      if(.not.scntrl(7))then
+cljs generalized simulator input
+        if(idcomp(icomp).eq.0)then
+cljs fuel rods
+        l3(1)=scd1(icomp)%cmpno*10000 + 40000301
+        l3(2)=-l3(1)-98
+        knt=1
+21      l3(6)=1
+        call inp2(fa(filndx(1)),rdat,l3)
+          if(l3(6).le.0)then
+          fail=.true.
+          else
+          kntmax = idat(4)
+          do knt2=knt,kntmax
+          rpel2(knt2,icomp) = rdat(1)
+          rci2(knt2,icomp) = rdat(2)
+          rco2(knt2,icomp) = rdat(3)
+            if(.not.uniti)then
+            rpel2(knt2,icomp) = rdat(1)*0.3048
+            rci2(knt2,icomp) = rdat(2)*0.3048
+            rco2(knt2,icomp) = rdat(3)*0.3048
+            end if
+          write(output,9205)knt,rpel2(knt,icomp),
+     &    rci2(knt,icomp),rco2(knt,icomp)
+9205      format(/,' for axial node ',i3, 
+     &    ' fuel pellet radius =',e10.4,' m;',
+     &    ' cladding inner radius =',e10.4,' m;',
+     &    ' cladding outer radius =',e10.4,' m')
+          nmater2(knt,icomp) = 3
+          imatr3(1,knt,icomp) = 6
+          imatr3(2,knt,icomp) = 9
+          imatr3(3,knt,icomp) = 1
+          kntmax = idat(4)+1
+          if(kntmax.le.naz)goto 21
+          end do
+cljs end of input for fuel rod
+          endif
+cljs  fuel rod has same material distribution and material radii
+cljs  at each axial node.
+          do knt =2,naz
+          imatr3(1,knt,icomp) = imatr3(1,1,icomp)
+          imatr3(2,knt,icomp) = imatr3(2,1,icomp)
+          imatr3(3,knt,icomp) = imatr3(3,1,icomp)
+          rpel2(knt,icomp) = rpel2(1,icomp)
+          rci2(knt,icomp) = rci2(1,icomp)
+          rco2(knt,icomp) = rco2(1,icomp) 
+          end do
+        else
+cljs simlulator input
+        lsm(1)=scd1(icomp)%cmpno*10000 + 40000301
+        lsm(2)=-lsm(1)-98
+        lsm(3)=7
+        lsm(4)=naz*lsm(3)
+        lsm(5)=0
+        lsm(6)=1
+        lsm(7)=7
+        lsm(8)=1
+        lsm(9)=1
+        lsm(10)=1
+        lsm(11)=0
+        lsm(12)=1
+        lsm(13)=0
+        lsm(14)=0
+        knt=1
+        call inp2(fa(filndx(1)),rdat,lsm)
+          if(lsm(6).le.0)then
+          fail=.true.
+          else
+          knt=1
+          iknt=1
+676       if((7*knt).le.lsm(6))then
+            do inode=iknt,idat(7*knt)
+              rpel2(inode,icomp) = rdat(7*(knt-1)+1)
+              rci2(inode,icomp)  = rdat(7*(knt-1)+2)
+              rco2(inode,icomp)  = rdat(7*(knt-1)+3)
+              mhsim(inode,icomp) = idat(7*(knt-1)+4)
+              rhwire(inode,icomp)=rdat(7*(knt-1)+5)
+              mhwire(inode,icomp)=idat(7*(knt-1)+6)
+c hm 20131220
+              if (modidx(6) .ne. 0) then
+                if (modidx(6).eq.1 .or. modidx(6).eq.3) then       
+                  rpeli2(inode,icomp)=0.003075     
+                else 
+                  rpeli2(inode,icomp)=rhwire(inode,icomp) 
+                end if        
+                if (rpeli2(inode,icomp) .lt. rhwire(inode,icomp)) then
+                  rpeli2(inode,icomp)=rhwire(inode,icomp)
+                end if    
+              endif
+                write(output,9531)inode,rhwire(inode,icomp),
+     &          mhwire(inode,icomp)
+9531   format(/,' for axial node ',i3, 
+     & ' outer radius of heater element =',e10.4,' m',
+     & ' material index for heater element =',i3)
+                mkt=inode
+                if (rpel2(mkt,icomp) .ge. 1.e-8) then
+              write(output,9533)rpel2(mkt,icomp),
+     &        mhsim(mkt,icomp)
+9533          format(/,' outer radius of fuel simulant',
+     &        ' surrounding heater element =',e10.4,' m',
+     &        ' material index for fuel simulant =',i3)
+              else
+              write(output,9535)
+9535          format(/,' no fuel simulant surrounds',
+     &        ' the heater element for this range of',
+     &        ' axial nodes')
+              end if
+            write(output,9537)rci2(mkt,icomp),rco2(mkt,icomp)
+9537        format(/,' for this axial node',
+     &      ' inner radius of cladding =',e10.4,' m',
+     &      ' outer radius of cladding =',e10.4,' m')
+cljs  define nmater2(nmat,k,icomp), imatr3(nmat,k,icomp)
+              if (modidx(6) .eq. 0) then
+                nmater2(mkt,icomp) = 4
+                imatr3(1,mkt,icomp) = mhwire(mkt,icomp)
+                imatr3(2,mkt,icomp) = mhsim(mkt,icomp)
+                imatr3(3,mkt,icomp) = 9
+                imatr3(4,mkt,icomp) = 1
+              else
+                nmater2(mkt,icomp) = 5	
+                imatr3(1,mkt,icomp) = mhwire(mkt,icomp)
+                if (modidx(6).eq.1 .or. modidx(6).eq.3) then       
+                  imatr3(2,mkt,icomp) = 9
+                else
+                  imatr3(2,mkt,icomp) = imatr3(1,mkt,icomp)
+                end if
+                imatr3(3,mkt,icomp) = mhsim(mkt,icomp)
+                imatr3(4,mkt,icomp) = 9
+                imatr3(5,mkt,icomp) = 1
+              endif
+            end do
+          iknt = idat(7*knt)+1
+          knt=knt+1
+          go to 676                                   
+cljs  all nodes read in 
+          end if
+cljs end of input OK check
+          end if
+cljs  end type of component check
+        endif
+cljs end restart check, 301 cards
+c  strain limit not greater than rod to rod limitation
+      elim=min(elim,((pitch(icomp)-2.*rco2(1,icomp))/
+     & pitch(icomp)))
+      end if
+c  print material composition
+      write(output,9805)icomp
+9805  format(/,' radial distribution in material indices and',           
+     &  ' material radii (m) for each axial node, comp. #',i5,/)
+      if(idcomp(icomp).eq.6)then
+cljs   simulator
+        if (modidx(6) .eq. 0) then
+          write(output,9807)
+9807   format(' axial node  mat. 1    mat. 2    mat. 3    mat. 4',
+     &         '    rad wire       rado sim       radi clad       ',
+     &         'rado clad')
+          do knt=1,naz
+            write(output,9809)knt,imatr3(1,knt,icomp),
+     &      imatr3(2,knt,icomp),
+     &      imatr3(3,knt,icomp),imatr3(4,knt,icomp),rhwire(knt,icomp),
+     &      rpel2(knt,icomp),rci2(knt,icomp),rco2(knt,icomp)
+9809        format(2x,i5,3x,2x,i5,5x,i5,5x,i5,5x,i5,5x,e10.4,5x,e10.4,
+     &      5x,e10.4,5x,e10.4)    
+          end do
+        else
+          write(output,9808)
+9808      format(' axial node  mat. 1    mat. 2    mat. 3    mat. 4',
+     &         '     mat.5',
+     &         '    rad wire       radi sim       rado sim       ',
+     &         'radi clad     rado clad')
+            do knt=1,naz
+            write(output,9810)knt,imatr3(1,knt,icomp),
+     &      imatr3(2,knt,icomp),imatr3(3,knt,icomp),
+     &      imatr3(4,knt,icomp),imatr3(5,knt,icomp),rhwire(knt,icomp),
+     &      rpeli2(knt,icomp),rpel2(knt,icomp),rci2(knt,icomp),
+     &      rco2(knt,icomp)
+9810        format(2x,i5,3x,2x,i5,5x,i5,5x,i5,5x,i5,5x,i5,5x,e10.4,5x,
+     &      e10.4,5x,e10.4,5x,e10.4,5x,e10.4)    
+            end do
+        endif
+      else
+cljs   fuel rod
+          write(output,9813)
+9813      format(' axial node  mat. 1    mat. 2    mat. 3    rad pel',
+     &         '       radi clad      rado clad')
+            do knt=1,naz
+            write(output,9815)knt,imatr3(1,knt,icomp),
+     &      imatr3(2,knt,icomp),imatr3(3,knt,icomp),rpel2(knt,icomp),
+     &      rci2(knt,icomp),rco2(knt,icomp)
+9815        format(2x,i5,5x,i5,5x,i5,5x,i5,5x,e10.4,5x,e10.4,5x,e10.4)
+            end do
+          end if
+      case(2)
+c 4ccc0301-99 fuel rod dimensions
+      if(.not.scntrl(7))then
+        l3(1)=scd1(icomp)%cmpno*10000 + 40000301
+        l3(2)=-l3(1)-98
+        knt=1
+20      l3(6)=1
+        call inp2(fa(filndx(1)),rdat,l3)
+        if(l3(6).le.0)then
+          fail=.true.
+        else
+          do knt2 = knt,idat(4)
+            if(uniti)then
+              rpel2(knt2,icomp)=rdat(1)
+              rci2(knt2,icomp)=rdat(2)
+              rco2(knt2,icomp)=rdat(3)
+            else
+              rpel2(knt2,icomp)=rdat(1)*0.3048
+              rci2(knt2,icomp)=rdat(2)*0.3048
+              rco2(knt2,icomp)=rdat(3)*0.3048
+            endif
+          enddo
+          knt=idat(4)+1
+          if(knt.le.naz)goto 20
+        endif
+c strain limit (card 40000500) not greater than rod-to-rod
+        elim=min(elim,((pitch(icomp)-2*rco2(1,icomp))/pitch(icomp)))
+      endif
+      end select
+c 4ccc0400 hydraulic connections
+      call rhvol
+c Print dimensions & connections
+        write(output,'(/,t20,a)') 'Fuel Rod Dimensions'
+        write(output,'(/,t4,a,t19,a,t39,a,t59,a,t79,a)')
+     &  'Axial Node','Fuel Pel Radius',
+     &   'Inner clad radius','Outer clad radius','Volume'
+        do 40 knt=1,naz
+   40   write(output,'(7x,i5,3(10x,e10.4),3x,i10))')
+     &  knt,rpel2(knt,icomp),
+     &       rci2(knt,icomp),
+     &       rco2(knt,icomp),
+     &       nvhyd(icomp,knt)
+c error check dimensions
+      do 50 knt=1,naz
+        if(rpel2(knt,icomp).lt.0.0 .or. rci2(knt,icomp).lt.0.0 .or.
+     &      rco2(knt,icomp).lt.0.0)then
+          write(output,9130) l3(1),-l3(2)
+          fail=.true.
+        endif
+        if(rci2(knt,icomp).lt.rpel2(knt,icomp) .or. rci2(knt,icomp).
+     &     gt.rco2(knt,icomp))then
+          write(output,9130) l3(1),-l3(2)
+          fail=.true.
+        elseif(rco2(knt,icomp).lt.rci2(knt,icomp) .or.
+     &         rco2(knt,icomp).gt.(pitch(icomp)/2.0))then
+          write(output,9130) l3(1),-l3(2)
+          fail=.true.
+        endif
+        if(rpel2(knt,icomp).lt.0.00200 .or. rpel2(knt,icomp) .gt.
+     &     0.00685)then
+          write(output,9110)l3(1),' pellet radius'
+        elseif(rci2(knt,icomp).lt.0.003000 .or. rci2(knt,icomp) .gt.
+     &     0.00634)then
+          write(output,9110)l3(1),' inner clad radius'
+        elseif(rco2(knt,icomp).lt.0.00350 .or. rco2(knt,icomp).gt.
+     &     0.00715)then
+          write(output,9110)l3(1),' outer clad radius'
+        endif
+c  For simulator component check that tungsten and moly/copper radius
+c  less than fuel radius.
+        if (idcomp(icomp) .eq. 6) then
+          if (rhwire(knt,icomp) .gt. rpel2(knt,icomp)) then
+            fail=.true.
+          endif
+        endif
+   50 continue
+c 4ccc0501-99 Radial mesh spacing
+      if(.not.scntrl(7))then
+        write(output,'(/,a)') 'Ax Node  Radial Node'
+        l5a(1) = 40000501 + scd1(icomp)%cmpno*10000
+        call inplnk(l5a(1),inext,nstart,ndata,fa(filndx(1)))
+        if (ndata .lt. 0) then
+          fail=.true.
+          goto 440
+        endif
+        if(ndata.eq.0)then
+          if(inext .gt. 40000599 + scd1(icomp)%cmpno*10000) then
+            fail=.true.
+            write(output,9090) l5a(1)
+            goto 440
+          else
+            l5a(1)=inext
+            call inplnk(l5a(1),inext,nstart,ndata,fa(filndx(1)))
+          endif
+        endif
+        do 60 knt=1,ndata-1
+   60   l5a(6+knt)=1
+        l5a(6+ndata)=0
+        call inpmod(fa(filndx(1)),l5a,nstart,ndata,knt,0)
+        if (knt .eq.-1)then
+          do 70 knt=7,ndata+6
+   70     l5a(knt)=0
+        endif
+c radial nodalization specified by mesh point
+        if(l5a(7).eq.1)then
+          nrods2(1,icomp)=ndata-1
+          knt=1
+          l5a(3)=ndata
+          l5a(4)=ndata
+   80     l5a(6)=1
+          call inp2(fa(filndx(1)),rdat,l5a)
+          if(l5a(6).le.0)then
+            call inp7(l5a(1),-l5a(6))
+            write(output,9120)'Unable to complete component processing'
+            fail=.true.
+            goto 440
+          endif
+          do 100 inode=knt,idat(ndata)
+            do 90 knt3=1,nrods2(1,icomp)
+              if(uniti)then
+                xcond3(knt3,inode,icomp)=rdat(knt3)
+              else
+                xcond3(knt3,inode,icomp)=rdat(knt3)*0.3048
+              endif
+   90       continue
+            nrods2(inode,icomp)=nrods2(1,icomp)
+            call rnodes(xcond3(1,inode,icomp),rpel2(inode,icomp),
+     &       rci2(inode,icomp),nrcond2(inode,icomp),
+     &       nrcldi2(inode,icomp),nrods2(inode,icomp))
+             if (modidx(6) .ne. 0) call rnodesi(xcond3(1,inode,icomp),
+     & rhwire(inode,icomp),
+     & rpeli2(inode,icomp),nrheat2(inode,icomp),
+     & nrcondi2(inode,icomp),nrods2(inode,icomp))     
+  100     continue
+          knt=idat(ndata)+1
+          l5a(1)=l5a(1)+1
+          if(knt.le.naz)goto 80
+        else
+c radial nodalization specified by number of intervals
+          knt=1
+          l5a(3)=4
+          l5a(4)=4
+  110     l5a(6)=1
+          call inp2(fa(filndx(1)),rdat,l5a)
+          if(l5a(6).eq.0)then
+            fail=.true.
+            write(output,9090) l5a(1)
+          elseif(l5a(6).lt.0)then
+            fail=.true.
+            call inp6(l5a(1),l5a(2),-l5a(6),knt3,knt2,fa(filndx(1)) )
+            call inp7(knt3,knt2)
+          else
+            do 150 inode=knt,idat(4)
+              nrcon1((icomp-1)*ndax+inode)=1
+              nrcond2(inode,icomp)=idat(1)+1
+              nrcldi2(inode,icomp)=nrcond2(inode,icomp)+idat(2)
+              nrods2(inode,icomp)=nrcldi2(inode,icomp)+idat(3)
+c nodes across pellet
+              dxmat = rpel2(inode,icomp)/idat(1)
+              do 120 knt3=1,idat(1)
+  120         xcond3(knt3,inode,icomp)= dxmat*(knt3-1)
+              xcond3(idat(1)+1,inode,icomp)=rpel2(inode,icomp)
+c nodes across gap
+              if (idat(2) .gt. 1) then
+                dxmat=(rci2(inode,icomp)-rpel2(inode,icomp))/idat(2)
+                do 130 knt3=idat(1)+2,idat(1)+idat(2)
+  130           xcond3(knt3,inode,icomp)=
+     &            rpel2(inode,icomp) + dxmat*(knt3-idat(1)+1)
+              endif
+              xcond3(idat(1)+idat(2)+1,inode,icomp)=rci2(inode,icomp)
+c nodes across clad
+              if (idat(3) .gt. 1) then
+                dxmat=(rco2(inode,icomp)-rci2(inode,icomp))/idat(3)
+                do 140 knt3=idat(1)+idat(2)+2,idat(1)+idat(2)+idat(3)
+  140           xcond3(knt3,inode,icomp)= rci2(inode,icomp)+
+     &            dxmat*(knt3-(idat(1)+idat(2)+1))
+              endif
+              xcond3(idat(1)+idat(2)+idat(3)+1,inode,icomp)=
+     &          rco2(inode,icomp)
+  150       continue
+          endif
+          knt=idat(4)+1
+          l5a(1)=l5a(1)+1
+          if(knt.le.naz)goto 110
+        endif
+        write(output,'(5x,99(2x,i10))') (i,i=1,nrods2(1,icomp))
+        do knt=1,naz
+          write(output,'(i5,99(2x,e10.4))') knt,
+     &       (xcond3(k1,knt,icomp),k1=1,nrods2(knt,icomp))
+        enddo
+c error checking
+        if(.not.fail)then
+          do 160 knt=1,naz
+            if(xcond3(1,knt,icomp).ne.0.0)then
+              fail=.true.
+              write(output,9120)'Initial radial mesh point not at zero'
+              write(output,9130)l5a(1),-l5a(2)
+            endif
+            if(xcond3(nrods2(knt,icomp),knt,icomp).ne.rco2(knt,icomp))
+     &      then
+              fail=.true.
+              write(output,9120)'Last radial node not on clad surface'
+              write(output,9130)l5a(1),-l5a(2)
+            endif
+  160     continue
+          do 180 knt=1,naz
+            errck1=.true.
+            errck2=.true.
+            do 170 k1=2,nrods2(1,icomp)
+              if(xcond3(k1,knt,icomp).eq.rpel2(knt,icomp))errck1=.false.
+              if(xcond3(k1,knt,icomp).eq.rci2(knt,icomp))errck2=.false.
+              if(xcond3(k1,knt,icomp).le.xcond3((k1-1),knt,icomp))then
+                write(output,9120)'Radial nodes out of sequence'
+                write(output,9130)l5a(1),-l5a(2)
+                fail=.true.
+              endif
+  170       continue
+            if(errck1)then
+              write(output,9120)'Radial node at pellet radius missing'
+              write(output,9130)l5a(1),-l5a(2)
+              fail=.true.
+            endif
+            if(errck2)then
+              write(output,9120)
+     &        'Radial node at clad inside radius missing'
+              write(output,9130)l5a(1),-l5a(2)
+              fail=.true.
+            endif
+  180     continue
+        endif
+      endif
+c 4ccc0601-99 Initial Temperature
+      call rtemp(2033.)
+c This block of coding will input the initial oxide thickness
+c  and re-initialize several parameters, based upon the input
+c  thickness.  HOWEVER, it is not included in the documentation
+c  because after each component input routine is
+c  read, rscdap calls dainit, which calls oxinit, which
+c  initializes over whatever has been input.  To finish making
+c  this work, I either need to call oxinit in each component
+c  input (after the needed parameters, but before here) or I
+c  need to set a flag and let oxinit bypass the appropriate
+c  initialization.
+c
+c 40cc0701 Initial oxide thicknesses
+      inode=1
+      start=.false.
+      l7a(1) = scd1(icomp)%cmpno*10000 + 40000701
+  192 call inplnk (l7a(1),inext,nstart,ndata,fa(filndx(1)))
+      if(ndata.lt.0)then
+        fail = .true.
+      elseif (ndata .eq. 0) then
+        if(inext.gt.l7a(1) .and.
+     &     inext.le.scd1(icomp)%cmpno*10000 + 40000799) then
+          l7a(1)=inext
+          goto 192
+        endif
+        if(start)then
+          write(output,9120)'Initial oxide input incomplete'
+          fail=.true.
+        endif
+      else
+        l7a(6)=1
+        call inp2(fa(filndx(1)),rdat,l7a)
+        if(l7a(6).le.0)then
+          fail=.true.
+        else
+          start=.true.
+          do knt3=inode,idat(2)
+            oxdeo2(knt3,icomp)=rdat(1)
+          enddo
+          inode=idat(2)+1
+          l7a(1)=inext
+          if(inode.le.naz)goto 192
+          do knt=1,naz
+            effoxd(icomp,knt)=oxdeo2(knt,icomp)
+            knt2=ndax*(icomp-1)+knt
+            rnalf(knt2)=rco2(knt,icomp)-oxdeo2(knt,icomp)
+            rnoxd(knt2)=rnalf(knt2)
+            oxdwc2(knt,icomp)=oxdeo2(knt,icomp)*zoxden*32./(91.22+32.)
+            effoxw(knt,icomp)=oxdwc2(knt,icomp)
+            effow0(knt,icomp)=oxdwc2(knt,icomp)
+          enddo
+        endif
+      endif
+c 40cc0701 Initial oxide thicknesses
+      knt=0
+      l7a(1) = scd1(icomp)%cmpno*10000 + 40000701
+  195 call inplnk (l7a(1),inext,nstart,ndata,fa(filndx(1)))
+      if(ndata.le.0)then
+        if (ndata.lt.0) then
+          fail=.true.
+        else
+          if(inext.gt.l7a(1) .and.
+     &       inext.le.scd1(icomp)%cmpno*10000 + 40000799)then
+            l7a(1)=inext
+            goto 195
+          endif
+        endif
+      else
+        l7a(2)=0
+        l7a(3)=1
+        l7a(4)=naz-knt
+        l7a(5)=0
+        l7a(6)=1
+        do knt2=7,ndax+6
+          l7a(knt2)=1
+        enddo
+  200   call inp2(fa(filndx(1)),rdat,l7a)
+        if(l7a(6).le.0)then
+          fail=.true.
+        else
+          knt2=l7a(6)+knt
+          do knt3=knt+1,knt2
+            oxdeo2(knt3,icomp)=rdat(knt3-knt)
+          enddo
+          knt=knt2
+          l7a(1)=l7a(1)+1
+          l7a(2) = scd1(icomp)%cmpno*10000 + 40000799
+          l7a(3)=1
+          l7a(4)=naz-knt
+          l7a(6)=1
+          if(knt.lt.naz)goto 200
+          do knt=1,naz
+            effoxd(icomp,knt)=oxdeo2(knt,icomp)
+            knt2=ndax*(icomp-1)+knt
+            rnalf(knt2)=rco2(knt,icomp)-oxdeo2(knt,icomp)
+            rnoxd(knt2)=rnalf(knt2)
+            oxdwc2(knt,icomp)=oxdeo2(knt,icomp)*zoxden*32./(91.22+32.)
+            effoxw(knt,icomp)=oxdwc2(knt,icomp)
+            effow0(knt,icomp)=oxdwc2(knt,icomp)
+          enddo
+        endif
+      endif
+c 4ccc0801-0899 Indicies of materials contained in each axial node
+      l8(1) = scd1(icomp)%cmpno*10000 + 40000801
+      inode=1
+  305 call inplnk(l8(1),inext,istart,ndata,fa(filndx(1)))
+      if(ndata.eq.0)then
+        if(inext.gt.l8(1) .and. inext.le.
+     &  scd1(icomp)%cmpno*10000 + 40000899) then
+          l8(1)=inext
+          goto 305
+        endif
+c assign default values
+        do inode=1,naz
+          if(idcomp(icomp).eq.6)then
+            if(modidx(1).ne.1)then
+            nmater2(inode,icomp)=4
+            imatr3(1,inode,icomp) = 4
+            imatr3(2,inode,icomp) = 6
+            imatr3(3,inode,icomp) = 9
+            imatr3(4,inode,icomp) = 1
+            end if
+          else
+          nmater2(inode,icomp)=3
+          imatr3(1,inode,icomp) = 6
+          imatr3(2,inode,icomp) = 9
+          imatr3(3,inode,icomp) = 1
+          endif
+        enddo
+      else
+        l8(6)=1
+        call inp2(fa(filndx(1)),rdat,l8)
+cljs  input option not needed and does not work.
+        if (l8(6) .gt. 0) then
+          nmater2(inode,icomp)=l8(6)
+          do inode=1,naz
+            do knt=1,nmater2(inode,icomp)
+              imatr3(knt,inode,icomp)=idat(knt)
+            enddo
+          enddo
+            write(output,9105)
+9105        format(/,' ****** input failure; Card 40cc0801 input',
+     &      ' has no application and should thus be deleted')
+            fail = .true.
+        endif
+      endif
+c 4ccc1000 - Power input
+      call rpower (nptim,npptim,ptim,pptim,timp,timpp)
+      call ipower(nptim,npptim,ptim,pptim,timp,timpp)
+      do knt=1,naz
+        burnup2(knt,icomp)=paxpz2(1,knt,1,icomp)*burnaa
+      enddo
+c  4ccc2000.
+c  PARAGRASS fission product species.
+       do knt=1,16
+         fpmass(knt)=0.0
+       enddo
+       l7a1(1) = scd1(icomp)%cmpno*10000 + 40002000
+       l7a1(6) = 1
+       call inp2 (fa(filndx(1)),specier,l7a1)
+c  4ccc2001-4ccc2199 PARAGRASS masses.
+       if (l7a1(6).gt.0) then
+         write (specie,"(7a8)") (specier(knt),knt=1,l7a1(6))
+        l7b1(1) = scd1(icomp)%cmpno*10000 + 40002001
+        l7b1(2)=-l7b1(1)-98
+        l7b1(3)=l7a1(6)
+        l7b1(4)=l7a1(6)
+        l7b1(6)=1
+        call inp2(fa(filndx(1)),rdat,l7b1)
+        if(l7b1(6).le.0)then
+          fail=.true.
+          write(output,9090) l7b1(1)
+        else
+          do 230 k1=1,l7a1(6)
+            do 220 knt=1,4
+              if (specie(k1).eq.fptyp1(knt))then
+                if(.not.uniti)rdat(k1)=rdat(k1)*0.4535924
+                fpmass(knt)=rdat(k1)
+                goto 230
+              endif
+  220       continue
+            write (output,9020) specie(k1),l7a1(1)
+ 9020 format ('0******** ',a,' is an incorrect species name on card',
+     &i8,'.')
+            fail = .true.
+  230     continue
+          ininv = 0
+          if(fpmass(1).gt.0.0)then
+            ininv = 1
+            fpmass(2)=fpmass(1)*(0.0838*0.15)/(0.1313*0.85)
+            write(output,*)' Kr mass recomputed to be',
+     &      ' (Xe mass)/(Kr mass)= 0.85*molecular wt of Xe',
+     &      '/0.15*molecular wt of Kr'
+          endif
+          write (output,9030)'Paragrass',
+     &    (fptyp1(knt),fpmass(knt),knt=1,4)
+        endif
+      endif
+c 4ccc2100 FUEL fission product
+      l7a2(1) = scd1(icomp)%cmpno*10000 + 40002100
+      l7a2(6) = 1
+      call inp2 (fa(filndx(1)),specier,l7a2)
+      if (l7a2(6) .gt. 0) then
+        write (specie,"(7a8)") (specier(knt),knt=1,l7a2(6))
+        l7b2(1) = scd1(icomp)%cmpno*10000 + 40002101
+        l7b2(2) = -l7b2(1)-98
+        l7b2(3) = l7a2(6)
+        l7b2(4) = l7a2(6)
+        l7b2(6) = 1
+        call inp2(fa(filndx(1)),rdat,l7b2)
+        if(l7b2(6).le.0)then
+          fail=.true.
+          write(output,9090) l7b2(1)
+        else
+          do 250 k1=1,l7a2(6)
+            do 240 knt=1,7
+              if (specie(k1).eq.fptyp2(knt))then
+                if(.not.uniti)rdat(k1)=rdat(k1)*0.4535924
+                fpmass(knt+4)=rdat(k1)
+                goto 250
+              endif
+  240       continue
+            write (output,9020) specie(k1),l7a2(1)
+            fail=.true.
+  250     continue
+          write (output,9030)'Fuel',(fptyp2(knt),fpmass(knt+4),knt=1,7)
+        endif
+      endif
+c 4ccc2200 GAP fission product
+      l7a3(1) = scd1(icomp)%cmpno*10000 + 40002200
+      l7a3(6) = 1
+      call inp2 (fa(filndx(1)),specier,l7a3)
+      if (l7a3(6) .gt. 0) then
+        write (specie,"(7a8)") (specier(knt),knt=1,l7a3(6))
+        l7b3(1) = scd1(icomp)%cmpno*10000 + 40002201
+        l7b3(2) = -l7b3(1)-98
+        l7b3(3) = l7a3(6)
+        l7b3(4) = l7a3(6)
+        l7b3(6) = 1
+        call inp2 (fa(filndx(1)),rdat,l7b3)
+        if(l7b3(6).le.0)then
+          fail=.true.
+          write(output,9090) l7b3(1)
+        else
+          do 270 k1=1,l7a3(6)
+            do 260 knt=1,5
+              if (specie(k1).eq.fptyp3(knt))then
+                if(.not.uniti)rdat(k1)=rdat(k1)*0.4535924
+                fpmass(knt+11)=rdat(k1)
+                goto 270
+              endif
+  260       continue
+            write (output,9020) specie(k1),l7a3(1)
+            fail = .true.
+  270     continue
+          write (output,9030)'Gap',(fptyp3(knt),fpmass(knt+11),knt=1,5)
+ 9030 format(/,a,' Inventory'/' Specie    Mass/Fuel Rod', 7(/3x,a3,8x,
+     +g10.3))
+        endif
+      endif
+c  Perform necessary calculations with fission products.
+c  Calculate fission product gases per axial node.
+      do i = 1,naz
+        do knt = 1,16
+          fpivm(icomp,i,knt) = fpmass(knt)/naz
+          if(fpivm(icomp,i,knt).lt.0.0)then
+            fail=.true.
+            write(output,9130)l7b3(1),-l7b3(2)
+          endif
+        enddo
+      enddo
+c 4ccc3000  gas inventory and pressure
+      l30(1) = scd1(icomp)%cmpno*10000 + 40003000
+      l30(6) = 1
+      call inp2 (fa(filndx(1)),rdat,l30)
+      if(l30(6).le.0)then
+        fail=.true.
+        write (output,9090) l30(1)
+      else
+        ggivy(17,icomp)=rdat(1)
+        pgas(icomp)=rdat(2)
+        if(ggivy(17,icomp).lt.0.0 .or. pgas(icomp).lt.0.0)then
+          write(output,9100)l30(1),l30(1)
+          fail=.true.
+        endif
+      endif
+c 4ccc3201-99 Time Temperature Pressure Profile
+c NOTE these values are not stored permanently.
+c used only in ifuel.
+      l32(1) = 40003200 + scd1(icomp)%cmpno*10000
+      knt2 = 0
+      do knt = 1,50
+        ttpptmp(knt,1) = -1.0
+      enddo
+  370 l32(1)=l32(1)+1
+      call inplnk(l32(1),inext,istart,ndata,fa(filndx(1)))
+      if(ndata .gt. 0) then
+        knt2 = knt2 + 1
+        l32(3) = naz + 2
+        l32(4)= naz + 2
+        l32(6) = 1
+        call inp2(fa(filndx(1)),rdat,l32)
+        if(l32(6).lt.0)then
+          fail=.true.
+        elseif(l32(6).gt.0)then
+          do knt = 1,naz + 2
+            ttpptmp(knt2,knt) = rdat(knt)
+          enddo
+        endif
+      endif
+       if (inext.gt.l32(1) .and. inext.le.
+     & 40003299 + scd1(icomp)%cmpno*10000) goto 370
+c  Optional switches.
+      call rswtch (scd1(icomp)%cmpno,knt,nopt,onoff)
+      iox(icomp)=0
+      if(knt.gt.0)then
+        do 390 knt2=1,knt
+          write(output,9040)nopt(knt2),onoff(knt2)
+ 9040 format('0Special Option - ',a8,' is ',a8,'.')
+          if(nopt(knt2).eq.'limit')then
+            if(onoff(knt2).eq.'on')then
+              iox(icomp)=1
+            elseif(onoff(knt2).eq.'off')then
+              iox(icomp)=0
+            else
+              write(output,9050)onoff(knt2)
+ 9050 format('1Invalid Switch -',a8,'.')
+              fail=.true.
+            endif
+          else
+            write(output,9060)nopt(knt2)
+            fail=.true.
+ 9060 format('1Invalid Option -',a8,'.')
+          endif
+  390   continue
+      endif
+!  Card 4ccc5001-5099.
+!  Fuel k factors.
+      do knt = 1,naz
+        acond2(knt,icomp)=5700.
+        fcfulk2(knt,icomp)=0.95
+      enddo
+      if(nvirn.le.2)then
+        l7e(1) = 40005001 + 10000*scd1(icomp)%cmpno
+        l7e(2) = -l7e(1) - 99
+        call inplnk (l7e(1),inext,nstart,ndata,fa(filndx(1)))
+        if (ndata.gt.0 .or. (inext.gt.l7e(1).and.inext.le.-l7e(2))) then
+          l7e(3)=3
+          l7e(4) = 3*naz
+          l7e(6) = 1
+          call inp2 (fa(filndx(1)),rdat,l7e)
+          if (l7e(6) .gt. 0) then
+            if (mod(l7e(6),3) .ne. 0) then
+              write (output,9100) l7e(1),-l7e(2)
+              fail = .true.
+            else
+              do knt = 1,l7e(6)/3
+                if (knt .eq. 1) then
+                  k1 = 1
+                else
+                  k1 = idat(3*(knt-1))
+                endif
+                do inode = k1,idat(knt*3)
+                  fcfulk2(inode,icomp) = rdat(3*knt-2)
+                  acond2(inode,icomp) = rdat(3*knt-1)
+                  if (.not.uniti) acond2(inode,icomp) =
+     &            acond2(inode,icomp)*20531.
+                  if (fcfulk2(inode,icomp) .le. 0.0) then
+                    fail = .true.
+                    write (output,9130) l7e(1),-l7e(2)
+                  endif
+                enddo
+              enddo
+            endif
+          else
+            fail=.true.
+          endif
+          write(output,'(1x,a,10(2x,e10.4))') 'K-factors ',
+     &    (fcfulk2(knt,icomp),knt=1,naz)
+        endif
+      endif
+c 4ccc9000 Volume of external volumes
+      l90(1) = 40009000 + scd1(icomp)%cmpno*10000
+      l90(6) = 1
+      nvinp(icomp) = 0
+      call inp2 (fa(filndx(1)),rdat,l90)
+      if(l90(6) .gt. 0) then
+        nvinp(icomp) = l90(6)
+        do knt = 1,nvinp(icomp)
+          if(uniti)then
+            vols(knt,icomp) = rdat(knt)
+          else
+            vols(knt,icomp) = rdat(knt)*2.8317e-4
+          endif
+          if(vols(knt,icomp).lt.0.0)then
+            write(output,9110)l90(1),'Volumes'
+            fail=.true.
+            nvinp(icomp)=0
+          endif
+        enddo
+      endif
+c 4ccc9001-99 0 temperature history for external volumes
+      if (nvinp(icomp) .gt. 0) then
+        l90a(1) = 40009001 + scd1(icomp)%cmpno*10000
+        icrd2 = 40009099 + scd1(icomp)%cmpno*10000
+        l90a(2) = 0
+        l90a(3) = nvinp(icomp)+1
+        l90a(4) = nvinp(icomp)+1
+        ntinp(icomp) = 0
+  410   call inplnk (l90a(1),inext,nstart,ndata,fa(filndx(1)))
+        if (ndata .eq. 0) then
+          if (inext.gt.l90a(1) .and. inext.le.icrd2) then
+            l90a(1) = inext
+            go to 410
+          endif
+          if (ntinp(icomp) .eq. 0) then
+            write (output,9090) l90a(1)
+            fail = .true.
+          endif
+        else
+          ntinp(icomp) = ntinp(icomp)+1
+          l90a(6) = 1
+          call inp2(fa(filndx(1)),rdat,l90a)
+          if( l90a(6) .lt. 0) then
+            fail = .true.
+            ntinp(icomp) = ntinp(icomp)-1
+            goto 440
+          endif
+          tsvols(ntinp(icomp),icomp)=rdat(1)
+          do 420 knt=2,l90a(6)
+            if(rdat(knt).lt.0)then
+              write(output,9110)l90a(1),' Temperature(s)'
+              fail=.true.
+              ntinp(icomp)=0
+              goto 440
+            endif
+            if(.not.uniti)rdat(knt)=(rdat(knt)+459.67)*1.8
+            tcvols(knt-1,ntinp(icomp),icomp)=rdat(knt)
+  420     continue
+          l90a(1)=l90a(1)+1
+          if(l90a(1).lt.icrd2 .and. ntinp(icomp).lt.10)goto 410
+        endif
+        if(ntinp(icomp).ge.1)then
+          line='Temperature history of external volumes (K).'
+          if(.not.unito) line(42:42)='F'
+          write(output,'(/,a)')line(1:44)
+          write(output,'(20x,a)')
+     +    'Time at which temperature was specified'
+          line(1:18)='Number   Vol ( m3)'
+          if(.not.unito)line(15:16)='ft'
+          write(output,9070) line(1:18),
+     #       (tsvols(knt,icomp),knt=1,ntinp(icomp))
+ 9070 format(1x,a,10f10.0)
+          do 430 knt=1,nvinp(icomp)
+            if(unito)then
+              write (output,9080)knt, vols(knt,icomp),
+     #          (tcvols(i,knt,icomp),i=1,ntinp(icomp))
+            else
+              write (output,9080)knt, vols(i,icomp)*3531.45,
+     #           ((tcvols(i,knt,icomp)-459.67)/1.8,i=1,ntinp(icomp))
+            endif
+  430     continue
+        endif
+ 9080 format(i4,4x,1pe10.3,0p,10f10.1)
+      endif
+c
+  440 continue
+      return
+ 9090 format (/,'******** Card ',i8,' is missing.')
+ 9100 format(/,'******** Improper number arguments on cards',i9,' to',
+     + i9)
+ 9110 format(/,'$$$$$$$$ Warning, Card ',i9,a,' outside range of',
+     +' normal use.')
+ 9120 format(/,'******** ',a,'.')
+ 9130 format(/,'******** Range error, cards ',i8,' to ',i8)
+      end
+*endif

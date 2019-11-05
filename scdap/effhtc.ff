@@ -1,0 +1,435 @@
+*mlist
+*if def,selap
+      subroutine effhtc (poxfr, qnuab, tsur, tsur0,
+     #  effcp, effcpi, effcpo, effgen,effk, effqc)
+c
+c  computation of effective material properties and
+c  effective heat generation for control rod heat conduction.
+c
+c  Cognizant engineer: ewc (wxs).
+c
+c     calling subroutines:  heatcn
+c     engineer/programmer:  w. sengpiel
+c
+c     input variables                  description
+c        qnuab          linear heat generation in absorber material due
+c                         to neutron capture (w/m)
+c        tsur           current temperature in control rod axial zone
+c                         (k)
+c        tsur0          average temperature in control rod axial zone
+c                         at start of time step (k)
+c
+c     output variables                 description
+c        effcp          effective specific heat  (j/m3-k)
+c        effcpi         volumetric heat capacity of inner region for
+c                         odidation model  (j/m3-k)
+c        effcpo         volumetric heat capacity of outer region for
+c                         oxidation model  (j/m3-k)
+c        effgen         effective heat generation rate  (w/m3)
+c        effk           effective thermal conductivity  (w/m-k)
+c        effqc          volumetric heat generation in inner region for
+c                         oxidation model  (w/m3)
+c
+c     local variables                  description
+c        cab            specific heat capacity of absorber material
+c                         (j/kg-k)
+c        css            specific heat capacity of ss  (j/kg-k)
+c        cszox          specific heat capacity of zircaloy/ss oxide
+c                         (j/kg-k)
+c        cws            specific heat capacity of water/steam  (j/kg-k)
+c        czr            specific heat capacity of zircaloy  (j/kg-k)
+c        rab            density of absorber material  (kg/m3)
+c        rcab           volumetric heat capacity of absorber material
+c                         (j/m3-k)
+c        rcss           volumetric heat capacity of ss  (j/m3-k)
+c        rcszox         volumetric heat capacity of zircaloy/ss oxide
+c                         (j/m3-k)
+c        rcws           volumetric heat capacity of water/steam
+c                         (j/m3-k)
+c        rczr           volumetric heat capacity of zircaloy  (j/m3-k)
+c        rss            density of ss  (kg/m3)
+c        rszox          density of zircaloy/ss oxide  (kg/m3)
+c        rws            density of water/steam  (kg/m3)
+c        rzr            density of zircaloy  (kg/m3)
+c        tcab           thermal conductivity of absorber material
+c                         (w/m-k)
+c        tcss           thermal conductivity of ss  (w/m-k)
+c        tcszox         thermal conductivity of zircaloy/ss oxide
+c                         (w/m-k)
+c        tcws           thermal conductivity of water/steam  (w/m-k)
+c        tczr           thermal conductivity of zircaloy  (w/m-k)
+c        vab            volume of absorber material in axial zone (m3)
+c        vss            volume of ss in axial zone  (m3)
+c        vwast          volume of water/steam in axial zone  (m3)
+c        vzr            volume of zircaloy in axial zone  (m3)
+c        vzrox          volume of zircaloy oxide in axial zone  (m3)
+c        wab            mass of absorber material in axial zone  (kg)
+c        wss            mass of ss in axial zone  (kg)
+c        wzr            mass of zircaloy in axial zone  (kg)
+      implicit none
+*call comctl
+*call cons
+*call contrl
+*call fast
+*call ufiles
+*call voldat
+*call scddat
+*call ehtc0
+*call hfuson
+*call intcom
+*call ndxara
+*call scdcom
+*call scdout
+*call tblsp
+*call debout
+      real poxfr,qnuab,tsur,tsur0,
+     +  effcp,effcpi,effcpo,effgen,effk,effqc
+      dimension effcp(ndrd), effgen(ndrd), effk(ndrd)
+c  Local variables.
+      integer ij,in,inode
+      real atot
+      real cab,cabi,css,cssi,cszox,cws,czr,czri
+      real rab,rcab,rcss,rcszox,rcws,rczr,rr,rss,rssi
+      real rszox,rws,rzr,rzri
+      real sumcp,sumcpi,sumcpo,sumk,tcab,tcss,tcszox,tcws,tczr,vab
+      real vi,vo1, vss,vszox,vtot,vwast,vzr,vzrox,vzroxo,wab,wss, wzr
+      real fncp,fnk,fnro
+      external fncp,fnk,fnro
+c set volumes/masses/properties equal to zero
+      vzr  = 0.
+      wzr  = 0.
+      rzr  = 0.
+      czr  = 0.
+      rczr = 0.
+      tczr = 0.
+      vss  = 0.
+      wss  = 0.
+      rss  = 0.
+      css  = 0.
+      rcss = 0.
+      tcss = 0.
+      vzrox= 0.
+      vab  = 0.
+      wab  = 0.
+      rab  = 0.
+      cab  = 0.
+      rcab = 0.
+      tcab = 0.
+      vwast= 0.
+c computation of material properties
+c  computation of volumes of oxidized zircaloy and stainless steel.
+      if( rnoxd(ndax*(icomp-1)+inaz).ge. rci2(inaz,icomp) .and.
+     #    rnoxd(ndax*(icomp-1 )+inaz).lt. rco2(inaz,icomp) ) then
+         vzroxo=rco2(inaz,icomp)*rco2(inaz,icomp) -
+     #       rnoxd(ndax*(icomp-1 )+inaz)*rnoxd(ndax*(icomp-1 )+inaz)
+      else
+         vzroxo = 0.
+      endif
+      vzrox = pi * dzcnd2(inaz,icomp) * vzroxo
+      if( wremzr(ndax*(icomp-1 )+inaz) .gt. 0. ) then
+         vzr = 0.
+      else
+         vzr=pi*dzcnd2(inaz,icomp)*(rco2(inaz,icomp)*rco2(inaz,icomp)-
+     #        rci2(inaz,icomp)*rci2(inaz,icomp)) - vzrox
+      endif
+      vszox = vzrox
+      if( wremsr(ndax*(icomp-1)+inaz) .gt. 0. ) then
+         vss = 0.
+      else
+         vss = pi* dzcnd2(inaz,icomp) *
+     #   (rci2(inaz,icomp)*rci2(inaz,icomp)-
+     #    riss2(inaz,icomp)*riss2(inaz,icomp))
+      endif
+c zr guide tube im = 1
+      if( wfrozr(ndax*(icomp-1)+inaz) .le. 0. .and.
+     #   (wremzr(ndax*(icomp-1 )+inaz).gt.0. .or. vzr.le.0.))goto 20
+      if( tsur .ge. cliq .and. tsur0 .lt. cliq ) then
+c melting of zr
+         rzr = fnro( 1, cliq)
+         czr = fncp( 1, cliq)
+         rzri= fnro( 1, tsur)
+         czri= fncp( 1, tsur)
+         rczr= (rzr*czr*(cliq-tsur0) + rzri*czri*(tsur-cliq) + rzr
+     +   *chefus) / (tsur - tsur0)
+         tczr= fnk(1,cliq,1)
+      else
+         if( tsur .le. csol .and. tsur0 .gt. csol ) then
+c refreezing of zr
+            rzr = fnro( 1, csol)
+            czr = fncp( 1, csol)
+            rzri= fnro( 1, tsur)
+            czri= fncp( 1, tsur)
+            rczr= (rzr*czr*(tsur0-csol) + rzri*czri*(csol-tsur) + rzr
+     +      *chefus) / (tsur0 - tsur)
+            tczr= fnk(1,csol,1)
+         else
+c no crossing of solidus/liquidus temperatures
+            rzr = fnro( 1, tsur)
+            czr = fncp( 1, tsur)
+            rzri= 0.
+            czri= 0.
+            rczr = rzr * czr
+            tczr = fnk(1,tsur,1)
+         endif
+      endif
+      vzr = vzr + wfrozr(ndax*(icomp-1)+inaz) / rzr
+      wzr = vzr * rzr
+c stainless steel (ss) cladding
+c im = 2
+   20 continue
+      if( wfrosr(ndax*(icomp-1)+inaz).le.0. .and.
+     #   (wremsr(ndax*(icomp-1)+inaz).gt.0. .or. vss.le.0.))goto 30
+      if( tsur .ge. sliq .and. tsur0 .lt. sliq ) then
+c melting of stainless steel cladding
+         rss = fnro(18, sliq)
+         css = fncp(18, sliq)
+         rssi= fnro(18, tsur)
+         cssi= fncp(18, tsur)
+         rcss= (rss*css*(sliq-tsur0) + rssi*cssi*(tsur-sliq) + rss
+     +   *shefus) / (tsur - tsur0)
+         tcss= fnk(18,sliq,1)
+      else
+         if( tsur .le. ssol .and. tsur0 .gt. ssol ) then
+c refreezing of ss cladding
+            rss = fnro(18, ssol)
+            css = fncp(18, ssol)
+            rssi= fnro(18, tsur)
+            cssi= fncp(18, tsur)
+            rcss= (rss*css*(tsur0-ssol) + rssi*cssi*(ssol-tsur) + rss
+     +      *shefus) / (tsur0 - tsur)
+            tcss= fnk(18,ssol,1)
+         else
+c no crossing of solidus/liquidus temperatures
+            rss = fnro(18, tsur)
+            css = fncp(18, tsur)
+            rssi= 0.
+            cssi= 0.
+            rcss= rss * css
+            tcss= fnk(18, tsur,1)
+         endif
+      endif
+      vss = vss + wfrosr(ndax*(icomp-1)+inaz) / rss
+      wss = vss * rss
+c zr/ss oxide
+c im = 5
+   30 continue
+      if( vzrox .gt. 0.) then
+         rszox = fnro( 5, tsur)
+         cszox = fncp( 5, tsur)
+         rcszox= rszox * cszox
+         tcszox = fnk( 5, tsur,1)
+      endif
+c control rod neutron absorber material
+c im = 6
+      if(wremab(ndax*(icomp-1)+inaz).gt.0. .and.
+     #     wfroab(ndax*(icomp-1)+inaz) .le. 0. ) goto 120
+      if(tsur.gt.1050.0.and.tsur.lt.1100.0)then
+         rab=fnro(20,aliq)
+         cab=2408.0
+         cabi=0.0
+         rcab=rab*cab
+         tcab=fnk(20,aliq,1)
+      else
+c no crossing of solidus/liquidus temperatures
+         rab = fnro(20, tsur)
+         cab = fncp(20, tsur)
+         cabi= 0.
+         rcab= rab * cab
+         tcab= fnk(20, tsur,1)
+      endif
+      if( wremab(ndax*(icomp-1)+inaz) .le. 0. ) then
+         wab = wabbng(inaz,icomp) +  wfroab(ndax*(icomp-1)+inaz)
+      else
+         wab =  wfroab(ndax*(icomp-1)+inaz)
+      endif
+      vab = wab / rab
+      vab=pi * dzcnd2(inaz,icomp) *riss2(inaz,icomp)*riss2(inaz,icomp)
+c  calculation of volume of water/steam in axial zone.
+  120 continue
+      if( rcrst2(inaz,icomp) .ge. rco2(inaz,icomp) ) then
+         rr = rcrst2(inaz,icomp)
+      else
+         rr = rco2(inaz,icomp)
+      endif
+      vtot = pi * rr*rr * dzcnd2(inaz,icomp)
+      vwast = vtot - (vzr + vss + vszox + vab)
+      if ( vwast.le.0. ) then
+         vwast = 0.
+      else
+         in = ( icmp-1 ) * nx + inaz
+         ij = nvad(in) + filndx(4)
+         if ( tsur.ge.satt(ij) ) then
+            rws = rhog(ij)
+            cws = csubpg(ij)
+            tcws = thcong(ij)
+         else
+            rws = rhof(ij)
+            cws = csubpf(ij)
+            tcws = thconf(ij)
+         end if
+         rcws = rws * cws
+      end if
+c  computation of effective material properties for heatcn.
+      sumcp = 0.
+      sumk  = 0.
+      if( vzr .gt. 0. ) then
+        sumcp = sumcp + rczr*vzr
+        sumk  = sumk  + vzr/tczr
+      endif
+      if( vss .gt. 0. ) then
+        sumcp = sumcp + rcss*vss
+        sumk  = sumk  + vss/tcss
+      endif
+      if( vszox .gt. 0. ) then
+        sumcp = sumcp + rcszox*vszox
+        sumk  = sumk  + vszox/tcszox
+      endif
+      if( vab .gt. 0. ) then
+        sumcp = sumcp + rcab*vab
+        sumk  = sumk  + vab/tcab
+      endif
+      if( vwast .gt. 0. ) then
+        sumcp = sumcp + rcws*vwast
+        sumk  = sumk  + vwast/tcws
+      endif
+c  computation of effective heat generation for heatcn.
+      atot = vtot / dzcnd2(inaz,icomp)
+      if( wremsr(ndax*(icomp-1)+inaz) .le. 0. ) then
+         do 166 inode = 1, nrcond(ndax*(icomp-1)+inaz)-1
+            if(tsur.gt.1050.0.and.tsur.lt.1100.0)then
+               rab=fnro(20,aliq)
+               cab=2408.0
+               cabi=0.0
+               tcab=fnk(20,aliq,1)
+            else
+               rab = fnro( 20, tcond3(inode,inaz,icomp))
+               cab = fncp(20, tcond3(inode,inaz,icomp))
+               tcab= fnk(20, tcond3(inode,inaz,icomp),1)
+            endif
+            rcab = rab*cab
+            effcp( inode) = rcab
+            effk( inode) = tcab
+  166    continue
+         do 266 inode = nrcond(ndax*(icomp-1)+inaz),
+     #       nrcldi2(inaz,icomp)-1
+            rss = fnro( 18, tcond3(inode,inaz,icomp))
+            css = fncp(18, tcond3(inode,inaz,icomp))
+            rcss= rss * css
+            tcss= fnk(18, tcond3(inode,inaz,icomp),1)
+            effcp( inode) = rcss
+            effk( inode) = tcss
+  266    continue
+         do 366 inode = nrcldi2(inaz,icomp),nrods2(inaz,icomp)
+            rzr = fnro( 1, tcond3(inode,inaz,icomp))
+            czr = fncp( 1, tcond3(inode,inaz,icomp))
+            rczr = rzr * czr
+            tczr = fnk( 1, tcond3(inode,inaz,icomp),1)
+            effcp( inode) = rczr
+            effk( inode) = tczr
+  366    continue
+      else
+         do 267 inode = 1, nrods2(inaz,icomp)
+            effcp( inode) = sumcp/vtot
+            effk( inode) = vtot/sumk
+  267    continue
+      endif
+      do 767 inode = 1, nrods2(inaz,icomp)
+         effgen(inode) = ( qnuab + poxfr ) / atot
+  767 continue
+      if( noxide2(inaz,icomp) .ne. 0 ) then
+         effcpi = 0.
+         effcpo = 0.
+         effqc = 0.
+      else
+c computation of effective volumetric heat capacities effcpi,effcpo
+         sumcpi = 0.
+         sumcpo = 0.
+         vi = 0.
+         vo1 = 0.
+         if(oxdhcc(inaz,icomp).ge.0.) then
+c oxidation in zr guide tube or in frozen zr crust on inner
+c   guide tube surface
+c inner balance over ( control rod center,rci2(inaz,icomp) )
+c outer balance over ( rci2(inaz,icomp),rco2(inaz,icomp) )
+            if( vzr .gt. 0. ) then
+              sumcpo = sumcpo + rczr*vzr
+              vo1 = vo1 + vzr
+            endif
+            if( vss .gt. 0. ) then
+              sumcpi = sumcpi + rcss*vss
+              vi = vi + vss
+            endif
+            if( vzrox .gt. 0. ) then
+              sumcpo = sumcpo + rcszox*vzrox
+              vo1 = vo1 + vzrox
+            endif
+            if( vab .gt. 0. ) then
+              sumcpi = sumcpi + rcab*vab
+              vi = vi + vab
+              if(  wfroab(ndax*(icomp-1)+inaz) .gt. 0. ) then
+                 sumcpi = sumcpi - cab* wfroab(ndax*(icomp-1)+inaz)
+                 vi = vi -  wfroab(ndax*(icomp-1)+inaz)/rab
+                 sumcpo = sumcpo + cab* wfroab(ndax*(icomp-1)+inaz)
+                 vo1 = vo1 +  wfroab(ndax*(icomp-1)+inaz)/rab
+              endif
+            endif
+            if( vwast .gt. 0. ) then
+              sumcpi = sumcpi + rcws*vwast
+              vi = vi + vwast
+            endif
+            if ( vi .eq. 0. 0) then
+               effcpi = 0.0
+            else
+               effcpi = sumcpi / vi
+            endif
+            if ( vo1.eq.0. 0) then
+               effcpo = 0.0
+            else
+               effcpo = sumcpo / vo1
+            endif
+            if( wremab(ndax*(icomp-1)+inaz) .le. 0. ) then
+               effqc=qnuab/(pi*rci2(inaz,icomp)*rci2(inaz,icomp))
+            else
+               effqc = 0.
+            endif
+         else
+c oxidation in ss cladding or frozen ss
+c inner balance over control rod center to riss2(inaz,icomp)
+c outer balance over riss2(inaz,icomp) to  rco2(inaz,icomp) )
+            if( vzr .gt. 0. ) then
+              sumcpo = sumcpo + rczr*vzr
+              vo1 = vo1 + vzr
+            endif
+            if( vss .gt. 0. ) then
+              sumcpo = sumcpo + rcss*vss
+              vo1 = vo1 + vss
+            endif
+            if( vszox .gt. 0. ) then
+              sumcpo = sumcpo + rcszox*vszox
+              vo1 = vo1 + vszox
+            endif
+            if( vwast .gt. 0. ) then
+              sumcpo = sumcpo + rcws*vwast
+              vo1 = vo1 + vwast
+            endif
+            if(  wfroab(ndax*(icomp-1)+inaz) .gt. 0. ) then
+              sumcpo = sumcpo + cab* wfroab(ndax*(icomp-1)+inaz)
+              vo1 = vo1 +  wfroab(ndax*(icomp-1)+inaz)/rab
+            endif
+            if( wremab(ndax*(icomp-1)+inaz) .le. 0. ) then
+               effcpi = rcab
+               effqc=qnuab/(pi*riss2(inaz,icomp)*riss2(inaz,icomp))
+            else
+               effcpi = rcws
+               effqc = 0.
+            endif
+            if ( vo1.eq.0. 0) then
+               effcpo = 0.0
+            else
+               effcpo = sumcpo / vo1
+            endif
+         endif
+      endif
+      return
+      end
+*endif

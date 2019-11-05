@@ -1,0 +1,232 @@
+      subroutine ccstrs(ctemp,delt,cflux,cstnb,ccstni,ccstnf,
+     # cstnbn,chstrs)
+c
+c     ccstrs calculates the tangential component of cladding
+c     compressive creep stress during a time step with constant
+c     cladding temperature, flux, and stress.
+c     chstrs = output tangential component of cladding stress (pa)
+c     cstnbn = output boundary condition parameter used to
+c                specify initial slope of next time step (unitless)
+c     ustru  = estimated uncertainty of the stress magnitude --
+c                upper bound on stress magnitude (pa)
+c     ustrl  = estimated uncertainty of the stress magnitude --
+c                lower bound on stress magnitude (pa)
+c     ctemp  = input cladding temperature (k)
+c     delt   = input time step size (s)
+c     cflux  = input fast neutron flux (neutrons/((m**2)*s))
+c     cstnb  = input boundary condition parameter used to
+c                specify initial slope of current time step
+c                (unitless).
+c                this parameter is zero for the first time step
+c                and is taken from output for subsequent steps.
+c     ccstni = input tangential component of cladding creep
+c                strain at the start of the time step (m/m)
+c     ccstnf = input tangential component of cladding creep
+c                strain at the end of the time step (m/m)
+c
+c     the equations used in this subroutine are based on data from
+c     (1) d. o. hobson, creepdown of zircaloy fuel cladding
+c         initial tests, ornl/nureg/tm-181 (april 1978).
+c     (2) d. o. hobson, preliminary analysis of surface displacement
+c         results in the creepdown irradiation experiment hobbie-1,
+c         ornl/nureg/tm-310 (june 1979).
+c     (3) v. fidleris, uniaxial in-reactor creep of zirconium
+c         alloys, journal of nuclear materials 26 (1968).
+c         pp. 51-76.
+c     (4) h. stehle et al., mechanical properties of anisotropy
+c         and microstructure of zircaloy canning tubes,
+c         zirconium in the nuclear industry, astm stp 663
+c         (1977) pp. 486-507.
+c
+c     the subcode ctp is used in this subroutine
+c     ccstrs was coded by d. l. hagrman june 1980
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+c
+c     x = ac * (abs(stress) ** 0.5  2.0  or  25.)
+c     y = x/ac
+c
+      call ctp(ctemp,bc,tau,psi,ak)
+      ac = 3.83e-19
+      rct = cflux/psi + 1.0/tau
+      delstn = ccstnf - ccstni
+c
+c     branch for positive or negative strain increment
+      if(delstn .eq. 0.) go to 800
+      if(delstn .gt. 0.) go to 300
+c
+c     branch for subcases of negative strain increment
+      if((cstnb + delstn) .gt. 0.) go to 110
+c
+c     subcase one  cstnb + delstn is negative
+      arg = bc * delt * (cstnb + delstn) / ac
+      if(arg .lt. -030.) go to 260
+      xl = - ( cstnb  + delstn )
+      cxp =  exp(arg)
+      delta = ac * delstn /(-ac*(1. - cxp) + delstn * bc * delt * cxp)
+      go to 210
+c
+c     subcase two  cstnb + delstn is positive
+  110 xl = 0.
+      delta = -ac * delstn / (cstnb  * bc * delt)
+c
+  210 n = 0
+      m = 0
+  215 xh = xl + delta
+      stn     =(-xh- cstnb) * (1. -  exp(-bc * delt * xh/ac))
+      if(stn .ge. delstn) go to 220
+      delta = delta / 5.
+      m = m + 1
+      if(m .lt. 5) go to 215
+  220 xh = xl + delta
+      stn     =(-xh- cstnb) * (1. -  exp(-bc * delt * xh/ac))
+      if(stn .lt. delstn) go to 230
+      delta = delta * 2.
+      n = n + 1
+      if(n .lt. 5) go to 220
+  230 continue
+      n = 0
+      xm = (xl + xh) * 0.5
+      stnm    =(-xm- cstnb) * (1. -  exp(-bc * delt * xm/ac))
+  240 if(stnm .lt. delstn) xh = xm
+      if(stnm .ge. delstn) xl = xm
+      xm = (xl + xh) * 0.5
+      stnm    =(-xm- cstnb) * (1. -  exp(-bc * delt * xm/ac))
+      fe =  abs(stnm/delstn - 1.0)
+      if(fe .lt. 0.01) go to 250
+      n = n + 1
+      if(n .lt. 11) go to 240
+  250 a = - xm
+      go to 500
+  260 xm = -delstn - cstnb
+      a = -xm
+      go to 500
+c
+c     positive strain increment
+c
+c     branch for subcases of positive strain increment
+  300 if((cstnb + delstn) .lt. 0.) go to 310
+c
+c     subcase one  cstnb + delstn is positive
+      arg =-bc * delt * (cstnb + delstn) / ac
+      if(arg .lt. -030.) go to 460
+      xl = cstnb + delstn
+      cxp =  exp(arg)
+      delta = ac * delstn / (ac*(1. - cxp) + delstn * bc * delt * cxp)
+      go to 410
+c
+c     subcase two  cstnb + delstn is negative
+  310 xl = 0.
+      delta = -ac * delstn / (cstnb  * bc * delt)
+  410 n = 0
+      m = 0
+  415 xh = xl + delta
+      stn     = (xh- cstnb) * (1. -  exp(-bc * delt * xh/ac))
+      if(stn .le. delstn) go to 420
+      delta = delta / 5.
+      m = m + 1
+      if(m .lt. 5) go to 415
+  420 xh = xl + delta
+      stn     = (xh- cstnb) * (1. -  exp(-bc * delt * xh/ac))
+      if(stn .gt. delstn) go to 430
+      delta = delta * 2.
+      n = n + 1
+      if(n .lt. 5) go to 420
+  430 continue
+      n = 0
+      xm = (xl + xh) * 0.5
+      stnm    = (xm- cstnb) * (1. -  exp(-bc * delt * xm/ac))
+  440 if(stnm .lt. delstn) xl = xm
+      if(stnm .ge. delstn) xh = xm
+      xm = (xl + xh) * 0.5
+      stnm    = (xm- cstnb) * (1. -  exp(-bc * delt * xm/ac))
+      fe = abs(stnm/delstn - 1.0)
+      if(fe .lt. 0.01) go to 450
+      n = n + 1
+      if(n .lt. 11) go to 440
+  450 a = xm
+      go to 500
+  460 xm = delstn + cstnb
+      a = xm
+c
+c     branch for pre or post steady state
+c
+  500 b = bc * xm/ ac
+      z = a / ((a - cstnb) * (1. + b/rct))
+      w = 1.
+      if(delstn .lt. 0.) w = -1.
+      if(z .ge. 1.) go to 510
+      dtss = -(log(z))/b
+      y = xm/ ac
+      arg = -b * delt
+      if(arg .ge. -030.) cstnbn = -(  exp(arg)) * (a - cstnb) + a
+      if(arg .lt. -030.) cstnbn = a
+      if(delt .le. dtss) go to 700
+c
+c     treat the case where the whole step is steady state and
+c     find upper limits of abs(stress) for transition case
+c     stress for pure steady state
+  510 edav =  abs(delstn)/delt
+      y = (edav/(2. * rct * ac)) * (1.0 + (1.0 + 4. * ac * rct * rct /
+     # (bc * edav) )**0.5)
+c     check to see if pure steady state is consistent
+      z = w * y * ac /((w * y * ac - cstnb)*(1. + bc*y /rct))
+      cstnbn = -ac * bc * (y**2) / rct
+      if(z .le. 0. .or. z .ge. 1.) go to 700
+c
+c     treat the case where only part of the step is steady state
+c     xh is upper limit on abs stress.  pure primary case is this limit
+      xh = xm
+c     xll is lower limit on abs stress. pure ss case slope is this limit
+      xll = (w * cstnb + (cstnb**2 + 4.*((ac*y)**2)/(1.+(bc*y/rct)))
+     # **0.5)/2.
+      delta = (xh - xll)/10.
+      if(delta .le. 0.) delta = xh/10.
+      xl = xh
+      n = 0
+  610 xl = xl - delta
+      bl = bc * xl / ac
+      zl = w * xl /((w* xl - cstnb) * (1. + bl /rct))
+      dtss = - (log(zl)/bl)
+      stnl = -cstnb + bl * w * xl * ((1./rct) + delt - dtss)
+     # /(1. + (bl/rct))
+      if((w * stnl) .lt. (w * delstn)) go to 620
+      xh = xl
+      n = n + 1
+      if(n .lt. 9) go to 610
+      xl = xll
+  620 n = 0
+  630 xm = (xl + xh) * 0.5
+      bm = bc * xm / ac
+      zm = w * xm /((w * xm - cstnb) * (1. + bm / rct) )
+      dtss = -(log(zm)/bm)
+      stnl = -cstnb + bm * w * xm * ((1./rct) + delt - dtss)
+     # /(1. + (bm/rct))
+      fe = abs((stnl/delstn) - 1.0)
+      if(fe .lt. 0.01) go to 640
+      if((w * stnl) .lt. (w * delstn)) xl = xm
+      if((w * stnl) .ge. (w * delstn)) xh = xm
+      n = n + 1
+      if(n .lt. 15) go to 630
+  640 y = xm/ac
+      cstnbn = w * xm * bm /rct
+c
+c
+  700 alimh = (0.75 * ak)**2
+      aliml = (0.20*ak)**2
+      chstrs = w * (y**0.5)
+      if(y .gt. alimh) chstrs = w*(y**0.04) * ((0.75*ak)**0.92)
+      if(y .lt. aliml) chstrs = w * (y**2) / ((0.20*ak)**3)
+      go to 810
+  800 chstrs = 0.0
+  810 continue
+c
+c     estimate uncertainty in stress
+      uctr = 2. * abs( (chstrs + 1.3e+08)/1.3e+08)
+     #     + 5. * abs( (ctemp - 644.)/644.)
+      ustru = (1. + 0.075 * (1. + uctr)) * chstrs
+      ustrl = (0.85/(1. + uctr)) * chstrs
+c
+      return
+      end

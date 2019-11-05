@@ -1,0 +1,2690 @@
+*mlist
+*if def,selap
+       subroutine heatld (tsatlp,wfrouo,wfrozr,vladeb)
+!
+!  This subroutine calculates the heatup of molten material in core
+!  region and the heat transfer from the outer surfaces of the crust
+!  surrounding the molten pool to the fluid surrounding the crust. It
+!  also calculates the thickness of the crust at every location and
+!  determines whether the crust ruptures at any point.
+!
+!  Cognizant engineer: ljs
+!
+       use invtbl
+       use scdmod
+       implicit none
+       include 'fast.h'
+       include 'cons.h'
+       include 'contrl.h'
+       include 'comctl.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'jundat.h'
+       include 'scddat.h'
+       include 'cpmdat.h'
+       include 'hardpn.h'
+       include 'uphdpn.h'
+       include 'scdout.h'
+       include 'scdcom.h'
+       include 'tblsp.h'
+       include 'ndxara.h'
+       include 'intcom.h'
+       include 'slumpv.h'
+       include 'hfuson.h'
+       include 'scdpow.h'
+       include 'debcom.h'
+       include 'miscon.h'
+       include 'bconds.h'
+       include 'dbacct.h'
+       include 'buntim.h'
+       include 'trnot1.h'
+!  Local variables.
+       integer j,jgmax,jgsum,jmaxcr,k,k1,kdyn,
+     & khpup,kmin,l,nfaluc,nlqnod,nsw,nswadd,nswadu
+       integer khplo
+       integer nswqdt,nswliq
+       integer jmax,lr5old,lr5,jj
+       integer nswbot,nswtop,nswlcr,nsw2,kmpbot
+       integer nswdis,kk,kkbyps,kksave
+       integer ncomph,ntest1,ntest2,jindex,nswint,nfalcr,nfalc2
+       integer itcnt,kp1,noxshl,ivol
+       real qcrust,tsink,aream,rcrust,arearm,qcrsmn,frcnod
+       real aexter,afalum,afcadm,aflith,afo,afru1,afru2,afrz1, afrz2,
+     & afsoil,afu,afz,ainfrc,ainter,alpool,asum,betapl,brnup,cdkdt,beta,
+     & cnpool,coef1,cppool,dapool,deloxy,deltmp,deltqi,
+     & dnpool,dv,dzadd,dzcruc,emltmx,frcbal,
+     & frcmin,frcspl,frodcr,frpuo2,qfpool,qipool,
+     & qupool,raynum,sigrad,thkbmn,tmelt,
+     & tmldeb,tmp1,tmp2,tmpdb1,tmpdb2,tmpeq,tsatlp,vdispl,viscpl,
+     & w,wag1,wag2,wbc1,wbc2,wfrouo,wfrozr,
+     & wmin,wox, wpotot,wss1,wss2,wsso1,wsso2,wuoadd,
+     & wzoadd,wzr, wzr1,wzr2,wzslg,wzruo1,wzruo2,wzuo1,
+     & zbot,zpen1,ztop,vspldt
+       real vladeb
+       real cden,fden,pliq,psol,zucp1,zuden1,zutco1,zuvisc
+       real femssr,femssa
+       real powdb1,qdpol1
+       real dxmpol,dxdbdt,dtmpol,xdtmol
+       real aream2,rcrus2,areape,pdpool
+       real powedg,rliqsw,eps,eps2
+       real tmlcer,tsoldb,tliqdb,tsolpl,tliqpl,tupol1,qhpol1
+       real powdba,tstren,rcolpl,factor,raynss,coefss
+       real tzr2,frcfal,frcfun
+       real thkcst,tmpcst,qlpool,cofl1,coflss,tmpout,
+     & acoef,bcoef,ccoef,diffac,
+     & sucrst,poircs,depthh,depthz,
+     & ardome,wtdom1,wtdomd,thkeff,thkef2,stcrst,
+     & szcrst,rcrst1,rcrcm2,dzp12,drp12,pddom1,zdommx,zdommn,
+     & alphcs,psubn,thkcs1,thkcs2,outsq1,acapco,bcapco,ccapco,thkcsn,
+     & outsq4,argsq4,argsq2,powdb2,tprgas,tprcom
+       integer mmsr1,mmsr2,nswmlt,nswbnd,nswfil,kstart, nswp1,lmap,jn,
+     & nswdrn,ja,nswap,idshrd,jreflc,nsided,nnn,khrecv,nsprdp,
+     & ilt,kvoidm,icmslp,itmax,lcrbm1,jedge,kkk,ntpfal,nmlt,ichn
+       real rhoss,tsolss,tliqss,tgrdss,conss,tavess,dthkdt,
+     & vplac0,vplacc,coefrc,gravac,enthp1,rmfrnt,
+     & thkssr,tmltnk,twallk,qssrmk,dtmltn,qcpool, qcrst1,thcmin,cpssrf,
+     & xpenuo,taverf,tsum,dzsum,xsum1,tussin, thsmin,vdrain,zdrain,
+     & dlzpol,hfshrd,afrcox,afrcuo,afrczr,hdslmp,arslmp,tmxluu,tflmsl,
+     & qcrst2,denomw,zbottm,zelev1,zelev2,zbtmpl
+       real tsurcr,qcrtcs,radlbr,tsrcst,tsurgs,hcsrad,hcvcst,
+     & hcmcst,aconst,bconst,cconst,ccnst2,sqtarg,radlb2,tmplbr,
+     & thklbr,hcvdfl,fnrmsh,fnrfld,dltprs,dpmin,ztoptm,tsink2,fachtc
+       real sden,sthcon,zunth1,scp,zoden,zotcon,aden
+       real dvsum,tmpsum,tmploc,dvrod
+       dimension w(maxcon), wfrouo(*), wfrozr(*)
+       dimension vladeb(*)
+       integer ndbg
+       integer m
+!  Data statements.
+       data tmelt, wmin /2873.0,0.001/
+!  femssa = combined configuration and emissivity factor for radiation
+!  from crust supporting molten pool to surrounding fluid in axial
+!  diection.
+!  femssr=same as femssa but in radial direction.
+       data sigrad/5.6697e-8/, femssa/0.5/, femssr/0.5/
+!  rliqsw is fully defined in RUBTRN and should have same value as in
+!  RUBTRN.
+       data rliqsw /0.250/
+!  tmlcer = melting temperature of mixture of UO2 and ZrO2, as for
+!  completely oxidized fuel rods.
+       data tmlcer /2830./
+!  tstren = maximum temperature at which UO2-ZrO2 has strength.
+       data tstren /2300./
+!  gravac = acceleration of gravity (m/s**2).
+       data gravac/9.8/
+!  dpmin = minimum pressure differential on crust at top of molten pool
+!  (Pa).
+       data dpmin /1.e+5/
+!  fnrmsh=1.-(fraction way through phase change for 100% blockage).
+!  Value should be consistent with value in subroutine scdad5.
+!  fnrfld = same as fnrmsh but for reflood conditions.
+cljs   data fnrmsh /0.0/, fnrfld /0.0/
+       data fnrmsh / 0.999999/, fnrfld / 0.999999/
+       data fachtc /1.0/
+!  tprgas = minimun superheat temperature of molten pool before gases in
+!           molten pool apply significant pressure to inside surface of
+!           crust around molten pool (K).
+       data tprgas /1./
+!  Define minimum amount of molten pool superheat for failure of crust
+!  for case of external pressure greater than internal pressure.
+       data tprcom /10./
+!
+       ndbg = 0
+cljs   if(timehy.ge.18973.0.and.timehy.lt.18973.01)ndbg=1
+         if(ndbg.eq.1)then
+         write(output,9005)timehy
+9005     format(' HEATLD entered; timehy=',e12.6)
+         end if
+       qdpol1 = qdpool
+       if (nspowi.eq.3 .or. nspowi.eq.1) qdpol1 = qdpol1*powtot(1)
+       wpotot = wupool + wzpool + wapool + wspool + wmpool
+!  Identify whether reactor being analyzed is AP-600.
+!  Specify atomic fractions of al, li and cd.
+       afalum = 0.0
+       aflith = 0.0
+       afcadm = 0.0
+       afsoil = 0.0
+       tmltuo = tmelt
+!  Store start of time step volume and masses,temperature.
+       wuslpu = 0.0
+       wzslpu = 0.0
+       waslpu = 0.0
+       wsslpu = 0.0
+       tmslpu = 0.0
+       qdslpu = 0.0
+!  Check to see whether any new node became part of circulating
+!  liquefied debris.
+!  Find outside fuel rod group. Inside fuel rod group is assumed to have
+!  smallest component number and outside fuel rod group to have largest
+!  number.
+       jgmax =0
+       asum = 0.0
+       jgsum = 0.0
+       nswqdt = 0
+       nswap = 0
+       nsprdp = 0
+       eatadm = 0.0
+       ardome = 0.0
+       wtdome = 0.0
+       redome = 0.0
+       do j =1,ncomp
+         if (ishdcr(j) .ge. 1) nswap = 1
+         tcdome(j) = 0.0
+         tcbotm(j) = 0.0
+         sedome(j) = 0.0
+         subotm(j) = 0.0
+         tmdome(j) = 0.0
+         tmbotm(j) = 0.0
+         sudome(j) = 0.0
+         sebotm(j) = 0.0
+!  Set to zero the arrays storing heat transfer from bottom and top
+!  surfaces of molten pool to crust.
+!  timslp(j) = temperature of material that slumps from
+!              periphery of core to lower head (K).
+         timslp(j) = 0.0
+         mduslp(j) = 0.0
+         mdzslp(j) = 0.0
+         mdmslp(j) = 0.0
+         mdaslp(j) = 0.0
+         mdsslp(j) = 0.0
+         mdtslp(j) = 0.0
+         entslp(j) = 0.0
+         qdpslp(j) = 0.0
+         velslp(j) = 0.0
+         htcssr(j) = 0.0
+         ifaluc(j) = 0
+         hnpool(j) = 0.0
+         qgmhpn(j) = 0.0
+         qcvhpu(j) = 0.0
+         nsw = 0
+         thkbmn = 1.e+10
+         do k = 1,naz
+           tcside(k) = 0.0
+           seside(k) = 0.0
+           suside(k) = 0.0
+           tmside(k) = 0.0
+           qssrbk(k,j) = 0.0
+           if (idcomp(j) .ne. 0) cycle
+           if (lcrucb(k,j) .eq. 1) then
+             nswqdt = 1
+             nsw = 1
+             if (thkhpn(j).gt.1.e-3 .and. thkhpn(j).lt.thkbmn)
+     &       thkbmn = thkhpn(j)
+           endif
+         enddo
+         if (nsw.eq.1) then
+           jgmax = j
+           jgsum = jgsum + 1
+           asum = asum + float(nsigl(j))*pitch(j)**2
+         endif
+       enddo
+       if (jgsum.ge.2) then
+         aexter = float(nsigl(jgmax))*pitch(jgmax)**2
+         ainter = asum - aexter
+         ainfrc = ainter/asum
+       else
+         ainfrc = 1.
+       endif
+       jmaxcr=0
+       do j =1,ncomp
+         if (idcomp(j).eq.0 .and. nhrdpn(j).ge.1) jmaxcr = j
+       enddo
+!  Calculate maximum amount of liquid that crucible can hold.
+       vcrucb=0.0
+       if (jmaxcr .ne. 0) then
+         do j = 1,jmaxcr
+           if (idcomp(j).ne.0 .or. nhrdpn(j).eq.0) cycle
+!  Crucible considered to be highest at outer part of core.
+           if (nhrdpn(j) .gt. nhrdpn(jmaxcr)) cycle
+           dzcruc = 0.0
+           kdyn = (j-1)*ndax+nhrdpn(j)
+           do k = nhrdpn(j),nhrdpn(jmaxcr)
+             dzadd = dzcond((j-1)*ndax+k)
+             if (j .eq. jmaxcr) dzadd = 0.2
+             dzcruc = dzcruc + dzadd
+           enddo
+           frodcr = float(nsigl(j))
+           if (j .lt. ncomp) then
+             if (idcomp(j+1) .eq. 1) frodcr = frodcr +
+     &       float(nsigl(j+1))
+             if (j.lt.(ncomp-1) .and. idcomp(j+2).eq.1) frodcr =
+     &       frodcr + float(nsigl(j+2))
+           endif
+           vcrucb = vcrucb + dzcruc*frodcr*pitch(j)**2
+         enddo
+       endif
+       nlqnod = 0
+       vdispl = 0.0
+       jmaxcr = 0
+       do j = 1,ncomp
+!  Only examine fuel rods.
+         if (idcomp(j) .ne. 0) cycle
+         khpup = 0
+         khplo = 0
+         do k = 1,naz
+           if (lcrucb(k,j) .eq. 1) khpup = k
+         enddo
+         do k = naz,1,-1
+           if (lcrucb(k,j) .eq. 1) khplo = k
+         enddo
+         nswadu = 0
+         do k = 1,naz
+           nswadd = 0
+           kdyn = (j - 1)*ndax + k
+           ivol = nvad(kdyn) + filndx(4)
+!  Get melting temp. of debris, based on uo2 and zro2 present.
+           tsoldb = tmlsol(k,j)
+           if (nsmgeo .ge. 1) then
+             tliqdb = tmlliq(k,j)
+           else
+             tliqdb = tmlsol(k,j)
+           endif
+           tmldeb = tliqdb
+           frcnod = 0.0
+           if (irubpp(k,j).eq.1 .and. rpel(kdyn).gt.0.2e-3 .and.
+     &     lcrucb(k,j).eq.0) then
+!  Threshold of 0.75 applies factor of 1.3 to rate of spreading.
+             if (frcspr(k,j) .gt. 0.75) then
+               imdctl(1) = ior(imdctl(1),dmwrite)
+               write (inpout,"('0-------- Core degradation',es14.6,' s: 
+     &Molten pool spread radially through axial node',i3,' of component'
+     & ,i3,'.')") timehy,k,scd1(j)%cmpno
+               frcpen(k,j) = 1.0
+               frcnod = 1.0
+               nswadd = 1
+             endif
+!  Threshold of 0.75 instead of 1.0 applies factor of 1.3 to rate of
+!  spreading.
+             if (dmltax(k,j) .gt. 0.75) then
+               imdctl(1) = ior(imdctl(1),dmwrite)
+               write (inpout,"('0-------- Core degradation',es14.6,' s: 
+     &Molten pool spread axially through axial node',i3,' of component',
+     & i3,'.')") timehy,k,scd1(j)%cmpno
+               frcpen(k,j) = 1.0
+               frcnod = 1.0
+               nswadd = 1
+             endif
+           endif
+           nmlt = 0
+cljs       if (tcond3(1,k,j) .gt. tmldeb) nmlt = 1
+cljs  Delay flagging node as melted until all radial nodes in fuel
+cljs  are melted.
+c  calculate average fuel temperature
+          dvsum=0.0
+          tmpsum=0.0
+            do m=2,nrods2(k,j)
+            dvrod=pi*(xcond3(m,k,j)**2-xcond3(m-1,k,j)**2)
+            dvsum=dvsum+dvrod
+            tmpsum=tmpsum+dvrod*0.5*(tcond3(m,k,j)+tcond3(m-1,k,j))
+            enddo
+          tmploc=tmpsum/dvsum
+          if(tmploc.ge.tmlliq(k,j))nmlt=1
+           ichn = ncmpgp(j)
+           if (frcmcl(ichn,k) .ge. (1.-fnrmsh)) nmlt = 1
+           if (voidf(ivol).ge.0.0001 .and. tcond3(1,k,j).gt.tmlsol(k,j)
+     &     .and. frcmcl(ichn,k).ge.(1.-fnrfld)) nmlt = 1
+             if(ndbg.eq.1)then
+             write(output,9011)j,k,ichn,frcmcl(ichn,k),irubpp(k,j),
+     &       lcrucb(k,k)
+9011         format(' HEATLD; j=',i5,' k=',i5,' ichn=',i5,
+     &       ' frcmcl=',e10.4,' irubpp=',i5,' lcrucb=',i5)
+             end if
+           if(modidx(4).eq.1.and.irubpp(k,j).eq.1)nmlt=1
+           if (lcrucb(k,j).eq.0 .and.nmlt.eq.1 .and.
+ctest&     irubpp(k,j).eq.1.and.rpel(kdyn).gt.0.2e-3) then
+     &     irubpp(k,j).eq.1) then
+             nswadd = 1
+             imdctl(1) = ior(imdctl(1),dmwrite)
+             write(inpout,"('0-------- Core degradation',es14.6,' s: Mol
+     &ten pool formation at axial node',i3, ' of component',i3,'.')")
+     &       timehy,k,scd1(j)%cmpno
+             write (inpout,9030) tmploc,
+     &       voidf(ivol)
+ 9030  format(' temperature=',f6.1,
+     & ' liquid void fraction of coolant =',es12.4)
+             frcpen(k,j) = 1.0
+             dmltax(k,j) = 1.
+             frcspr(k,j) = 1.
+             frcnod = 1.
+             frcsp0(k,j) = 1.
+             dmltx0(k,j) = 1.
+           endif
+!  Check to see if conditions met for this node becoming bottom location
+!  of molten pool because it is below a void region and node immediately
+!  above void region is melting. Void region is due to molten material
+!  draining to lower head at periphery of core.
+           if (lcrucb(k,j).eq.0 .and. irubpp(k,j).eq.1 .and.
+     &     rpel(kdyn).gt.0.2e-3) then
+             if (k .le. (naz-2)) then
+               if (lcrucb(k+1,j) .eq. 2) then
+!  Void region due to drainage above node k.
+!  Find highest node that is void.
+                 kvoidm = 0
+                 k1 = k + 2
+                 nsw = 0
+                 do kk = k1,naz
+                   if (nsw.eq.1) cycle
+                   if (lcrucb(kk,j).le.1) then
+                     kvoidm = kk - 1
+                     nsw=1
+                   endif
+                 enddo
+                 if (kvoidm.ge.1) then
+                   if (lcrucb(kvoidm+1,j).eq.1 .or.
+     &             tcond3(1,kvoidm+1,j).gt.tmldeb) then
+                     imdctl(1) = ior(imdctl(1),dmwrite)
+                     write (inpout,"('0-------- Core degradation',
+     &es14.6,' s: Molten pool formation at axial node',i3,' component',
+     & i3/' First node below void region to catch molten material from a
+     &bove.')") timehy,k,scd1(j)%cmpno
+                     nswadd = 1
+                     frcpen(k,j) = 1.0
+                     dmltax(k,j) = 1.
+                     frcspr(k,j) = 1.
+                     frcnod = 1.
+                     frcsp0(k,j) = 1.
+                     dmltx0(k,j) = 1.
+                   endif
+                 endif
+               endif
+             endif
+           endif
+!  End of check for molten pool formation due to voided region above
+!  node k and molten material from above voided region slumping into
+!  this node.
+!  Now check for next set of conditions that cause molten pool
+!  formation.
+           if (lcrucb(k,j).eq.0 .and. irubpp(k,j).eq.1 .and.
+     &     rpel(kdyn).gt.0.2e-3 .and. frcnod.ge.0.999) then
+             imdctl(1) = ior(imdctl(1),dmwrite)
+             write (inpout,"('0-------- Core degradation',es14.6,' s: Mo
+     &lten pool spread through axial node',i3,' component',i3,' temperat
+     &ure=',f6.1)") timehy,k,j,tcond3(1,k,j)
+             nswadd = 1
+             frcpen(k,j) = 1.0
+             dmltax(k,j) = 1.
+             dmltx0(k,j) = 1.
+             frcspr(k,j) = 1.
+             frcsp0(k,j) = 1.
+           endif
+!  Check for heatup of water rod to point of molten pool formation.
+           if (lcrucb(k,j).eq.0 .and. irubpp(k,j).eq.1 .and.
+     &     rpel(kdyn).lt.0.21e-3.and.tcond3(1,k,j).ge.tmlcer) then
+             imdctl(1) = ior(imdctl(1),dmwrite)
+             write (inpout,"('0-------- Core degradation',es14.6,' s: M
+     &elting of water rod--add to molten pool, axial node =',i3,' compon
+     &ent',i3,' temperature=',f6.1)") k,j,tcond3(1,k,j)
+             nswadd =1
+             frcpen(k,j) = 1.0
+             dmltax(k,j) = 1.
+             dmltx0(k,j) = 1.
+             frcspr(k,j) = 1.
+             frcsp0(k,j) = 1.
+           endif
+!  Check for addition of material to molten pool due to extensive
+!  dissolution of fuel by cladding at axial node.
+           nswdis=0
+!  Set offset to assure that HEATLD signals molten pool formation
+!  right after RUBTRN signals debris formation due to excessive
+!  dissolution.
+           eps=0.10
+           eps2=60.
+!  Delete fuel dissolution as cause of molten fuel formation by
+!  deactivating the next several lines.
+!  If oxide thickness is greater than durable thickness, then do not
+!  trigger debris formation.
+           noxshl=0
+           tzr2=0.0
+           frcfal=frcoxf
+           if (frcfal .lt. (1.-1.e-10)) then
+             frcfun = frcfal/(1. - frcfal)
+!  This is case of double-sided oxidation.
+!  Preclude oxide breach as does melprog.
+!  frcfal=fraction of cladding that must be oxidized to
+!         prevent oxide shell from failing due to dissolution.
+!  Thickness of metallic zr was 0.604047 thickness after
+!  oxidation.
+             tzr2 = 0.0
+             if (int(brchv(k,j)) .ne. 1) then
+               tzr2 = rnoxd(kdyn) - rci(kdyn)
+             else
+               tzr2 = 0.5*(rnoxd(kdyn) - rci(kdyn))
+             endif
+             if (0.604047*oxdeo(kdyn) .gt. frcfun*tzr2) noxshl = 1
+           endif
+!***  Activate three lines below to model molten pool formation
+!***  initiated by complete dissolution of fuel pellets.
+!***       if ((ruliq(kdyn)/rpel(kdyn)).lt.rliqsw .and.
+!*** &     tcond3(1,k,j).gt.(tmpfal-eps2) .and.
+!*** &     noxshl.eq.0) nswdis = 1
+           if (irubpp(k,j).eq.1 .and. lcrucb(k,j).eq.0 .and.
+     &     rpel(kdyn).gt.0.2e-3 .and. nswadd.eq.0) then
+! If excessive amount of fuel pellet dissolved, and rubble debris,
+! then represent location as molten pool.
+             if (nswdis .eq. 1) then
+               nswadd = 1
+               imdctl(1) = ior(imdctl(1),dmwrite)
+               write (inpout,"('0-------- Core degradation',es14.6,' s: 
+     &Dissolution of fuel causes molten pool formation at axial node',
+     & i3,' component ',i3)") timehy,k,scd1(j)%cmpno
+               frcpen(k,j) = 1.0
+               dmltax(k,j) = 1.
+               dmltx0(k,j) = 1.0
+               frcspr(k,j) = 1.
+               frcnod = 1.
+               frcsp0(k,j) = 1.
+             endif
+           endif
+           kdyn = (j - 1)*ndax + k
+!  Check for addition to molten pool due to debris bed slumping into
+!  pool.
+           nfaluc = 0
+           do l = 1,numttp
+             if (sedome(l).gt.(sudome(l)-2.) .and.
+     &       tupool.gt.(tmltuo+1.)) nfaluc=1
+           enddo
+           if (lcrucb(k,j).eq.0 .and. nfaluc.eq.1 .and. k.ge. 2 .and.
+     &     lcrucb(k-1,j).eq.1 .and. irubqq(k,j).eq.1 .and.
+     &     nswadu.eq.0 .and. vlpool.gt.1.e-3) then
+             nswadd = 1
+             frcnod = 1.
+             nswadu = 1
+             zpen1 =  dzcond(kdyn)
+             frcpen(k,j)=1.
+             frcspr(k,j)=1.
+             dmltax(k,j)=1.
+             imdctl(1) = ior(imdctl(1),dmwrite)
+             write (inpout,"('0-------- Core degradation',es14.6,' s: Ma
+     &terial has slumped into molten pool due to failure of crust on top
+     & of pool at axial node=',i3,' component no.=',i3,'.')") timehy,k,j
+             write (inpout,9080) tupool
+ 9080  format (' temperature of molten pool =',es12.4)
+!  If molten pool has spread to core bypass channel, assume that fail
+!  of upper crust causes molten pool to slump to lower head.
+             do kk=ncomp,1,-1
+               kksave=kk
+               if (idcomp(kk).eq.0 .and. rpel((kk-1)*ndax+1).gt.0.2e-3)
+     &         go to 100
+             enddo
+             kksave=1
+  100        continue
+           endif
+           if (k.gt.khplo .and. k.lt.khpup .and. lcrucb(k,j).eq.0 .and.
+     &     irubpp(k,j).eq.1) then
+             nswadd=1
+             imdctl(1) = ior(imdctl(1),dmwrite)
+             write (inpout,"('0-------- Core degradation',es14.6,' s: Ma
+     &terial sandwiched between molten pool added to molten pool at axia
+     &l node',i3,' component',i3,'.')") timehy,k,j
+             frcspr(k,j)=1.
+             dmltax(k,j)=1.
+             frcpen(k,j)=1.
+             frcnod=1.
+           endif
+           if (nswadd .eq. 1) then
+             wzr2 = 0.0
+             nlqnod=nlqnod+1
+             wpotot = wupool + wzpool + wapool + wspool + wmpool
+             lr5 = nvad((j-1)*ndax+1)+filndx(4)
+             pipool=p(lr5)
+             if (wpotot .lt. wmin) tupool = tcond3(1,k,j)
+!  New liquefied material has entered the pool.
+!  Update mass and heat generation and temperature of pool.
+             frcbal = frcpen(k,j)*frcnod*float(nsigl(j))
+             wuoadd = frcbal*wuorub(k,j)
+             wzoadd = frcbal*wzorub(k,j)
+             wzr2 = frcbal*wzrdeb(k,j)
+             wag2 = frcbal*wagrub(k,j)
+             wss2 = frcbal*wssrub(k,j)
+             tmpdb2 = tcond3(1,k,j)
+             if (frcnod .gt. 0.999) then
+               imdctl(1) = ior(imdctl(1),dmwrite)
+               write (inpout,"('0-------- Core degradation',es14.6,' s: 
+     &Addition of new material to molten pool at axial node',i3, ' of co
+     &mponent',i3,'.')") timehy,k,j
+               if (wupool .ge. 1.e-3) then
+                 write (inpout,9131) tupool
+ 9131  format (' Molten pool temperature before addition of material =',
+     & e10.4,' K')
+                 write (inpout,9129) tmldeb
+ 9129  format (' Melting temperature of molten pool before material addi
+     &tion =',e10.4,' K')
+               endif
+               write (inpout,9140) wupool
+ 9140  format (' mass of uo2 in pool (kg) =',e10.4)
+               write (inpout,9150) wuoadd
+ 9150  format (' mass of uo2 added to pool=',e10.4)
+               write(inpout,9170)tcond3(1,k,j),j,k
+ 9170  format (' Temperature of material added to molten pool =',
+     & e10.4,' (K),  Added material from component #',i5,
+     & ' at axial node #',i5)
+             endif
+             if (wpotot .lt. wmin) then
+               tmpeq=tcond3(1,k,j)
+             else
+               wzr1=wmpool
+               wag1=wapool
+               wss1=wspool
+               wsso1=0.0
+               wsso2=0.0
+               wzruo1=0.0
+               wzruo2=0.0
+               afru1=0.333333334
+               afru2=0.333333334
+               afrz1=0.0
+               afrz2=0.0
+               wbc1=0.0
+               wbc2=0.0
+               tmpdb1=tupool
+               call mixtmp(wupool, wuoadd, wzr1, wzr2, wzpool, wzoadd,
+     &         wag1, wag2, wss1, wss2, wsso1, wsso2, wzruo1, wzruo2,
+     &         afru1, afru2, afrz1, afrz2, wbc1, wbc2, tmpdb1, tmpdb2,
+     &         tmpeq)
+             endif
+             write (inpout,9072) tmpeq
+ 9072  format (' Temperature of molten pool after material addition =',
+     & es12.4,' K')
+             tupool=tmpeq
+             wupool=wupool+wuoadd
+             wzpool=wzpool+wzoadd
+             wapool=wapool+wag2
+             wspool=wspool+wss2
+             wmpool=wmpool+wzr2
+!  Sum up power from nuclear heat in material that slumped into this
+!  node.  powadd(nnn,j) = nuclear heat in relocated material that
+!  slumped from axial node nnn.
+             powdba=0.0
+             do nnn = 1,naz
+               if (idrfz2(nnn,j).eq.1 .or. idrfz2(nnn,j).eq.2 .or.
+     &         idrfz2(nnn,j).eq.3) then
+                 powdba=powdba+powadd(nnn,j)
+               endif
+             enddo
+             powdb1=frcnod*(powrub(k,j)+powdba)
+             qdpol1=qdpool
+             if(nspowi.eq.3.or.nspowi.eq.1)qdpol1=
+     &       qdpol1*powtot(1)
+             write (inpout,9180) qdpol1
+ 9180  format(' power in molten pool before material addition =',
+     & es12.4,' W')
+             write (inpout,9190)nsigl(j)
+ 9190  format(' number of fuel rods in node added to molten pool =',
+     & i7)
+! Note.   This coding requires that component # 1 be a fuel rod.
+             qdpool=qdpool+powdb1*float(nsigl(j))
+             powdb1=powdb1*float(nsigl(j))
+             powdb2=frcnod*powdba*float(nsigl(j))
+             if (nspowi.eq.3 .or. nspowi.eq.1) then
+               if (powtot(1).gt.0.) powdb1=powtot(1)*powdb1
+               if (powtot(1).gt.0.) powdb2=powtot(1)*powdb2
+             endif
+             write(inpout,9200)powdb1,powdb2
+ 9200  format (' total power in material added to molten pool =', e10.4,
+     &' W ','  power from previously relocated material =',e10.4,' W')
+             powdba=qdpool
+             if (nspowi.eq.3 .or. nspowi.eq.1) then
+               if (powtot(1) .gt. 0.) powdba = powtot(1)*powdba
+             endif
+             write (inpout,9210) powdba
+ 9210 format(' power in molten pool after material addition =', e10.4,
+     &' W ')
+             nswlcr = 0
+             vladeb((j-1)*ndax+k) = 0.0
+!  Zero out early phase melt progression terms.
+             wfrozr((j-1)*ndax+k)=0.0
+             dzfrcq(k,j)=0.0
+!  Threshold of 0.75 anstead of 1.0 applies factor of 1.3 to rate of
+!  spreading.
+             if (dmltax(k,j).ge.0.75) nswlcr=1
+             if (frcspr(k,j).ge.0.75) nswlcr=1
+             if (nswlcr.eq.1) then
+               lcrucb(k,j) = 1
+               icohpp(k,j) = 1
+               if (j .lt. ncomp) then
+!  Check for layout of core components where all fuel rods defined
+!  first, then all control rods.
+                 ntest1=0
+                 ntest2=0
+                 if (ncomp.ge.4) then
+                   ncomph=ncomp/2
+                   if (idcomp(1).eq.0 .and. idcomp(2).eq.0) ntest1=1
+                   if(idcomp(ncomph+1).eq.1 .and. idcomp(ncomph+2).eq.1)
+     &             ntest2 = 1
+                   if (ntest1.eq.1 .and. ntest2.eq.1) then
+!  Layout of core with all fuel rods defined first, then the control
+!  rods.
+                     jindex = ncomph + j
+                     lcrucb(k,jindex) = 1
+                   endif
+                 endif
+                 if (ntest1.eq.0 .and. ntest2.eq.0) then
+                   if (idcomp(j+1).eq.1) lcrucb(k,j+1) = 1
+                   if (j.lt.(ncomp-1) .and. idcomp(j+2).eq.1)
+     &             lcrucb(k,j+2) = 1
+                 endif
+               endif
+               qdpol1 = qdpool
+               if (nspowi.eq.3 .or. nspowi.eq.1) qdpol1 =
+     &         qdpol1*powtot(1)
+             endif
+           endif
+         enddo
+       enddo
+!  Get atomic fractions of all constituents and total pool mass.
+       w(1) = wmpool
+       w(2) = 0.0
+       w(3) = wspool
+       w(4) = wapool
+       w(5) = 0.0
+       w(6) = wupool
+       w(7) = wzpool
+       w(8) = 0.0
+       w(9) = 0.0
+       w(10) = 0.0
+       w(11) = 0.0
+       call calaf (w, wpotot, afpool)
+       if (wpotot .lt. wmin) then
+         vlpool = 0.0
+         repool = 0.0
+         qfpool=0.0
+         qlpool=0.0
+         qupool=0.0
+         go to 430
+       endif
+!  Get melting temp. of pool, based on uo2 and zro2 present.
+       wzr = 0.7403018*wzpool + wmpool
+       wox = 0.2596981*wzpool
+       call atomfr (wupool,wzr,wox,afu,afz,afo)
+       tsolpl = psol(afo,afu,afz)
+       tliqpl = pliq(afo,afu,afz)
+       if (afz.gt.0.01 .and. tliqpl.gt.2873.0) tliqpl = 2873.0
+       if (tliqpl .lt. 2873.) tliqpl = 2873.0
+       if (tsolpl .gt. (tliqpl-30.)) tsolpl =tliqpl - 30.
+       if (tsolpl .lt. 2830.0) tsolpl = 2830.0
+       tmltuo = tliqpl
+!  Calculate density and volume of pool.
+       tupol1 = tupool
+       if (tupol1 .lt. 3200.0) tupol1 = 3200.0
+       dnpool = zuden1(afpool(1), afpool(2), afpool(3), afpool(4),
+     & afpool(5), afpool(6), afpool(7), afalum, aflith, afcadm, afsoil,
+     & tupol1)
+       vlpool = wpotot/dnpool
+!  Repool=effective radius for pool in configuration of hemisphere.
+       repool = (0.4774648*vlpool)**0.3333333333
+!  Calculate heat flux at bottom of pool according to gabor equation.
+!  betapl=thermal coefficient of volumetric expansion of liquid
+!         pool (1/k).
+!  betapl=1.08e-4
+!  viscpl=kinematic viscosity of pool (pa.s/(kg/m3)).
+!  ZUVISC and other material property subroutines internally
+!  calculate solidus and liquidus temperatures for mixture that is not
+!  consistent with solidus and liquidus temperatures used in HEATLD
+!  and MIXDLT.  So force input temperature that is above liquidus
+!  temperature calculated in these subroutines.
+!  Note. Function zuvisc has discontinuity in viscosity with respect to
+!  temperature change.
+       tupol1 = tupool
+       if (tupol1 .lt. 3200.0) tupol1 = 3200.0
+       viscpl = zuvisc(afu, afz, tupol1)/dnpool
+!  cnpool=conductivity of pool of liquefied debris (w/m.k).
+       cnpool = zutco1(afpool(1), afpool(2), afpool(3), afpool(4),
+     & afpool(5), afpool(6), afpool(7), afalum, aflith, afcadm, afsoil,
+     & tupol1)
+!  cppool=heat capacity of pool of liquefied debris.
+       cppool = zucp1(afpool(1),afpool(2),afpool(3),afpool(4),afpool(5),
+     & afpool(6),afpool(7),afalum,aflith,afcadm,afsoil,tupol1)
+!  alpool=thermal diffusivity of pool of liquefied debris (m**2/s).
+       alpool = cnpool/(dnpool*cppool)
+       call zubet1 (afpool(1),afpool(2),afpool(3),afpool(4),afpool(5),
+     & afpool(6),afpool(7),afalum,aflith,afcadm,afsoil,tupol1,beta)
+       betapl = beta
+!  Calculate average heat flux at bottom surface of pool.
+!  Calculate rayleigh number.
+       qdpol1 = qdpool
+       if (nspowi.eq.3 .or. nspowi.eq.1) qdpol1 = qdpol1*powtot(1)
+!  Store power density of .pool.
+       pdpool=qdpol1/vlpool
+!  Steady state internal Rayleigh number.
+       raynss = gravac*betapl*(qdpol1/vlpool)*repool**5/(alpool*viscpl*
+     & cnpool)
+       raynss = max(raynss,0.0)
+       if ((tupool - tliqpl) .le. 0.0) raynss = 0.0
+!  Set location factor to 1.0 and calculate and apply this factor at
+!  point in calculations in which qfpool needed at specific location.
+       factor = 1.0
+       coefss = 0.54*factor*raynss**0.18
+       coflss = 0.85*raynss**0.19
+!  Transient natural convection modified Rayleigh number.
+!  Reference: INEL-94/0174 (Nov. 1994), page 3-14.
+       raynum = gravac*betapl*(repool**3)*(tupool - tliqpl)/
+     & (alpool*viscpl)
+       raynum = max(raynum,0.0)
+       if (chngno(3)) then
+!  Transient equation.
+         coef1 = factor*0.472*raynum**0.220
+         cofl1 = 0.818*raynum**0.235
+         if (coef1 .gt. coefss) coef1 = coefss
+         if (cofl1 .gt. coflss) cofl1 = coflss
+       else
+!  Coefficient from steady state equation.
+         coef1 = coefss
+         cofl1 = coflss
+       endif
+       qfpool = fachtc*coef1*cnpool*(tupool - tliqpl)/repool
+       qlpool = fachtc*cofl1*cnpool*(tupool - tliqpl)/repool
+       if (qlpool .lt. qfpool) qlpool = qfpool
+!  If conduction heat flux is greater than natural convection heat flux,
+!  then set qfpool to conduction heat flux.
+!  Parabolic temperature distribution in molten material is assumed.
+       qcpool = -6.0*cnpool*(tliqpl - tupool)/repool
+       if (qcpool .lt. 0.0) qcpool = 0.0
+       if (qfpool .lt. 0.0) qfpool = 0.0
+       if (qlpool .lt. 0.0) qlpool = 0.0
+!  Calculate heat transferred from pool at its top surface.
+       deltmp = tupool - tliqpl
+       if (deltmp .lt. 0.0) deltmp = 0.0
+       coefss = 0.345*raynss**0.233
+       if (chngno(3)) then
+         coef1 = 0.250*raynum**0.304
+         if (coef1.gt.coefss) coef1 = coefss
+       else
+         coef1 = coefss
+       endif
+       qupool = fachtc*cnpool*deltmp*coef1/repool
+       if (deltmp.lt.0.0) qupool = 0.0
+!  See if any nodes contain circulating liquefied debris.
+!  Calculate amount of heat transfer from circulating liquefied debris
+!  into hardpan.
+       qhpool = 0.0
+       do j = 1,ncomp
+         qgmhpn(j) = 0.0
+         qcvhpu(j) = 0.0
+         if (idcomp(j).ne.0) cycle
+         nswliq = 0
+         khplo = 0
+         do k = 1,naz
+           if (lcrucb(k,j).eq.1) then
+             nswliq = k
+             if (khplo.eq.0) khplo = k
+           endif
+         enddo
+       enddo
+!  Radial spreading modeled.
+!  At least one node on side of pool.
+       do l = 1,numrtp
+         qhpool = qhpool + wtotr(l)*aradmp(l)*dt
+!  Set wtotr at start of time step.
+         wtotr(l) = 0.0
+         aradmp(l) = 0.0
+       enddo
+       do l = 1,numbtp
+         qhpool = qhpool + wtotb(l)*ardbmp(l)*dt
+         wtotb(l) = 0.0
+         ardbmp(l) = 0.0
+       enddo
+       do l = 1,numttp
+         qhpool = qhpool + wtott(l)*ardtmp(l)*dt
+         wtott(l) = 0.0
+         ardtmp(l) = 0.0
+       enddo
+       qhpol1 = qhpool/dt
+       numbtp = 0
+       numttp = 0
+       numrtp = 0
+       if (wpotot .lt. wmin) go to 430
+!  Calculate temperature change of circulating liquefied debris.
+       qipool = qdpol1*dt
+       deltqi = qipool - qhpool
+       wzr1 = wmpool
+       wag1 = 0.0
+       wss1=0.0
+       wsso1=0.0
+       wzuo1=0.0
+       afru1=0.333333334
+       afrz1=0.0
+       wbc1=0.0
+       brnup=0.0
+       frpuo2=0.0
+       deloxy=0.0
+       tmp1=tupool
+       call mixdlt(deltqi, wupool, wzr1, wzpool, wapool, wspool, wsso1,
+     & wzuo1, afru1, afrz1, wbc1, brnup, frpuo2, deloxy, emltld, emltmx,
+     & matmld, tsolpl, tliqpl, tmp1, tmp2)
+       tupool=tmp2
+!  For output convert qhpool from J to W.
+       qhpool=qhpool/dt
+!
+!  Calculate variables for mapping configuration of core.
+       do j = 1,ncomp
+         ztprub(j) = 0.0
+         zbtrub(j) = 0.0
+         if (idcomp(j) .ne. 0) cycle
+         do k = naz,1,-1
+           kdyn = (j - 1)*ndax + k
+           zbot = zcond(kdyn) - 0.5*dzcond(kdyn)
+           if (lcrucb(k,j) .ge. 1) zbtcoh(j) = zbot
+           if (irubqq(k,j).eq.1 .and. lcrucb(k,j).eq.0) zbtrub(j) = zbot
+         enddo
+         dv = 0.0
+         do k = 1,naz
+           kdyn = (j - 1)*ndax + k
+           ztop = zcond(kdyn) + 0.5*dzcond(kdyn)
+           if (irubqq(k,j).eq.1 .and. lcrucb(k,j).eq.0) ztprub(j) = ztop
+         enddo
+       enddo
+       if (vlpool .lt. 1.e-4) go to 510
+!  Calculate elevation of top of molten pool.
+       nswfil = 0
+       vplacc = 0.0
+       do k = 1,naz
+         dapool = 0.0
+         if (nswfil .eq. 1) cycle
+         do j = 1,ncomp
+           if (idcomp(j) .ne. 0) cycle
+           kdyn = (j - 1)*ndax + k
+           if (rpel(kdyn).lt. 0.2e-3) cycle
+           if (lcrucb(k,j) .ne. 1) cycle
+!  Factor of 1.1 accounts for cross sectional area contributed by
+!  positions in bundle for fuel rods.
+           dapool=dapool+1.1*float(nsigl(j))*pitch(j)**2
+         enddo
+         if (dapool .lt. 1.e-3) cycle
+         vplac0 = vplacc
+         vplacc = vplacc + dapool*dzcond(k)
+         if (vplacc .gt. vlpool) then
+           ztpool = zcond(k) - 0.5*dzcond(k) + (vlpool - vplac0)/dapool
+           nswfil = 1
+         endif
+       enddo
+!  Store height of molten pool for each component.
+       do j = 1,ncomp
+         if (idcomp(j).ne.0) cycle
+         if (rpel((j-1)*ndax+1) .lt. 0.2e-3) cycle
+!  Identify mid node height of bottom node with molten material.
+         nsw = 0
+         zbtmpl = zcond(naz)
+         do k = 1,naz
+           if (nsw.eq.1) cycle
+           if (lcrucb(k,j) .eq. 1) then
+             zbtmpl = zcond(k)
+             nsw = 1
+           endif
+         enddo
+         nswfil=0
+         do k = 1,naz
+           if (nswfil.eq.1) cycle
+           if (lcrucb(k,j) .eq. 1) nswfil = 1
+         enddo
+!  Require a little bit of superheat in molten pool before it can
+!  self-level.
+!***    if(nswfil.eq.1.and.tupool.ge.(tmltuo+1.))then              
+         if (nswfil .eq. 1) then
+           if (zbtmpl .lt. ztpool) then
+             ztpcoh(j)=ztpool
+           else 
+!  Force blockage in every flow channel with molten pool.
+             ztpcoh(j)=zbtmpl+0.001 
+           endif
+         endif
+       enddo
+!  Identify nodes flagged as molten debris that are above top elevation
+!  of molten pool.
+  510  do j = 1,ncomp
+         if (idcomp(j).ne.0) cycle
+         do k1 = 1,naz
+           kmpbot = 0
+           if (k1.gt.1) then
+             if (lcrucb(k1-1,j).ge.1) kmpbot = 1
+           endif
+           if (lcrucb(k1,j).ge.1 .and. kmpbot.eq.1 .and.
+     &     nbublk(ncmpgp(j),k1).eq.1 .and.
+     &     (nunbl2(ncmpgp(j),k1).eq.0 .or.
+     &     nunbl2(ncmpgp(j),k1).eq. 2) .and.
+     &     zcond((j-1)*ndax+k1).gt.ztpcoh(j)) then
+             nunbl2(ncmpgp(j),k1) = 1
+           endif
+         enddo
+!  Reset value of lcrucb for locations above top of molten pool.
+         do k1 = 1,naz
+           if (lcrucb(k1,j).eq.0 .or. lcrucb(k1,j).eq.2) cycle
+           if (lcrucb(k1,j).eq.1) then
+             lcrbm1 = 0
+             if (k1.ge.2) then
+               if (lcrucb(k1-1,j).ge.1) lcrbm1=1
+             endif
+             if (ztpcoh(j).le.zcond2(k1,j) .and. lcrbm1.eq.1) then
+               lcrucb(k1,j) = 2
+               if (j.lt.ncomp) then
+                 if (idcomp(j+1).eq.1 .and. lcrucb(k1,j+1).eq.1) then
+                   lcrucb(k1,j+1) = 2
+                 endif
+               endif
+             endif
+           endif
+         enddo
+       enddo
+!  Map molten pool temperatures into corresponding rod-like geometry
+!  arrays.
+       do j = 1,ncomp
+         do k = 1,naz
+           if (lcrucb(k,j).eq.1) then
+             do l = 1,nrods2(k,j)
+               tcond3(l,k,j) = tupool
+             enddo
+           endif
+         enddo
+       enddo
+!  Determine extent of propagation in axial and radial direction of
+!  molten pool.
+!
+!  Find left most of components that are part of molten pool.
+!  Component number 1 is assumed to be in center of core;
+!  each successive component number is located farther from center-
+!  line of vessel.
+       do j = ncomp,1,-1
+         kbtpol(j) = 0
+         ktppol(j) = 0
+         if (idcomp(j) .ne. 0) cycle
+         do k = naz,1,-1
+           if (lcrucb(k,j) .eq. 1) then
+             kbtpol(j) = k - 1
+             if (k.eq.1) kbtpol(j) = naz + 1
+           endif
+         enddo
+         do k =1,naz
+           if (lcrucb(k,j) .eq. 1) then
+             ktppol(j) = k
+           endif
+         enddo
+         if (ktppol(j) .ge. 1) then
+           ktppol(j) = naz + 1
+!  Molten pool at this location.
+           nsw = 0
+           do k = 1,naz
+             if (nsw .eq. 1) cycle
+             if (zcond((j-1)*ndax+k) .gt. ztpcoh(j)) then
+               nsw = 1
+               ktppol(j) = k
+             endif
+           enddo
+         endif
+       enddo
+       do j = 1,ncomp
+         do k = 1,naz
+           frcsp0(k,j)=frcspr(k,j)
+           dmltx0(k,j)=dmltax(k,j)
+         enddo
+       enddo
+!  Find component number on right side of molten pool.
+       numrtp = 0
+       do k = 1,naz
+         jrtpol(k) = 0
+         nsw = 0
+         nsw2 = 0
+         do j = 1,ncomp
+           if (nsw .eq. 1) cycle
+           if (idcomp(j) .ne. 0) cycle
+!  If no molten pool directly below this location, then it will be
+!  represented in boundary for bottom of molten pool.
+           if (nsw2 .eq. 1) cycle
+           if (lcrucb(k,j).eq.1 .and. zcond((j-1)*ndax+k).le.ztpcoh(j))
+     &     then
+!  Find next fuel rod location to right that is not part of molten pool.
+             if (j .eq. ncomp) then
+               jrtpol(k) = 100
+               cycle
+             endif
+             jmax = j + 1
+!  Check to see whether this is last fuel rod group.
+             nsw2 = 0
+             do jj = jmax,ncomp
+!***          if (idcomp(jj) .eq. 0) nsw2 = jj
+!  Require next rod group to be in next flow channel.
+               if (idcomp(jj).eq.0 .and. ncmpgp(jj).gt.ncmpgp(j))
+     &         nsw2 = jj
+             enddo
+             if (nsw2 .eq. 0) then
+               jrtpol(k) = 100
+               cycle
+             endif
+             nsw2 = 0
+             do jj = jmax,ncomp
+               if (nsw2 .eq. 1) cycle
+               if (idcomp(jj).eq.0 .and. lcrucb(k,jj).eq.0) then
+                 nsw2 = 1
+                 nsw = 0
+                 jrtpol(k) = jj
+               endif
+             enddo
+           endif
+         enddo
+       enddo
+! Store number of locations at bottom of pool and their axial and
+! component numbers.
+       numbtp = 0
+       do j = 1,ncomp
+         if (kbtpol(j) .ge. 1) then
+           numbtp = numbtp + 1
+           jnumbt(numbtp) = j
+           knumbt(numbtp) = kbtpol(j)
+         endif
+       enddo
+! Store number of locations at top of pool and their axial and
+! component numbers.
+       numttp = 0
+       do j = 1,ncomp
+         khrecv = 0
+         if (ktppol(j) .ge. 1) then
+           numttp = numttp + 1
+           jnumtp(numttp) = j
+           knumtp(numttp) = ktppol(j)
+!  Check to see whether this node is flagged as having bulk blockage.
+!  Set default value.
+           khrecv = naz + 1
+           if (knumtp(numttp) .le. naz) then
+             if (nbublk(ncmpgp(j),knumtp(numttp)) .eq. 1) then
+               k1 = knumtp(numttp)
+               nsw = 0
+               do kk = k1,naz
+                 if (nsw .eq. 1) cycle
+                 if (nbublk(ncmpgp(j),kk) .ne. 1) then
+                   nsw = 1
+                   khrecv = kk
+                 endif
+               enddo
+               if (nsw .eq. 0) khrecv = naz + 1
+             else
+               khrecv = ktppol(j)
+             endif
+           endif
+           knumtp(numttp) = khrecv
+         endif
+       enddo
+! Store number of locations at right side of pool and their
+! corresponding axial nodes and component numbers.
+       numrtp = 0
+       do k = 1,naz
+         if (jrtpol(k) .ge. 1) then
+           numrtp = numrtp + 1
+           jnumrt(numrtp) = jrtpol(k)
+           knumrt(numrtp) = k
+         endif
+       enddo
+       if (numttp.eq.0) go to 428
+       if (tupool.le.(tmltuo+1.)) go to 428
+!  Calculate weight of debris on top of dome and area of dome.
+!  Also, calculate height of dome.
+       wtdome = 0.0
+       ardome = 0.0
+       eatadm = 0.0
+       do l = 1,numttp
+         j = jnumtp(l)
+         k = knumtp(l)
+         if (l .eq. 1) zdommx = zcond2(k,j) - 0.5*dzcnd2(k,j)
+         if (l .eq. numttp) zdommn = zcond2(k,j) - 0.5*dzcnd2(k,j)
+!  Note. factor of 1.1 is approximatetly ratio of fuel rods and
+!  control rod to fuel rods.
+         ardome = ardome+1.1*float(nsigl(j))*pitch(j)**2
+         if (k .le. naz) then
+           kp1 = k
+           nsw = 0
+           do kk = kp1,naz
+             if (lcrucb(kk,j) .eq. 1) cycle
+             if (nsw .eq. 1) cycle
+!  Note. irubqq restricts weight on dome to only that of debris
+!  resulting from quenching of embrittled fuel rods.
+!  If debris from all modes of formation is to be considered
+!  in weight on dome, replace irubqq with irubpp.
+             if (irubqq(kk,j).eq.0 .and. lcrucb(kk,j).eq.0) nsw = 1
+             if (irubqq(kk,j).eq.1 .and. lcrucb(kk,j).eq.0) then
+               wtdome = wtdome + gravac*float(nsigl(j))*(wuorub(k,j) +
+     &         wzorub(k,j))
+             endif
+           enddo
+         endif
+       enddo
+       eatadm = zdommx - zdommn
+!  Post-accident examination of TMI-2 crust at top of previously
+!  molten material showed that this crust was not flat, so impose
+!  minimum arch in top crust.
+       if (eatadm.lt.(0.05*repool)) eatadm = 0.05*repool
+       wtdomd = wtdome
+!  redome = radius in horizontal plane to bottom of dome.
+       redome=sqrt(ardome/pi)
+       ntpfal=0
+       do 422 l= 1,numttp
+         wtott(l) = 0.0
+         j = jnumtp(l)
+         qcvhpu(j)=0.0
+         k=knumtp(l)
+         if (k.le.naz) then
+           lr5 = nvad((j-1)*ndax+k)+filndx(4)
+         else
+           lr5=uhvol(j)+filndx(4)
+         endif
+         tsink=tempg(lr5)
+!  Calculate sink temperature based on water above top surface of molten
+!  pool being stratified.
+         if (voidf(lr5) .gt. 0.01) then
+           tsink=tempf(lr5)
+         else
+           denomw = voidg(lr5)*rhog(lr5)+voidf(lr5)*rhof(lr5)
+           tsink = (voidg(lr5)*rhog(lr5)/denomw)*tempg(lr5) +
+     &     (voidf(lr5)*rhof(lr5)/denomw)*tempf(lr5)
+         endif
+!   mltprg = 0 = case of open crucible and maximum energy to lower
+!                head.
+         ardtmp(l) = float(nsigl(j))*pitch(j)**2
+         if (j .lt. ncomp) then
+         if (idcomp(j+1).eq.1) ardtmp(l) = ardtmp(l) +
+     &   float(nsigl(j+1))*pitch(j+1)**2
+       endif
+       if (mltprg .eq. 0) then
+         thkeff = 0.0
+         pipool = p(lr5)
+         go to 424
+       endif
+!      calculate temperature distribution through crust at top of
+!      molten pool, the thickness of the crust, and heat flux at outer
+!      surface of crust.
+        tsrcst=1800.
+        tsurgs=1800.
+        itmax=50
+!   find htc of first node above molten pool.
+        hcvdfl=10.
+        nsw=0
+        if(k.lt.naz)then
+        kp1=k+1
+        do4218kkk=kp1,naz
+        if(nsw.eq.1)go to 4218
+          if(idcomp(j).eq.0.and.lcrucb(kkk,j).eq.0)then
+          nsw=1
+          hcvdfl=hcnvec((j-1)*ndax+kkk)
+          endif
+4218    continue
+        endif
+         do itcnt = 1,itmax
+           tsurgs = 0.5*(tsrcst + tsurgs)
+           if (tsurgs.gt.tmlcer) tsurgs = tmlcer
+           hcsrad = femssa*sigrad*(tsurgs**2 + tsink**2)*(tsurgs +
+     &     tsink)
+           hcvcst = hcvdfl
+!  Zuber correlation.
+           if (voidg(lr5) .gt. 0.10) then
+             qcrtcs = 0.0
+!    For this condition assume film boiling is occurring.
+             if (hcvcst.gt.500.0) hcvcst = 500.
+           else
+             qcrtcs = 0.14*(sathg(lr5) - sathf(lr5))* rhog(lr5)*
+     &       (sigma(lr5)*9.80*(rhof(lr5)-rhog(lr5))/
+     &       rhog(lr5)**2)**0.25
+           endif
+           if (qupool.lt.qcrtcs) then
+             hcvcst = 100000.
+           endif
+           hcmcst = hcsrad + hcvcst
+           tsink2 = tsink
+           if (tsink2.gt.tmlcer) tsink2 = tmlcer
+           thkcst = (cnpool/pdpool)*((((qupool/cnpool) +
+     &     (pdpool/hcmcst))**2 + (4.*pdpool/(2.*cnpool))*
+     &     (tmlcer - tsink2 - qupool/hcmcst))**0.5 -
+     &     ((qupool/cnpool)+(pdpool/hcmcst)))
+           aconst = -pdpool/(2.*cnpool)
+           bconst = -qupool/cnpool
+           cconst = tmlcer
+           tsrcst = aconst*(thkcst**2) + bconst*thkcst + cconst
+           if (abs((tsrcst - tsurgs)/tsurgs).lt.0.001) exit
+ 4220    enddo
+         ccnst2=cconst-2250.
+        sqtarg=bconst** 2- 4.*aconst*ccnst2
+        if(sqtarg.ge.0.0)then
+          radlb2=(-bconst+sqtarg**0.5)/(2.*aconst)
+          radlbr=(-bconst-sqtarg**0.5)/ (2.*aconst)
+        else
+          radlbr=0.0
+          radlb2=0.0
+          write(output,9004)sqtarg
+ 9004 format(' negative argument to square root in crust thickness',
+     &' equation,  sqtarg=',e10.4)
+        endif
+        tmplbr=aconst*radlbr** 2+ bconst*radlbr+cconst
+        thklbr=thkcst-radlbr
+        thkeff=thklbr
+        thkcsn=thkcst
+        qcrust=hcmcst*(tsrcst-tsink)
+!**     if(qcrust.gt.(qupool+pdpool*thkcst))qcrust=qupool
+        if(qcrust.gt.(qupool))qcrust=qupool
+!*** #  +pdpool*thkcst
+        if(qcrust.lt.0.0)qcrust=0.0
+  424  continue
+!     jnumrt(numrtp)>ncomp ; molten pool spread to core periphery
+       if(ncmpgp(jnumtp(numttp)).lt.igp)then
+!  Molten pool not spread to periphery.
+       tmdome(l)=tmltuo
+       thkcst=0.0
+       tcdome(l)=0.0
+       sudome(l)=0.0
+       sedome(l)=1.0
+       ntpfal=1
+       pipool=p(lr5)
+!***   wtott(l)=femssa*sigrad*(tupool**4 - tempg(lr5)**4)
+!     Calculate radiation heat transfer from top surface of molten pool
+!     to fluid above molten pool taking into account fraction of liquid
+!     in water in assuming liquid is stratified.
+       wtott(l)=qupool
+       tsink=tempg(lr5)
+       if(tsink.gt.tmltuo)wtott(l)=0.0
+       qcvhpu(j)=1.1*float(nsigl(j))*(pitch(j)**2)*wtott(l)
+       go to 422
+       endif
+!  Case of molten pool spread to periphery of core.
+!  (jnumrt(numrtp) > (ncomp+1); ncmgpg(j)= igp
+       tmpcst=tsrcst
+       tcdome(l)=thkcst
+       if(tcdome(l).gt.(0.5*(ztpcoh(j)-zbtcoh(j))))then
+       tcdome(l)=0.5*(ztpcoh(j)-zbtcoh(j))
+       endif
+       tmdome(l)=tmpcst
+       if(tmdome(l).gt.2250.0)then
+       thkeff=0.0
+       go to 425
+       endif
+!  thkeff = effective crust thickness = thickness of portion of
+!           crust that is at temperature less than 2220 K.
+!  Apply quadratic equation to solve for r at which temperature equals
+!  2250.   a*r**2 + b*r +c = 2250.
+       if(thkeff.lt.0.0)thkeff=0.0
+       if(tmpcst.gt.2250.0)thkeff=0.0
+       if(thkcst.lt.1.e-6)thkeff=0.0
+425    tcdome(l)=thkeff
+!  Calculate heat flux at outer surface based on steady state heat
+!  transfer.
+!***   qcrust=qupool+thkcst*pdpool
+       qcrust=qupool
+       wtott(l)=qcrust
+       if(tsink.ge.tmltuo)wtott(l)=0.0
+       qcvhpu(j)=1.1*float(nsigl(j))*(pitch(j)**2)*wtott(l)
+!       calculate ultimate strength of crust using simplification
+!       of MATPRO correlation that is more appropriate for uncertainties
+!       in crust composition.
+        tmpout=tmpcst
+        if(tmpout.lt.1609.0)then
+        sucrst=1.e+6*(0.020876*tmpout + 92.233)
+        else
+        sucrst=1.e+6*(-0.19598*tmpout + 441.22)
+        endif
+        if(tmpout.gt.2250.0)sucrst=0.0
+!
+!  Calculate thickness and degree of integrity of crust at top of molten
+!  pool.
+!  For case of open crust, stresses in top crust are negligible.
+       sudome(l)=sucrst
+       if(mltprg.eq.0)then
+!  Case of open crucible and thus maximum energy case.
+       sedome(l)=0.0
+       pipool=p(lr5)
+       else
+!   case of closed crucible and thus minimum energy case.
+!   If molten pool temperature is just above melting temperature, assume
+!   crust fails to equlibriate internal pressure to external pressure,
+!   but slumping of molten material does not occur.
+       if(tupool.gt.tmldeb.and.tupool.lt.(tmldeb+1.1))pipool=p(lr5)
+!      eatadm = height of dome.
+       wtdome=wtdome+gravac*ardtmp(l)*thkcst*dnpool
+!      thkeff = effective crust thickness = thickness of portion of
+!               crust that is at temperature less than 2220 K.
+         dltprs=pipool-p(lr5)-wtdome/ardome
+         if(thkeff.gt.1.e-6)then
+!   add on minimum pressure differential so that radial spreading of
+!   molten pool does not stop with equilibrium of pressure after
+!   failure of thin crust.
+         sedome(l)=0.25*((redome*redome/(tcdome(l)*eatadm))+
+     &   eatadm/tcdome(l))*abs(dltprs)                             
+!  Multiply effective stress by factor of 3.2 to bring results into line
+!  with ABAQUS code calculations.  Apply factor of 6.0 to bring results
+!  into line with ASME equation for stress in crust.
+         sedome(l)=3.2*sedome(l)
+         else
+         sedome(l)=sudome(l)+1.
+         endif
+!   end of if()then on mltprg
+       endif
+!   no massive slumping unless crust with finite strength fails.
+!   no massive slumping unless internal pressure greater than 
+!   external pressure.
+!  Define parameters for crust failure that are independent of whether
+!  internal pressure is greater or less than internal pressure.
+           nfalcr=0
+           if(abs(sedome(l)).gt.sudome(l)
+     &     .and.sudome(l).gt.1.e+3
+     &     .and.abs(dltprs).gt.0.5e+5
+     &     .and.l.eq.numttp)nfalcr=1
+           nfalc2=0
+           if(nfalcr.eq.1.and.dltprs.gt.0.5e+5
+     &     .and.tupool.gt.(tmldeb+tprgas))nfalc2=1
+           if(nfalcr.eq.1.and.dltprs.lt.0.0
+     &     .and.tupool.gt.(tmldeb+tprcom))nfalc2=1
+!  Maximum stress occurs at juncture of top crust with side crust; so
+!  only evaluate for failure at this location.
+           if(nfalc2.eq.1 .or.(mltprg.eq.0.and.tupool.gt.(tmldeb+0.001)
+     &     .and.l.eq.numttp)) then
+           if(dltprs.gt.0.)then
+           ntpfal=1
+           ifaluc(j)=2
+           imdctl(1) = ior(imdctl(1),dmwrite)
+           write (inpout,"('0-------- Core degradation',es14.6,' s: Fail
+     &ure of molten pool crust at periphery of core, component',
+     & i3,'.')") timehy,j
+           write (inpout,9085) pipool,p(lr5),ncmpgp(j)
+9085       format (' pressure in molten pool =',e10.4,' Pa;   system',
+     &     ' pressure =',e10.4,' Pa;  channel no. =',i5)
+           write (inpout,9086) wtdome,eatadm,wupool
+9086       format (' weight of debris on top of crust =',es12.4,' N',
+     &     '    dome height =',es12.4,' m,  mass UO2 in molten pool =',
+     &     es12.4,' kg')
+           write (inpout,9088)redome,tcdome(l)
+9088       format (' radius of top crust =',e10.4,' m',
+     &     '   effective thickness of top crust =',e10.4,' m')
+           write (inpout,9092)tmdome(l)
+9092       format (' outer surface temperature of top crust =',e10.4,
+     &     ' K')
+           write (inpout,9087)sedome(l),sudome(l)
+9087       format(' effective stress in crust =',e10.4,' Pa;  ultimate',
+     &     ' strength of crust =',e10.4,' N')
+             sedome(l)=sudome(l)+1.
+             pipool=p(lr5)
+           else
+           pipool=p(lr5)
+           endif
+           endif
+!  Case of external pressure greater than internal pressure, failure of
+!  crust causes internal and external pressure to equilibriate but does
+!  not trigger slumping of molten pool.
+422   continue
+!  End of calculations for behavior of upper crust of molten pool.
+428   continue
+      qcrsmn=1.e+30
+      nswbot=0
+      nswtop=0
+      if(numbtp.eq.0)go to 340
+      if(tupool.le.(tmltuo+1.))go to 340
+      aream=0.0
+      do 330l = 1,numbtp
+        wtotb(l)=0.0
+        j=jnumbt(l)
+        k=knumbt(l)
+        ardbmp(l)=float(nsigl(j))*pitch(j)**2
+        if(j.lt.ncomp)then
+        if(idcomp(j+1).eq.1)ardbmp(l)=ardbmp(l)+
+     &  float(nsigl(j+1))*pitch(j+1)**2
+        endif
+        aream=aream+ardbmp(l)
+        if(aream.lt.1.e-3)aream=1.e-3
+        rcrst1=sqrt(aream/pi)
+!   alphcs = angle in vertical plane of line tangent to crust and line
+!            in horizontal plane.  alphcs = 90. for vertical wall and is
+!            0.0 degrees for flat bottom part of crucible.
+!            Units of alphcs is radians.
+        alphcs=0.0
+        aream2=aream
+        if(l.lt.numbtp)then
+        dzp12=zcond2(knumbt(l+1),jnumbt(l+1))-zcond2(k,j)
+        aream2=aream+1.1*float(nsigl(jnumbt(l+1)))*
+     &  pitch(jnumbt(l+1))**2
+        rcrcm2=sqrt(aream2/pi)
+        drp12=rcrcm2-rcrst1
+        if(drp12.lt.0.0)drp12=0.0
+          if(drp12.gt.1.e-6)then
+          alphcs=atan(dzp12/drp12)
+          else
+          alphcs=0.5*pi
+          endif
+        endif
+        if(k.le.naz)then
+          lr5=nvad((j-1)*ndax+k)+filndx(4)
+        else
+          lr5=lhvol(j)+filndx(4)
+        endif
+        tsink=tempg(lr5)
+!  Calculate temperature distribution through crust supporting
+!  molten pool, the thickness of the crust, and heat flux at outer
+!  surface of crust.
+!  Calculate factor to account for H/R configuration factor of pool.
+          zbottm=zbtcoh(j)
+          ztoptm=ztpcoh(j)
+          if(ztpcoh(j).lt.(zbtcoh(j)+0.01))ztpcoh(j)=zbtcoh(j)+0.01
+          if(ztoptm.lt.(zbottm+0.5*dzcnd2(k,j)))ztoptm=
+     &    zbottm+0.5*dzcnd2(k,j)
+          factor=((ztoptm-zbottm)/repool)**0.26
+          if(factor.lt.0.1)factor=0.1
+!  Find htc of first node below molten pool.
+         hcvdfl = 10.
+         nsw = 0
+         if (k .gt. 1) then
+           kp1 = k - 1
+           do kkk = kp1,1,-1        
+             if (nsw .eq. 1) cycle
+             if (idcomp(j).eq.0 .and. lcrucb(kkk,j).eq.0) then
+               nsw = 1
+               hcvdfl = hcnvec((j-1)*ndax+kkk)
+             endif
+           enddo
+         endif
+!***  start new addition
+        tsrcst=1800.
+        tsurgs=1800.
+        itmax=50
+        do 4320 itcnt=1,itmax
+          tsurgs=0.5*(tsrcst+tsurgs)
+          if(tsurgs.gt.tmlcer)tsurgs=tmlcer
+          hcsrad=femssa*sigrad*(tsurgs**2+tsink**2)*(tsurgs+tsink)
+          hcvcst=hcvdfl
+!  Zuber correlation.
+            if (voidg(lr5) .gt. 0.10) then
+            qcrtcs = 0.0
+            if(hcvcst.gt.500.0)hcvcst=500.0
+            else
+!     apply 0.1 factor for bottom facing crust based upon Penn State
+!     CHF correleation for downward facing hemisphere
+            qcrtcs = 0.014*(sathg(lr5) - sathf(lr5))* rhog(lr5)*
+     &      (sigma(lr5)*9.80*(rhof(lr5)-rhog(lr5))/rhog(lr5)**2)**0.25
+            endif
+          if((factor*qfpool).lt.qcrtcs)then
+          hcvcst=100000.
+          endif
+          hcmcst=hcsrad+hcvcst
+          tsink2=tsink
+          if(tsink2.gt.tmlcer)tsink2=tmlcer
+          thkcst=(cnpool/pdpool)*
+     &    (((((factor*qfpool)/cnpool)+(pdpool/hcmcst))** 2+
+     &    (4.*pdpool/(2.*cnpool))*(tmlcer-tsink2-(factor*qfpool)
+     &    /hcmcst))**0. 5
+     &    -(((factor*qfpool)/cnpool)+(pdpool/hcmcst)))
+          aconst=-pdpool/(2.*cnpool)
+          bconst=-(factor*qfpool)/cnpool
+          cconst=tmlcer
+          tsrcst=aconst*(thkcst**2)+bconst*thkcst+cconst
+          if(abs((tsrcst-tsurgs)/tsurgs).lt.0.001)go to 4330
+ 4320   continue
+ 4330   continue
+        ccnst2=cconst-2250.
+        sqtarg=bconst** 2- 4.*aconst*ccnst2
+        if(sqtarg.ge.0.0)then
+          radlb2=(-bconst+sqtarg**0.5)/(2.*aconst)
+          radlbr=(-bconst-sqtarg**0.5)/ (2.*aconst)
+        else
+          radlbr=0.0
+          radlb2=0.0
+          write(output,9001)sqtarg
+ 9001  format(' Negative argument to square root in crust thickness equa
+     &tion, sqtarg=',es12.4)
+        endif
+        tmplbr=aconst*radlbr** 2+ bconst*radlbr+cconst
+        thklbr=thkcst-radlbr
+        thkeff=thklbr
+        thkcsn=thkcst
+       if(thkcsn.le.1.e-6)then
+       tmbotm(l)=tmltuo
+       thkcst=0.0
+       tcbotm(l)=0.0
+       subotm(l)=0.0
+       sebotm(l)=1.0
+       qcrust=factor*qfpool
+       go to 328
+       endif
+       thkcst=thkcsn
+       qcrust=hcmcst*(tsrcst-tsink) + pdpool*thkcst
+       if(qcrust.gt.(factor*qupool))qcrust=
+     & factor*qupool
+       if(qcrust.lt.0.0)qcrust=0.0
+!***   qcrust=factor*qfpool + pdpool*thkcst
+!  Calculate temperature of bottom surface of crust.
+       tcbotm(l)=thkcst
+       if(tcbotm(l).gt.(0.5*(ztpcoh(j)-zbtcoh(j))))then
+       tcbotm(l)=0.5*(ztpcoh(j)-zbtcoh(j))
+       endif
+       tmpcst=tsrcst                                         
+       tmbotm(l)=tmpcst
+       if(tmbotm(l).gt.2250.0)then
+       thkeff=0.0
+       go to 335
+       endif
+!      thkeff = effective crust thickness = thickness of portion of
+!               crust that is at temperature less than 2250 K.
+       if(thkeff.lt.0.0)thkeff=0.0
+       if(thkcst.lt.1.e-6)thkcst=0.0
+335    tcbotm(l)=thkeff
+       tmpout=tmpcst
+        if(tcbotm(l).gt.1.e-3.and.tmpout.lt.2250.0)then
+        subotm(l)=1.e+6
+        sebotm(l)=0.0
+        go to 328
+        endif
+!   calculate ultimate strength of crust at bottom of molten pool.
+        if(tmpout.lt.1609.0)then
+        sucrst=1.e+6*(0.020876*tmpout + 92.233)
+        else
+        sucrst=1.e+6*(-0.19598*tmpout + 441.22)
+        endif
+        if(tmpout.gt.2250.0)sucrst=0.0
+        if(tcbotm(l).lt.1.e-3)then
+        subotm(l)=0.0
+        sebotm(l)=1.
+        go to 328
+        endif
+!    calculate meridional stresses in crust.
+       wtdom1=wtdome
+!    meltprg = 0 = open crucible = case of maximum energy.
+       if(mltprg.eq.0)wtdom1=0.0
+       pddom1=pipool-p(lr5)
+       if(mltprg.eq.0)pddom1=0.0
+       if(k.lt.naz)then
+       zbottm=zcond2(k+1,j)
+       else
+       zbottm=0.0
+       endif
+       if(zbottm.gt.ztpcoh(j))zbottm=ztpcoh(j)
+       szcrst=(redome/(2.*pi*tcbotm(l)*rcrst1**2))*
+     &        (-gravac*dnpool*vlpool-wtdom1+
+     &         (gravac*dnpool*(ztpcoh(j)-zbottm)+pddom1)*
+     &          pi*rcrst1**2)
+       psubn=gravac*dnpool*(ztpcoh(j)-zbottm)
+       if(mltprg.eq.1)psubn=psubn+(pipool-p(lr5))
+       stcrst=(psubn*redome/tcbotm(l)) - szcrst +
+     & wtdome*cos(alphcs)/(redome*tcbotm(l))
+       sebotm(l)=sqrt(stcrst**2 - szcrst*stcrst + szcrst*2)
+328    continue
+!  Bottom crust is assumed to be supported in axial direction.
+        if(k.gt.naz)then
+!  Case of bottom of molten pool at bottom of core.
+!  No further gradual downward propagation of molten core can occur.
+          dmltax(1,j)=1.
+!  Crust thickness and surface temperature calculations are based on
+!  assumption of steady state heat transfer.
+          wtotb(l)=factor*qfpool
+          if(tsink.gt.tmltuo)wtotb(l)=0.0
+          go to 330
+        endif
+!  Calculate whether crust fails due to stress or supports molten pool.
+        if(sebotm(l).gt.(subotm(l)-0.001)
+     &  .or.tcbotm(l).lt.(fmdiff*2.*rpel((j-1)*ndax+k)))then
+          sebotm(l)=subotm(l)+1.
+!  Steady state heat transfer is assumed.
+          wtotb(l)=factor*qfpool
+!  Protect against overshoot of heat transfer to fluid.
+          if (tsink .gt. tmltuo) wtotb(l) = 0.0
+          nswbot=1
+! Calculate delta (xsubp)
+          if(tcond3(1,k,j).gt.(tmltuo-1.))then
+! case of rapid meltthrough
+            dxdbdt=0.1
+          else
+            dxdbdt=(tmlsol(k,j)-tcond3(1,k,j))/dzcond((j-1)*ndax+k)
+            if(dxdbdt.lt.0.1)dxdbdt=0.1
+          endif
+          dxmpol=sqrt(2.*porcom(k,j)*fhefus*diacom(k,j)/
+     &      ((1.-porcom(k,j))*cppool*dxdbdt))
+! xdtmol = rate of propagation of molten pool.
+! powedg=power density at leading edge of speading of
+! molten pool (W/m**3).
+          powedg=porcom(k,j)*qdpol1/vlpool
+          if(irubpp(k,j).eq.0)then
+! intact region
+            powedg=powedg+(1.-porcom(k,j))*unuca(k,j)/ (pi*rcos(j)
+     &      **2)
+          else
+            powdba=powrub(k,j)
+            if(nspowi.eq.3.or.nspowi.eq.1)then
+              if(powtot(1).gt.0.)powdba=powtot(1)*powdba
+            endif
+            powedg=powedg+(1.-porcom(k,j))* powdba/((pi*rcos(j)**2)
+     &      *dzcond((j-1)*ndax+k))
+          endif
+          if(powedg.ge.1.e-6)then
+            dtmpol=(1.-porcom(k,j))*dnpool*fhefus/powedg
+          else
+            dtmpol=1.e+30
+          endif
+          xdtmol=dxmpol/dtmpol
+! ***   Note. artificial increase on xdtmol is only required for
+! ***   test problems that accelerate transient to reduce overall
+! ***   computational time.
+! if very hot pool temperature, artificially increase rate of
+! propagation to account for vigorous natural convection and
+! resultant erosion of crust.
+          if(tupool.gt.3600.0) xdtmol=10.*xdtmol
+          dmltax(k,j)=dmltx0(k,j)+(xdtmol*dt)/dzcond((j-1)*ndax+k)
+          if(dmltax(k,j).gt.1.0)dmltax(k,j)=1.0
+        else
+          wtotb(l)=factor*qfpool
+          if (tsink .gt. tmltuo) wtotb(l) = 0.0
+        endif
+  330 continue
+  340 continue
+      if(numrtp.eq.0)go to 420
+      if(tupool.le.(tmltuo+1.))go to 420
+!  Estimate surface area at periphery of core.
+      jmax = ncomp
+      k = 1
+      j = 1
+      aream = 0.0
+      lr5old = 0
+      do jj = 1,jmax
+        if (idcomp(jj).eq.0 .or. idcomp(jj).eq.1) then
+          aream = aream + float(nsigl(jj))*pitch(jj)**2
+        endif
+      enddo
+      rcrust=sqrt(aream/pi)
+      do 410l=1,numrtp
+        wtotr(l)=0.0
+        j=jnumrt(l)
+        k=knumrt(l)
+!  Beginning of if block AA.
+      if(j.gt.ncomp)then
+!  Case of molten pool spread to periphery of core (j=100).
+          tmside(l)=tliqpl
+          wtotr(l)=qlpool
+          areape=2.*pi*rcrust*dzcnd2(k,1)
+          aradmp(l)=areape
+          if(nswap.eq.1)go to 410
+            if(flmpmn.lt.0.001)then
+!  Note.  If molten pool spread to core bypass region, j = 100,
+!  determine whether crust at bypass location is stable.
+!  Find node for bypass volume.
+            do kk =1,nbypss
+              kkbyps = kk
+              if (zbypss(kk).gt.zcond((ncomp-1)*ndax+k)) go to 370
+            enddo
+            kkbyps=nbypss
+  370       continue
+            lr5=lbypss(kkbyps)+filndx(4)
+            else
+            ilt=(ncomp-1)*ndax+k
+            lr5=nvad(ilt)+filndx(4)
+            endif
+          tsink=tempg(lr5)
+          denomw=voidg(lr5)*rhog(lr5)+voidf(lr5)*rhof(lr5)
+          tsink=(voidg(lr5)*rhog(lr5)/denomw)*tempg(lr5) +
+     &    (voidf(lr5)*rhof(lr5)/denomw)*tempf(lr5)
+          qcrust=femssa*sigrad*(tmltuo**4-tsink**4)
+          wtotr(l)=qlpool
+          if(tsink.gt.tmltuo)then
+          wtotr(l)=0.0
+          tsink=tupool
+          endif
+!      If flmpmn > 0.0, no slumping of molten pool when at perihery
+!      of core unless failure of crust with finite strength.
+          if((qcrust+1.e-3).lt.qlpool.and.nswap.eq.0.and.  
+     &    flmpmn.le.0.001)then
+          nsprdp=1
+!  Identify highest numbered fuel component.
+            nsw=0
+            do651jj=ncomp,1,-1
+            if(nsw.eq.1)go to 651
+              if(idcomp(jj).eq.0)then
+              icmslp=jj
+              nsw=1
+              endif
+651         continue
+            if(nsw.eq.0)icmslp=ncomp
+            if(npldrn(icmslp).ne.k)then
+            npldrn(icmslp)=k
+            endif
+          go to 410
+          endif
+!  Calculate thickness of crust and determine whether it fails due to
+!  excessive stress.
+!  Calculate temperature distribution through crust supporting molten
+!  pool, the thickness of the crust, and heat flux at outer surface of
+!  crust.
+!  Calculate factor to account for H/R configuration factor of pool.
+!  Find htc of first node above molten pool.
+        hcvdfl=10.
+        nsw=0
+        if(k.lt.naz)then
+        kp1=k+1
+        do 4214 kkk = kp1,naz
+        if(nsw.eq.1)go to 4214
+          if(idcomp(j).eq.0.and.lcrucb(kkk,j).eq.0)then
+          nsw=1
+          hcvdfl=hcnvec((j-1)*ndax+kkk)
+          endif
+4214    continue
+        endif
+          factor=1.
+        tsrcst=1800.
+        tsurgs=1800.
+        itmax=50
+        do 4420 itcnt=1,itmax
+          tsurgs=0.5*(tsrcst+tsurgs)
+          if(tsurgs.gt.tmlcer)tsurgs=tmlcer
+          hcsrad=femssr*sigrad*(tsurgs**2+tsink**2)*(tsurgs+tsink)
+          hcvcst=hcvdfl
+!  Zuber correlation.
+            if (voidg(lr5) .gt. 0.10) then
+            qcrtcs = 0.0
+            if(hcvcst.gt.500.0)hcvcst=500.0
+            else
+            qcrtcs = 0.14*(sathg(lr5) - sathf(lr5))* rhog(lr5)*
+     &      (sigma(lr5)*9.80*(rhof(lr5)-rhog(lr5))/
+     &      rhog(lr5)**2)**0.25
+            endif
+          if(qlpool.lt.qcrtcs)then
+          hcvcst=100000.
+          endif
+          hcmcst=hcsrad+hcvcst
+          tsink2=tsink
+          if(tsink2.gt.tmlcer)tsink2=tmlcer
+          thkcst=(cnpool/pdpool)*((((qlpool/cnpool)+
+     &    (pdpool/hcmcst))**2+
+     &    (4.*pdpool/(2.*cnpool))*(tmlcer-tsink2-qlpool/hcmcst))**0.5
+     &    -((qlpool/cnpool)+(pdpool/hcmcst)))
+          aconst=-pdpool/(2.*cnpool)
+          bconst=-qlpool/cnpool
+          cconst=tmlcer
+          tsrcst=aconst*(thkcst**2)+bconst*thkcst+cconst
+          if(abs((tsrcst-tsurgs)/tsurgs).lt.0.001)go to 4430
+ 4420   continue
+ 4430   continue
+        ccnst2=cconst-2250.
+        sqtarg=bconst** 2- 4.*aconst*ccnst2
+        if(sqtarg.ge.0.0)then
+          radlb2=(-bconst+sqtarg**0.5)/(2.*aconst)
+          radlbr=(-bconst-sqtarg**0.5)/ (2.*aconst)
+        else
+          radlbr=0.0
+          radlb2=0.0
+          write(output,9002)sqtarg
+ 9002  format (' Negative argument to square root in crust thickness equ
+     &ation, sqtarg=',es12.4)
+        endif
+        tmplbr=aconst*radlbr** 2+ bconst*radlbr+cconst
+        thklbr=thkcst-radlbr
+        thkeff=thklbr
+        thkcsn=thkcst
+        qcrust=hcmcst*(tsrcst-tsink)
+        if(qcrust.gt.qlpool)qcrust=qlpool
+        if(qcrust.lt.0.0)qcrust=0.0
+       if(thkcsn.lt.1.e-4)then
+       tmside(l)=tmltuo
+       thkcst=0.0
+       suside(l)=0.0
+       seside(l)=1.0
+       go to 378
+       endif
+       thkcst=thkcsn
+       tmpcst=tsrcst                                       
+       tmside(l)=tmpcst
+!      calculate heat flux at outer surface based on steady state
+!      heat transfer
+       if(qcrust.gt.(qlpool))qcrust=qlpool
+       if(tmside(l).gt.2250.0)then
+       thkeff=0.0
+       go to 374
+       endif
+!   calculate thickness that has temperature less than 2250.0 K.
+!      thkeff = effective crust thickness = thickness of portion of
+!               crust that is at temperature less than 2220 K.
+       if(thkeff.lt.0.0)thkeff=0.0
+       if(tmpcst.gt.2250.0)thkeff=0.0
+374    tcside(l)=thkeff
+       tmpout=tmside(l)
+!       calculate ultimate strength of crust using simplification
+!       of MATPRO correlation that is more appropriate for uncertainties
+!       in crust composition.
+        if(tmpout.lt.1609.0)then
+        sucrst=1.e+6*(0.020876*tmpout + 92.233)
+        else
+        sucrst=1.e+6*(-0.19598*tmpout + 441.22)
+        endif
+        if(tmpout.gt.2250.0)sucrst=0.0
+       suside(l)=sucrst
+       if(thkeff.lt.1.e-6)then
+       seside(l)=suside(l)+1.
+       go to 378
+       endif
+!      calculate stress on crust.
+!      poircs = Poissons ratio of crust.
+       poircs=0.316
+!      depthh = depth of molten pool (m)
+       depthh=ztpcoh(j)-zbtcoh(j)
+!      depthz=height of current node above bottom of molten pool.
+       depthz=zcond2(k,j)-zbtcoh(j)
+       if(depthz.lt.0.0)depthz=0.0
+       wtdom1=0.0
+       psubn=gravac*(depthh-depthz)
+       if(mltprg.eq.1)then
+       psubn=psubn+(pipool-p(lr5))
+       wtdom1=wtdome
+       endif
+       szcrst=((pipool-p(lr5))*pi*rcrust**2 -  wtdom1)/
+     &        (2.*pi*rcrust*tcside(l))
+       stcrst=(psubn*rcrust/tcside(l))
+       seside(l)=(stcrst**2-szcrst*stcrst+szcrst**2)**0.5
+378    continue
+!     do not trigger massive slumping unless crust fails in state in
+!     which it has finite strength.
+!***  Since side stress are maximum at intersection with top crust,
+!***  do not track effect of side crust failure and instead only
+!***  track effect of failure of upper crust.
+!   else in if block AA
+      else
+!  Case of molten pool not spread to periphery of core.
+        lr5=nvad((j-1)*ndax+k)+filndx(4)
+        tsink=tempg(lr5)
+        qcrust=femssa*sigrad*(tmltuo**4-tsink**4)
+!  Identify component number at edge of molten pool.
+        nsw=0
+        jedge=1
+        do402jj=j,1,-1
+        if(nsw.eq.1)go to 402
+        if(idcomp(jj).eq.0.and.lcrucb(k,jj).eq.1)then
+        nsw=1
+        jedge=jj
+        endif
+402     continue
+! estimate surface area of crust.
+        if(j.eq.1)then
+! ***   Note.  This case should never happen.
+          aream=avol(lr5)
+          rcrust=sqrt(aream/pi)
+        else
+          jmax=j-1
+          aream=0.0
+          lr5old=0
+          do 400jj=1,jmax
+            if(idcomp(jj).eq.0.or.idcomp(jj).eq.1)
+     &          aream=aream+float(nsigl(jj))*pitch(jj)**2
+400     continue
+             rcrust=sqrt(aream/pi)
+        endif
+           arearm=2.*pi*rcrust*dzcond((j-1)*ndax+k)
+           aradmp(l)=arearm
+        aream2=aream+float(nsigl(j))*pitch(j)**2
+        if(j.lt.ncomp)then
+        if(idcomp(j+1).eq.1)aream2=aream2+
+     &  float(nsigl(j+1))*pitch(j+1)**2
+        endif
+        rcrus2=sqrt(aream2/pi)
+!  Molten pool spreads in radial direction when it applies stress in
+!  crust supporting it that is greater than ultimate strength of crust.
+!***    wtotr(l)=qlpool + pdpool*tcside(l)
+        wtotr(l)=qlpool
+        if(tsink.gt.tmltuo)wtotr(l)=0.0
+        if(tsink.ge.tmlcer)then
+        thkcsn=0.0
+        go to 4840
+        endif
+        tsrcst=1800.
+        tsurgs=1800.
+        itmax=50
+        do 4820 itcnt=1,itmax
+          tsurgs=0.5*(tsrcst+tsurgs)
+          if(tsurgs.gt.tmlcer)tsurgs=tmlcer
+          hcsrad=femssr*sigrad*(tsurgs**2+tsink**2)*(tsurgs+tsink)
+          hcvcst=hcvdfl
+!  Zuber correlation.
+            if (voidg(lr5) .gt. 0.10) then
+            qcrtcs = 0.0
+            if(hcvcst.gt.500.0)hcvcst=500.0
+            else
+            qcrtcs = 0.14*(sathg(lr5) - sathf(lr5))* rhog(lr5)*
+     &      (sigma(lr5)*9.80*(rhof(lr5)-rhog(lr5))/
+     &      rhog(lr5)**2)**0.25
+            endif
+          if(qlpool.lt.qcrtcs)then
+          hcvcst=100000.
+          endif
+          hcmcst=hcsrad+hcvcst
+          tsink2=tsink
+          if(tsink2.gt.tsink)tsink2=tsink
+          thkcst=(cnpool/pdpool)*((((qlpool/cnpool)+
+     &    (pdpool/hcmcst))**2+
+     &    (4.*pdpool/(2.*cnpool))*(tmlcer-tsink2-qlpool/hcmcst))**0.5
+     &    -((qlpool/cnpool)+(pdpool/hcmcst)))
+          aconst=-pdpool/(2.*cnpool)
+          bconst=-qlpool/cnpool
+          cconst=tmlcer
+          tsrcst=aconst*(thkcst**2)+bconst*thkcst+cconst
+          if(abs((tsrcst-tsurgs)/tsurgs).lt.0.001)go to 4830
+ 4820   continue
+ 4830   continue
+        ccnst2=cconst-2250.
+        sqtarg=bconst** 2- 4.*aconst*ccnst2
+        if(sqtarg.ge.0.0)then
+          radlb2=(-bconst+sqtarg**0.5)/(2.*aconst)
+          radlbr=(-bconst-sqtarg**0.5)/ (2.*aconst)
+        else
+          radlbr=0.0
+          radlb2=0.0
+          write(output,9008)sqtarg
+ 9008  format (' negative argument to square root in crust thickness equ
+     &ation, sqtarg=',es12.4)
+        endif
+        tmplbr=aconst*radlbr** 2+ bconst*radlbr+cconst
+        thklbr=thkcst-radlbr
+        thkeff=thklbr
+        thkcsn=thkcst
+        qcrust=hcmcst*(tsrcst-tsink)
+        if(qcrust.gt.qlpool)qcrust=qlpool
+        if(qcrust.lt.0.0)qcrust=0.0
+4840   continue
+!  Account for jagged nature of crust due to molten material flowing
+!  through porous debris with particle diameter of fuel pellets.
+       if(thkcsn.lt.(2.*rpel((j-1)*ndax+k)))then
+       tmside(l)=tmltuo
+       thkcst=thkcsn
+       suside(l)=0.0
+       seside(l)=1.0
+       tcside(l)=thkcsn
+       go to 3781
+       endif
+       thkcst=thkcsn
+       tmpcst=tsrcst
+       tmside(l)=tmpcst
+!  Calculate heat flux at outer surface based on steady state heat
+!  transfer.
+       if(qcrust.gt.qlpool)qcrust=qlpool
+       if(tmside(l).gt.2250.0)then
+       thkeff=0.0
+       go to 3741
+       endif
+!   calculate thickness that has temperature less than 2250.0 K.
+!      thkeff = effective crust thickness = thickness of portion of
+!               crust that is at temperature less than 2220 K.
+       if(thkeff.lt.0.0)thkeff=0.0
+       if(tmpcst.gt.2250.0)thkeff=0.0
+3741   tcside(l)=thkeff
+       tmpout=tmside(l)
+!       calculate ultimate strength of crust using simplification
+!       of MATPRO correlation that is more appropriate for uncertainties
+!       in crust composition.
+        if(tmpout.lt.1609.0)then
+        sucrst=1.e+6*(0.020876*tmpout + 92.233)
+        else
+        sucrst=1.e+6*(-0.19598*tmpout + 441.22)
+        endif
+        if(tmpout.gt.2250.0)sucrst=0.0
+       suside(l)=sucrst
+       if(thkeff.lt.1.e-6)then
+       seside(l)=suside(l)+1.
+       go to 3781
+       endif
+!      calculate stress on crust.
+!      poircs = Poissons ratio of crust.
+       poircs=0.316
+!      depthh = depth of molten pool (m)
+       depthh=ztpcoh(j)-zbtcoh(j)
+!      depthz=height of current node above bottom of molten pool.
+       depthz=zcond2(k,j)-zbtcoh(j)
+       if(depthz.lt.0.0)depthz=0.0
+       wtdom1=0.0
+       psubn=gravac*(depthh-depthz)
+       if(mltprg.eq.1)then
+       psubn=psubn+(pipool-p(lr5))
+       wtdom1=wtdome
+       endif
+       szcrst=((pipool-p(lr5))*pi*rcrust**2 -  wtdom1)/
+     &        (2.*pi*rcrust*tcside(l))
+       stcrst=(psubn*rcrust/tcside(l))
+       seside(l)=(stcrst**2-szcrst*stcrst+szcrst**2)**0.5
+3781   continue
+!  Require threshold depth of molten pool before radial spreading
+!  occurs.
+!  ntpfal = 1 = top crust has failed.
+        if(ntpfal.eq.1)then
+        seside(l)=2.
+        suside(l)=1.
+        endif
+        if((wtotr(l).ge.(qcrust-0.001)
+     &  .or.seside(l).gt.(suside(l)+0.001))
+     &  .and.(ztpcoh(jedge)-zbtcoh(jedge)).gt.0.01)then
+          if(tcond3(1,k,j).gt.(tmltuo-1.))then
+            dxdbdt=0.1
+          else
+            dxdbdt=(tmlsol(k,j)-tcond3(1,k,j))/(rcrus2-rcrust)
+            if(dxdbdt.lt.0.1)dxdbdt=0.1
+          endif
+          dxmpol=sqrt(2.*porcom(k,j)*fhefus*diacom(k,j)/ ((1.-porcom
+     &    (k,j))*cppool*dxdbdt))
+          dtmpol=(1.-porcom(k,j))*dnpool*fhefus/pdpool
+          xdtmol=dxmpol/dtmpol
+          frcspr(k,j)=frcsp0(k,j)+xdtmol*dt/(rcrus2-rcrust)
+          if(frcspr(k,j).gt.1.0)frcspr(k,j)=1.
+        endif
+!   end of if block AA
+      endif
+  410 continue
+!  If more than one fuel component in flow channel, set radial
+!  spreading fraction to same value for each of the fuel components.
+      do l = 1,numrtp
+        j = jnumrt(l)
+        k = knumrt(l)
+        ichn = ncmpgp(j)
+        do jj = 1,ncomp
+          if (jj .eq. j) cycle
+          if (idcomp(jj) .ne. 0) cycle
+          if (rpel((jj-1)*ndax+k) .le. 0.2e-3) cycle
+          if (ncmpgp(jj).eq.ichn .and. frcspr(k,jj).lt.frcspr(k,j))
+     &    frcspr(k,jj) = frcspr(k,j)
+        enddo
+      enddo
+  420 continue
+  430 continue
+!  If AP-600 reactor, then model interaction of molten pool with
+!  reflector.
+      if(nswap.ne.1.and.nsprdp.ne.1)go to 760
+      if(vlpool.lt.1.e-6)go to 760
+      if(nswap.eq.0.and.nsprdp.eq.1)go to 658
+!  Identify material and configuration of shroud.
+      idshrd=0
+!  jreflc=number of first component that interfaces with side of
+!  core.
+      jreflc=0
+      do 560j=1,ncomp
+        if(ishdcr(j).ge.1)then
+        idshrd=ishdcr(j)
+        if(jreflc.eq.0)jreflc=j
+        endif
+  560 continue
+      if(idshrd.eq.0)go to 760
+!  Obtain heat of fusion of shroud.
+      z=0.0
+      u=0.333333333
+      call qfuson
+!  Calculate melt progression into reflector.
+!  Obtain solidus temperature of stainless steel.
+      if(imatr3(1,1,jreflc).eq.18 .or.
+     &   imatr3(1,1,jreflc).eq.19)then
+        hfshrd=shefus
+        tsolss=1671.
+        tliqss=1727.
+!  Obtain density of stainless steel.
+        rhoss=sden(tsolss)
+        conss=sthcon(tsolss)
+        if(conss.gt.39.16)conss=39.16
+      elseif(imatr3(1,1,jreflc).eq.1)then
+!  Zr structure
+        hfshrd=chefus
+        afrcox=0.0
+        afrcuo=0.0
+        afrczr=1.
+        tsolss=psol(afrcox,afrcuo,afrczr)
+        tliqss=pliq(afrcox,afrcuo,afrczr)
+        rhoss=cden(tsolss)
+        if (chngno(70)) then
+          call cthconr (tsolss,conss,cdkdt)
+        else
+          call cthcon (tsolss,conss,cdkdt)
+        endif
+      else
+! ZrO2 structure
+        hfshrd=zohfus
+! assure melting of ZrO2 in contact with molten UO2.
+        tsolss=2800.
+        tliqss=2810.
+        rhoss=zoden(tsolss)
+        conss=zotcon(tsolss)
+      endif
+      nswint=0
+      do 640k=1,naz
+! jrtpol(k)=100=molten pool spread to periphery of core at this
+! elevation.
+        if(jrtpol(k).lt.100)go to 640
+        if(ztpool.lt.(zcond(k)-dzcond(k)))go to 640
+! If molten pool is not completely liquefied but is still slushy,
+! consider interaction to be negligible.
+        if(tupool.lt.tliqpl)go to 640
+        nswint=1
+        do 630j=1,ncomp
+          if(ishdcr(j).le.0)goto 630
+! if drainage at another axial node currently taking place,
+! delay interaction calculations until drainage complete.
+          kdyn=(j-1)*ndax+k
+!         check for complete melt through.
+          if(thkssm(k,j).gt.
+     &       (xcond3(nrodes(kdyn),k,j)-xcond3(1,k,j)))go to 630
+          nswmlt=0
+          nssrht(k,j)=1
+! calculate interface temperature on basis of steady state
+! heat transfer and equality of heat flux through crust of core
+! material and layer of melted stainles steel.
+          thcmin=thkpls(k,j)
+            if(thkssm(k,j).gt.tmxlss)then
+            tmxluu=(thkpls(k,j)/thkssm(k,j))*tmxlss
+            else
+            tmxluu=tmxlss
+            endif
+          thcmin=min(thkpls(k,j),tmxluu)
+          if(thcmin.lt.1.e-4)thcmin=1.e-4
+          thsmin=min(thkssm(k,j),tmxlss)
+          if(thsmin.lt.1.e-4)thsmin=1.e-4
+          tussin=((cnpool*tsolpl/thcmin)+(conss*tliqss/thsmin)+ qdpol1
+     &    *thcmin/vlpool) /((conss/thsmin)+(cnpool/thcmin))
+          if(tussin.gt.tsolpl)tussin=tsolpl
+          if(tussin.lt.tliqss)tussin=tliqss
+! calculate rate of propagation of melt front into reflector.
+          qcrst1=(tsolpl-tussin)*cnpool/thcmin
+! obtain radial temperature gradient in reflector.
+          if(mssrmc(k,j).gt.2)then
+            mmsr1=mssrmc(k,j)-1
+            mmsr2=mssrmc(k,j)-2
+! case of melting into reflector
+            tavess=0.5*(tcond3(mmsr1,k,j)+tcond3(mmsr2,k,j))
+! obtain thermal conductivity of stainless steel.
+            tgrdss=(tcond3(mmsr1,k,j)-tcond3(mmsr2,k,j))/ (xcond3
+     &      (mmsr1,k,j)-xcond3(mmsr2,k,j))
+            dthkdt=(qcrst1-tgrdss*conss)/(rhoss*hfshrd)
+          else
+!  Case of melting almost through reflector
+!  Assume temperature gradient through reflector is zero.
+            tgrdss=0.0
+            dthkdt=qcrst1/(rhoss*hfshrd)
+            mmsr1=1
+            mmsr2=2
+          endif
+          thkssm(k,j)=thkssm(k,j)+dthkdt*dt
+          if(thkssm(k,j).lt.0.0)thkssm(k,j)=0.0
+!  Calculate growth of solidifying layer of previously molten
+!  material.
+!  Note. Factor of 2. on qfpool results in heat flux at upper side
+!  portion of molten pool.
+       dthkdt=-(2.*qfpool-qcrst1)/(dnpool*fhefus)
+          thkpls(k,j)=thkpls(k,j)+dthkdt*dt
+          if(thkpls(k,j).lt.0.0)thkpls(k,j)=0.0
+!  If thickness of region liquefied structural material underlying
+!  solidified molten pool material is greater than threshold value
+!  for instability, then consider crust to break up.
+!  Adjust temperature of reflector according to interaction with
+!  molten pool.
+          thcmin=xcond3(nrodes(kdyn),k,j)-xcond3(nrodes(kdyn)-1,k,j)
+          if(thkssm(k,j).lt.thcmin)then
+!  Case of melting or solidification at inner surface of reflector
+!  starting.
+!  Set temperature at inner surface of reflector to its melting
+!  temperature.
+            tcond3(nrodes(kdyn),k,j)=tsolss
+            tcnd03(nrodes(kdyn),k,j)=tcond3(nrodes(kdyn),k,j)
+            if(nrodes(kdyn).ge.3)then
+              tcond3(nrodes(kdyn)-1,k,j)=tsolss
+              tcnd03(nrodes(kdyn)-1,k,j)=tcond3(nrodes(kdyn)-1,k,j)
+            endif
+          endif
+!  Case of melt progression into reflector.
+          nswbnd=0
+          if(nrodes(kdyn).le.2)then
+            mssrmc(k,j)=1
+            tcond3(nrodes(kdyn),k,j)=tsolss
+            tcnd03(nrodes(kdyn),k,j)=tcond3(nrodes(kdyn),k,j)
+          else
+            mssrmc(k,j)=nrodes(kdyn)-1
+            rmfrnt=xcond3(nrodes(kdyn),k,j)-thkssm(k,j)
+            if(rmfrnt.lt.0.0)rmfrnt=0.0
+            do 570l=nrodes(kdyn),2,-1
+              if(xcond3(l,k,j).ge.rmfrnt)then
+                if(l.gt.2)then
+                mssrmc(k,j)=l-1
+                nswbnd=1
+                else
+!          mssrmc(k,j)=l=signal that melt through has occurred.
+                if(rmfrnt.lt.1.e-3)mssrmc(k,j)=l-1
+                endif
+              endif
+  570       continue
+            if(nswbnd.eq.1)then
+              do 580l=nrodes(kdyn),mssrmc(k,j),-1
+                tcond3(l,k,j)=tsolss
+                tcnd03(l,k,j)=tcond3(l,k,j)
+  580         continue
+            endif
+          endif
+!  mssrmc(k,j)=1=complete melt through at this location
+!  Check for possibility of melt through of reflector.
+          thkssr=xcond3(nrodes(kdyn),k,j)-xcond3(1,k,j)
+!  Creep rupture date shows that strength of stainless steel has zero
+!  strength for temperature greater than 1471 K. So take midpoint
+!  temperature between 1471 K and solidus temperature of stainless steel
+!  (1671 K), and assume reflector fails instantly when its minimum
+!  temperature exceeds this value (1571).
+!  Minimum temperature assumed to be located on side opposite of molten
+!  pool.
+          if (thkssm(k,j).gt.(thkssr-1.e-3) .or.
+     &    tcond3(1,k,j).gt.1571.0.or. mssrmc(k,j).eq.1) then
+          if (ztpool.gt.(zcond2(k,j)-dzcnd2(k,j))) then
+!  Signal slumping of molten pool.
+! xxx       ifaluc(j)=4
+            if (npldrn(j).eq.0 .or. npldrn(j).gt.k) then
+              zdrain=zcond2(k,j)-dzcnd2(k,j)
+              imdctl(1) = ior(imdctl(1),dmwrite)
+              write (inpout,"('0-------- Core degradation',es14.6,' s: C
+     &omplete melt through of component at periphery of core, axial node
+     &',i3,' component',i3,'.')") timehy,k,j
+              write (output,9318) tupool,ztpool,zdrain,vlpool
+9318   format(' temp. of pool =',e10.4,' elev. of top of',
+     & ' pool =',e10.4,' elev. of melt through =',e10.4,
+     & ' volume of pool =',e10.4)
+            endif
+            npldrn(j)=k
+!  mssrmc(k,j)=1=melt through of entire thickness of reflector.
+               mssrmc(k,j)=1
+               if(kbrssr(j).ge.k)then
+!  Part of column of molten material in embedded flow channel is in
+!  elevation span at which complete melt through of reflector has
+!  occurred.
+                 if(nplguo(j).lt.k)then
+                 kbrssr(j)=k-1
+                 else
+                 kbrssr(j)=0
+                 endif
+               endif
+               go to 620
+               endif
+          endif
+          if(thkssm(k,j).le.1.e-3)go to 620
+          if(mssrmc(k,j).eq.1)go to 620
+          if(mssrmx(k,j).gt.mssrmc(k,j))mssrmx(k,j)=mssrmc(k,j)
+! check for possibility of molten material flowing down holes
+! in reflector.
+          if(mssrmc(k,j).gt.nodech(j))go to 620
+! melt front in reflector has propagated to location of
+! embedded channel.
+          if(k.eq.1.and.ztpool.gt.0.001)then
+! signal that molten pool is now draining.
+            npldrn(j)=k
+            go to 610
+          endif
+! if embedded flow channel already filled with molten core material
+! at this location, then signal that reflector has melted through
+! at lower location, but do not calculate slumping distance if
+! meltthrough above plug.
+          if(kbrssr(j).gt.k.and.nplguo(j).ge.1.and.nplguo(j).lt.k)then
+            kbrssr(j)=k
+            go to 620
+          endif
+          if(kbrssr(j).eq.k.and.nplguo(j).ge.1.and.nplguo(j).lt.k)then
+            go to 620
+          endif
+!  If breach already at this elevation, then bypass signal of
+!  new breach.
+          if(kbrssr(j).eq.k)go to 620
+          kbrssr(j)=k
+!  Calculate distance of slumping of molten material.
+!  Use Equation 31 of Epstein, et al, Nuclear Science and
+!  Engineering,61,p 320 (1976).
+          kstart=k-1
+!  Find average surface temperature in reflector from this point
+!  down to bottom.
+          tsum=0.0
+          dzsum=0.0
+          do kk = kstart,1,-1
+            tsum = tsum + dzcnd2(kk,j)*tcond3(nodech(j),kk,j)
+            dzsum = dzsum + dzcnd2(kk,j)
+          enddo
+          taverf=tsum/dzsum
+          l=nvechn(kstart,j) + filndx(4)
+          coefrc=0.005
+          cpssrf=scp(taverf)
+          xpenuo=0.5*(diamv(l)/coefrc)* (((fhefus/cppool)+tupool-tliqpl)
+     &    /(tupool-tliqss))* (1./(1.+(tliqpl-tliqss)/((hfshrd/cpssrf)
+     &    +tliqss-taverf)))
+!  Find axial node that flowing molten material solidified in.
+          xsum1=0.0
+          nswp1=0
+          nplguo(j)=0
+          do kk = kstart,1,-1
+            if (nswp1.eq.1) cycle
+            xsum1=xsum1+dzcnd2(kk,j)
+            if (xsum1.gt.xpenuo) then
+              nplguo(j)=kk
+              tcoluo(k,j)=tupool
+              nswp1=1
+            endif
+          enddo
+!         write(output,9250)
+!9250 format(/,' heatld - core degradation event; melt through',
+!    +' to embedded flow channel in structure at periphery of core')
+!         write(output,9260)timehy,j
+!9260 format(' time of event =',e14.8,' component no. =',i3)
+!         write(output,9270)kbrssr(j)
+!9270 format(' axial node at which melt through occurred =',i3)
+!         if(nplguo(j).gt.1)then
+!           write(output,9280)nplguo(j)
+!9280 format(' axial node at which draining material plugged =',i3)
+!           write(output,9290)xpenuo
+!9290 format(' distance core material slumped through embedded flow',
+!    +' flow channel before freezing =',e10.4,' m')
+!         endif
+          if(nplguo(j).ge.1)go to 620
+          if(ztpool.gt.0.001)npldrn(j)=k
+          nplguo(j)=0
+  610     continue
+  620     continue
+  630   continue
+  640 continue
+!  If no interaction of molten pool with reflector, then go to 2990.
+      if(nswint.eq.0)go to 760
+!  Check to see whether molten pool at any location drained through to
+!  embedded flow channels and then downward through embedded flow
+!  channels or else melted completely through reflector and then drained
+!  down the outside of reflector.
+!  Calculate amount of material that will drain from molten pool, time
+!  to drain this material, and its heatup of reflector as it drains.
+658   continue
+      do 670 j=1,ncomp
+        if(npldrn(j).ge.1)then
+         if(ztpool.lt.(zcond2(npldrn(j),j)-dzcnd2(npldrn(j),j)))then
+         npldrn(j)=0
+         endif
+         if(vlpool.lt.1.e-6)npldrn(j)=0
+        endif
+        if(ishdcr(j).le.0.and.nsprdp.eq.0)go to 670
+        nswdrn=0
+        if(npldrn(j).ge.1)nswdrn=1
+        npldr0(j)=npldrn(j)
+! nplguo(j)=-1 = melting of plug that was located at axial node 1.
+        if(nplguo(j).eq.(-1))then
+        nswdrn=1
+        npldrn(j)=1
+        nplguo(j)=0
+        endif
+        if(nswdrn.eq.0)go to 670
+! drainage has started at this time step.
+! calculate amount of molten material that drains from
+! molten pool.
+        vdrain=0.0
+        if(nsprdp.eq.1)then
+        zdrain=zcond2(npldrn(ncomp),j)-0.5*dzcnd2(npldrn(ncomp),j)
+        else
+        zdrain=zcond2(npldrn(j),j)-0.5*dzcnd2(npldrn(j),j)
+        endif
+        do 660k=1,naz
+          zelev1=zcond2(k,j)-0.5*dzcnd2(k,j)
+          zelev2=zcond2(k,j)+0.5*dzcnd2(k,j)
+          if(ztpool.lt.(zcond2(k,j)-0.5*dzcnd2(k,j)))go to 660
+          if(zdrain.gt.(zcond2(k,j)+0.5*dzcnd2(k,j)))go to 660
+          dlzpol=dzcnd2(k,j)
+          if(ztpool.lt.(zcond2(k,j)+dzcnd2(k,j)))then
+          dlzpol=ztpool-(zcond2(k,j)-dzcnd2(k,j))
+          endif
+          dapool=0.0
+          do 650jj=1,ncomp
+            if(idcomp(jj).ne.0)go to 650
+            if(rpel((jj-1)*ndax+k).le.0.2e-3)go to 650
+! factor of 1.1 accounts for cross sectional area contributed by
+! positions in bundle for fuel rods.
+            if(lcrucb(k,jj).eq.1)dapool=dapool+ 1.1*float(nsigl(jj))
+     &      *pitch(jj)**2
+  650     continue
+          vdrain=vdrain+dapool*dlzpol
+  660   continue
+! dvspll(j)=volume of molten material that drains from molten
+! pool through or along outside of reflector to lower head.
+        dvspll(j)=vdrain
+        if(dvspll(j).lt.1.e-3)go to 670
+! calculate velocity of material slumping through reflector.
+! coefrc=coefficient of friction of molten material at wall.
+! value is from Epstein et al.
+        coefrc=0.005
+        if(nsprdp.eq.1)then
+!   assume slumping as rivulet with thickness of 0.10 m.
+        tflmsl=0.10
+        hdslmp=0.125*tflmsl
+        arslmp=0.25*hdslmp*pi*repool
+        velslp(j)=sqrt(2.*hdslmp*gravac/coefrc)
+        mdtslp(j)=arslmp*dnpool*velslp(j)
+        vspldt=arslmp*velslp(j)*dt
+        go to 662
+        endif
+        kdyn=(j-1)*ndax+k
+        thkssr=xcond3(nrodes(kdyn),k,j)-xcond3(1,k,j)
+        nsided=0
+        if(nodech(j).ne.0.and.mssrmc(k,j).ge.2
+     &  .and.npldrn(j).le.0)then
+        nsided=1
+! drainage through embedded flow channels in shroud.
+! l = offset index for RELAP5 control volume representing
+! embedded flow channel at this location.
+          l=nvechn(kbrssr(j),j) + filndx(4)
+! diamv(l)=hydraulic diameter of this channel.
+! calculate velocity assuming fall in pipe with contact only
+! at wall surface.
+          velslp(j)=sqrt(2.*diamv(l)*gravac/coefrc)
+        else
+! hdslmp=hydraulic diameter of film flow down outside edge of
+! structure, with one side of film contacting reflector and other side
+! contacting the core barrel.
+! hdslmp=0.125*(film thickness)
+! If no breakup of slumping molten pool material has been defined
+! user, then set film thickness to maximum gap between outside of
+! reflector and core barrel (about 0.1 m).
+! If breakup has been defined, then much slower rate of slumping is
+! implied; so set thickness of slumping film to 0.01 m.
+          if(nobrok(mcp).eq.1)then
+          tflmsl=0.10
+          else
+          tflmsl=0.01
+          endif
+          hdslmp=0.125*tflmsl
+          velslp(j)=sqrt(2.*hdslmp*gravac/coefrc)
+        endif
+! calculate mass and enthalpy of molten material slumping from
+! molten pool through shroud to lower head.
+        if(nodech(j).ne.0.and.nsided.eq.1)then
+          mdtslp(j)=avol(l)*dnpool*velslp(j)
+          vspldt=avol(l)*velslp(j)*dt
+        else
+! (flow area) = (4.*(hydraulic diameter)*(wetted circumference)
+! assume flow over 1/8 of circumference of molten pool.
+! (wetted circumference)=0.5*pi*repool
+          arslmp=0.25*hdslmp*pi*repool
+          mdtslp(j)=arslmp*dnpool*velslp(j)
+          vspldt=arslmp*velslp(j)*dt
+        endif
+662     continue
+        wpotot=wupool+wapool+wzpool+wspool+wmpool
+        mduslp(j)=(wupool/wpotot)*mdtslp(j)
+        mdzslp(j)=(wzpool/wpotot)*mdtslp(j)
+        mdmslp(j)=(wmpool/wpotot)*mdtslp(j)
+        mdaslp(j)=(wapool/wpotot)*mdtslp(j)
+        mdsslp(j)=(wspool/wpotot)*mdtslp(j)
+!       timslp(j) = temperature of material slumping to lower head.
+        timslp(j)=tupool
+!     calculate reduction in volume and mass and internal heat
+!     generation in molten pool.
+        if(vspldt.gt.vlpool)vspldt=vlpool
+        frcspl=vspldt/vlpool
+        vlpool=vlpool-vspldt
+! repool=effective radius for pool in configuration of hemi-
+! sphere.
+        repool=(0.4774648*vlpool)**0.3333333333
+        frcmin=1.-frcspl
+        wupool=frcmin*wupool
+        wzpool=frcmin*wzpool
+        wmpool=frcmin*wmpool
+        wapool=frcmin*wapool
+        wspool=frcmin*wspool
+        qdpool=frcmin*qdpool
+! calculate heat transfer coefficient of molten material
+! slumping through embedded flow channel. Use equation from
+! Epstein et al.
+        if(nsprdp.eq.0)then
+        htcssr(j)=0.5*coefrc*dnpool*cppool*velslp(j)
+        endif
+        powdba=qdpool
+        if(nspowi.eq.3.or.nspowi.eq.1)then
+          if(powtot(1).gt.0.0)powdba=powtot(1)*powdba
+        endif
+        qdpslp(j)=powdba/wpotot
+        if((ishdcr(j).ge.1.and.nodech(j).eq.0).or.nsprdp.eq.1)then
+! for these cases the heat transfer from slumping material to
+! structure is not calculated.
+        enthp1=zunth1(afpool(1),afpool(2),afpool(3),afpool(4),afpool
+     &  (5), afpool(6),afpool(7),tupool,afalum,aflith,afcadm,afsoil,
+     &  tsatlp)
+        entslp(j)=enthp1
+        endif
+  670 continue
+! If molten material currently flowing through embedded channels
+! in reflector, then calculate heat input to each axial node in
+! flow path. Also calculate temperature drop of molten material
+! as it slumps through embedded flow channel and the internal
+! energy after slumping through reflector. In subroutine DEBADD
+! apply this internal energy to material slumping to lower head
+! for case of slumping through reflector.
+      do 690j=1,ncomp
+        if(ishdcr(j).ne.1)go to 690
+        if(npldrn(j).le.0)go to 690
+        tmltnk=tupool
+        if(kbrssr(j).le.0)go to 690
+        if(kbrssr(j).lt.naz)then
+!     mssrmc(kbrssr(j)+1,j)=1=complete melt through of reflector at
+!     axial node above node with molten material in embedded flow
+!     channels.
+        if(mssrmc(kbrssr(j)+1,j).eq.1)go to 690
+        endif
+        kmin=1
+        if(nplguo(j).gt.1.and.nplguo(j).le.kbrssr(j))kmin=nplguo(j)
+        do 680k=kbrssr(j),kmin,-1
+          l=nvechn(k,j) + filndx(4)
+! qssrmk=heat input to reflector at elevation k (W),
+! twallk=temperature contacted at wall by slumping material.
+          twallk=tcnd03(nodech(j),k,j)
+          qssrmk=htcssr(j)*(tmltnk-twallk)* 4.*avol(l)*dzcnd2(k,j)/diamv
+     &    (l)
+          if(qssrmk.lt.0.0)qssrmk=0.0
+          if(nplguo(j).eq.0)qssrbk(k,j)=qssrmk
+          dtmltn=(4.*htcssr(j)/(dnpool*cppool*diamv(l)))* (tmltnk
+     &    -twallk)*dzcnd2(k,j)/velslp(j)
+          if(dtmltn.lt.0.0)dtmltn=0.0
+          tmltnk=tmltnk-dtmltn
+  680   continue
+        enthp1=zunth1(afpool(1),afpool(2),afpool(3),afpool(4),afpool(5),
+     &  afpool(6),afpool(7),tmltnk,afalum,aflith,afcadm,afsoil, tsatlp)
+        entslp(j)=enthp1
+        timslp(j)=tmltnk
+  690 continue
+! calculate heat transfer into reflector at locations in which
+!    column of plugged molten material exists in embedded flow channel.
+! also check for possible slumping downward of plug.
+      do 710j=1,ncomp
+        if(ishdcr(j).ne.1)go to 710
+        if(nplguo(j).le.0)go to 710
+        if(kbrssr(j).le.0)go to 710
+        do 700k=kbrssr(j),nplguo(j),-1
+! First calculate growth of melt layer in reflector and then
+! growth of solidification layer in column of molten material.
+          thcmin=thkcol(k,j)
+          if(thcmin.lt.1.e-4)thcmin=1.e-4
+          thsmin=thkemb(k,j)
+          if(thsmin.lt.1.e-4)thsmin=1.e-4
+          tavess=0.5*(tcond3(nodech(j)-1,k,j)+tcond3(1,k,j))
+          conss=sthcon(tavess)
+          rhoss=sden(tavess)
+          tussin=((cnpool*tsolpl/thcmin)+(conss*tliqss/thsmin)+ qdpol1
+     &    *thcmin/vlpool) /((conss/thsmin)+(cnpool/thcmin))
+          if(tussin.gt.tsolpl)tussin=tsolpl
+          if(tussin.lt.tliqss)tussin=tliqss
+       if(thcmin.le.1.e-4)tussin=tsolpl
+! calculate rate of propagation of melt front into reflector.
+       qcrst1=(tussin-tliqss)*conss/thsmin
+          l=nvechn(k,j) + filndx(4)
+! if thick layer of solidified core material in embedded channel,
+! then calculate heat flux to reflector based only on heat
+! generation in the core material.
+          if(thcmin.gt.(0.1*diamv(l)))qcrst1=qdpol1*0.5*diamv(l)/ vlpool
+          qcrst2=qdpol1*0.25*diamv(l)/ vlpool
+          if(qcrst1.gt.qcrst2)qcrst1=qcrst2
+! obtain radial temperature gradient in reflector around
+! embedded flow channel.
+          if(nodech(j).gt.1)then
+            tgrdss=(tcond3(nodech(j)-1,k,j)-tcond3(1,k,j))/ (xcond3
+     &      (nodech(j)-1,k,j)-xcond3(1,k,j))
+          else
+            tgrdss=0.0
+          endif
+          dthkdt=(qcrst1-tgrdss*conss)/(rhoss*hfshrd)
+          if(dthkdt.gt.1.e-3)dthkdt=1.e-3
+          thkemb(k,j)=thkemb(k,j)+dthkdt*dt
+          if(thkemb(k,j).lt.0.0)thkemb(k,j)=0.0
+! calculate heat input to reflector by column of molten material.
+!         wetted perimeter = 4.*avol(l)*dzcnd2(k,j)/diamv(l)
+!***  debug printout indicates that the qssrbk term below is
+!***  calculated correctly, but nevertheless omit it until
+!***  production run for tight schedule met.
+          qssrbk(k,j)=qcrst1*4.*avol(l)*dzcnd2(k,j)/diamv(l)
+! calculate thickness of solidification layer in column of
+! molten material.
+!      heat flux at outer boundary for tranient heat transfer.
+       rcolpl=0.5*diamv(l)-thkcol(k,j)
+       if(rcolpl.le.0.0)rcolpl=0.0
+!      heat flux at boundary for steady state heat transfer.
+       qcpool=(rcolpl**2)*(qdpol1/vlpool)/(2.*rcolpl)
+!     calculate heat flux on other side front at which solidification is
+!      occurring.
+       qcrst1=(tsolpl-tussin)*cnpool/thcmin
+          dthkdt=-(qcpool-qcrst1)/(dnpool*fhefus)
+          thkcol(k,j)=thkcol(k,j)+dthkdt*dt
+          if(thkcol(k,j).le.0.0)thkcol(k,j)=0.0
+          if(thkcol(k,j).gt.(0.5*diamv(l)))thkcol(k,j)=0.5*diamv(l)
+  700   continue
+  710 continue
+! evaluate whether plug of core material in embedded flow channel
+! may slump; base criterion for slumping on thickness of annulus
+! of liquefied reflector that surrounds plug of core material.
+      do 720 j=1,ncomp
+        if(ishdcr(j).ne.1)go to 720
+        if(nplguo(j).eq.0)go to 720
+        if (thkemb(k,j).gt.1.0e-2) then
+!  Plug slumps to next node.
+          imdctl(1) = ior(imdctl(1),dmwrite)
+          write(inpout,"('0-------- Core degradation',es14.6,' s: Slumpi
+     &ng down of plug of frozen material supporting column of core mater
+     &ial in embedded flow channel, axial node',i3, ' component',i3,'.')
+     &") timehy,k,j
+          if(nplguo(j).eq.1)then
+!  Set nplguo(j)=-1 to signal on next time step that plug of core
+!  material has slumped below bottom of reflector.
+            nplguo(j)=-1
+          else
+            nplguo(j)=nplguo(j)-1
+          endif
+        endif
+  720 continue
+!    Check to see whether embedded flow channels are blocked due to
+!    molten material entering the flow channels.
+      do 728 j=1,ncomp
+      if(ishdcr(j).ne.1)go to 728
+      if(nblkrf(j).ge.1)go to 728
+      if(kbrssr(j).ge.1)nblkrf(j)=1
+728   continue
+! If first time step for flow being plugged in reflector, then
+! block flow in reflector.
+      do j=1,ncomp
+        if(ishdcr(j).ne.1) cycle
+        if(nblkrf(j).ne.1) cycle
+        do k=2,naz
+!  Close junctions at bottom of embedded flow channel.
+          lr5=nvechn(k,j)+filndx(4)
+          lmap = invfnd(lr5)
+          do jn = 1,invcnt(lr5)
+            ja = invj(lmap)%invvnx
+            jc(ja) = ior(jc(ja),2)
+            velfj(ja) = 0.0
+            velgj(ja) = 0.0
+            lmap = lmap + 1
+          enddo
+       enddo
+       nblkrf(j)=2
+         imdctl(1) = ior(imdctl(1),dmwrite)
+         write (inpout,"('0-------- Core degradation',es14.6,' s: Flow t
+     &hrough embedded flow channels in shroud component blocked, compone
+     &nt',i3,'.')") timehy,j
+         write (inpout,953) volno(l)
+  953  format(' RELAP5 control volume blocked =',i10)
+       enddo
+  760  continue
+       qdpol1=qdpool
+       if(nspowi.eq.3.or.nspowi.eq.1)qdpol1=qdpol1*powtot(1)
+       return
+       end
+*endif

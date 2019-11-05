@@ -1,0 +1,188 @@
+*mlist
+*if def,selap
+       subroutine iradia (idbuna,ptch1,nrows,nclmns)
+!  Process input data for radiation heat transfer.
+!
+!  Cognizant engineer: ewc.
+!
+       use scdmod
+       implicit none
+       real ptch1
+       integer idbuna(20,20),nrows,nclmns
+!
+       include 'scddat.h'
+       include 'scdcom.h'
+       include 'scdout.h'
+       include 'cons.h'
+       include 'contrl.h'
+       include 'ufiles.h'
+       include 'ndxara.h'
+       include 'trnot1.h'
+       include 'radata.h'
+       include 'tblsp.h'
+       include 'blageo.h'
+!  Local Variables.
+       real fview(ndcomp,ndcomp),gapshd,pathl(ndcomp,ndcomp),
+     & radav1(ndcomp),radave(ndcomp),slbwd1
+       integer idbna1(20,20),idshrd,j,j1,k,kcount,knt,
+     & m,m1,n,n1,nc,ncomp1,ng,nsw
+       logical lphlp
+!
+       if (snc1(numenc)%nvfcal .eq. 0) then
+         do j = 1,snc1(numenc)%ncompe
+           lphlp = .false.
+           do k = 1,ncomp
+             if (scd1(k)%cmpno .eq. ngroup(numenc,j,1)) then
+               ngroup(numenc,j,2) = k
+               lphlp = .true.
+               exit
+             endif
+           enddo
+           if (.not.lphlp) then
+             write (output,"('0******** Component specified in enclosure
+     &',i3,' was not entered in Scdap component input.')") 
+     &       ngroup(numenc,j,1)
+             fail = .true.
+           endif
+         enddo
+       endif
+       do knt = 1,ncomp
+         icrad(knt) = 0
+         radave(knt) = rcrst2(1,knt)
+       enddo
+       if (numenc.gt.2*ncomp .or. numenc.le.0) then
+         write (output,9000) numenc
+ 9000  format('0********* Error - number of enclosures,',i3,
+     & ' ,outside allowable range.')
+         fail = .true.
+       endif
+       if (snc1(numenc)%nvfcal .eq. 0) then
+!  Check to see whether bundle is surrounded by flow shroud.
+         ishrd(numenc) = 0
+         do knt = 1,ncomp
+!  Assume that the last shroud encountered surrounds the bundle.
+!!     write (12,"('iradia01',4i5)") numenc,knt,ngroup(numenc,knt,2)
+!  The following if test was added by rjw to bypass exceeding the 
+!  dimensioned limits.
+           if (ngroup(numenc,knt,2) .ne. 0) then
+!  ishrd(numenc) = component number of shroud that surrounds bundle.
+             if (idcomp(ngroup(numenc,knt,2)) .eq. 2) ishrd(numenc) =
+     &       ngroup(numenc,knt,2)
+           endif
+         enddo
+       else
+!ljs case of view factors to be calculated by the code.
+!  Determine ngroup array from read of idbuna array.
+!  Map zeros from global into compact array.
+         do m = 1,nrows
+           do n = 1,nclmns
+             if (idbuna(m,n) .eq. 0) idbna1(m,n) = 0
+           enddo
+         enddo
+         ng = 0
+         do nc = 1,ncomp
+           nsw = 0
+           do m = 1,nrows
+             do n = 1,nclmns
+               if (idbuna(m,n).eq.scd1(nc)%cmpno .and. nsw.eq.0) then
+                 nsw = 1
+                 ng = ng + 1
+                 ngroup(numenc,ng,1) = scd1(nc)%cmpno
+                 ngroup(numenc,ng,2) = nc
+                 do m1 = 1,nrows
+                   do n1 = 1,nclmns
+                     if (idbuna(m1,n1) .eq. scd1(nc)%cmpno)
+     &               idbna1(m1,n1) = ng
+                   enddo
+                 enddo
+               endif
+             enddo
+           enddo
+         enddo
+         snc1(numenc)%ncompe = ng
+         if (ishrd(numenc) .gt. 0) then
+           snc1(numenc)%ncompe = ng + 1
+           ngroup(numenc,ng+1,2) = ishrd(numenc)
+           radave(ishrd(numenc)) = slbwd(ishrd(numenc))/(2.0*pi)
+           slbwd1 = slbwd(ishrd(numenc))
+           if (idcomp(ishrd(numenc)) .ne. 2)
+     &     write (output,9010) ishrd(numenc)
+ 9010  format ('0********* Error - component number',i3,' surrounds a '
+     & 'radiation enclosure but is not a shroud.')
+         else
+           slbwd1 = 0.0
+         endif
+         ncomp1 = snc1(numenc)%ncompe
+         do m = 1,ncomp1
+           radav1(m) = radave(ngroup(numenc,m,2))
+         enddo
+! Calculate view factors.
+         idshrd = 0
+         if (ishrd(numenc) .gt. 0) idshrd = 1
+         gapshd = 0.5*ptch1
+         call vufac (nrows,nclmns,ncomp1,idshrd,slbwd1,gapshd,idbna1,
+     &   ptch1,radav1,nsigvu,fview,pathl)
+         if (iand(ihlppr(2),ishft(1,22)) .ne. 0) then
+           write (output,9020)
+ 9020  format ('0Array of calculated view factors '/)
+           do m = 1,ncomp1
+             write (output,9030)(fview(m,n),n=1,ncomp1)
+ 9030  format (11(2x,e10.4))
+           enddo
+           write (output,9040)
+ 9040  format ('0Array of calculated path lengths (m)',/)
+           do m = 1,ncomp1
+             write (output,9030)(pathl(m,n),n=1,ncomp1)
+             do n = 1,ncomp1
+               fviewg(numenc,m,n) = fview(m,n)
+               pathlg(numenc,m,n) = pathl(m,n)
+             enddo
+           enddo
+         endif
+       endif
+       do j = 1,ncomp
+         scd1(j)%ngrupe = 0
+         scd1(j)%ngrupi = 0
+         kcount = 0
+         do k = 1,numenc
+           ncomp1 = snc1(k)%ncompe
+           do j1 = 1,ncomp1
+             if (ngroup(k,j1,2) .eq. j) then
+               lphlp = j1 .ge. 2
+!  A bwr blade/box component (type 8) may appear twice in a radiation
+!  enclosure.
+               if (lphlp) lphlp = idcomp(j).eq.8 .and.
+     &         ngroup(k,j1-1,2).eq.j
+               if (.not.lphlp) kcount = kcount + 1
+!  Note. It is assumed that second reference of component in radiation
+!  enclosure applies to outside surface of shroud. Outside surface is
+!  surface on which radial node 1 resides.
+               if (kcount .eq. 1) then
+                 scd1(j)%ngrupe = k
+               else
+                 if (kcount .eq. 2) then
+                   scd1(j)%ngrupi = k
+                 else
+                   if (kcount .ge. 3) then
+                     write (output,"('0********* Error - component',i3,
+     & ' is referenced more than twice.')") j
+                     fail = .true.
+                   endif
+                 endif
+               endif
+             endif
+!!     if (j1 .eq. 1) then
+!!       write (12,"('iradia02',10i5)") j,k,j1,snc1(k)%ncompe,numenc,
+!!   &   ngroup(k,j1,2),idcomp(j),scd1(j)%ngrupe,scd1(j)%ngrupi
+!!     else
+!!       write (12,"('iradia02',10i5)") j,k,j1,snc1(k)%ncompe,
+!!   &   ngroup(k,j1-1,2),ngroup(k,j1,2),idcomp(j),scd1(j)%ngrupe,
+!!   &   scd1(j)%ngrupi
+!!     endif
+           enddo
+         enddo
+         nraden(j) = kcount
+       enddo
+       return
+       end
+*endif

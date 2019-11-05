@@ -1,0 +1,587 @@
+*mlist
+*if def,selap
+       subroutine fgrelg (deltcc,dzcond,fpary,ibrch,ibrch0,
+     # idsrp1,naz,pcool,rci,rdlnth,tgapbr,wgapbr,ggivy,ggrel,gasms,
+     *     ggrelh, ggrelr, gsrelh, gsrelr, qfd,
+     # timec,tshtdn,dtfail,ndkset,vfueli,fpivyi,dkgrel,dksrel,
+     # trbun1,gs1bn1,gs2bn1,gs3bn1,gs4bn1,gs5bn1,gs6bn1)
+c
+c
+c  fgrelg determines the release of gap gases to the coolant.
+c
+c  Cognizant engineer: ewc (erc).
+c
+c     calling subroutines:  fuelan
+c
+c     input variables                  description
+c        deltcc         component time step (s)
+c        dtfail         time interval between shutdown and fuel failure
+c                         (s)
+c        dzcond         height of heat conduction axial node  (m)
+c        fpary          fission product release from fuel to gap during
+c                         the current time step 1-xe, 2-kr, 3-cs, 4-i
+c                         (kg)
+c        fpivyi         total initial volatile fission product inventory
+c                         within fuel matrix , xe+kr+cs+i (kg)
+c        ibrch          indicator of a breach in the cladding  0=no,
+c                         1=yes
+c        ibrch0         indicator of a breach in the cladding existing
+c                         in the previous time step  0=no, 1=yes
+c        idsrup         indicator of a severe disruption such that all
+c                         gap gases are released instantly  0=no, 1=yes
+c        naz            number of heat conduction axial zones
+c        ndkset         decay power set identifier
+c        qfd            fission product decay heat  (w/m3)
+c        pcool          coolant pressure  (n/m2)
+c        rci            radius to inside cladding surface  (m)
+c        rdlnth         total rod length : active + plenum  (m)
+c        tgapbr         temperature of the gap at the breach elevation
+c                         from the tcond aray (k)
+c        timec          current time (s)
+c        tshtdn         time for start of decay, or time of shut down
+c                         (s)
+c        vfueli         total initial volume of fuel in the fuel rod
+c                         (m3)
+c        wgapbr         effective gap width near the breach for
+c                         diffusion of gases out of the gap (m)
+c
+c     i/o variables                    description
+c        ggivy            gap gas inventory 1-xe, 2-kr, 3-cs, 4-i, 5-uo2
+c                         6-zr, 7-sn, 8-fe, 9-ru, 10-zr*, 11-ba, 12-sb,
+c                         13-te, 14-ag, 15-cs*, 16-i* (kg)
+c        ggrel          cumulative gap gas released to coolant  1-xe,
+c                         2-kr, 3-cs, 4-i, 5-uo2, 6-zr, 7-sn, 8-fe, 9-ru
+c                         10-zr*, 11-ba, 12-sb, 13-te, 14-ag, 15-cs*,
+c                         & 16-i* (kg)
+c        trbun1 = end time for release of gases inside fuel to coolant
+c                 due to burst of fuel rods.  This release is spread in
+c                 time due to fsct that there is spread in time of the
+c                 rupturing of the individual rods within a group of
+c                 rods represented as being identical. (s).
+c        gs1bn1 = total amount of Xe gas released to fluid field due to
+c                 rupture of this group (icmp) of fuel rods. (kg).
+c        gs2bn1 = Kr
+c        gs3bn1 = Cs
+c        gs4bn1 = I
+c        gs5bn1 = He
+c        gs6bn1 = Hydrogen
+c
+c     output variables                 description
+c        dkgrel         decay heat of the noncondensible gases released
+c                         to the coolant  (w/kg)
+c        dksrel         decay heat of the soluble gases released to the
+c                         coolant   (w/kg)
+c        gasms          gas inventory = fill gas +released fission gases
+c                         ( gm mole )
+c        ggrelh         enthalpy of noncondensible gases released to
+c                         coolant  (j/kg)
+c        ggrelr         total release rate of all noncondensible gases
+c                         into the coolant from the gap  xe+kr+he+h2
+c                         (kg/s)
+c        gsrelh         enthalpy of soluble gases released to coolant
+c                         (j/kg)
+c        gsrelr         total release rate of all soluble gases into the
+c                         coolant from the gap   csi+csoh   (kg/s)
+c
+c     local variables                  description
+c        aci            cladding inside surface area  (m2)
+c        at             atomic weight of gap gases  -see rel
+c                         definition-, 6-h, 7-o
+c        b              constants for cs and i release correlations
+c        c              constants for hydrogen enthalpy correlation
+c        cpcsi          specific heat of csi  (j/kg-k)
+c        cphe           specific heat of he   (j/kg-k)
+c        cpi2           specific heat of i2   (j/kg-k)
+c        cpkr           specific heat of kr   (j/kg-k)
+c        cpxe           specific heat of xe   (j/kg-k)
+c        csimol         number of moles of csi released
+c        df             disrupted decay power fraction /fdkpwr:fdecay/
+c        dr3,4          diffusion rate of cesium(3) or iodine(4)  (kg/s)
+c        hcsi           enthalpy of csi  (j/kg)
+c        hcsoh          enthalpy of csoh (heat of formation)  (j/kg)
+c        hh2            enthalpy of h2 (j/kg)
+c        hi2            enthalpy of i2 (j/kg)
+c        hmol           number of moles of h or oh generated
+c        hvcsi          heat of vaporization of csi  (j/kg)
+c        hvi2           heat of vaporiztion of i2  (j/kg)
+c        rbar           universal gas constant  (j/kmole-k)
+c        rciav          average cladding inside radius  (m)
+c        rel            gap gas released to coolant during current time
+c                         step 1-xe, 2-kr, 3-cs, 4-i, 5-uo2, 6-zr, 7-sn,
+c                         8-fe, 9-ru,10-zr*, 11-ba, 12-sb, 13-te, 14-ag,
+c                         15-cs*, 16-i* (kg)
+c        totl           sum of axial node lengths  (m)
+c        vb             volume of gas released at burst  (m3)
+c        ximol          number of moles of i released as i2
+c
+c -----------------------------fgrelg outline--------------------------
+c     :set dimensions
+c     :set data
+c     :if debug flag set, then
+c         print input variables
+c     :end if
+c     :update gap gas inventory (ggivy) to include
+c         current release to gap from the fuel
+c     :if idsrup = 1, then
+c         set all release to current inventory
+c     :else if ibrch = 1, then
+c         calculate inside cladding surface area  (2*pi*ri*h)
+c         :if gap gas inventory .gt. 0.0, then
+c             calculate diffusion release of cs and i  eq(3,4)
+c         :end if
+c         :if ibrch0 = 0, then
+c             calculate volume of burst gas release  eq(2)
+c             calculate burst release of cs and i  (eq(1)
+c         :end if
+c         set xe,kr,he release = xe,kr,he inventory
+c        :if any release .gt. current inventory, then
+c            set release = current inventory
+c        :end if
+c     :else
+c         set all release ,enthalpy and decay heat to zero
+c         calculate gasms
+c         :if debug flag set, then
+c             print output variables
+c         :end if
+c         return
+c     :end if
+c     calculate hydrogen release
+c     update gap gas inventory (ggivy) and cumulative release (ggrel)
+c         to account for current release
+c     calculate current total release rate of noncondensibe gases and
+c         soluble gases
+c     :if release .gt. 0.0 , then
+c        calculate enthalpy of noncondensible gas release  eq(5,8,9,10)
+c        calculate enthalpy of soluble gas release  eq(10,11)
+c        calculate decay heat of gas release
+c     :else
+c        set enthalpy and decay heat to zero
+c     :end if
+c     set gasms = 0.0
+c     :if debug flag set, then
+c         print output variables
+c     :end if
+c     :return
+c ---------------------------------------------------------------------
+       implicit none
+*call comctl
+*call fast
+*call fpfast
+*call scddat
+*call statec
+*call tblsp
+*call ufiles
+*call voldat
+c
+c  Local variables.
+       integer ibrch,ibrch0,idsrp1,naz,ndkset
+       real deltcc,dzcond,fpary,pcool,rci,rdlnth,tgapbr,wgapbr,ggivy,
+     * ggrel,gasms,ggrelh,ggrelr,gsrelh,gsrelr,qfd,s(26),timec,
+     * tshtdn,dtfail,vfueli,fpivyi,dkgrel,dksrel
+      dimension dzcond(ndax) ,rci(ndax)
+     #    ,fpary(16), ggivy(17), ggrel(18), rel(18), at(7), b(9), c(12)
+c
+       integer lad(ndax)
+       real uo,co,do
+      dimension uo(3), co(3), do(3)
+       integer i,i34,idsrup,il,im,isp,ispvk,iy,iz,iz1,jl,jz,krap,ksp,l,
+     * mi,ml,mlm,ni,nl,nln,nsp
+       real aci,at,b,c,cpcsi,cphe,cpi2,cpkr,cpxe,csimol,df,dktime,dr3,
+     * dr4,factor,h12,hcsi,hcsoh,hh2,hi2,hmol,hvcsi,hvi2,pi2,
+     * rbar,rciav,rel,t273k,totl,vb,vtotl,ximol
+       real trbun1,gs1bn1,gs2bn1,gs3bn1,gs4bn1,gs5bn1,gs6bn1
+       real tspred
+       real rels1,rels2,rels3,rels4,rels17,rels18
+       real rbst1,rbst2,rbst3,rbst4,rbst5,rbst6,gsrelb,gsrels
+       real hmolb,ximolb,csimlb
+       real flburs
+       external fdecay,fpspix,frestr,grasf2
+c
+      data uo/1.226665e5, 1.226665e5, 1.325644e4/
+      data co/94.9084, 148.824, 3115.839/
+      data do/0.35e-2, 0.35e-2, 0.3456e-2/
+      data at/136. ,88. ,137. ,135. ,4.003 ,1.008 ,15.9994/
+      data b/553.128 ,0.8 ,7420. ,8.365e+07 ,19800.
+     #       ,25.834      ,3770. ,5.371e+06 ,14800./
+      data c/3.057445    , 1.33826e-03 ,-1.93664e-06 ,1.38026e-09
+     #     ,-3.62455e-13 ,  .122e+06   , 3.10019     ,2.55597e-04
+     #     , 1.75481e-08 ,-8.7275e-12  , 7.38907e-16 , .576e+06/
+      data cpcsi/240./ ,cphe/5233.5/ ,cpi2/148./ ,cpkr/248.5/
+     #    ,cpxe/158.5/
+      data hvcsi/5.41e+05/ ,hcsoh/3.18e+06/ ,hvi2/2.27e+05/
+      data pi2/6.2831853072/ ,rbar/8314.3/ ,t273k/273./
+c     Note.  Value for tspred is based on observed spread in time of
+c     failure of fuel rods in severe fuel damage tests such as
+c     PBF SFD 1-1.
+c     tspred = spread in time of failure of individual rods in a
+c              component group (s).
+      data tspred / 10./
+c
+       idsrup=idsrp1
+       rels1=0.0
+       rels2=0.0
+       rels3=0.0
+       rels4=0.0
+       rels17=0.0
+       rels18=0.0
+       do112i=1,18
+       rel(i)=0.0
+112    continue
+       flburs=1./float(naz)
+       rbst1=0.0
+       rbst2=0.0
+       rbst3=0.0
+       rbst4=0.0
+       rbst5=0.0
+       rbst6=0.0
+       gsrelb=0.0
+       gsrels=0.0
+c  Assume balloon rupture is large and offers no constraint to gas
+c  release.
+       if(ibrch.ge.1.and.trbun1.ge.1.e-3)idsrup=1
+c       update gap gas inventory to include current release
+      do 10 i = 1,16
+           ggivy(i) = ggivy(i) + fpary(i)
+   10 continue
+c
+c----  Beginning of A-A IF block.
+      if (idsrup .ne. 0) then
+c     All He in rod is released at time of burst, thus none now present.
+          ggivy(17)=0.0
+          do 20 i = 1,17
+              rel(i) = ggivy(i)
+   20     continue
+c
+      else if (ibrch .ne. 0) then
+c        calculate cladding inside surface area
+          rciav = 0.0
+          totl = 0.0
+          do 30 i = 1,naz
+              rciav = rciav + rci(i)*dzcond(i)
+              totl = totl + dzcond(i)
+   30     continue
+          rciav = rciav/totl
+          aci = pi2*rciav*rdlnth
+c
+c            calculate release by diffusion
+          if (ggivy(3) .gt. 0.0) then
+              dr3 = b(4)*(wgapbr/pcool) * ((ggivy(3)/aci)**b(2))
+     #               * exp(-b(5)/tgapbr)
+              rel(3) = ggivy(3)*(1.- exp(-dr3*deltcc/ggivy(3)))
+c***      apply simpler more reliable model.
+              rel(3)=ggivy(3)
+          else
+              rel(3) = 0.0
+          endif
+c
+          if (ggivy(4) .gt. 0.0) then
+              dr4 = b(8)*(wgapbr/pcool) * ((ggivy(4)/aci)**b(2))
+     #               * exp(-b(9)/tgapbr)
+              rel(4) = ggivy(4)*(1.- exp(-dr4*deltcc/ggivy(4)))
+              rel(4)=ggivy(4)
+          else
+              rel(4) = 0.0
+          endif
+c
+c          calculate burst release
+          if (trbun1.le.1.e-3)then
+          trbun1=timec+tspred
+          gs1bn1=ggivy(1)*isgl
+          gs2bn1=ggivy(2)*isgl
+          gs3bn1=ggivy(3)*isgl
+          gs4bn1=ggivy(4)*isgl
+          gs5bn1=ggivy(17)*isgl
+c  Calculate hydrogen release.
+      hmolb = ggivy(3)/at(3) - ggivy(4)/at(4)
+      if (hmolb .lt. 0.0) then
+          ximolb = -hmolb
+          hmolb = 0.0
+          csimlb = ggivy(3)/at(3)
+      else
+          ximolb = 0.0
+          csimlb = ggivy(4)/at(4)
+      end if
+         gs6bn1=hmolb*at(6)*isgl
+         gsrels=0.0
+c
+              vb   =    (t273k*rbar/pcool)*
+     #            (ggivy(1)/at(1) + ggivy(2)/at(2) + ggivy(5)/at(5))
+              rel(3) = rel(3) + b(1)*vb * ((ggivy(3)/aci)**b(2))
+     #                           * exp(-b(3)/tgapbr)
+              rel(4) = rel(4) + b(6)*vb * ((ggivy(4)/aci)**b(2))
+     #                           * exp(-b(7)/tgapbr)
+          end if
+c
+          if(ggivy(1).gt.1.e-12)rel(1)=ggivy(1)
+          if(ggivy(2).gt.1.e-12)rel(2)=ggivy(2)
+          if (rel(3) .gt. ggivy(3))  rel(3) = ggivy(3)
+          if (rel(4) .gt. ggivy(4))  rel(4) = ggivy(4)
+          do 36 i = 5,17
+          rel(i) = ggivy(i)
+   36 continue
+c
+c----  Branch in A-A IF block.
+      else
+          ggrelr = 0.0
+          gsrelr = 0.0
+          gsrels=0.0
+          ggrelh = 0.0
+          gsrelh = 0.0
+          dkgrel = 0.0
+          dksrel = 0.0
+          gasms = 1000.*(ggivy(1)/at(1)+ggivy(2)/at(2)+ggivy(17)/at(5))
+          return
+      end if
+c----  end of A-A IF block.
+c  Calculate hydrogen release.
+      hmol = rel(3)/at(3) - rel(4)/at(4)
+      if (hmol .lt. 0.0) then
+          ximol = -hmol
+          hmol = 0.0
+          csimol = rel(3)/at(3)
+      else
+          ximol = 0.0
+          csimol = rel(4)/at(4)
+      end if
+      rel(18) = hmol*at(6)
+c
+c       update gap gas inventory and cumulative gas release
+      do 40 i = 1,17
+          if(ibrch.ge.1)then
+c      breach this time step.
+          ggrel(i)=ggrel(i)+ggivy(i)
+          ggivy(i)=0.0
+          else
+          ggivy(i) = ggivy(i) - rel(i)
+          ggrel(i) = ggrel(i) + rel(i)
+          end if
+   40 continue
+      ggrel(18) = ggrel(18) + rel(18)
+c
+c       calculate noncondensible and soluble gas release rate
+      ggrelr = (rel(1) + rel(2) + ximol*at(4) + rel(17) + rel(18))
+     #             / deltcc
+      gsrelr = ( rel(3) + rel(4) - ximol*at(4) + hmol*(at(6) + at(7)) )
+     #             / deltcc
+c       calculate enthalpy and decay heat of released gases
+      df = 1.0
+      dktime = timec - tshtdn
+      if (timec .gt. (tshtdn+dtfail))
+     #     call fdecay ( ndkset ,dtfail ,dktime ,df ,krap )
+c
+      if (ggrelr .gt. 0.0) then
+          if (tgapbr .le. 1000.) then
+              hh2 = c(6) + tgapbr*(c(1) + tgapbr*(c(2) + tgapbr*(c(3)
+     #             + tgapbr*(c(4) + tgapbr*c(5)))))*rbar/(at(6)*2.)
+          else
+              hh2 = c(12) + tgapbr*(c(7) + tgapbr*(c(8) + tgapbr*(c(9)
+     #             + tgapbr*(c(10) + tgapbr*c(11)))))*rbar/(at(6)*2.)
+          end if
+c
+          hi2 = cpi2*tgapbr + hvi2
+      ggrelh = (tgapbr*(rel(1)*cpxe + rel(2)*cpkr + rel(17)*cphe)
+     #               + hh2*rel(6) + hi2*ximol*at(4) ) / (ggrelr*deltcc)
+          if (  fpivyi .gt. 0.0 )  then
+              factor = (ggrelr - (rel(17) + rel(18))/deltcc)/ggrelr
+              dkgrel = factor*qfd*(1. - df)*vfueli/fpivyi
+          else
+              dkgrel = 0.0
+          endif
+      else
+          ggrelh = 0.0
+          dkgrel = 0.0
+      end if
+c
+      if (gsrelr .gt. 0.0) then
+          hcsi = cpcsi*tgapbr + hvcsi
+          gsrelh = (   hcsoh*hmol*(at(3) + at(6) + at(7))
+     #              + hcsi*csimol*(at(3) + at(4)) ) / (gsrelr*deltcc)
+          if (  fpivyi .gt. 0.0 )  then
+              factor = (gsrelr - hmol*(at(6) + at(7))/deltcc)/gsrelr
+              dksrel = factor*qfd*(1. - df)*vfueli/fpivyi
+          else
+              dksrel = 0.0
+          endif
+      else
+          gsrelh = 0.0
+          dksrel = 0.0
+      end if
+      gasms = 0.0
+c
+c  Beginning of B-B IF block.
+c  Case of disrupted fuel rod or cladding burst during this time step.
+       if (idsrup.ne.0 .or. (ibrch.ge.1 .and. trbun1.le.1.e-3)) then
+         vtotl = 0.0
+         do iz = 1,naz
+           il = (icmp-1)*nx + iz
+           l = nvad(il) + filndx(4)
+           if (iz .eq. 1) then
+             vtotl = vtotl + v(l)
+           else
+             iz1 = iz - 1
+             do iy = 1,iz1
+               if (l .ne. lad(iy)) then
+                 vtotl = vtotl + v(l)
+                 exit
+               endif
+             enddo
+           endif
+           lad(iz) = l
+         enddo
+         if (trbun1.le.1.e-3 .and. ibrch.ge.1) then
+c  Burst of fuel rod this time step.
+           rels17=0.0
+           rels1=0.0
+           rels2=0.0
+           rels3=0.0
+           rels4=0.0
+           rels18=0.0
+           gsrels=0.0
+         else
+       rels17=rel(17)
+c***   if(rel(1).gt.1.e-12)rels1=rel(1)
+c***   if(rel(2).gt.1.e-12)rels2=rel(2)
+c***   Fix below apllied because rel(1) is calculated to equal 2.e-310
+c***  and cause above line to have floating exception.
+       rels1=0.0
+       rels2=0.0
+       rels3=rel(3)
+       rels4=rel(4)
+       rels18=rel(18)
+       gsrels=gsrelr
+       end if
+       if(ibrch.ge.1)then
+         if(timec.lt.trbun1)then
+c      calculate release of gases from spread of bursts.
+         rbst1=(deltcc/tspred)*gs1bn1
+         rbst2=(deltcc/tspred)*gs2bn1
+         rbst3=(deltcc/tspred)*gs3bn1
+         rbst4=(deltcc/tspred)*gs4bn1
+         rbst5=(deltcc/tspred)*gs5bn1
+         rbst6=(deltcc/tspred)*gs6bn1
+         hmolb=rbst3/(isgl*at(3)) - rbst4/(isgl*at(4))
+         if(hmolb.lt.0.0)then
+         ximolb=-hmolb
+         hmolb=0.0
+         csimlb=rbst3/(isgl*at(3))
+         else
+         ximolb=0.0
+         csimlb=rbst4/(isgl*at(4))
+         end if
+         gsrelb=(rbst3 + rbst4 - ximolb*at(4)
+     #   + hmolb*(at(6)+at(7)))/(isgl*deltcc)
+         end if
+       end if
+c     gas released from point of burst upwards.
+      flburs=float(naz-ibrch+1)/float(naz)
+      if(flburs.lt.0.001)flburs=1./float(naz)
+c     flburs = ratio of burst length to total length.
+       do 15 jz =ibrch,naz
+       jl = (icmp-1) * nx + jz
+       nl = nvad(jl) + filndx(4)
+        do 16 ni = 1,noncn
+        nln = nl + ni - 1
+          if (ni .ne. nonhe) go to 51
+          gaman(nln)=gaman(nln)+(rels17*isgl+rbst5)/
+     #    (vtotl*deltcc*flburs)
+         enthn(nln) = uo(3) + co(3)*tgapbr + do(3)/2.0*
+     +                (tgapbr-tao)**2
+         go to 16
+   51     if (ni .ne. nonkr) go to 52
+         if(rels2.lt.1.e-12)rels2=0.0
+         gaman(nln)=gaman(nln)+(rels2*isgl+rbst2)/
+     #   (vtotl*deltcc*flburs)
+         enthn(nln) = uo(2) + co(2)*tgapbr + do(2)/2.0*
+     +                (tgapbr-tao)**2
+         go to 16
+   52     if (ni .ne. nonxe) go to 16
+         if(rels1.lt.1.e-12)rels1=0.0
+         gaman(nln)=gaman(nln)+(rels1*isgl+rbst1)/
+     #   (vtotl*deltcc*flburs)
+         enthn(nln) = uo(1) + co(1)*tgapbr + do(1)/2.0*
+     +                (tgapbr-tao)**2
+        gamas(nl) = gamas(nl) + (gsrels+gsrelb)*isgl/(vtotl*flburs)
+c***  solute source term not being processed correctly by RELAP5, since
+c***  SCDAP/RELAP5 not commissioned to do fission product transport
+c***  analysis, zero out solute source term.
+        gamas(nl)=0.0
+16      continue
+        enths(nl) = gsrelh
+ 15    continue
+c---   Branch in B-B IF block.
+      else
+       if ( ibrch.ne.0 ) then
+        im = (icmp-1) * nx + ibrch
+       ml = nvad(im) + filndx(4)
+        do 26 mi = 1,noncn
+        mlm = ml + mi - 1
+          if (mi .ne. nonhe) go to 61
+          gaman(mlm)=gaman(mlm)+(rels17*isgl+rbst5)*recipv(ml)/deltcc
+         enthn(mlm) = uo(3) + co(3)*tgapbr + do(3)/2.0*
+     +                (tgapbr-tao)**2
+         go to 26
+   61     if (mi .ne. nonkr) go to 62
+         gaman(mlm) = gaman(mlm) + (rels2*isgl+rbst2)*recipv(ml)/deltcc
+         enthn(mlm) = uo(2) + co(2)*tgapbr + do(2)/2.0*
+     +                (tgapbr-tao)**2
+         go to 26
+   62     if (mi .ne. nonxe) go to 26
+         gaman(mlm) = gaman(mlm) + (rels1*isgl+rbst1)*recipv(ml)/deltcc
+         enthn(mlm) = uo(1) + co(1)*tgapbr + do(1)/2.0*
+     +                (tgapbr-tao)**2
+        gamas(ml) = gamas(ml) + (gsrels+gsrelb)*isgl*recipv(ml)
+c***    see note for gamas above.
+        gamas(ml)=0.0
+26      continue
+        enths(ml) = gsrelh
+       endif
+      endif
+c---  End of B-B IF block.
+      if (filid(34) .eq. 0.0) return
+      if (idsrup.eq.0 .and. ibrch.eq.0) return
+      i34 = filndx(34)
+      nsp = fpnsp(i34)
+      ispvk = fpspvk(i34)
+c     igsl = number of rods.
+      h12 = isgl/deltcc
+      do 70 ni = 1, nsp
+        s(ni) = 0.0
+   70   continue
+      call fpspix ('I2  ', ksp)
+      if (ksp .gt. 0) then
+         s(ksp) = ximol*at(4)*h12
+      endif
+      call fpspix ('CsI ', ksp)
+      if (ksp .gt. 0) then
+         s(ksp) = csimol*(at(3)+at(4))*h12
+      endif
+      call fpspix ('CsOH', ksp)
+      if (ksp .gt. 0) then
+         s(ksp)=hmol*(at(3)+at(6)+at(7))*h12
+      endif
+      call fpspix ('Te  ', ksp)
+      if (ksp .gt. 0) then
+         s(ksp)=fpary(5)*h12
+      endif
+      if (idsrup .ne. 0) then
+          h12 = 1.0/naz
+          do 75 ksp = 1, nsp
+             s(ksp) = s(ksp)*h12
+   75     continue
+          do 72 jz = 1,naz
+             isp = nvhydf(icmp,jz) + i34
+             do 73 ksp = 1, nsp
+               fpsrc(isp) = fpsrc(isp) + s(ksp)
+               isp = isp + ispvk
+   73        continue
+   72     continue
+       else
+          isp = nvhydf(icmp,ibrch) + i34
+          do 74 ksp = 1, nsp
+            fpsrc(isp) = fpsrc(isp) + s(ksp)
+            isp = isp + ispvk
+   74     continue
+      endif
+      return
+      end
+*endif

@@ -1,0 +1,458 @@
+*mlist
+       subroutine gesub(wi,xi,pi,rhog,rhof,vsf,vsg,istage,rr1,ai,an,rh,
+     & theta,rws,rrs,ads,dds,hrhogs,hds,hsks,cks,efflds,aas,bbs,vorn,
+     & cwfco,cwgcu,dppa,wfcut,wfcot,wgcut,wgcot,isoln,gacc)
+c
+c
+c  gesub performs a detailed calculation of the operation of
+c  a single bwr steam-water separator. input variables are
+c  the fluid conditons at the separator inlet and
+c  separator geometric data. output variables are the phasic
+c  mass flow rates for carryunder and carryover, and the
+c  separator pressure drop.
+c
+c  Cognizant engineer: wlw (kkc).
+c
+c**   seppor - does detailed calculation of GE separator operation
+c
+c     called by sepdis
+c
+c
+c     argument list -
+c
+c        -input variables-
+c
+c       wi         separator inlet mass flow rate
+c       xi         separator inlet flow quality
+c       pi         separator inlet pressure
+c       rhog       separator inlet vapor density
+c       rhof       separator inlet liquid density
+c       vsf        separator inlet liquid viscosity
+c       vsg        separator inlet vapor viscosity
+c       istage     number of separator stages (2 or 3)
+c       rr1        radius of larger pickoff ring at 1st stage
+c                   of two stage separator
+c       ai         standpipe flow area
+c       an         separator nozzle exit area
+c       rh         radius of the separator hub at inlet
+c       theta      angle between swirling vane and horizontal plane
+c       rws   (3)  inner radius of separator wall
+c       rrs   (3)  inner radius of pickoff ring
+c       ads   (3)  flow area of discharge passage
+c       dds   (3)  hydraulic diameter of discharge passage
+c       hrhogs     hydrostatic head from vessel disharge cell to
+c                   top vessel separator cell
+c       hds   (3)  length of separating barrel
+c       hsks  (3)  axial distance between the exit of the 1st
+c                   discharge passage and the swirler inlet
+c       cks   (3)  loss coefficient in discharge passage
+c       efflds(3)  effective l/d coefficient at pickoff ring
+c       aas   (3)  void profile coeff inside water layer radius
+c       bbs   (3)  void profile coeff within water layer
+c       vorn       vortex exponent
+c       cwfco      carryover coefficient
+c       cwgcu      carryunder coefficient
+c       gacc       gravity constant (gravcn)
+c
+c        -output variables-
+c
+c       dppa       separator pressure drop
+c       wfcut      mass flow rate of separated liquid
+c       wfcot      mass flow rate of liquid carryover
+c       wgcut      mass flow rate of vapor carryunder
+c       wgcot      mass flow rate of vapor carryover
+c       isoln      abnormal separator conditions flag
+c
+       implicit none
+       include 'contrl.h'
+      real wi,xi,pi
+      real rhog,rhof,vsf,vsg
+      real rr1
+      real ai,an,rh,theta
+      real vorn,cwfco,cwgcu
+      real dppa,wfcut,wfcot,wgcut,wgcot
+c
+      real alpdow, xdown, wfctor, wgcuo, wfcoo, wfcus, wgcus
+      real  y1da, y1d, c4p, axmp, y5, y3, y2, y11
+      real y8, y7, y6, y1, y1bar
+      real phi2, vd, rhomd, xcu, alfacu, wd
+      real wfco2, wgco2, wfcu1, wgcu1, wfcu2, wgcu2
+      real br1, br2, br3, b9, anmfn, ff, cf, rell, rel
+      real vw, vtfw, bmax, c3p, cpi, c, rf52, rf32, rhoa
+      real vaf, vag, delta, rfwc, rfw3, rfw2, rfw, bf
+      real gama, gama1, rf, wfcu, wgcu, wfco, wgco
+      real alfam, poo, rf2,  y1d1, rf1
+      real anmfo, axmf, anmf, b, a, c3, anmi, c2, c1, anmp
+      real steami, wateri, c4, pn, cknoz, vtn, thetar
+      real van, vi, rhomi
+      real amax, y1d2, alfai, cb, ca, xicrt, xnb2, xna2
+      real xna1, xnb1, xnb, xna, caa, b6, b5, b4, b2, bh
+      real br, bw, b1, bb, aa, effld, ck, hsk, hd, hrhog, dd
+      real ad, rr, rw, rhofg, xistg, b0, gacc, x2p58
+c
+      integer istage, isoln, iter, itermx, iscope, ifree
+      integer kk, k1
+      integer kstage, k, isol
+      integer ifine
+      real rflft,rfsrch
+c
+c     local parameters
+c
+      parameter (x2p58  = 2.58)
+c
+      real rws(3),rrs(3),ads(3),dds(3),hds(3),hrhogs(3),
+     &          hsks(3),cks(3),efflds(3),aas(3),bbs(3)
+c
+      real pwfco(3),pwgco(3),pwfcu(3),pwgcu(3),pwfcu2(3),
+     &          pwgcu2(3)
+c
+c     constants
+c
+      b0=3.141593
+      xistg=xi
+      rhofg=rhof-rhog
+      isol=0
+      do 380 k=1,istage
+         kstage=k
+         rw=rws(k)
+         rr=rrs(k)
+         ad=ads(k)
+         dd=dds(k)
+         hrhog=hrhogs(k)
+         hd=hds(k)
+         hsk=hsks(k)
+         ck=cks(k)
+         effld=efflds(k)
+         aa=aas(k)
+         bb=bbs(k)
+         b1=b0*(rw-rr)**2
+         bw=b0*rw*rw
+         br=b0*rr*rr
+         bh=b0*rh*rh
+         b2=bw-br
+         b4=2.*b0*rw*(rw-rr)
+         b5=b0*rw*log(rw/rr)-(bw-br)/rw*0.5
+         b6=b1/rw
+         if(isol .eq. 1) go to 150
+         caa=gacc*rw*rw
+         caa=caa**(vorn/2.)
+         xna=2.
+         xnb=3.
+         xna1=0.75
+         xnb1=3.
+         xna2=xna-xna1
+         xnb2=xnb-xnb1
+         xicrt=0.15
+         if(xistg .gt. xicrt ) go to 100
+         ca=caa*xistg**xna*aa
+         cb=caa*(1.-xistg)**xnb*bb
+         go to 110
+  100    continue
+         ca=caa*xistg**xna1*xicrt**xna2*aa
+         cb=caa*(1.-xistg)**xnb1*(1.-xicrt)**xnb2*bb
+  110    continue
+         if (kstage .gt. 1) go to 120
+c
+c        calculate nozzle constants
+c
+         alfai=rhog/rhof*(1.-xi)/xi+1.
+         alfai=1./alfai
+         rhomi=rhof-alfai*rhofg
+         vi=wi/rhomi/ai
+         van=wi/rhomi/an
+         thetar=theta*b0/180.
+         vtn=van/tan(thetar)
+         cknoz=0.5*(1.-an/ai)
+         pn=pi+0.5*rhomi*(vi*vi-(van*van+vtn*vtn)*(1.+cknoz))
+         c4=(rhomi*van*van+pn)*(bw-bh)
+         wateri=(1.-xi)*wi
+         steami=xi*wi
+         anmp=2.*b0*rhomi*van*vtn*(rw**3-rh**3)/3.
+  120    continue
+         c1=wateri/4./rhof/bw
+         c2=steami/4./rhog/bw
+         anmi=anmp
+         c3=anmi
+c
+c        initialize values for iteration
+         ifree=0
+         ifine=0
+  130    continue
+         a=0.
+         b=0.
+         anmf=0.
+         axmf=0.
+         anmfo=c3/3.
+         iscope=1
+         itermx=10
+         iter=0
+         rf1=0.039*rw
+         y1d1=0.
+         y1d2=0.
+         rf2=0.
+  140    continue
+         iter=iter+1
+         if(iter .le. itermx) go to 170
+         if( ifree .eq. 1 .and. kstage .gt. 1) go to 150
+         if(ifree.eq.1 .and. kstage.eq.1)go to 160
+         ifree=1
+         ifine=0
+         if(kstage .eq.1) poo=pn+0.5*rhomi*((vtn*vtn+van*van)
+     &   *(1.-(1.-an/bw)**2.)-(wi/rhomi/bw)**2.)
+         go to 130
+  150    continue
+         alfam=rhog/rhof*(1.-xistg)/xistg+1.
+         alfam=1./alfam
+         wgco=br/bw*steami
+         wfco=br/bw*wateri
+         wgcu=(1.-br/bw)*steami
+         wfcu=(1.-br/bw)*wateri
+         a=0.
+         b=0.
+         rf=rw
+         wateri=wfco
+         steami=wgco
+         isol=1
+         xistg=steami/(steami+wateri)
+         go to 370
+  160    continue
+         isoln=0
+         return
+  170    continue
+         if(iscope .gt. 1) go to 180
+         rf=(0.039+(iter-1)*0.16)*rw
+         if(iter .gt. 6) rf=(rf1+rw)*0.5
+         if( ifine.eq.1 ) then
+           rf = rflft + ( iter - 1 ) * rfsrch / 5.0
+         endif
+         go to 190
+  180    continue
+         gama=y1d1/(y1d1-y1d2)
+         rf=rf1-gama*(rf1-rf2)
+         gama1=(y1d1-y1d2)/y1
+         if(abs(gama1) .gt. 0.33) rf=0.5*(rf1+rf2)
+  190    continue
+c
+c        calculate vaf and vag
+         bf=b0*rf*rf
+         rfw=rf/rw
+         rfw2=rfw*rfw
+         rfw3=rfw2*rfw
+         rfwc=(1.-rfw)**2
+         amax=rf/(rw-rf)
+         do 200 k1=1,3
+            delta=a*b/6.*rfw3*rfwc-(0.5*rfw2-b*rfw3/3.)/2.*
+     &      (1.-rfw2-a*rfwc)
+            vag=(c1*a*rfwc-c2*(1.-rfw2-a*rfwc))/delta
+            vaf=(-c1*(rfw2-2.*b*rfw3/3.)+2.*c2*b*rfw3/3.)/delta
+            if(vaf .lt. 0. .or. vaf .gt. 500.) go to 140
+            if(vag .lt. 0.  ) go to 140
+c
+c           calculate vortex constant
+c
+            rhoa=rhof+a*rhofg
+            rf32=rf*sqrt(rf)
+            rf52=rf*rf32
+            c=vag*(rhog*rf52/4.+rhofg*b*rf*rf52/rw/5.)
+            c=c+vaf*(0.4*rhoa*(rw**2.5-rf52)-a*2./3.*rhofg*rw
+     &      *(rw**1.5-rf32))
+            cpi=c
+            if(anmfo .gt. c3) anmfo=c3/3.
+            do 200 kk=1,5
+               c3p=c3-anmfo
+               c=c3p/2./b0/cpi
+               a=ca/c**vorn
+               if(a .gt. amax) a=amax
+               b=cb/c**vorn
+               bmax=(1.-a*(1./rfw-1.))/rfw
+               if(bmax .lt. 0.) bmax=0.
+               if(b .gt. bmax) b=bmax
+c
+c              calculate friction in separator
+c
+               vtfw=c/sqrt(rw)
+               vw=vtfw*vtfw+vaf*vaf
+               vw=sqrt(vw)
+               rel=rhof*vw*vw*hd/vsf/vaf
+               rell=log10(rel)
+               cf=0.455/rell**x2p58
+               ff=b0*rhof*cf*vw*vw*rw*hd
+               anmf=ff*vtfw/vw*rw
+               anmfn=anmf
+               if(anmfn .gt. c3) anmfn=c3
+               anmfo=(anmfn+anmfo)/2.
+  200          continue
+         anmf=anmfo
+         axmf=ff*vaf/vw
+c
+c        calculate discharge flows
+         if(rf .gt. rr) go to 210
+         wgcu=b1*a*rhog*vaf
+         wfcu=rhof*vaf*(b2-a*b1)
+         wgco=steami-wgcu
+         wfco=wateri-wfcu
+         go to 220
+  210    continue
+         b9=2.*b*rr/3./rw
+         wgco=br*rhog*vag*(1.-b9)
+         wfco=br*rhof*vag*b9
+         wgcu=steami-wgco
+         wfcu=wateri-wfco
+  220    continue
+         if(wgcu .lt. 0.) go to 140
+         if(wfcu .lt. 0.) go to 140
+         wgcu2=0.
+         wfcu2=0.
+         if(istage .gt. 2) go to 250
+         if (kstage .eq. istage) go to 250
+         br1=b0*(rw-rr1)**2.
+         br2=b0*rr1*rr1
+         br3=b0*rr1*b/3./rw
+         if(rf .gt. rr1) go to 230
+         wgcu1=br1*a*rhog*vaf
+         wfcu1=rhof*vaf*(bw-br2-br1*a)
+         go to 240
+  230    continue
+         wgco2=br2*rhog*vag*(1.-br3)
+         wfco2=br2*rhof*vag*br3
+         wgcu1=steami-wgco2
+         wfcu1=wateri-wfco2
+  240    continue
+         wgcu2=wgcu-wgcu1
+         wfcu2=wfcu-wfcu1
+  250    continue
+c
+c        calculate y1
+         y1=c*c*(rhoa/rf-rhoa/rw-a*rhofg/2.*(rw/rf/rf-1./rw))
+         bf=b0*rf*rf
+         y6=bw*vaf*vaf*(rhoa*(1.-rfw2)-2.*a*rhofg*(1.-rfw))
+         y7=c*c*(a*rhofg*(-rw*log(rfw)*b0-(bw-bf)/2./rw)
+     &   -rhoa*b0*(rw-rf)**2/rw)
+         y8=bf*vag*vag*(rhog+2.*b*rhofg/3.*rfw)
+         if(ifree .eq. 1) go to 270
+c
+c        calculate discharge flow and y1bar
+         wd=wgcu+wfcu
+         alfacu=wgcu/rhog
+         alfacu=alfacu/(alfacu+wfcu/rhof)
+         xcu=wgcu/wd
+         rhomd=rhof-alfacu*(rhof-rhog)
+         vd=wd/rhomd/ad
+         cf=rhomd*vd*dd/vsf
+         cf=0.079/cf**0.25
+         phi2=rhof/rhomd/(1.+xcu*(vsf/vsg-1.))**0.25
+         y11=0.5*rhomd*vd*vd+0.5*wd*wd/rhof/ad/ad*phi2*
+     &   (4.*cf*(hd/dd+effld)+ck)+hrhog-rhomd*(hd+hsk)*gacc
+         if(rf .gt. rr) go to 260
+         y2=vaf*vaf*(rhoa*b2-a*rhofg*b4)
+         y3=c*c*(a*rhofg*b5-rhoa*b6)
+         y1bar=y11-(0.5*y2+y3)/b2
+         go to  290
+  260    continue
+         y5=br*vag*vag*(rhog*((rf/rr)**2-1.)
+     &   +2./3.*b*rhofg*rr/rw*((rf/rr)**3-1.))
+         y1bar=y11-(0.5*(y5+y6)+y7)/b2
+         y1bar=y1bar*b2/(bw-bf)
+         go to 290
+  270    continue
+c
+c        calculate y1bar for ifree=1
+         if(kstage .gt. 1) go to 280
+         y1bar=(poo*(bh-bw)-y6-y7-y8+c4-axmf)/(bw-bf)
+         go to 290
+  280    continue
+         y1bar=(axmp-axmf-y6-y7-y8)/(bw-bf)
+         y1=axmp
+         y1bar=y6+y8
+  290    continue
+c
+c        check convergence on y1 and y1bar
+         if(kstage .gt. 1 .or. ifree .gt. 0) go to 300
+         c4p=c4-axmf
+         poo=y6+y7+y8+y1*(bw-bf)-c4p
+         poo=poo/(bh-bw)
+  300    continue
+         y1d=y1-y1bar
+         y1da=y1d/y1
+         y1da=abs(y1da)
+         if (iscope .gt. 1) go to 320
+         if(iter .eq. 1) y1d1=y1d
+         if (iter .eq. 1) go to 140
+         if (y1d1 .gt. 0. .and. y1d .lt.0.) go to 310
+         if( y1d .gt. y1d1 .and. ifine .eq. 0 .and. iter.gt.2 ) then
+           ifine = 1
+           rfsrch = rf - rf1
+           rflft = rf1 - rfsrch
+           go to 130
+         endif
+         y1d1=y1d
+         rf1=rf
+         go to 140
+  310    continue
+         y1d2=y1d
+         rf2=rf
+         iscope=2
+         itermx=30
+         go to 140
+  320    continue
+         if(y1da .le. 0.005) go to 340
+         if(y1d1*y1d .lt. 0.0) go to 330
+         rf1=rf
+         y1d1=y1d
+         go to 140
+  330    continue
+         rf2=rf
+         y1d2=y1d
+         go to 140
+  340    continue
+         if(rf .lt. rr) go to 350
+         anmp=2.*b0*c*vag/rf**1.5*(rhog*rr**4./4.+b*
+     &   rhofg*rr**5./5./rw)
+         axmp=br*vag*vag*(rhog+2.*b*rhofg/3.*rr/rw)
+         go to 360
+  350    continue
+         anmp=2.*b0*c*vag*(rhog*rf52/4.+rhofg*b*rf*rf52/rw/5.)
+         anmp=anmp+2.*b0*vaf*c*(0.4*rhoa*(rr**2.5
+     &  -rf52)-a*2./3.*rhofg*rw*(rr**1.5-rf32))
+         axmp=b0*vaf*vaf*(rhoa*(rr+rf)-2.*a*rhofg*rw)*(rr-rf)
+         axmp=axmp+y8
+  360    continue
+         wateri=wfco
+         steami=wgco
+         xistg=steami/(steami+wateri)
+         if(wateri .lt. 1.0e-15) isol=1
+         dppa=pi-poo
+  370    continue
+         pwfco(k)=wfco
+         pwgcu(k)=wgcu-wgcu2
+         pwgco(k)=wgco
+         pwfcu(k)=wfcu-wfcu2
+         pwfcu2(k)=wfcu2
+         pwgcu2(k)=wgcu2
+  380    continue
+      wgcus=0.
+      wfcus=0.
+      do 390 k=2,istage
+         wgcus=wgcus+pwgcu(k)
+         wfcus=wfcus+pwfcu(k)
+  390    continue
+      if(istage .ne. 2) go to 400
+      wgcus = wgcus + pwgcu2(1)
+      wfcus = wfcus + pwfcu2(1)
+  400 continue
+      if(wgcus .le. 1.0e-16) wgcus=0.
+      if(wfcus .le. 1.0e-16) wfcus=0.
+      wfcoo=wgcus**2.*cwfco
+      wgcuo=wfcus**2.*cwgcu
+      wfctor=1.0
+      if(wfcoo .gt. wfcus) wfctor=0.0
+      wfcut=pwfcu(1)+(wfcus-wfcoo)*wfctor
+      wfcot=pwfco(istage)+wfcoo*wfctor
+      wfctor=1.0
+      if(wgcuo .gt. wgcus) wfctor=0.0
+      wgcot=pwgco(istage)+(wgcus-wgcuo)*wfctor
+      wgcut=pwgcu(1)+wgcuo*wfctor
+      xdown=wgcut/(wfcut+wgcut)
+      alpdow=xdown/(xdown+(1.-xdown)*rhog/rhof)
+      return
+      end

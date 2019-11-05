@@ -1,0 +1,219 @@
+*mlist
+*if def,selap
+       subroutine htrc3a (n,mhdpan,nbundl,tsurhp,frcbun)
+c
+c
+c  htrc3a calculate heat transfer from debris to coolant.
+c
+c  Cognizant engineer: ljs (gaj).
+*in32 lprop
+*in32end
+c
+c  Programmer:   G. A. Jayne            Feb., 1988
+c  Engineer:     L. J. Siefken
+c
+c       input -
+c         n      = debris region
+c      mhdpan=axial node that consists of cohesive debris with
+c             small amount of surface area in contact with coolant.
+c       nbundl=0=indicator that debris is from empty guide tube.
+c       frcbun=fraction of volume occupied by debris region n.
+c
+       implicit none
+*call comctl
+*call contrl
+*call fast
+*call scddat
+*call statec
+c
+c  Local variables.
+       integer it,l,m,mhdpan,n,nbundl,ndim,nex
+       real cl,csbpav,d,dotalp,dtvap,e,frcbun,gdum,hdeb,
+     & hfg,hsink,htcdeb,prop(36),qdo,qdomlt,qnchfc,qneqv,qneway,
+     & qnmax,qnold,qoldwy,re,reg,smax,tsurhp,velabs,
+     & vflod1,vflood,wrelax,qsdeb,qndbmx,qndbm2,csbpgu
+c
+c    prop is array in which state properties to and from steam table
+c    subroutines. values are in si units.
+c    prop(1)=temperature
+c    prop(2)=pressure
+c    prop(3)=specific volume
+c    prop(4)=specific internal energy
+c    prop(5)=specific enthalpy
+*call stcblk
+*call ufiles
+*call voldat
+*call debcom
+c
+       logical err
+c
+       qneqv = 0.0
+       qdo = 0.0
+       do 500 m = 1,nvoldb(n)
+         l = numdbv(m,n)
+c--assure proper steam tables are used
+         if (volmat(l).ne.nfluid)  call  stcset (volmat(l))
+         if(nbundl .eq. 0)then
+           qnchdb(m,n) = 0.0
+           qfgdeb(m,n) = 0.0
+           gmwdeb(m,n) = 0.0
+           nqndbl(m,n) = -1
+           tmpdeb(m,n) = tempg(l)
+           go to 500
+         endif
+         l = numdbv(m,n)
+         hfg = sathg(l) - sathf(l)
+         e = porvol(m,n)
+         d = ddbvol(m,n)
+c  cl = characteristic pore structure length = bet / alp,
+c  alp = 150.0*(((1.0-e)/d)**2)/e**3
+c  bet = 1.75*((1.0-e)/d)/e**3
+         cl = 0.0116667*d/(1.0 - e)
+c
+c  Calculate debris to coolant vapor heat transfer using equation 26 of
+c  report egg-cdd-5728.
+         reg = cl*rhog(l)*abs(velg(l))/viscg(l)
+c  Calculate debris to coolant liquid heat transfer using equation 23
+c  of report egg-cdd-5728.
+         dtvap = tmpdeb(m,n) - tempg(l)
+         if (voidg(l) .gt. 0.95) then
+c  Debris bed is in state of dryout.
+           csbpav = csubpg(l)
+           velabs = abs(velg(l))
+c  Get enthalpy as a function of p and debris temp.
+           prop(1) = tmpdeb(m,n)
+           prop(2) = p(l)
+           if (nfluid .eq. 1) then
+             call sth2x3 (fa(ndxstd),prop(1),it,err)
+           elseif (nfluid .eq. 2) then
+             call std2x3 (fa(ndxstd),prop(1),it,err)
+           else
+             call strtp (fa(ndxstd),prop(1),it,err)
+           endif
+           hdeb = prop(5)
+           if (err) then
+             write (output,902) volno(l),prop(1),prop(2),prop(5)
+  902  format (/'********* steam table error in htrc3a.',/,
+     #   'volume ',i9,' debris tmp=',1pe13.5,' pressure=',e13.5,
+     #   ' enthalpy=',e13.5)
+             fail = .true.
+           endif
+c  Get enthalpy as a function of p and sink temp.
+           prop(2) = p(l)
+           prop(1)=tempg(l)
+c  In hardpan region, heat transfer between coolant and cohesive
+c  debris is considered negligible.
+           if (nfluid .eq. 1) then
+             call sth2x3 (fa(ndxstd),prop,it,err)
+           elseif (nfluid .eq. 2) then
+             call std2x3 (fa(ndxstd),prop,it,err)
+           else
+             call strtp (fa(ndxstd),prop,it,err)
+           endif
+           hsink = prop(5)
+           if(err) then
+             write (output,903) volno(l),prop(1),prop(2),prop(5)
+  903  format (/'********* steam table error in htrc3a.',/,
+     #   'volume ',i9,' vapor tmp=',1pe13.5,' pressure=',e13.5,
+     #   ' enthalpy=',e13.5)
+             fail = .true.
+           endif
+           qnchdb(m,n) = frcbun*avol(l)*rhog(l)*velabs*(hdeb - hsink)
+c      Limit heat transfer to fluid to limit imposed by thermodynamics.
+           csbpgu=1./dtgdug(l)
+c      Limit based on fluid in volume.
+           qndbmx=csbpgu*v(l)*rhog(l)*(tmpdeb(m,n)-tempg(l))/dt
+c      Limit based on fluid flowing through volume.
+           qndbm2=csbpgu*avol(l)*abs(velg(l))*rhog(l)*(tmpdeb(m,n)-
+     #     tempg(l))
+           qndbmx=qndbmx+qndbm2
+           if(qnchdb(m,n).gt.qndbmx)qnchdb(m,n)=qndbmx
+           qfgdeb(m,n) = qnchdb(m,n)
+           gmwdeb(m,n) = 0.0
+           nqndbl(m,n) = 1
+       else if(tmpdeb(m,n).lt.(satt(l)+100.).or.(nqndbl(m,n).eq.
+     #(-1).and.tmpdeb(m,n).lt.(satt(l)+1000.)).or.voidg(l).lt.0.10)then
+c   ************  debris bed is in state of quench.
+        qnchdb(m,n) = powdbl(m,n) * voldeb(m,n)
+        if (m .eq. 1) then
+          qnchdb(m,n) = qnchdb(m,n) + qbtdeb(n) * aradeb(m,n)
+        end if
+c       add heat transfer to drive debris temperature to same
+c      temperature as coolant.
+       htcdeb=10000.
+       if(tmpdeb(m,n).ge.(satt(l)+50.))htcdeb=2000.
+       if(tmpdeb(m,n).ge.(satt(l)+100.))htcdeb=500.
+       qsdeb=0.0
+       if(tmpdeb(m,n).ge.satt(l))then
+       qsdeb=aovrdb(m,n)*voldeb(m,n)*htcdeb*(tmpdeb(m,n)-satt(l))
+       end if
+       qnchdb(m,n)=qnchdb(m,n)+qsdeb
+        qfgdeb(m,n) = 0.0
+         gmwdeb(m,n) = qnchdb(m,n)/(sathg(l)*v(l))
+       if(gmwdeb(m,n).lt.0.0)gmwdeb(m,n)=0.0
+        nqndbl(m,n) = -1
+      else
+c   ************  quenching is in progress.
+c       assume all water fluxing into volume is evaporated
+c       by hot debris.  add on steady state evaporation to model
+c       possible uncovering of debris bed in case flooding stops.
+        vflood=((voidgo(l)-voidg(l))/dt)*v(l)
+       vflod1=vflood/avol(l)
+        if(vflod1.lt.0.0)vflod1=0.0
+c     assume maximum possible rate of quenching is 0.1 m/s.
+        if(vflod1.gt.0.1)vflod1=0.1
+        vflood=vflod1*avol(l)
+c      store past time step value of heat transfer to coolant
+       qnold = qnchdb(m,n)
+       htcdeb=500.
+       qsdeb=aovrdb(m,n)*voldeb(m,n)*htcdeb*(tmpdeb(m,n)-satt(l))
+       if(qsdeb.lt.0.0)qsdeb=0.0
+       qnchdb(m,n) = vflood*rhof(l)*hfg +
+     & voidf(l)*powdbl(m,n)*voldeb(m,n)+qsdeb
+       qoldwy=qnchdb(m,n)
+c  Calculate volumetric vapor generation rate assuming that all
+c  thermal energy removed from debris at quench front.
+       dotalp=(voidgo(l)-voidg(l))/dt
+       if(dotalp.lt.0.0)dotalp=0.0
+c      assume maximum flooding rate of 0.1 m/s.
+       if ((dotalp*v(l)/avol(l)) .gt. 0.1) dotalp = 0.1*avol(l)/v(l)
+       qneway = dotalp*dbentn(m,n) + powdbl(m,n)*voldeb(m,n)+qsdeb
+       qnmax = 0.90*hyarf(l)*v(l)*hfg/dt
+       if (qneway .gt. qnmax) qneway = qnmax
+       qnchdb(m,n)=qneway
+c***   qnchdb(m,n)=min(qnchdb(m,n),1.e+9)
+c       qnchfc=experimentally determined ratio of rate of quenching
+c       in hardpan region to that of region with fragmented rods.
+       qnchfc = 1.0
+       if(m.eq.mhdpan)qnchdb(m,n)=qnchfc*qnchdb(m,n)
+c
+c     calculate dryout heat flux using lipinski 0-d correlation
+c     ndim=1=use 0-d correlation.
+       ndim=0
+c  gdum=inlet mass flux (not used).
+         gdum = 0.0
+c  nex = exponent in correlation.
+         nex = 5
+         re = e*(d/(1.0 - e))*(hyarg(l)*abs(velg(l))/viscg(l) +
+     &   hyarf(l)*abs(velf(l))/viscf(l))
+         call qdlmax(rhog(l),rhof(l),viscg(l),viscf(l),hfg,
+     &   e,d,gdum,re,ndim,nex,smax,qdo)
+         if (qdo .lt. 0.0) qdo = 0.0
+         qneqv = qnchdb(m,n)/aradeb(m,n)
+         qdomlt = 1.e+3
+         if (qneqv .gt. qdomlt*qdo) then
+         qnchdb(m,n) = qdomlt*qdo*aradeb(m,n)
+         endif
+c  Wrelax relaxation coefficient
+         wrelax = 0.1
+         qnchdb(m,n) = (1.0 - wrelax)*qnold + wrelax*qnchdb(m,n)
+         if (m. eq. mhdpan) qnchdb(m,n) = qnchfc*qnchdb(m,n)
+         gmwdeb(m,n) = qnchdb(m,n)/(sathg(l)*v(l))
+         dbqenn(m,n) = dbqenn(m,n) + qnchdb(m,n)
+         qfgdeb(m,n) = 0.0
+         nqndbl(m,n) = 0
+         endif
+  500  continue
+       return
+       end
+*endif

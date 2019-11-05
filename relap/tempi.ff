@@ -1,0 +1,201 @@
+*mlist
+       subroutine tempi(i)
+c  1) Set up the interfacial temperature iteration equation
+c     to solve for the interfacial temperature.
+c  2) Do all the partial derivatives related to the interfacial
+c     temperatures.
+c
+c  Cognizant engineer: rar.
+c
+c  Part 1 interfacial temperature iteration.
+c
+c  INPUT:	I	- 	volume index
+c		QUALA 	-	noncondensable mass fraction
+c		P	-	pressure
+c		Tf
+c		Tg
+c
+c  OUTPUT: 	Ti
+c
+c  Part II partial derivertives part.
+c
+c  OUTPUT: 	dtidp
+c		dtidug
+c		dtiduf
+c		dtidxn		
+c***************************************************************
+c
+c  Calling routine:
+c 			initialization: istate
+c			transient:	statep
+c  Routines called:
+c			function tempifc
+c			zbrent
+c
+c***************************************************************
+       implicit none
+       include 'fast.h'
+       include 'cmpdac.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'mxnfcd.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'trpblk.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'scrtch.h'
+c
+c  Local variables.
+       logical err
+       data err/.false./
+c
+       integer i,ier,iter,nsig,ivl,k,weidong
+       logical erx
+c
+       real advh2o,advx,dc,dcnst,hdl,hdt,molh2o,ta,tb,tempifc,
+     & reg,rmolg,sc,tol,wmolex,x,s(26),qualaa,sannu
+c
+       real dfdti,dfdtf,dfdtg,termf,termg,
+     &      dfdpi,dfdxn,dfdp,deltahi,dpsidti,
+     &      denume,deltah,prandl
+c
+       real mflux,kuf,kug,kum,func
+       real hd,omega,gamaf,gamag,pvblk,incnd,mstar,psati
+c
+       common /testa1/ hd,omega,gamaf,gamag,mstar,psati,ivl
+       common /testa2/ mflux,kuf,kug,kum,func,wmolex
+c
+       external tempifc
+c
+       data erx/.false./
+c***********************************************************************
+c
+c  Set a loop around the volume.
+c
+c***********************************************************************
+c
+       ivl = i
+c
+c  molh20 = mol.weight of water.
+c  advh2o = atomic diffusion volume of water, ref.gien in rnoncn.
+       data molh2o,advh2o /18.0, 12.7/
+c
+c  Calculate properties at tsat.
+       pvblk = pps(i)
+       rmolg = 8314.3
+       advx = 0.0
+       wmolex = 0.0
+       do k = 1,noncn
+         advx = advx + qualan(i+k-1)*advn(k)
+         wmolex = wmolex + qualan(i+k-1)*wmolea(k)
+       enddo
+c
+c  Mass diffusiity is calculated using eqn.11-4.1 in the
+c  properties of gases and liquid by reid,praudnitz,sherwood,
+c  third ed. mc-graw-hill book co.,1977.
+c
+c Mol.weight for air
+c      wmolex = 28.9
+       dcnst = (sqrt(1.0/molh2o + 1.0/wmolex))/
+     & ((advh2o**0.33333 + advx**0.33333)**2)
+       dc = 0.0101325*dcnst*tempg(i)**1.75/p(i)
+c
+c  Calculate reynolds number.
+       reg = rhog(i)*abs(velg(i))*diamv(i)/viscg(i)
+c
+c flow regime test for annular flow
+       if (floreg(i) .eq. 6) then
+c  For high flow - use Gilliland correlation.
+c  sc = schmidt number.
+         sc = viscg(i)/(rhog(i)*dc)
+         hdt = 0.023*(dc/diamv(i))*(reg**0.83)*(sc**0.44)
+c
+c  For laminar - use rohsenow - choi correlation.
+c  Heat and mass transfer analogy.
+         hdl = 4.0*dc/diamv(i)
+c
+c  Calculate max of laminar and turbulent values.
+         hd = max(hdt, hdl)
+       else
+c  Vertical stratified flow regime
+         prandl = csubpg(i)*viscg(i)/thcong(i)
+         sc = viscg(i)/(rhog(i)*dc)
+c  Apply the Reynolds analogy
+         hd =(rhog(i)*dc*hig(i)/thcong(i))*(sc/prandl)**0.25
+       endif
+c
+       if (quala(i) .ne. 0.0) then
+c	
+c  Set convergence criteria and bound values for zbrent.
+         incnd = 0
+         tol = 0.000005
+         nsig = 20
+         iter = 200
+         ta = tempf(i)
+         ta = 274.0
+         tb = max(tempf(i),tempg(i),satt(i),tsat(i))
+         call zbrent (tempifc,tol,nsig,ta,tb,iter,ier)
+c
+         x = tempifc(tb)
+	 ttempi(i) = tb
+c        extv19(i) = hig(i)
+c        extv18(i) = hif(i)
+c
+       else
+	 ttempi(i) = satt(i)
+       endif
+c  To obtain the properties for the interface gas
+       s(1) = ttempi(i)
+       s(9) = 1.0
+       call sth2x1(fa(ndxstd),s,err)
+c
+       psati = s(2)
+       deltahi = s(16) - s(15)
+c  extv01 is the valuble from eqfinl.F which is from bulk value to
+c  bulk value
+c      deltah = extv01(i)
+       deltah = 1000000.0
+       sannu = 80.0
+       qualaa = quala(i)
+c      extv15(i) = 1.0/((.62*psati/(p(ivl)-psati)+1))
+c      extv16(i) = 1.0/((.62*pps(i)/(p(ivl)-pps(i))+1))
+c
+cc To calculat the direvertives
+c      if (extv03(i) .eq. 0.0) then
+c        extv03(i) = 3.14*diamv(i)*dl(i)
+c      endif
+       if (floreg(i) .eq. 13) then
+         dfdti =(hig(i) + hif(i))*dl(i)
+         dfdtg = (-hig(i))*dl(i)
+         dfdtf = (-hif(i))*dl(i)
+       else
+         dfdti =(hig(i) + hif(i))/sannu
+         dfdtg = (-hig(i))/sannu
+         dfdtf = (-hif(i))/sannu
+       endif
+c  Note: the factor dl(i) and extv03(i) is to convert the volumatric
+c  value of heat transfer coefficients to non-volumatric
+       termg = hd*rhog(i)*deltah
+       dfdxn = hd*rhog(i)/quala(i)
+       termf = termg/max(0.000001,(0.62*psati/(p(i)-psati)+1.0))
+       dfdp = termf*(-0.62*psati/(p(i)-psati)**2.0)
+       dfdpi = termf*(0.62*p(i)/(p(i)-psati)**2.0)
+c Clapeyron's Equation
+       dpsidti=deltahi/(ttempi(i)*(s(12)-s(11)))
+c partial derivatives for interfacial temperature
+c
+       denume=dfdti+dfdpi*dpsidti
+       denume = max(0.00001,denume)
+       dtidp(i)=(dfdtf*dtfdp(i)+dfdtg*dtgdp(i)+dfdp)
+     & /denume
+       dtiduf(i)=(dfdtf*dtfduf(i))/denume
+       dtidug(i)=(dfdtg*dtgdug(i))/denume
+       dtidxn(i)=(dfdtg*dtgdxa(i)+dfdxn)/denume
+       i = i + ivskp
+       return
+       end

@@ -1,0 +1,415 @@
+*mlist
+*if def,selap
+       subroutine fpread
+c
+c  Processes fission product transport input data.
+c
+c  Cognizant engineer: ewc (esm).
+c
+*in32 fpint
+*in32 init
+*in32end
+c
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'fpfast.h'
+       include 'ufiles.h'
+c
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer fpint(1)
+       real fpreal(1)
+       equivalence (fpint(1),ia(1))
+       equivalence (fpreal(1),fa(1))
+       integer,parameter :: maxbin=20
+       integer,parameter :: maxsp=16 
+c  Maximum number of fission product systems to be input.
+       integer,parameter :: maxsys=100
+c  Maximum number of integers/reals to be read.
+c  Set maxnit = max (maxsys,maxsp,maxbin+3).
+       integer,parameter :: maxnit=maxsys
+       integer init(maxnit)
+       real xinit(maxnit)
+       equivalence (init(1),xinit(1))
+c  Relative and absolute error tolerances for fission product 
+c  differential equation solution.
+       real(kr), parameter :: rtol=1.0e-01, atol=1.0e-05
+c  Minimum and maximum particle diameters for aerosol bin model.
+       real ftbnid
+       integer inp9, lcontg
+       integer i34, iloc, iwrd, ksp, le, ll, lp, nbin, ne, next, nh,
+     & nline, nnn, nsp, nsys, nval, nvol, nwrds
+       logical rst,tfail,need,delete,debug
+       character c0, cb, spname*4
+c
+       integer l3a(8),l3b(9),l3c(8),l3d(9),l3e(8),l3f(10)
+c  Note: init and xinit must be at least max (l3x(4):x=a,b,c,d,e,f).
+       data l3a/20700000,       0,1,     2,0,1, 0,-1/
+       data l3b/20700001,20700005,0,maxsys,0,1, 2, 0, 0/
+       data l3c/20700010,       0,0,     2,0,1, 1, 1/
+       data l3d/20700011,20700018,1, maxsp,0,1, 2,-1,-1/
+       data l3e/       0,       0,0,     2,0,1, 0, 0/
+       data l3f/       0,       0,2,maxnit,0,1,-1, 2, 1, 1/
+       data c0 /'0'/, cb /' '/
+c
+c  Procsess input line 20700000, number of bins data value.
+       call inplnk (l3a(1),next,iloc,nval,fa(filndx(1)))
+       if (nval.eq.0 .and. (next.eq.-1 .or. next.gt.20799999)) return
+       write (output,"('0',45x,'Fission Product Transport Data')")
+       need = .false.
+       delete = .false.
+       debug = .false.
+c  Establish fileid.
+       ll = lcontg(1)
+       rst = filid(34) .ne. 0.0
+       if (.not.rst) then
+         filid(34) = ftbnid(1)
+         call ftbrsv (filid(34),ll,-1,filndx(34))
+       else
+         call ftbsft (filid(34),ll,2,filndx(34))
+       endif
+       i34 = filndx(34)
+       le = i34 + ll
+       if (rst .and. nval.eq.0) then
+         nsys = fpnsys(i34)
+         nbin = fpnbin(i34)
+         debug = fpdbgr(i34)
+         call fpinsp (fpsp(i34), fpnsp(i34), nsp)
+       else
+c  New problem with or without bin specification or restart problem
+c  with bin specification.
+c  Process input line 20700000, number of bins or delete flag.
+         call inp2(fa(filndx(1)),init,l3a)
+         nwrds = l3a(6)
+         if (nwrds.eq.0) then
+c  New problem, no bin specification.
+           fail = .true.
+           nbin = 1
+           write (output,"('0******** Missing line 20700000 on new probl
+     &em, default to number of bins on first initial conditions line.')"
+     & )
+         elseif (nwrds.lt.0) then
+c  New or restart problem with bad data value for nbin.
+           fail = .true.
+           if (next.eq.-1 .or. next.gt.20799999) then
+             nbin = 0
+             write (output,"('0******** Input line 20700000 is bad and n
+     &o other 207xxxxx data is entered; zero for delete of fission produ
+     &ct data is assumed.')")
+           else
+             nbin = 1
+             write (output,"('0******** Input line 20700000 is bad, will
+     & default to number of bins on first initial conditions line.')")
+           endif
+         else
+c  New or restart problem; legal value; check correct range.
+           nbin = init(1)
+           if (nwrds .gt. 1) debug = .true.
+           if (nbin.lt.0 .or. nbin.eq.1 .or. nbin.gt.maxbin) then
+             fail = .true.
+             nbin = 1
+             write (output,"('0******** Incorrect number of aerosol bins
+     & entered, will default to number of bins on first initial conditio
+     &ns line.')")
+           endif
+         endif
+         if (nbin .eq. 0) then
+           delete = .true.
+           if (rst) then
+             call ftbdel (-filid(34))
+             write (output,"('0Fission product calculation is deleted.')
+     &")
+           else
+             fail = .true.
+             write (output,"('0******** Attempt to delete a nonexistent
+     &fission product calculation.')")
+           endif
+           go to 100
+         else
+           write (output,"('0Number of aerosol bins is',i4,'.')") nbin
+           if (rst) then
+             rst = .false.
+             call ftbdel (-filid(34))
+             write (output,"('Fission product data from restart file bei
+     &ng discarded and new data being processed.')")
+           endif
+c  Set upper and lower limits for number of items on the initial
+c  conditions input lines.
+           l3f(3) = nbin + 3
+           if (nbin.eq.1) then
+             l3f(4) = maxbin + 3
+           else
+             l3f(4) = l3f(3)
+           endif
+         endif
+c  Set initial or default values for new problem.
+         nsp = 0
+         nsys = 0
+         filsiz(34) = 14 + maxsp
+         fpactv(i34) = .false.
+         fpdbgr(i34) = debug
+         fpnbin(i34) = nbin
+         fpnsp(i34) = nsp
+         fpnsys(i34) = nsys
+         fpsyso(i34) = filsiz(34)
+         fprtol(i34) = rtol
+         fpatol(i34) = atol
+       endif
+c
+c  Initialization of Aerosol bin model (call fpabin) has
+c  been moved to subroutine fpinit (krk 4/92).
+c
+c  Process input lines 20700001-20700005, hydrodynamic system selection.
+c  (For either NEW or RESTART problem.)
+c  Set offset for beginning of fission product input data;
+c  Set pointer to next available location in fission product RAM file.
+       fpinpo(i34) = filsiz(34)
+       lp = i34 + filsiz(34)
+       nvol = 0
+       call inp2 (fa(filndx(1)),init,l3b)
+       nwrds = l3b(6)
+       if (nwrds .gt. 0) then
+         write (output,"('0Volumes indicating hydrodynamic systems for f
+     &ission product transport:'/(10i12))") (init(iwrd),iwrd=1,nwrds)
+         tfail = .false.
+c  Count number of valid volumes.
+c  If volume number < 0 then delete FP system in initfp.
+c  If volume number > 0 then add FP system in initfp.
+         nvol = nwrds
+         do iwrd = 1,nwrds
+           if (init(iwrd).eq.0 .or. abs(init(iwrd)).ge.1000000000) then
+             init(iwrd) = 0
+             nvol = nvol - 1
+             tfail = .true.
+           endif
+         enddo
+         if (tfail) then
+           fail = .true.
+           write (output,"('******** One or more of above volumes number
+     &s out of range.')")
+         endif
+         if (nvol.gt.0) then
+c  Write flag word, number of volumes, and copy volume list to temporary
+c  storage.
+           if (lp +2 + nvol .le. le) then
+             fpint(lp) = 0
+             fpint(lp+1) = nvol
+             lp = lp + 2
+             do iwrd = 1,nwrds
+               if (init(iwrd).ne.0) then
+                 fpint(lp) = init(iwrd)
+                 lp = lp + 1
+               endif
+             enddo
+           else
+             lp = lp + 2 + nvol
+             need = .true.
+           endif
+         endif
+       endif
+       if (nsys.eq.0 .and. nvol.eq.0) then
+         fail = .true.
+         delete = .true.
+         write (output,"('0******** Fission product model being initiali
+     &zed, but no hydrodynamic systems specified.')")
+       endif
+c
+c  Process input line 20700010, convergence criteria.
+c  On restart, allow only to reduce criteria.
+       call inp2 (fa(filndx(1)),xinit,l3c)
+       nwrds = l3c(6)
+       if (nwrds.gt.0) then
+         if (nwrds.lt.2) then
+           fail = .true.
+           xinit(2) = atol
+           write (output,"('0******** Insufficient number of words enter
+     &ed on input line 20700010, default used.')")
+         endif
+         write (output,"('0Convergence criteria are:',2es17.6)")
+     &   xinit(1), xinit(2)
+         fprtol(i34) = xinit(1)
+         fpatol(i34) = xinit(2)
+c  Allow pure relative or pure absolute convergence criteria, i.e.
+c  either may be zero, but not both may not be zero. Neither may be
+c  negative.
+         if (xinit(1).lt.0.0 .or. xinit(2).lt.0.0 .or.
+     &   xinit(1).eq.0.0 .and. xinit(2).eq.0.0) then
+           fail = .true.
+           write (output,"('0******** Illegal convergence numbers entere
+     &d on input line 20700010.')")
+         endif
+       endif
+c
+c  Process input lines 20700011-2070018, species selection.
+       call inp2 (fa(filndx(1)),xinit,l3d)
+       nwrds = l3d(6)
+       if (nwrds .gt. 0) then
+         if (.not.rst) then
+           write (output,"('0Fission product species tracked are:'/
+     & (8a12))") (xinit(iwrd),iwrd=1,nwrds)
+           call fpinsp (xinit, nwrds, nsp)
+           fpnsp(i34) = nsp
+           fpvolk(i34) = 2 + nsp*(nbin+4)
+           if (nsp .eq. nwrds) then
+             do iwrd = 1,nsp
+               fpsp(i34+iwrd-1) = xinit(iwrd)
+             enddo
+           else
+             fail = .true.
+             write (output,"('0******** Incorrect fission product specie
+     &s symbol entered.')")
+           endif
+           if (nsp .eq. 0) then
+             fail = .true.
+             write (output,"('0******** No fission product species speci
+     &fied.')")
+           endif
+         else
+           fail = .true.
+           write (output,"('0******** Species selection not allowed on r
+     &estart.')")
+         endif
+       endif
+c
+c  Processs input lines 2070nnn0, initial conditions control.
+       nnn = 2
+   40  continue
+c  Set input line number, last line in series, and series number.
+       l3e(1) = 20700000 + 10*nnn
+       ne = l3e(1) + 9
+       nh = ne/10
+       call inplnk (l3e(1),next,iloc,nval,fa(filndx(1)))
+       tfail = .false.
+       if (nval.eq.0) then
+         if (next.eq.-1 .or. next.gt.ne) go to 90
+         tfail = .true.
+         write (output,"('0******** Input line',i8,' missing but other l
+     &ines in',i7,' series entered.')") l3e(1),nh
+       else
+         l3e(6) = 1
+         call inp2 (fa(filndx(1)),init,l3e)
+         nwrds = l3e(6)
+         if (nwrds.le.0) then
+           tfail = .true.
+         else
+           if (nwrds .eq. 1) init(2) = init(1)
+           write (output,"('0Volume initial condition range is:',
+     &     2i10)") init(1),init(2)
+           if (init(1).le.0 .or. init(1).ge.1000000000 .or.
+     &     init(2).le.0 .or. init(2).ge.1000000000 .or.
+     &     init(2).lt.init(1)) then
+             write (output,"('0******** Illegal volume range.')")
+           endif
+         endif
+       endif
+       if (tfail) then
+c  Allow more data to be processed.
+         fail = .true.
+         init(1) = 0
+         init(2) = 0
+       endif
+       if (lp + 3 .le. le) then
+c  Write flag word and volume range to temporary storage.
+         fpint(lp) = 1
+         fpint(lp+1) = init(1)
+         fpint(lp+2) = init(2)
+         lp = lp + 3
+       else
+         lp = lp + 3
+         need = .true.
+       endif
+c
+c  Process input lines 2070nnnm, initial conditions.
+       nline = 0
+       do
+         if (next.eq.-1 .or. next.gt.ne) exit
+         l3f(1) = next
+         call inplnk (l3f(1),next,iloc,nval,fa(filndx(1)))
+         l3f(6) = 1
+         call inp2 (fa(filndx(1)),xinit,l3f)
+         nwrds = l3f(6)
+         if (nwrds .gt. 0) then
+           nline = nline + 1
+           write (output,"(' Species, liquid, vapor, and aerosol bins:'/
+     &     a10,7es17.6/(45x,5es17.6))")
+     &     xinit(1),(xinit(iwrd),iwrd=2,nwrds)
+           if (nline.eq.1 .and. nbin.eq.1) then
+             nbin = nwrds - 3
+             fpnbin(i34) = nbin
+             l3f(3) = nbin + 3
+             l3f(4) = l3f(4)
+           endif
+c  Check name against list of available species.
+           write (spname,"(a4)") xinit(1)
+           call fpspix (spname, ksp)
+           if (ksp .eq. 0) then
+             fail = .true.
+             write (output,"('0******** Fission product species incorrec
+     &t on line:',i8)") l3f(1)
+           endif
+           iwrd = 2
+           do
+             if (iwrd .gt. nwrds) exit
+             if (xinit(iwrd) .ge. 0.0) then
+               fpactv(i34) = fpactv(i34) .or. (xinit(iwrd).gt.0.0)
+               iwrd = iwrd + 1
+               cycle
+             else
+               fail = .true.
+               write (output,"('0******** Liquid, vapor, or aerosol bin 
+     &initial data has negative quantities on line',i8,'.')") l3f(1)
+             endif
+             exit
+           enddo
+           if (nsp .gt. 0) then
+c  Write flag word and species initial data to temporary storage.
+             if (lp + 1 + nwrds .le. le) then
+               fpint(lp) = 2
+               lp = lp + 1
+               do iwrd = 1,nwrds
+                 fpreal(lp) = xinit(iwrd)
+                 lp = lp + 1
+               enddo
+             else
+               lp = lp + 1 + nwrds
+               need = .true.
+             endif
+           endif
+         endif
+       enddo
+       if (nline .eq. 0) then
+         fail = .true.
+         write (output,"('0******** Input line',i8,' entered but no corr
+     &esponding',i7,' m lines.')") l3e(1),nh
+       endif
+   90  continue
+       if (next.ne.-1) then
+         nnn = (next-20700000)/10
+         if (nnn.lt.1000) go to 40
+       endif
+  100  continue
+       if (need) then
+         fail = .true.
+         delete = .true.
+         write (output,"('0******** Insufficient space to process fissio
+     &n product data;',i8,' additional words needed.')") lp-le
+       endif
+       if (delete) then
+c  Delete file from memory.
+         call ftbdel (filid(34))
+         filid(34) = 0.0
+         filsiz(34) = 0
+         filndx(34) = 0
+       else
+c  Reserve disk file; copy file from memory to disk; delete file from
+c  memory.
+         filsiz(34) = lp - i34
+         call ftbsft(filid(34),filsiz(34),2,filndx(34))
+       endif
+c  Delete data which has been processed.
+       filsiz(1) = inp9(fa(filndx(1)))
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+       return
+       end
+*endif

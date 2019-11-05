@@ -1,0 +1,587 @@
+*mlist
+       subroutine phantvd
+$if def,makemap
+!
+!  Cognizant engineer: gam, vam, smitsg
+!
+       use invtbl
+       use lpdatc
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'makmap.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'tsctlc.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+      integer NODOS
+c      number nested do loops in this driver
+      parameter(NODOS=8)
+      integer jjj, nfix(NODOS), check
+      character*80 titl(9)
+      integer iivol, iij1, iij2, iiii, i, ix
+      integer ii1, ii2, ii3, ii4, ii5, ii6, ii7, ii8
+      integer idie, zlabel
+      integer mm
+      real xstrt(NODOS), xstop(NODOS), xdelta(NODOS)
+      real xout, yout, zout, zmin, zmax
+      real voidgtemp
+      real tsubvar, hfsubc, hgsatc
+      logical found
+c
+      integer jj,nn
+      integer ist, npts(2)
+      real strstp(2,2)
+      character*15 labels(2),names(NODOS)
+      character*40 labelz, znames(24)
+      data check /1/
+      data zmin /1.0e+30/, zmax /-1.0e+30/
+      data names /'pres P (MPa)',
+     &            'voidg \a_g',
+     &            'uf U_f (J/kg)',
+     &            'ug U_g (J/kg)',
+     &            'quala X_n',
+     &            'velf v_f (m/s)',
+     &            'velg v_g (m/s)',
+     &            'T_f-T_s_a_t (K)'/
+      data znames /'extv01', 'extv02', 'extv03', 'extv04', 'extv05',
+     &             'extv06', 'extv07', 'extv08', 'extv09', 'extv10',
+     &             'extv11', 'extv12', 'extv13', 'extv14', 'extv15',
+     &             'extv16', 'extv17', 'extv18', 'extv19', 'extv20',
+     &             'h_i_f (W/m^3-K)',
+     &             'h_i_g (W/m^3-K)',
+     &             'floreg',
+     &             'log10 h_i_f'/
+c
+      open (unit = 36,file='pvmap.inp',status='old')
+c
+      found = .false.
+      iiii = lpdat(issys)%liv
+c loop over volumes
+      do 5 mm = 1, lpdat(issys)%livn
+c
+        if (volno(iiii) .eq. target) then
+          found = .true.
+          iivol = iiii
+$if def,extv20
+c  initialize the extra variables
+          extv01(iivol) = 0.0
+          extv02(iivol) = 0.0
+          extv03(iivol) = 0.0
+          extv04(iivol) = 0.0
+          extv05(iivol) = 0.0
+          extv06(iivol) = 0.0
+          extv07(iivol) = 0.0
+          extv08(iivol) = 0.0
+          extv09(iivol) = 0.0
+          extv10(iivol) = 0.0
+          extv11(iivol) = 0.0
+          extv12(iivol) = 0.0
+          extv13(iivol) = 0.0
+          extv14(iivol) = 0.0
+          extv15(iivol) = 0.0
+          extv16(iivol) = 0.0
+          extv17(iivol) = 0.0
+          extv18(iivol) = 0.0
+          extv19(iivol) = 0.0
+          extv20(iivol) = 0.0
+$endif
+c
+c  Use the junctions on either side of the target volume in the pipe.
+          iij1 = invvnx(invfnd(iivol))
+          iij2 = invvnx(invfnd(iivol)+1)
+c  Print out the initial values.
+          print *,'ncount    ',ncount     ,' timehy    ',timehy
+          print *,'targ vol  ',target     ,' index     ',iivol
+          print *,'junct in  ',junno(iij1),' junct out ',junno(iij2)
+          print *,'pressure  ',p(iivol)
+          print *,'voidg     ',voidg(iivol)
+          print *,'uf        ',uf(iivol)
+          print *,'ug        ',ug(iivol)
+          print *,'quala     ',quala(iivol)
+          print *,'tempf     ',tempf(iivol)
+          print *,'tempg     ',tempg(iivol)
+          print *,'satt      ',satt(iivol)
+          print *,'tsatt     ',tsatt(iivol)
+          print *,'tempf-satt',(hvmix(iivol)-sathf(iivol))/csubpf(iivol)
+          print *,'hif       ',hif(iivol)
+          print *,'hig       ',hig(iivol)
+          print *,'velf      ',velf(iivol)
+          print *,'velg      ',velg(iivol)
+        endif
+c
+        iiii = iiii + ivskp
+c
+   5  continue
+c
+      if (found) then
+c
+      do 15 jjj = 1,8
+c
+         read(36,*) nfix(jjj)
+         read(36,*) xstrt(jjj)
+         read(36,*) xstop(jjj)
+c
+   15 continue
+c
+      read(36,*) zlabel
+      read(36,*) idie
+      close(36)
+c
+c  get the labels and limits for the plot
+c  the first variable goes with the y-axis and second goes with x-axis
+      ist = 0
+      do 16 i = 1, 8
+        if (nfix(i) .gt. 1) then
+          ist = ist + 1
+          labels(ist) = names(i)
+          strstp(1,ist) = xstrt(i)
+          strstp(2,ist) = xstop(i)
+          npts(ist) = nfix(i)
+        elseif (nfix(i) .lt. 1) then
+c             cases for negative number of points
+          ist = ist + 1
+          labels(ist) = names(i)
+          if (i .eq. 1) then
+            strstp(1,ist) = max(0.0,xstrt(i)*p(iivol))
+            strstp(2,ist) = xstop(i)*p(iivol)
+            xstrt(i) = strstp(1,ist)
+            xstop(i) = strstp(2,ist)
+c  convert pressure to MPa
+            strstp(1,ist) = strstp(1,ist)
+            strstp(2,ist) = xstop(i)*p(iivol)
+          elseif (i .eq. 2) then
+            strstp(1,ist) = max(0.0,xstrt(i)*voidg(iivol))
+            strstp(2,ist) = min(1.0,xstop(i)*voidg(iivol))
+            xstrt(i) = strstp(1,ist)
+            xstop(i) = strstp(2,ist)
+          elseif (i .eq. 3) then
+            strstp(1,ist) = max(0.0,xstrt(i)*uf(iivol))
+            strstp(2,ist) = xstop(i)*uf(iivol)
+            xstrt(i) = strstp(1,ist)
+            xstop(i) = strstp(2,ist)
+          elseif (i .eq. 4) then
+            strstp(1,ist) = max(0.0,xstrt(i)*ug(iivol))
+            strstp(2,ist) = xstop(i)*ug(iivol)
+            xstrt(i) = strstp(1,ist)
+            xstop(i) = strstp(2,ist)
+          elseif (i .eq. 5) then
+            strstp(1,ist) = max(0.0,xstrt(i)*quala(iivol))
+            strstp(2,ist) = min(1.0,xstop(i)*quala(iivol))
+            xstrt(i) = strstp(1,ist)
+            xstop(i) = strstp(2,ist)
+          elseif (i .eq. 6) then
+            strstp(1,ist) = xstrt(i)*velf(iivol)
+            strstp(2,ist) = xstop(i)*velf(iivol)
+            xstrt(i) = strstp(1,ist)
+            xstop(i) = strstp(2,ist)
+          elseif (i .eq. 7) then
+            strstp(1,ist) = xstrt(i)*velg(iivol)
+            strstp(2,ist) = xstop(i)*velg(iivol)
+            xstrt(i) = strstp(1,ist)
+            xstop(i) = strstp(2,ist)
+          elseif (i .eq. 8) then
+            strstp(1,ist) = xstrt(i)
+     &                    * (hvmix(iivol)-sathf(iivol))/csubpf(iivol)
+            strstp(2,ist) = xstop(i)
+     &                    * (hvmix(iivol)-sathf(iivol))/csubpf(iivol)
+            xstrt(i) = strstp(1,ist)
+            xstop(i) = strstp(2,ist)
+          endif
+          nfix(i) = abs(nfix(i))
+          npts(ist) = nfix(i)
+        endif
+  16  continue
+      labelz = znames(zlabel)
+c
+      open (unit = 36,file='map.dat',status='unknown')
+c  write out axis label, min, max values and z axis label
+        write(36,*) labels(2)
+        write(36,*) strstp(1,2)
+        write(36,*) strstp(2,2)
+        write(36,*) npts(2)
+        write(36,*) labels(1)
+        write(36,*) strstp(1,1)
+        write(36,*) strstp(2,1)
+        write(36,*) npts(1)
+c
+      if (nfix(1) .gt. 1) then
+         xdelta(1) = (xstop(1)-xstrt(1))/float(nfix(1)-1)
+         p(iivol) = xstrt(1) - xdelta(1)
+         po(iivol) = p(iivol)
+      else
+         xdelta(1) = 0.0
+      endif
+c
+      do 80 ii1 = 1,nfix(1)
+c
+         p(iivol) = p(iivol) + xdelta(1)
+         po(iivol) = p(iivol)
+c
+         if (nfix(2) .gt. 1) then
+            xdelta(2) = (xstop(2)-xstrt(2))/float(nfix(2)-1)
+            voidg(iivol) = xstrt(2) - xdelta(2)
+            voidf(iivol) = 1.0 - voidg(iivol)
+            voidgo(iivol) = voidg(iivol)
+         else
+            xdelta(2) = 0.0
+         endif
+c
+         do 70 ii2 = 1,nfix(2)
+c
+            voidg(iivol) = voidg(iivol) + xdelta(2)
+            voidf(iivol) = 1.0 - voidg(iivol)
+            voidgo(iivol) = voidg(iivol)
+c
+            if (nfix(3) .gt. 1) then
+               xdelta(3) = (xstop(3)-xstrt(3))/float(nfix(3)-1)
+               uf(iivol) = xstrt(3) - xdelta(3)
+               ufo(iivol) = uf(iivol)
+            else
+               xdelta(3) = 0.0
+            endif
+c
+            do 60 ii3 = 1,nfix(3)
+c
+               uf(iivol) = uf(iivol) + xdelta(3)
+               ufo(iivol) = uf(iivol)
+c
+               if (nfix(4) .gt. 1) then
+                  xdelta(4) = (xstop(4)-xstrt(4))/float(nfix(4)-1)
+                  ug(iivol) = xstrt(4) - xdelta(4)
+                  ugo(iivol) = ug(iivol)
+               else
+                  xdelta(4) = 0.0
+               endif
+c
+               do 50 ii4 = 1,nfix(4)
+c
+                  ug(iivol) = ug(iivol) + xdelta(4)
+                  ugo(iivol) = ug(iivol)
+c
+                  if (nfix(5) .gt. 1) then
+                     xdelta(5) =
+     &                 (xstop(5)-xstrt(5))/float(nfix(5)-1)
+                     quala(iivol) = xstrt(5) - xdelta(5)
+                     qualao(iivol) = quala(iivol)
+                  else
+                     xdelta(5) = 0.0
+                  endif
+c
+                  do 40 ii5 = 1,nfix(5)
+c
+                     quala(iivol) = quala(iivol) + xdelta(5)
+                     qualao(iivol) = quala(iivol)
+c
+c  reset qualan and qualno in case the problem was not initialized
+c  with air in the volume
+c
+                      nn = iivol
+                      do 41 jj = 1,noncn
+                        qualan(nn) = qn(jj)
+                        qualno(nn) = qn(jj)
+                        nn = nn + 1
+   41                 continue
+c
+                     if (nfix(6) .gt. 1) then
+                        xdelta(6) =
+     &                    (xstop(6)-xstrt(6))/float(nfix(6)-1)
+                        velf(iivol) = xstrt(6) - xdelta(6)
+                     else
+                        xdelta(6) = 0.0
+                     endif
+c
+                     do 30 ii6 = 1,nfix(6)
+c
+                        velf(iivol) = velf(iivol) + xdelta(6)
+c
+                        if (nfix(7) .gt. 1) then
+                           xdelta(7) =
+     &                       (xstop(7)-xstrt(7))/float(nfix(7)-1)
+                           velg(iivol) = xstrt(7) - xdelta(7)
+                        else
+                           xdelta(7) = 0.0
+                        endif
+c
+                        do 20 ii7 = 1,nfix(7)
+c
+                           velg(iivol) = velg(iivol) + xdelta(7)
+c
+                           if (nfix(8) .gt. 1) then
+                              xdelta(8) =
+     &                           (xstop(8)-xstrt(8))/float(nfix(8)-1)
+                              tsubvar = xstrt(8) - xdelta(8)
+                           else
+                              xdelta(8) = 0.0
+                           endif
+c
+                           do 10 ii8 = 1, nfix(8)
+c
+                             voidgtemp = voidg(iivol)
+                             call statep(check)
+c
+                             tsubvar = tsubvar + xdelta(8)
+                             hfsubc = sathf(iivol) + csubpf(iivol)
+     &                           *tsubvar
+                             hgsatc  = sathg(iivol)
+                             uf(iivol) = hfsubc - p(iivol)/rhof(iivol)
+                             ufo(iivol) = uf(iivol)
+                             ug(iivol) = hgsatc - p(iivol)/rhog(iivol)
+                             ugo(iivol) = ug(iivol)
+c
+c  call statep to get new volume thermodynamic properties in case
+c  we changed pressure, internal energies, void fraction, or
+c  non condensable quality
+                             call statep(check)
+c
+                             voidg(iivol) = voidgtemp
+c
+                             call phantv
+c
+                             if (nfix(1) .gt. 1) then
+c                                 convert to MPa for plots
+                                xout = p(iivol)*1.0e-6
+                                if (nfix(2) .gt. 1) then
+                                   yout = voidg(iivol)
+                                elseif (nfix(3) .gt. 1) then
+                                   yout = uf(iivol)
+                                elseif (nfix(4) .gt. 1) then
+                                   yout = ug(iivol)
+                                elseif (nfix(5) .gt. 1) then
+                                   yout = quala(iivol)
+                                elseif (nfix(6) .gt. 1) then
+                                   yout = velf(iivol)
+                                elseif (nfix(7) .gt. 1) then
+                                   yout = velg(iivol)
+                                else
+                                   yout = tsubvar
+                                endif
+                             elseif (nfix(2) .gt. 1) then
+                                xout = voidg(iivol)
+                                if (nfix(3) .gt. 1) then
+                                   yout = uf(iivol)
+                                elseif (nfix(4) .gt. 1) then
+                                   yout = ug(iivol)
+                                elseif (nfix(5) .gt. 1) then
+                                   yout = quala(iivol)
+                                elseif (nfix(6) .gt. 1) then
+                                   yout = velf(iivol)
+                                elseif (nfix(7) .gt. 1) then
+                                   yout = velg(iivol)
+                                else
+                                   yout = tsubvar
+                                endif
+                             elseif (nfix(3) .gt. 1) then
+                                xout = uf(iivol)
+                                if (nfix(4) .gt. 1) then
+                                   yout = ug(iivol)
+                                elseif (nfix(5) .gt. 1) then
+                                   yout = quala(iivol)
+                                elseif (nfix(6) .gt. 1) then
+                                   yout = velf(iivol)
+                                elseif (nfix(7) .gt. 1) then
+                                   yout = velg(iivol)
+                                else
+                                   yout = tsubvar
+                                endif
+                             elseif (nfix(4) .gt. 1) then
+                                xout = ug(iivol)
+                                if (nfix(5) .gt. 1) then
+                                   yout = quala(iivol)
+                                elseif (nfix(6) .gt. 1) then
+                                   yout = velf(iivol)
+                                elseif (nfix(7) .gt. 1) then
+                                   yout = velg(iivol)
+                                else
+                                   yout = tsubvar
+                                endif
+                             elseif (nfix(5) .gt. 1) then
+                                xout = quala(iivol)
+                                if (nfix(6) .gt. 1) then
+                                   yout = velf(iivol)
+                                elseif (nfix(7) .gt. 1) then
+                                   yout = velg(iivol)
+                                else
+                                   yout = tsubvar
+                                endif
+                             elseif (nfix(6) .gt. 1) then
+                                xout = velf(iivol)
+                                if (nfix(7) .gt. 1) then
+                                   yout = velg(iivol)
+                                else
+                                   yout = tsubvar
+                                endif
+                             elseif (nfix(7) .gt. 1) then
+                                xout = velf(iivol)
+                                yout = velg(iivol)
+                             else
+                                xout = voidg(iivol)
+                                yout = tsubvar
+                             endif
+c
+                             if (zlabel .eq. 1) then
+                                zout = extv01(iivol)
+                             elseif (zlabel .eq. 2) then
+                                zout = extv02(iivol)
+                             elseif (zlabel .eq. 3) then
+                                zout = extv03(iivol)
+                             elseif (zlabel .eq. 4) then
+                                zout = extv04(iivol)
+                             elseif (zlabel .eq. 5) then
+                                zout = extv05(iivol)
+                             elseif (zlabel .eq. 6) then
+                                zout = extv06(iivol)
+                             elseif (zlabel .eq. 7) then
+                                zout = extv07(iivol)
+                             elseif (zlabel .eq. 8) then
+                                zout = extv08(iivol)
+                             elseif (zlabel .eq. 9) then
+                                zout = extv09(iivol)
+                             elseif (zlabel .eq. 10) then
+                                zout = extv10(iivol)
+                             elseif (zlabel .eq. 11) then
+                                zout = extv11(iivol)
+                             elseif (zlabel .eq. 12) then
+                                zout = extv12(iivol)
+                             elseif (zlabel .eq. 13) then
+                                zout = extv13(iivol)
+                             elseif (zlabel .eq. 14) then
+                                zout = extv14(iivol)
+                             elseif (zlabel .eq. 15) then
+                                zout = extv15(iivol)
+                             elseif (zlabel .eq. 16) then
+                                zout = extv16(iivol)
+                             elseif (zlabel .eq. 17) then
+                                zout = extv17(iivol)
+                             elseif (zlabel .eq. 18) then
+                                zout = extv18(iivol)
+                             elseif (zlabel .eq. 19) then
+                                zout = extv19(iivol)
+                             elseif (zlabel .eq. 20) then
+                                zout = extv20(iivol)
+                             elseif (zlabel .eq. 21) then
+                                zout = hif(iivol)
+                             elseif (zlabel .eq. 22) then
+                                zout = hig(iivol)
+                             elseif (zlabel .eq. 23) then
+                                zout = floreg(iivol)
+                             elseif (zlabel .eq. 24) then
+                                zout = log10(hif(iivol))
+                             endif
+                             write(36,*) zout
+                             zmax = max(zmax,zout)
+                             zmin = min(zmin,zout)
+c
+   10                        continue
+   20                   continue
+   30                continue
+   40             continue
+   50          continue
+   60       continue
+   70    continue
+   80 continue
+c
+         ix = vctrls(iivol)
+c
+         titl(1) = ''
+         titl(2) = ''
+         titl(3) = ''
+         titl(4) = ''
+         titl(5) = ''
+         titl(6) = ''
+         titl(7) = ''
+         titl(8) = ''
+         titl(9) = ''
+c
+c
+c  write out z axis label, min, and max values
+         write(36,*) labelz
+         write(36,*) zmin
+         write(36,*) zmax
+c
+c  this do loop does titl(1) and titl(2)
+         ist = 0
+         do i=1,8
+           if (nfix(i) .gt. 1) then
+             ist = ist + 1
+             write(titl(ist),798)
+     &          'Axis',ist,' start=',xstrt(i),
+     &          ', delta=',xdelta(i),
+     &          ', stop=',xstop(i)
+  798        format(a,i2,a,g12.3,a,g12.6,a,g12.3)
+             write(36,'(a80)') titl(ist)
+           endif
+         enddo
+c
+         write(titl(3),803)
+     &       'ncount: ',targcn,
+     &       ', volno: ',target,
+     &       ', zmin: ',zmin,
+     &       ', zmax: ',zmax
+  803    format(a,i5,a,i9,a,g10.4,a,g10.4)
+         write(36,'(a80)') titl(3)
+c
+         write(titl(4),804)
+     &       'Stop data for hif:',hif(iivol),
+     &       ', hig:',hig(iivol),
+     &       ', hgf:',hgf(iivol)
+  804    format(1p,3(a,g9.3))
+         write(36,'(a80)') titl(4)
+c
+         write(titl(5),805)
+     &       'trmm:',trmm(ix),
+     &       ', tf:',tempf(iivol),
+     &       ', tg:',tempg(iivol),
+     &       ', satt:',satt(iivol)
+  805    format(1p,4(a,g9.3))
+         write(36,'(a80)') titl(5)
+c
+         write(titl(6),806)
+     &       'dtsf:',dtsf(ix),
+     &       ', rvcrit:',rvcrit(ix),
+     &       ', dtsg: ',dtsg(ix),
+     &       ', xliqh: ',xliqh(ix)
+  806    format(1p,4(a,g9.3))
+         write(36,'(a80)') titl(6)
+c
+         write(titl(7),807)
+     &       'flomap: ',flomap(ix),
+     &       ', fstrt: ',fstrt(iivol),
+     &       ', pfinrg: ',pfinrg(ix),
+     &       ', voidg: ',voidg(iivol)
+  807    format(1p,4(a,g9.3))
+         write(36,'(a80)') titl(7)
+c
+         write(titl(8),808)
+     &       'fwalf: ',fwalf(iivol),
+     &       ', fwalg: ',fwalg(iivol),
+     &       ', quala: ',quala(iivol),
+     &       ', quale: ',quale(iivol)
+  808    format(1p,4(a,g9.3))
+         write(36,'(a80)') titl(8)
+c
+         write(titl(9),809)
+     &       'velf: ',velf(iivol),
+     &       ', velg: ',velg(iivol),
+     &       ', hfg:',hfg(ix)
+  809    format(1p,3(a,g9.3))
+         write(36,'(a80)') titl(9)
+c
+         if (idie .eq. 1) then
+            done = -7
+         endif
+c
+         endif
+         close(36)
+c
+  999  continue
+$endif
+       return
+       end

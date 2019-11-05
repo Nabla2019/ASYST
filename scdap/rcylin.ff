@@ -1,0 +1,402 @@
+*mlist
+*if def,selap
+       subroutine rcylin
+c
+c  Cognizant engineer: ewc.
+c
+c  Processess input data for the control rod component.
+c
+c  Cognizant engineer: ewc.
+c
+*in32 idat
+*in32 igeom
+*in32end
+       use scdmod
+       implicit none
+c
+       include 'scddat.h'
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'ndxara.h'
+       include 'scdout.h'
+       include 'scdcom.h'
+       include 'tblsp.h'
+       include 'ufiles.h'
+       include 'fpnonv.h'
+       include 'debcom.h'
+       include 'miscon.h'
+      integer knt,k1,knt2,knt3,i,inode,l31,l32,last
+      real rdat, botzon,xgeom,conv
+      integer idat(80),iscr(792)
+      integer l1(8),l3(9),l3a(6),l3b(ndrd+1),l4(3),l4a(8),
+     # l5(5),l7(7),l8(8),l5a(6+ndrd)
+      dimension rdat(80),xgeom(ndax,5)
+      integer inext,nstart,ndata
+      integer igeom(3,ndax)
+      logical errck1, errck2, errck3, errck4
+      equivalence (idat(1),rdat(1))
+c power table variables
+      real timp(50), timpp(50), ptim(50), pptim(50)
+      integer nptim, npptim
+!mpf -b
+! l(1,2)= first,last card number
+! l(3,4)= minimum, maximmum number of items to be processed
+! l(5)= number of words to be skipped between items, usually 0
+! l(6)= number of words
+! l(7)= array defining integer=0, real=1 or character=-1 format.
+      integer l0(7)
+      real(8) ctyp
+      character(8) btyp
+      data l0/5*0,1,-1/
+!mpf -e
+      data l1/0,0,2,2,0,1,0,1/
+      data l3/0,0,3,3,0,1,0,0,0/
+      data l3a/ndax,1,1,1,1,0/
+      data l3b/ndax,ndrd*1/
+      data l4a/0,0,2,2,0,1,0,0/
+      data l4/0,0,0/
+      data l5/ndax,0,0,0,0/
+      data l5a/0,0,2,ndrd,0,1,ndrd*1/
+      data l7/0,0,1,1,0,1,1/
+      data l8/0,0,2,2,0,1,1,1/
+!mpf -b
+c 40cc0001
+c type of control rod.
+      l0(1)= scd1(icomp)%cmpno*10000 + 40000001
+      call inp2(fa(filndx(1)),ctyp,l0)
+      crm(icomp) = -1
+      if (l0(6) .eq. 0) then
+        write (output,"('Control rod uses default sic model')")
+        crm(icomp) = 0
+      else
+        write (btyp,'(a8)') ctyp
+        if (ctyp .eq. 'sic') then
+          crm(icomp) = 0
+          write (output,"(' 0Control rod uses default ',a4,' model')") 
+     & btyp
+        elseif (ctyp .eq. 'b4c') then
+          crm(icomp) = 1
+          write (output,"(' 0Control rod uses ',a4,' model')") btyp
+        else
+          fail = .true.
+          write (output,2100) btyp,l0(1)
+        endif
+      endif
+!mpf -e
+c 4ccc0100
+c Number of control rods in this component
+      l1(1)= scd1(icomp)%cmpno*10000 + 40000100
+      l1(2)=0
+      l1(3)=2
+      l1(4)=2
+      l1(5)=0
+      l1(6)= 1
+      call inp2(fa(filndx(1)),rdat,l1)
+      if(l1(6).eq.0)then
+        write(output,2001) l1(1)
+        fail=.true.
+        return
+      else
+        nsigl(icomp)=idat(1)
+        if(nsigl(icomp).lt.0)then
+          write(output,2040)l1(1)
+          fail=.true.
+        endif
+        pitch(icomp)=rdat(2)
+        if(.not.uniti)pitch(icomp)=rdat(2)*0.3048
+        if(pitch(icomp).lt.0.0)then
+          write(output,2040)l1(1)
+          fail=.true.
+        endif
+        write(output,3001) '0Number of control rods ',nsigl(icomp)
+        write(output,3000) ' Pitch of control rods ',pitch(icomp)
+      endif
+c 4ccc0300 - Control Rod Materials
+      l3(1)=scd1(icomp)%cmpno*10000 + 40000300
+      call inplnk(l3(1),inext,nstart,ndata,fa(filndx(1)))
+      if(ndata.eq.0)then
+c Curently for a control rod number and material layers are fixed
+        nmater2( 1,icomp ) = 4
+        imatr3( 1,1,icomp ) = 20
+        imatr3( 2,1,icomp ) = 18
+        imatr3( 3,1,icomp ) = 9
+        imatr3( 4,1,icomp ) = 1
+      else
+        call inp2(fa(filndx(1)),rdat,l3)
+        if(l3(6).le.0)then
+          fail=.true.
+c set benign defaults
+          nmater2( 1,icomp ) = 4
+          imatr3( 1,1,icomp ) = 20
+          imatr3( 2,1,icomp ) = 18
+          imatr3( 3,1,icomp ) = 9
+          imatr3( 4,1,icomp ) = 1
+        else
+          nmater2( 1,icomp ) = l3(6)
+          imatr3( 1,1,icomp ) = idat(1)
+          imatr3( 2,1,icomp ) = idat(2)
+          imatr3( 3,1,icomp ) = 9
+          imatr3( 4,1,icomp ) = idat(3)
+        endif
+      endif
+c 4ccc0301-99 - Control Rod geometry
+      l31=  scd1(icomp)%cmpno*10000 + 40000301
+      l32=  -l31 - 98
+      knt=1
+      call inp5(l31,l32,1,4,0,naz,-ndax,1,1,knt,
+     +  fa(filndx(1)),xgeom,l3a,iscr,792)
+      if(knt.le.0)then
+        fail=.true.
+        write(output,2001) l31
+        return
+      else
+        do 100 knt=1,naz
+        riss2(knt,icomp)=xgeom(knt,1)
+        rpel2(knt,icomp)=xgeom(knt,2)
+        rci2(knt,icomp)=xgeom(knt,3)
+        rco2(knt,icomp)=xgeom(knt,4)
+        if(.not.uniti)then
+          riss2(knt,icomp)=riss2(knt,icomp)*0.3048
+          rpel2(knt,icomp)=rpel2(knt,icomp)*0.3048
+          rci2(knt,icomp)=rci2(knt,icomp)*0.3048
+          rco2(knt,icomp)=rco2(knt,icomp)*0.3048
+        endif
+        if(riss2(knt,icomp).le.0.0 .or. riss2(knt,icomp).ge.
+     +     rpel2(knt,icomp))then
+           fail=.true.
+           write(output,2050)'radius of absorber',l31,-l32
+        endif
+        if(rpel2(knt,icomp).le.riss2(knt,icomp) .or.
+     +     rpel2(knt,icomp).gt.rci2(knt,icomp))then
+           fail=.true.
+           write(output,2050)'outer radius stainless steel',l31,-l32
+        endif
+        if(rci2(knt,icomp).lt.rpel2(knt,icomp) .or.
+     +     rci2(knt,icomp).ge.rco2(knt,icomp))then
+           fail=.true.
+           write(output,2050)'inner radius of zircaloy',l31,-l32
+        endif
+        if(rco2(knt,icomp).le.rci2(knt,icomp) .or.
+     +     rco2(knt,icomp).ge.(pitch(icomp)/2.0))then
+           fail=.true.
+           write(output,2050)'outer radius of zircaloy',l31,-l32
+        endif
+  100   continue
+      endif
+c 4ccc0400 hydraulic connections
+      call rhvol
+      write(output,'(1h )')
+      write(output,'(24x,6hRadius)')
+      write(output,'(6x,43(1h-))')
+      write(output,3040)'Absorber','Sheath','Inner Zr','Outer Zr',
+     #        'Boundary'
+ 3040 format(6x,a8,5x,a6,4x,a8,3x,a8,4x,a8)
+      if(unito)then
+        write(output,3050)'m ','m ','m ','m ','Volume'
+        conv=1.
+      else
+        write(output,3050)'ft','ft','ft','ft','Volume'
+        conv=1./0.3048
+      endif
+ 3050 format(1x,4hNode,4(5x,a2,4x),4x,a6)
+      do 110 knt=1,naz
+  110 write(output,3060)knt,riss2(knt,icomp)*conv,
+     # rpel2(knt,icomp)*conv,rci2(knt,icomp)*conv,
+     # rco2(knt,icomp)*conv,nvhyd(icomp,knt)
+ 3060 format(2x,i2,1x,1p,4(e10.4,1x),i10)
+c 4ccc0501-99 Radial mesh spacing
+      l5a(1)=40000000+scd1(icomp)%cmpno*10000+501
+      l5a(2)=-l5a(1)-98
+      call inplnk(l5a(1),inext,nstart,ndata,fa(filndx(1)))
+      if (ndata .le. 0) then
+        write(output,2090)-ndata,l5a(1)
+        fail=.true.
+        goto 312
+      elseif(ndata.eq.0)then
+        last=40000000+scd1(icomp)%cmpno*10000+599
+        if(inext.gt.last)then
+          fail=.true.
+          write(output,2001) l5a(1)
+          goto 312
+        else
+          l5a(1)=inext
+          call inplnk(l5a(1),inext,nstart,ndata,fa(filndx(1)))
+        endif
+      endif
+      if(ndata.le.2)then
+        fail=.true.
+        write(output,2020)l5a(1),l5a(1)
+        goto 312
+      endif
+      do 404 knt=1,ndrd
+      l3b(knt+1)=1
+  404 l5a(6+knt)=1
+      l5a(6+ndata)=0
+      call inpmod(fa(filndx(1)),l5a,nstart,ndata,knt,0)
+      if (knt .eq.-1)then
+        do 403 knt=7,ndrd+6
+  403   l5a(knt)=0
+        call inpmod(fa(filndx(1)),l5a,nstart,ndata,knt,0)
+      elseif(knt.lt.0)then
+        call inp7(l5a(1),-knt)
+        fail=.true.
+        goto 312
+      endif
+c radial nodalization specified by mesh point
+      if(l5a(8).eq.1)then
+        nrods2(1,icomp)=ndata-1
+        l3b(ndata+1)=0
+        knt=1
+        call inp5(l5a(1),l5a(2),1,nrods2(1,icomp),0,naz,
+     #            ndrd,1,1,knt,
+     #            fa(filndx(1)),xcond3(1,1,icomp),l3b,iscr,792)
+        if(knt.le.0)then
+          fail=.true.
+          goto 312
+        endif
+        do 409 inode=1,naz
+        if(.not.uniti)then
+          do 407 k1=1,nrods2(1,icomp)
+  407     xcond3(k1,inode,icomp)=xcond3(k1,inode,icomp)*0.3048
+        endif
+        nrods2(inode,icomp)=nrods2(1,icomp)
+        call rnodes(xcond3(1,inode,icomp),rpel2(inode,icomp),
+     #    rci2(inode,icomp),nrcond2(inode,icomp),nrcldi2(inode,icomp),
+     #    nrods2(inode,icomp))
+  409   continue
+      else
+c radial nodalization specified by number of intervals
+        knt=1
+        call inp5(l5a(1),l5a(2),1,3,0,naz,3,1,1,knt,
+     +   fa(filndx(1)),igeom,l5,iscr,792)
+        if(knt.le.0)then
+          fail=.true.
+          write(output,2001) l5a(1)
+        else
+          do 310 knt=1,naz
+          botzon=0.0
+          if (knt.ne.1) then
+            knt2=knt-1
+            do 250 k1=1,knt2
+  250       botzon=botzon+dzcnd2(k1,icomp)
+          endif
+          nrcon1((icomp-1)*ndax+knt)=1
+          nrcond2(knt,icomp)=igeom(1,knt)+1
+          nrcldi2(knt,icomp)=nrcond2(knt,icomp)+igeom(2,knt)
+          nrods2(knt,icomp)=nrcldi2(knt,icomp)+igeom(3,knt)
+          if (igeom(1,knt) .gt. 1) then
+            knt2=igeom(1,knt)
+            do 300 k1=1,knt2
+  300       xcond3(k1,knt,icomp)=rpel2(knt,icomp)/igeom(1,knt)*(k1-1)
+          endif
+          xcond3(igeom(1,knt)+1,knt,icomp)=rpel2(knt,icomp)
+          if (igeom(2,knt) .gt. 1) then
+            k1=igeom(1,knt)+2
+            knt2=igeom(1,knt)+igeom(2,knt)
+            do 305 knt3=k1,knt2
+  305       xcond3(knt3,knt,icomp)=
+     +     (rci2(knt,icomp)-rpel2(knt,icomp))/igeom(2,knt)*(knt3-k1+1)
+          endif
+          xcond3(igeom(1,knt)+igeom(2,knt)+1,knt,icomp)=rci2(knt,icomp)
+          if (igeom(3,knt) .gt. 1) then
+            k1=igeom(1,knt)+igeom(2,knt)+2
+            knt2=igeom(1,knt)+igeom(2,knt)+igeom(3,knt)
+            do 307 knt3=k1,knt2
+  307       xcond3(knt3,knt,icomp)=
+     +       (rco2(knt,icomp)-rci2(knt,icomp))/igeom(3,knt)*(knt3-k1-1)
+          endif
+  310     xcond3(igeom(1,knt)+igeom(2,knt)+igeom(3,knt)+1,knt,icomp)=
+     +      rco2(knt,icomp)
+        endif
+      endif
+      write(output,'(a)') '0Ax Node  Radial Node'
+      write(output,'(5x,99(2x,i10))') (i,i=1,nrods2(1,icomp))
+      do 311 knt=1,naz
+  311   write(output,'(i5,99(2x,e10.4))')
+     #    knt,(xcond3(k1,knt,icomp),k1=1,nrods2(knt,icomp))
+      goto 315
+  312 write(output,2030)
+      return
+  315 continue
+c  error checking
+      do 360 inode=1,naz
+        errck1=.true.
+        errck2=.true.
+        errck3=.true.
+        errck4=.true.
+        if(xcond3(1,inode,icomp).ne.0.0)then
+          fail=.true.
+          write(output,2060)'first radial node not = 0.0',l31,-l32
+        endif
+       do 350 knt=2,nrods2(inode,icomp)
+         if(xcond3(knt,inode,icomp).eq.riss2(inode,icomp))errck1=.false.
+         if(xcond3(knt,inode,icomp).eq.rpel2(inode,icomp))errck2=.false.
+         if(xcond3(knt,inode,icomp).eq.rci2(inode,icomp))errck3=.false.
+         if(xcond3(knt,inode,icomp).eq.rco2(inode,icomp))errck4=.false.
+  350  continue
+       if(errck1.or.errck2.or.errck3.or.errck4)then
+         fail=.true.
+         write(output,2060)'radial node and material layer inconsistent'
+     #         ,l31,-l32
+         goto 365
+       endif
+  360 continue
+  365 continue
+c 4ccc0601-99 Initial Temperature
+      call rtemp(2033.)
+c 4ccc0700 Internal Gas Pressure
+      l7(1)=scd1(icomp)%cmpno*10000+40000700
+      l7(6)=1
+      call inp2(fa(filndx(1)),rdat,l7)
+      if(l7(6) .eq. 0) then
+        fail=.true.
+        write(output,2001) l7(6)
+      else
+       pgas(icomp)=rdat(1)
+       if(pgas(icomp).lt.0.0)then
+         write(output,2070)' ,internal gas pressure,',l7(1)
+         fail=.true.
+       endif
+      endif
+      write(output,'(a,e10.4)') ' Internal Gas ',pgas(icomp)
+c 4ccc0800 Mass of Silver
+      l8(1)=scd1(icomp)%cmpno*10000+40000800
+      l8(6)=1
+      call inp2(fa(filndx(1)),rdat,l8)
+      if(l8(6) .eq. 0) then
+        fail=.true.
+        write(output,2001) l8(6)
+      else
+c fpstt is recalculated in icylin
+        fpstt(icomp,1,1)=rdat(1)
+        if(fpstt(icomp,1,1).lt.0.0)then
+          write(output,2070)' ,mass of tin,',l8(1)
+          fail=.true.
+        endif
+        fpstt(icomp,1,2)=rdat(2)
+        if(fpstt(icomp,1,1).lt.0.0)then
+          write(output,2070)' ,mass of silver,',l8(2)
+          fail=.true.
+        endif
+      endif
+c    calculate power information
+      call rpower(nptim,npptim,ptim,pptim,timp,timpp)
+      call ipower(nptim,npptim,ptim,pptim,timp,timpp)
+      return
+ 2001 format ('0******** Card ',i8,' is missing.')
+ 2020 format ('0******** Incorrect Data on cards ',i8,' to ',i8)
+ 2030 format ('0******** Unable to continue processing component.')
+ 2040 format('0******** Card(s) ',i9,' negative value input')
+ 2050 format('0******** Range error, ',a,' cards ',i9,' - ',i9)
+ 2060 format('0******** Error, ',a,' cards ',i9,' - ',i9)
+ 2070 format('0******** Range error, ',a,' end card ',i9)
+ 2080 format('0******** Range error, ',a,' component ',i3)
+ 2090 format('0******** illegal format on word',i3,' of card ',i8)
+ 2100 format('0******** Control rod model ',a4, 'in card ',i8,' is illeg
+     &al.')
+ 3000 format (1x,a,e10.4)
+ 3001 format (1x,a,i5)
+ 3020 format (t5,'Axial node',i3,' bounded by volume ',i9)
+      end
+*endif

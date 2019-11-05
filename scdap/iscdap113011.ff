@@ -1,0 +1,1863 @@
+*mlist
+       subroutine iscdap
+!  Initialize scdap data.
+!
+!  Cognizant engineer: ljs.
+!
+       use gentblc
+       use invtbl
+       use scdmod
+       implicit none
+       include 'fast.h'
+       include 'cpmdat.h'
+       include 'alcm.h'
+       include 'iparm.h'
+       include 'coupl.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'convarc.h'
+       include 'scddat.h'
+       include 'fecom.h'
+       include 'fpnonv.h'
+       include 'bconds.h'
+       include 'buntim.h'
+       include 'cons.h'
+       include 'cora.h'
+       include 'dbacct.h'
+       include 'effprp.h'
+       include 'fpfast.h'
+       include 'htrcom.h'
+       include 'intcom.h'
+       include 'matdat.h'
+       include 'miscon.h'
+       include 'plndat.h'
+       include 'ndxara.h'
+       include 'radata.h'
+       include 'rgacct.h'
+       include 'scdcom.h'
+       include 'scdout.h'
+       include 'statec.h'
+       include 'tblsp.h'
+       include 'thplot.h'
+       include 'trnot1.h'
+       include 'trnot2.h'
+       include 'ufiles.h'
+       include 'slumpv.h'
+       include 'rupt.h'
+       include 'voldat.h'
+       include 'jundat.h'
+       include 'blageo.h'
+       include 'nrcom.h'
+       include 'hardpn.h'
+       include 'uphdpn.h'
+       include 'debcom.h'
+       include 'scdpow.h'
+       include 'scntl.h'
+       include 'oxairv.h'
+       include 'oxsrv2.h'
+!
+!  Local variables.
+       integer jx
+       integer i,i1,i34,ib,icm,icm1,icm2,icm3,icm4,id,idebug,idxjun,
+     & ijshr2,iknt,il,il1,il2,inc,indxjn,ir5vol,
+     & irodch(ndcomp),is,iswfp,isys,isys1,isysk,isysn,
+     & ive,ivol,ivol1,ivolk,ivoln,j,j1,jb,jbb,jj,jjdyn1,jjdyn2,jk,k,k1,
+     & k2,kdyn,kk,l,l1,m,n,ncnd,ncnd2,nfstrt,nfwide,ng1,nj,
+     & nn,nnn,nsides
+       logical lphlp
+!  This logical variable is defined to test new coding. It will be set
+!  to newrst and used in the new tests introduced. These will later be
+!  set to newrst.
+       logical newrstn
+       real ang1,avfunc,cden,cghg,flg,flg1,hcoef1,pcl(ndax*ndcomp),
+     & ratio,rhozr,slbp,treftm,v1loc,wt(ndcomp),wtpm
+       real rmshi,rmsho,romat1
+       integer nsw
+       integer mshmat(ndrd)
+       integer idmvol
+       integer im
+       real fnro
+       real t0,t1,ro0
+       integer nmxgap,matgs1,nn1,nn2,nngap,kx
+       integer ndbg
+       character itype*8
+       character :: matyptbl(3)*20=(/'specific heat','density',
+     & 'thermal conductivity'/)
+!
+       ndbg = 0
+       newrstn = newrst
+cljs store values of primary material in each mesh for all components
+cljs if a new problem, begin block of coding setting values of
+cljs mshmt3 array.
+       if(.not.scntrl(7))then
+       do icomp=1,ncomp  
+         do inaz=1,naz 
+cljs Store in local array mshmat(i) the index identifying the first
+cljs material (beginning with inner radius of mesh) in mesh i.
+cljs  romat1 = outer radius of first material layer at axial node
+       romat1 = radmt3(2,inaz,icomp)
+         do i = 1, numelm2(inaz,icomp)
+         mshmat(i) = 0
+           if(i.eq.1)then
+           mshmat(i) = imatr3(1,inaz,icomp)
+           else     
+           rmshi = xcond3(i,inaz,icomp)
+           rmsho = xcond3(i+1,inaz,icomp)
+             if(rmsho.le.(romat1+1.e-8).or.
+     &       nmater2(inaz,icomp).eq.1)then
+             mshmat(i) = imatr3(1,inaz,icomp)
+             elseif(i.eq.numelm2(inaz,icomp))then
+cljs  outer mesh always assumed to have oxide layer but primary
+cljs  material is metal
+             mshmat(i) = imatr3(nmater2(inaz,icomp),inaz,icomp)
+             else
+               nsw = 0
+               do n = 2,nmater2(inaz,icomp)
+                 if(nsw.eq.0)then
+                   if(rmsho.le.(radmt3(n+1,inaz,icomp)+1.e-8).and.
+     &             rmshi.ge.(radmt3(n,inaz,icomp)-1.e-8))then
+                   mshmat(i) = imatr3(n,inaz,icomp)
+                   nsw = 1
+                   end if
+                 end if
+               end do
+             end if
+           end if
+         end do
+cljs  store material indices for each radial mesh for printout
+           do i =1,numelm2(inaz,icomp)
+           mshmt3(i,inaz,icomp) = mshmat(i)
+           end do
+         end do
+       end do
+cljs  end of block of coding for setting values of mshmt3 array for
+cljs  identify outer most radial mesh with heater material for
+cljs  simulator rods.
+      do icomp=1,ncomp
+        if(idcomp(icomp).eq.6)then
+          do k=1,naz
+          nsimot(k,icomp) = 1
+            do i=1,numelm2(k,icomp)
+            im = mshmt3(i,k,icomp)
+              if(im.eq.4 .or. im.eq.21 .or. im.eq.22
+     &        .or. im.eq.23 .or. im.eq.24 .or. im.eq.25)then
+              nsimot(k,icomp) = i
+              end if
+            end do
+          end do
+        end if
+      end do
+cljs  case of new problem.
+      end if
+!  Define heated length for natural convection for RELAP5.
+       htlenc = zcond2(naz,1) + 0.5*dzcnd2(naz,1)
+!  Bwr blade/box radial spreading error checking.
+       if (newrstn) then
+         do j = 1,ncomp
+           if (idcomp(j).ne.8) cycle
+!  Radial spreading from segment 1.
+           lp1: do jk = 1,numfs(1,j)
+             do i = 1,ncomp
+               if (cmpfs(1,jk,j) .eq. scd1(i)%cmpno) then
+!  Redefine cmpfs from user-defined to internal SCDAP component number.
+                 cmpfs(1,jk,j) = i
+!  Make sure cmpfs refers to fuel or simulator rod components.
+                 if (idcomp(cmpfs(1,jk,j)).ne.0 .and.
+     &           idcomp(cmpfs(1,jk,j)).ne.6) then
+                   fail = .true.
+                   write (output,9000) scd1(j)%cmpno
+                 endif
+                 cycle lp1
+               endif
+             enddo
+             fail = .true.
+             write (output,9000) scd1(j)%cmpno
+ 9000  format ('0******** Error - Only fuel or simulator rod components 
+     &can receive molten material from BWR blade/box component',i4,'.')
+           enddo lp1
+!  Radial spreading from segment 2.
+           lp2: do jk = 1,numfs(2,j)
+             do i = 1,ncomp
+               if (cmpfs(2,jk,j) .eq. scd1(i)%cmpno) then
+!  Redefine cmpfs from user-defined to internal SCDAP component number.
+                 cmpfs(2,jk,j) = i
+!  Make sure cmpfs refers to fuel or simulator rod components.
+                 if (idcomp(cmpfs(2,jk,j)).ne.0 .and.
+     &           idcomp(cmpfs(2,jk,j)).ne.6) then
+                   fail = .true.
+                   write (output,9000) scd1(j)%cmpno
+                 endif
+                 cycle lp2
+               endif
+             enddo
+             fail = .true.
+             write (output,9000) scd1(j)%cmpno
+           enddo lp2
+         enddo
+       endif
+!  Check user specified materials references to general table and set up
+!  indexes to the table.
+       do j = 1,imax
+         if (umgntno(1,j) .le. 0) cycle
+         if (j .le. 4) then
+           is = j + 8
+         else
+           is = j + 45
+         endif
+         do i = 1,3
+           lphlp = .false.
+           do jk = 1,ngtbls
+             if (umgntno(i,j) .eq. gtnum(jk)) then
+               lphlp = .true.
+               exit
+             endif
+           enddo
+           if (.not.lphlp) then
+             fail = .true.
+             write (output,"('0******** User material',i3,' for 'a,
+     & ' refers to general table',i4,' which does not exits.')")
+     &       is,trim(matyptbl(i)),gtnum(jk)
+             umgntno(i,j) = 0
+             jk = 0
+           else
+             if (gen(jk)%gttyp .eq. 0) then
+               fail = .true.
+               umgntno(i,j) = 0
+               jk = 0
+             elseif (gen(jk)%gttyp .ne. i + 7) then
+               fail = .true.
+               write (output,"('0******** User material',i3,' for 'a,
+     & ' refers to general table',i4,' which is not the right type of ta
+     &ble.')")  is,trim(matyptbl(i)),gtnum(jk)
+             endif
+             umgntni(i,j) = jk
+           endif
+         enddo
+       enddo
+!  Radiation enclosure error checking.
+       if (newrstn) then
+         do j = 1,ncomp
+           if (idcomp(j) .eq. 8) then
+             if (nraden(j) .eq. 0) then
+               write (output,9010) scd1(j)%cmpno
+ 9010  format ('0******** Error, a radiation enclosure must be defined f
+     &or fuel bundle side of component',i4,'.')
+               fail = .true.
+             endif
+             if (nraden(j) .le. 1) then
+               write (output,9020) scd1(j)%cmpno
+ 9020  format ('0******** Error, a dummy radiation enclosure must be def
+     &ined for interstitial side of component',i4'.')
+               fail = .true.
+             endif
+           endif
+         enddo
+       endif
+!  Initialize these debris variables. For mod1 these will be placed in
+!  the debris initialization routine debint.
+       if (newrstn) then
+         ndbris = 0
+         do k = 1,ndax
+           fishr(k)  = 0.0
+         enddo
+         do k = 1,ndax
+           do j = 1,ncomp
+             efstr0(k,j) = 0.0
+             icohpp(k,j) = 0
+             rathsa(k,j) = 1.0
+           enddo
+         enddo
+       endif
+!
+!  Store initial fuel radius of each fuel rod component and initial
+!  cladding radius of each control rod component.
+       if (newrstn) then
+         do j = 1,ncomp
+           kdyn = (j - 1)*ndax + 1
+           if (idcomp(j) .eq. 0) then
+             rpel00(j) = rpel(kdyn)
+           else
+             if (idcomp(j) .eq. 1) then
+               rpel00(j) = riss(kdyn)
+             else
+               rpel00(j) = 0.0
+             endif
+           endif
+         enddo
+         ifshrd = 0
+       endif
+!
+!  Set flag which will bypass *debris* model in *tranh* until scdap
+!  debris behavior models have been called.
+       if (newrstn) then
+         crucb = 0.0
+         icrcb2 = 0
+!c       if (newrst) nsqslp = 0
+         nsqslp = 0
+         gamslp = 0.0
+       endif
+!
+       if (noncn .eq. 0) then
+         write (output,9030)
+ 9030  format ('0******** Non-condensible gases including hydrogen must 
+     &be entered on card 110 when using the scdap option.')
+         fail = .true.
+       else
+         lphlp = .true.
+         do n = 1,noncn
+           write (itype,'(a8)') nctype(n)
+           if (itype .eq. 'hydrogen') then
+             lphlp = .false.
+             exit
+           endif
+         enddo
+         if (lphlp) then
+           write (output,9040)
+ 9040  format ('0******** One of the non-condensible gases must be hydro
+     &gen when the scdap option is used.')
+           fail = .true.
+         endif
+       endif
+       if (nonmf .ne. 0) then
+         lphlp = .true.
+         do n = 1,nonmf
+           if (itype .eq. 'o2') then
+             lphlp = .false.
+             exit
+           endif
+         enddo
+         if (lphlp) then
+           write (output,9050)
+ 9050  format ('0******** One of the molten metal material must be o2 wh
+     &en the scdap option is used.')
+           fail = .true.
+         endif
+       endif
+!  Check scdap reference to oxide shattering trip.
+       if (trpfal .gt. 0) call itrscn (40000100,trpfal,icode)
+!  Clear storage.
+       if (newrst) then
+         fpstr(1:ndcomp,1:ndax,1:3) = 0.0
+         ncnd = ndcomp*ndax
+         ncnd2 = 2*ncnd
+         nvad(1:ncnd2) = 0
+         lbypss(1:nbypss)=0
+         nx = ndax
+         qot = 0.0
+         qoc = 0.0
+         qor = 0.0
+         qos = 0.0
+         qon = 0.0
+         qoo = 0.0
+         qoe = 0.0
+         qst = 0.0
+         qst0 = 0.0
+         qpr = 0.0
+         do j = 1,ncomp
+           qsdt(j) = 0.0
+           qndt(j) = 0.0
+           qodt(j) = 0.0
+           qedt(j) = 0.0
+           qstor(j) = 0.0
+           qstor0(j) = 0.0
+           icoht(j) = 0
+           icohb(j) = 0
+           do k = 1,ndax
+             dri(k,j) = 0.0
+             dro(k,j) = 0.0
+             timlti(k,j) = 0.0
+             timlto(k,j) = 0.0
+             timltf(k,j) = 0.0
+             iempty(k,j) = 0
+           enddo
+         enddo
+!  Initialize blockage and unblockage indicators.
+         do k = 1,ndax
+           do j = 1,ndcomp
+             frcmcl(j,k) = 0.0
+             nplblk(j,k) = 0
+             nbublk(j,k) = 0
+             nunblk(j,k) = 0
+             nunbl2(j,k) = 0
+           enddo
+         enddo
+       endif
+!  Check scdap references to hydrodynamic volumes.
+       if (filid(4) .ne. 0.0) then
+         if (filid(34) .ne. 0.0) then
+           i34 = filndx(34)
+           isysk = fpsysk(i34)
+           ivolk = fpvolk(i34)
+           isys1 = i34 + fpsyso(i34)
+           isysn = isys1 + (fpnsys(i34)-1)*isysk
+         endif
+         iv = filndx(4)
+         ive = iv + nvols(iv)*ivskp - 1
+         do j = 1,ncomp
+!  Check SCDAP component six references to tables or cntrlvars.
+           if (idcomp(j).eq.6) then
+             do iknt = 1,2
+               if (scd1(j)%ibndtb(iknt) .gt. 0) then
+                 if (ngtbls .eq. 0) then
+                   write (output,9060) scd1(j)%ibndtb(iknt),j
+ 9060  format ('0******** General table',i4,' specified for Scdap compon
+     &ent',i3,', but no general tables are entered.')
+                   fail = .true.
+                 else
+                   lphlp = .true.
+                   do k = 1,ngtbls
+                     if (scd1(j)%ibndtb(iknt) .eq. gtnum(k)) then
+                       nbtcof(iknt,j) = k
+                       lphlp = .false.
+                       exit
+                     endif
+                   enddo
+                   if (lphlp) then
+                     write (output,9070) scd1(j)%ibndtb(iknt)
+ 9070  format ('0******** Table reference to non-existent table number',
+     & i4,'.')
+                     fail = .true.
+                   endif
+                 endif
+               elseif (scd1(j)%ibndtb(iknt) .lt. 0) then
+                 if (filid(27) .eq. 0.0) then
+                   write (output,9080) -scd1(j)%ibndtb(iknt),j
+ 9080  format ('0******** Control variable',i4,' specified for SCDAP com
+     &ponent',i3,', but no control variables are entered.')
+                   fail = .true.
+                 else
+                   lphlp = .true.
+                   jx = filndx(27)
+                   do k = 1,cnvnum(jx)
+                     if (-scd1(j)%ibndtb(iknt) .eq. cnvpnm(jx)) then
+                       nbtcof(iknt,j) = jx - filndx(27)
+                       lphlp = .false.
+                       exit
+                     endif
+                     jx = jx + cnvlen(jx)
+                   enddo
+                   if (lphlp) then
+                     write (output,9090) scd1(j)%ibndtb(iknt)
+ 9090  format ('0******** SCDAP refers to control variable',i4,
+     & ', which is not defined.')
+                     fail = .true.
+                   endif
+                 endif
+               endif
+             enddo
+           endif
+           if ((idcomp(j).eq.2 .and. islbot(j).eq.0) .or.
+     &     idcomp(j).eq.4 .or. idcomp(j).eq.5 .or. idcomp(j).eq.7 .or.
+     &     idcomp(j).eq.8) then
+             nsides = 2
+           else
+             nsides = 1
+           endif
+           do is = 1,nsides
+             if (is .eq. 1) then
+               jb = j
+             else
+               jb = ndcomp + nsout(j)
+             endif
+             do k = 1,naz
+               nvhydf(jb,k) = nvhyd(jb,k)
+               lphlp = .true.
+               do i = iv,ive,ivskp
+                 if (nvhyd(jb,k) .eq. volno(i)) then
+                   lphlp = .false.
+                   exit
+                 endif
+               enddo
+               if (lphlp) then
+                 write (output,9100) j,k,nvhyd(jb,k)
+ 9100  format ('0******** Scdap component',i3,', axial level',i3,
+     & ' references a non-existent hydrodynamic volume,',i9,'.')
+                 fail = .true.
+                 exit
+               endif
+               nvad((jb-1)*ndax+k) = i - iv
+               if (filid(34) .ne. 0.0) then
+                 lphlp = .true.
+                 lp4: do isys = isys1,isysn,isysk
+                   ivol1 = i34 + fpvolo(isys)
+                   ivoln = ivol1 + (fpnvol(isys)-1)*ivolk
+                   do ivol = ivol1,ivoln,ivolk
+                     if (nvhydf(jb,k) .eq. fpvoln(ivol)) then
+                       nvhydf(jb,k) = ivol - i34
+                       lphlp = .false.
+                       exit lp4
+                     endif
+                   enddo
+                 enddo lp4
+                 if (lphlp) then
+                   fail = .true.
+                   write (output,9110) j,k
+ 9110  format ('0******** Scdap component',i3,', axial level',i3,
+     & 'references a volume not involved in fission product transport.')
+                   nvhydf(jb,k) = 0
+                 endif
+               endif
+             enddo
+           enddo
+         enddo
+!  Set up array that contains indexes (offsets) for relap5 hydro
+!  volumes, that are also relap5 fission product volumes, adjacent
+!  to convective nodes in couble debris bed. Added subroutine
+!  fprsw to check that convective node is adjacent to a fission
+!  product debris node.
+         do mcp = 1, maxcpm
+           if (icoup(mcp) .le. 0) cycle
+!  Get the iparm and parm arrays for Couple mesh mcp.
+           call gpcoup (1)
+           if (nspdeb .gt. 0) then
+             lp5: do k = 1,ncevr5
+               call fprsw (k, a(i8), a(i40), numel, iswfp)
+               if (iswfp .eq. 0) cycle
+               ir5vol = iafp(ir5pt + k - 1)
+               hcoef1 = a(i41+k-1)
+               if (ir5vol.le.0 .and. hcoef1.gt.0.0) then
+                 iafp(iptgav+k-1) = 0
+                 cycle
+               endif
+               lphlp = .true.
+               do i = iv,ive,ivskp
+                 if (ir5vol .eq. volno(i)) then
+                   lphlp = .false.
+                   exit
+                 endif
+               enddo
+               if (lphlp) then
+                 write (output,9120) k
+ 9120  format ('0 ******** Convective node',i6,' of debris bed does not 
+     &reference an existing relap5 hydro volume.')
+                 fail = .true.
+                 exit
+               endif
+               iafp(iptgav+k-1) = i - filndx(4)
+               if (filid(34) .ne. 0.0) then
+                 do isys = isys1, isysn, isysk
+                   ivol1 = i34 + fpvolo(isys)
+                   ivoln = ivol1 + (fpnvol(isys)-1)*ivolk
+                   do ivol = ivol1, ivoln, ivolk
+                     if (ir5vol .eq. fpvoln(ivol)) then
+                       iafp(iptfpv+k-1) = ivol - i34
+                       exit lp5
+                     endif
+                   enddo
+                 enddo
+                 fail = .true.
+               endif
+             enddo lp5
+           endif
+!  Store the new iparm and parm arrays for Couple mesh mcp.
+           call gpcoup (2)
+         enddo
+       endif
+!  Set ngpc, ngpv, and icp arrays and number of flow channels igp.
+       if (nvirn.ne.3 .and. nvirn.ne.4 .and. nvirn.ne.6) then
+         ngpflg = 0
+         igp = 0
+         do i = 1,numenc
+           do k = 1,snc1(i)%ncompe
+             irodch(k) = 0
+           enddo
+           snc1(i)%ncpenc = 0
+           do nn = 1,snc1(i)%ncompe
+             if (irodch(nn) .ne. 0) cycle
+             j = ngroup(i,nn,2)
+             igp = igp + 1
+             ncmpch(i,nn) = igp
+             irodch(nn) = 1
+             snc1(i)%ncpenc = snc1(i)%ncpenc + 1
+!  nrepfc(i,snc1(i)%ncpenc) = absolute flow channel number of flow
+!  channel within enclosure.
+             nrepfc(i,snc1(i)%ncpenc) = igp
+             icp(igp) = 1
+             ngpc(igp,1) = j
+             if ((idcomp(j).eq.2 .or. idcomp(j).eq.8) .and.
+     &       scd1(j)%ngrupi.eq.i) then
+               ngps(igp,1) = 1
+               jjdyn1 = (ndcomp + nsout(j) - 1)*ndax + 1
+               ngpv(igp,1) = nvad(jjdyn1)
+             else
+               ngps(igp,1) = 0
+               jjdyn1 = (j - 1)*ndax + 1
+               ngpv(igp,1) = nvad(jjdyn1)
+             endif
+!  Find all other components in this enclosure with this same RELAP5
+!  volume.
+             do nnn = nn + 1,snc1(i)%ncompe
+               jj = ngroup(i,nnn,2)
+               if (idcomp(jj).eq.8 .and. idcomp(ngroup(i,nnn-1,2)).eq.8)
+     &         cycle
+               if ((idcomp(jj).eq.2 .or. idcomp(jj).eq.8) .and.
+     &         scd1(jj)%ngrupi.eq.i) then
+                 jjdyn2 = (ndcomp + nsout(jj) - 1)*ndax + 1
+               else
+                 jjdyn2 = (jj - 1)*ndax + 1
+               endif
+               if (nvad(jjdyn2) .eq. nvad(jjdyn1)) then
+                 ncmpch(i,nnn) = igp
+                 irodch(nnn) = 1
+                 icp(igp) = icp(igp) + 1
+                 ngpc(igp,icp(igp)) = jj
+                 ngpv(igp,1) = nvad(jjdyn1)
+                 ngps(igp,icp(igp)) = 0
+                 if (scd1(jj)%ngrupi.eq.i .and. (idcomp(jj).eq.2 .or. 
+     &           idcomp(jj).eq.8)) ngps(igp,icp(igp)) = 1
+               endif
+             enddo
+           enddo
+         enddo
+         if (.not.allocated(swc1)) allocate (swc1(igp))
+           swc1%qcdt = 0.0
+           swc1%qrdt = 0.0
+           swc1%qtdt = 0.0
+!
+         write (output,"(/////,' *** CONFIGURATION OF FACILITY ***  '/)"
+     &   )
+         write (output,9140) numenc,igp,ncomp
+ 9140  format (/'Total number of radiation enclosures =',i3/
+     & ' Total number of flow channels =',i3/
+     & ' Total number of core components =',i3)
+!c  Debug print.
+       write (12,"('snc1(i)%ncompe',i5/(20i5))") 
+     & numenc,snc1%ncompe
+       write (12,"('snc1%ncpenc',i5/(20i5))") 
+     & numenc,snc1%ncpenc
+       write (12,"('ngroup(1:numenc,1:ncomp,1:2)',2i5/(20i5))") 
+     & numenc,ncomp,ngroup(1:numenc,1:ncomp,1:2)
+       write (12,"('ncmpch(1:numenc,1:ncomp)',2i5/(20i5))") 
+     & numenc,ncomp,ncmpch(1:numenc,1:ncomp)
+       write (12,"('scd1%ngrupe',i5/(20i5))") 
+     & ncomp,scd1%ngrupe
+       write (12,"('scd1%ngrupi',i5/(20i5))") 
+     & ncomp,scd1%ngrupi
+       write (12,"('nrepfc(1:numenc,1:igp)',2i5/(20i5))") 
+     & numenc,igp,nrepfc(1:numenc,1:igp)
+       write (12,"('ngpc(1:igp,1:icomp)',2i5/(20i5))") 
+     & igp,ncomp,ngpc(1:igp,1:icomp)
+       write (12,"('ngps(1:igp,1:icomp)',2i5/(20i5))") 
+     & igp,ncomp,ngps(1:igp,1:icomp)
+       write (12,"('icp(1:igp)',i5/(20i5))") 
+     & igp,icp(1:igp)
+       write (12,"('ngpv(1:igp,1)',i5/(10i10))") 
+     & igp,ngpv(1:igp,1)
+       write (12,"('volno(ngpv(1:igp,1))',i5/(10i10))") 
+     & igp,volno(ngpv(1:igp,1)+filndx(4))
+!c
+         if (newrst) then
+!  Store initial values of loss coefficients for each flow channel
+!  at each axial node.
+           do i = 1,igp
+             do k = 1,naz
+               ivol = ngpv(i,k) + filndx(4)
+               dhydb0(i,k) = diamv(ivol)
+               indxjn = invfnd(ivol)
+               do nj = 1,invcnt(ivol)
+!  Skip the cross flow junctions( 8 bit on).
+                 if (iand(invj(indxjn)%invjun,8) .eq. 0) then
+!  idxjun = junction index
+                   idxjun = invj(indxjn)%invvnx
+                   if (iand(invj(indxjn)%invjun,2) .ne. 0) then
+!  Outlet junction (2 bit is on).
+                     klsof0(i,k) = fjunf(idxjun)
+                     klsor0(i,k)= fjunr(idxjun)
+                   else
+!  Inlet junction (2 bit is off).
+                     klsif0(i,k) = fjunf(idxjun)
+                     klsir0(i,k)= fjunr(idxjun)
+                   endif
+                 endif
+                 indxjn = indxjn + 1
+               enddo
+             enddo
+           enddo
+         endif
+!  End of IF Block based on newrst.
+         if (numenc .gt. igp) then
+           write (output,"('0******** Error, number of radiation enclosu
+     &res exceeds number of flow channels. Program stopped in subroutine
+     & ISCDAP.')")
+           stop 'iscdap-1'
+         endif
+!  The following section thru 30 continue accounts for the second
+!  surface of a bwr blade/box component.
+         do i = 1,igp
+           do j = 2,naz
+             if (ngps(i,1) .eq. 1) then
+               il = (ndcomp + nsout(ngpc(i,1)) - 1)*ndax + j
+             else
+               il = (ngpc(i,1) - 1)*ndax + j
+             endif
+             ngpv(i,j) = nvad(il)
+           enddo
+         enddo
+!  Set ncmpgp array.
+         if (newrstn) then
+           do j = 1,ncomp
+             ncmpgs(j) = 0
+             do i = 1,igp
+               do j1 = 1,icp(i)
+                 if (ngpc(i,j1) .eq. j) then
+                   if (ngps(i,j1) .eq. 1) then
+                     ncmpgs(j) = i
+                   else
+                     ncmpgp(j) = i
+                   endif
+                 endif
+               enddo
+             enddo
+           enddo
+         endif
+       endif
+       write (12,"('ncmpgp(j)',i5/(20i5))") 
+     & ncomp,ncmpgp(1:ncomp)
+       write (12,"('ncmpgs(j)',i5/(20i5))") 
+     & ncomp,ncmpgs(1:ncomp)
+       if (newrst) then
+!  Initialize Inconel grid spacer variables.
+         do j = 1,ncomp
+           do i = 1,naz
+             timzo2(i,j) = 1.0e+30
+             winrem(i,j) = 0.0
+             winfro(i,j) = 0.0
+             winliq(i,j) = 0.0
+             wzrinc(i,j) = 0.0
+             wzrgfz(i,j) = 0.0
+             dzrinf(i,j)=0.0
+             dinzrf(i,j)=0.0
+             dia1gr(i,j)=0.0
+             dza1gr(i,j)=0.0
+             daxdis(i,j)=0.0
+             daxgrd(i,j)=0.0
+             thetgr(i,j)=0.0
+             drgrdm(i,j)=0.0
+           enddo
+           tmpslg(j) = 2200.0
+           itjump(j) = 0
+         enddo
+           scd21%qscd = 0.0
+           scd21%qwgscd = 0.0
+           scd21%gamscd = 0.0
+           scd21%gamccd = 0.0
+         do k = 1,ndax
+           do j = 1,ncomp
+             efgena(k,j) = 0.0
+           enddo
+         enddo
+c   initialize variables involved in the oxidation Zircaloy in the
+c   presence of air
+         do k = 1,ndax
+           do j =1,ncomp
+           delwgg(k,j)=0.0
+           thbeg(k,j)=1.e-6
+           dheatg(k,j)=0.0
+           thbsag(k,j)=0.0
+           thsag(k,j)=0.0
+           thxeg(k,j)=1.e-6
+           thkstm(k,j)=2.e-6
+           f1air(k,j)=0.0
+           tmtair(k,j)=rcos(j)-rcii(j)
+           ibkarg(k,j)=0
+           rbkarg(k,j)=0.0
+           thbkag(k,j)=0.0
+           thbksg(k,j)=0.0
+           nswair(k,j)=0
+           nbgair(k,j)=0
+           end do
+         end do
+         do i = 1,5
+           do j = 1,ndax
+             do k = 1,ndcomp
+               qraden(i,j,k) = 0.0
+             enddo
+           enddo
+         enddo
+         do i = 1,ndcomp
+           do j = 1,ndax
+             do k = 1,ndcomp
+               qradpv(i,j,k) = 0.0
+             enddo
+           enddo
+         enddo
+         idebug = 0
+         bgmct  = 0.
+         h2prod = 0.0
+         h2prd0 = 0.0
+         shqout = 0.
+         shqin  = 0.
+         bgmcth = 0.0
+         tmaxhs = 0.0
+         jmaxhs = 1
+         kmaxhs = 1
+!  Find index of the shroud with the largest perimeter.
+         jshq = 0
+         slbp = 0.0
+         do j = 1,ncomp
+           if (idcomp(j) .eq. 2) then
+             if (slbwd(j) .gt. slbp) then
+               jshq = j
+               slbp = slbwd(j)
+             endif
+           endif
+         enddo
+         bgth = 0.
+         z2phas = 0.0
+         do j = 1,ncomp
+           wdtqlp(j) = 0.
+           cghg = 0.
+           do i = 1,naz
+             if (nintc0(i) .eq. 0) cghg = cghg + h2oxd2(i,j) * nsigl(j)
+           enddo
+         enddo
+         bgth = bgth + cghg
+         bgnhg = 0.
+         do k = 1,ntotrg
+           if (idbndl(k) .gt. 0) then
+             bgth = bgth + hydgr(k)
+             bgnhg = bgnhg + fishr(k)*arear*rghigt(k)*(1.-poros(k))
+           endif
+         enddo
+         bgthq = bgth*1.48e+08
+         bgtfrs = 0.
+         bgtfrn = 0.
+         qouts = 0.0
+         qout2 = 0.0
+!  Coding from sbtran to initialize aflowp, crust, oxdeo, bgmct.
+         do j = 1,ncomp
+           jb = j
+           jbb = j
+           if ((idcomp(j).eq.2 .and. islbot(j).eq.0) .or.
+     &     idcomp(j).eq.4. or. idcomp(j).eq.5 .or. idcomp(j).eq.7 .or.
+     &     idcomp(j).eq.8) then
+             nsides = 2
+           else
+             nsides = 1
+           endif
+           do is = 1,nsides
+             if (is .eq. 2) then
+               jb = ndcomp + nsout(j)
+               jbb = nsout(j)
+             endif
+             do k = 1,naz
+               il = (j-1)*ndax + k
+               if (j .ne. jb) then
+!  Calculations for second surfaces.
+                 tw = tcond3(1,k,j)
+                 if (idcomp(j).eq.8) then
+                   htsa = wpsur2(il)*dzcond(il)*nsigl(j)
+                 else
+                   htsa = slbwd(j)*dzcond(il)*nsigl(j)
+                 endif
+                 il = (jb-1)*ndax + k
+                 ib = (nsout(j)-1)*ndax + k
+                 l = nvad(il) + filndx(4)
+                 qfluxo = qouts(ib)
+               else
+!  Calculations for first surfaces.
+                 l = nvad(il) + filndx(4)
+                 if (idcomp(j).eq. 2 .or. idcomp(j).eq. 4 .or.
+     &           idcomp(j).eq. 5 .or. idcomp(j).eq.7) then
+                   htsa = slbwd(j)*dzcond(il)*nsigl(j)
+                 elseif (idcomp(j).eq.8) then
+                   htsa = wpsur1(il)*dzcond(il)*nsigl(j)
+                 else
+                   htsa = 2.0*pi*rocrst(il)*dzcond(il)*nsigl(j)
+                 endif
+                 qfluxo = qout2(k,j,1)
+                 tw =tcond3(nrods2(k,j),k,j)
+               endif
+               id = is*10000 + jb*100 + k
+               iv = l
+               iv1 = iv
+               iv2 = iv
+               htlen = 1.0
+!***           htlenc = diamv(iv)
+               gridz = 0.0
+               gridk = 1.0
+               axpf = 1.0
+               hfg = sathg(iv) - sathf(iv)
+               ggasa = abs(ggas(iv1))
+               gliqa = abs(gliq(iv1))
+               gabs = max(ggasa + gliqa,0.001)
+               if (iand(print,16384) .eq. 0) then
+                 g = hydzc(iv2) + hydzc(iv2+1)
+               else
+                 g = (hydxc(iv2) + hydxc(iv2+1))*gravv(iv) +
+     &           (hydyc(iv2) + hydyc(iv2+1))*gravv(iv+1) + (hydzc(iv2) +
+     &           hydzc(iv2+1))*gravv(iv+2)
+               endif
+               g = (ggas(iv1) + gliq(iv1))*sign(1.0,g)
+               drod = rco((j-1)*ndax + k)
+!  delgrv=(gravity constant)*(length of heat structure).
+               delgrv = g*dzcnd2(k,j)
+!  gcross = mass flux in direction perpindicular to rod.
+               gcross = 0.0
+!  gcrosf = (gravity constant)*(ratio of flow area to gap area).
+               gcrosf = 0.0
+!  pitdia = ratio of pitch to diameter.
+               if (idcomp(j) .ne. 8) then
+                 pitdia = pitch(j)/rco((j-1)*ndax+k)
+               else
+                 pitdia = 1.
+               endif
+!  htopta = index that defines configuration of heat structure.
+               htopta = 1
+!  ivindx = index of RELAP5 control volume at inlet of bundle (used for
+!  Czech CHF correlation)
+               ivindx = iv
+               chf = 0.0
+               chfmul = 0.0
+               htdiam = diamv(l)
+               htopta = 0
+               call htrc1 (id)
+               scd21(k,jbb,is)%qscd = qfluxo*htsa
+               q(l) = q(l) + scd21(k,jbb,is)%qscd
+               scd21(k,jbb,is)%qwgscd = qfgo*htsa
+               qwg(l) = qwg(l) + scd21(k,jbb,is)%qwgscd
+               scd21(k,jbb,is)%gamscd = (qfluxo - qfgo)*htgamf
+               gammaw(l) = gammaw(l) + scd21(k,jbb,is)%gamscd
+               gammac(l) = gammac(l) + qfgo*htgamg
+               qflux0(il) = qfluxo
+               qfg0(il) = qfgo
+               if (noncn .ne. 0) then
+                 do inc = 1,noncn
+                   gaman(inc+l-1) = 0.0
+                 enddo
+               endif
+               gamas(l) = 0.0
+               if (j .ne. jb) then
+!  Calculations for second surfaces.
+                 tcols(ib) = satt(l)
+                 if (voidf(l).le.0.0001) tcols(ib) = tempg(l)
+                 if (voidf(l).ge.0.9999) tcols(ib) = tempf(l)
+                 hfixf(il) = htcf
+                 hfixg(il) = htcg
+                 hout(ib) = htcf + htcg
+               else
+!  Calculations for first surfaces.
+                 tcolc(il) = satt(l)
+                 if (voidf(l).le.0.0001) tcolc(il) = tempg(l)
+                 if (voidf(l).ge.0.9999) tcolc(il) = tempf(l)
+                 hfixf(il) = htcf
+                 hfixg(il) = htcg
+                 hfix(il) = htcf + htcg
+                 hcnvec(il) = hfix(il)
+                 pcl(il) = p(l)
+                 rcrsto(il) = rocrst(il)
+                 if (idcomp(j).eq.2 .or. idcomp(j).eq.4 .or.
+     &           idcomp(j).eq.5 .or. idcomp(j).eq.7 .or. idcomp(j).eq.8)
+     &           then
+                   avol(l) = avol(l) - slbwd(j)*nsigl(j)*(rocrst(il) -
+     &             rcrsto(il))
+                 else
+                   avol(l) = avol(l) - pi*(rocrst(il) + rcrsto(il))*
+     &             (rocrst(il) - rcrsto(il))*nsigl(j)
+                 endif
+                 if (avol(l) .le. 0.0) avol(l) = 1.0e-10*avol(l)
+!  Set the scdap variables aflowp, crust, bgmct, and oxd2d.
+                 if (j .eq. 1) aflowp(k) = avol(l)
+                 bgmct = max(bgmct,tcond3(nrods2(k,j),k,j))
+                 oxd2d(k,j) = oxdeo(il)
+                 v(l) = avol(l)*dl(l)
+                 v1loc = v(l)
+                 if (v1loc .lt. 1.e-6) then
+                   v1loc = 1.e-6
+                   v(l) = v1loc
+                 endif
+                 recipv(l) = 1.0/v(l)
+               endif
+             enddo
+           enddo
+         enddo
+         pcool = pcl(1)
+         do i = 1,ncnd2
+           flstm0(i) = 0.0
+           flstm(i) = 0.0
+           flwh20(i) = 0.0
+           flwh2(i) = 0.0
+         enddo
+         if (nvirn.ne.3 .and. nvirn.ne.4 .and. nvirn.ne.6) then
+           do kk = 1,numenc
+             do nn = 1,snc1(kk)%ncpenc
+               i = nrepfc(kk,nn)
+               do k = 1,naz
+                 l = ngpv(i,k) + filndx(4)
+                 wtpm = 0.0
+                 do k1 = 1,icp(i)
+                   icm1 = ngpc(i,k1)
+                   il1 = (icm1 - 1)*ndax + k
+                   if (idcomp(icm1).eq.2) then
+                     wt(k1) = slbwd(icm1)*nsigl(icm1)
+                   elseif (idcomp(icm1) .eq. 8) then
+                     if (ngps(i,k1) .eq. 1) then
+                       wt(k1) = wpsur2(il1)*nsigl(icm1)
+                     else
+                       wt(k1) = wpsur1(il1)*nsigl(icm1)
+                     endif
+                   else
+!  wt(k1) = 2.0*pi*rocrst(il1)*nsigl(icm1).
+                     wt(k1) = 2.0*pi*rco2(k,icm1)*nsigl(icm1)
+                   endif
+                   wtpm = wtpm + wt(k1)
+                 enddo
+                 do k2 = 1,icp(i)
+                   icm1 = ngpc(i,k2)
+                   if ((idcomp(icm1).eq.2 .and. icm1.ne.ishrd(kk)) .or.
+     &             ngps(i,k2).eq.1) then
+                     il1 = (ndcomp+nsout(icm1)-1)*ndax + k
+                   else
+                     il1 = (icm1 - 1)*ndax + k
+                   endif
+                   ratio = wt(k2)/(wtpm*nsigl(icm1))
+                   flg = rhog(l)*abs(velg(l))*avol(l)*voidg(l)
+                   flstm(il1) = (1.0 - quala(l))*flg*ratio
+                   flstm0(il1) = flstm(il1)
+                   if (noncn.ne.0) then
+                     do inc = 1,noncn
+                       if (inc .eq. nonhy) then
+                         flwh2(il1) = flg*quala(l)*qualan(l+inc-1)*ratio
+                         flwh20(il1) = flwh2(il1)
+                       endif
+                     enddo
+                   endif
+                 enddo
+               enddo
+             enddo
+           enddo
+         elseif (nvirn.ne.4) then
+           do i = 1,igp
+             icm = (i-1)*nfe(i) + 1
+             do j = 1,naz
+               il = (icm-1)*ndax + j
+               l = nvad(il) + filndx(4)
+               flg = rhog(l)*abs(velg(l))*avol(l)*voidg(l)
+               flstm(il) = flg*(1.0-quala(l))
+               flstm0(il) = flstm(il)
+               do inc = 1,noncn
+                 if (inc .eq. nonhy) then
+                   flwh2(il) = flg*quala(l)*qualan(l+inc-1)
+                   flwh20(il) = flwh2(il)
+                 endif
+               enddo
+             enddo
+             icm1 = icm
+             do k = 1,nfe(i)-1
+               icm2 = ndcomp + nsout(icm1)
+               icm1 = icm1 + 1
+               do j = 1,naz
+                 il = (icm-1)*ndax + j
+                 il1 = (icm1-1)*ndax + j
+                 il2 = (icm2-1)*ndax + j
+                 l = nvad(il1) + filndx(4)
+                 ratio = slbwd(icm1)/(slbwd(icm1)+slbwd(icm))
+                 flg = rhog(l)*abs(velg(l))*avol(l)*voidg(l)
+                 flstm(il1) = flg*(1.0-quala(l))*ratio
+                 flstm0(il1) = flstm(il1)
+                 flstm(il2) = flg*(1.0-quala(l))*(1.0-ratio)
+                 flstm0(il2) = flstm(il2)
+                 do inc = 1,noncn
+                   if (inc .eq. nonhy) then
+                     flwh2(il1) = flg*quala(l)*qualan(l+inc-1)*ratio
+                     flwh20(il1) = flwh2(il1)
+                     flwh2(il2) = flg*quala(l)*qualan(l+inc-1)*
+     &               (1.0 - ratio)
+                     flwh20(il2) = flwh2(il2)
+                   endif
+                 enddo
+               enddo
+             enddo
+             icm3 = icm + nfe(i) - 1
+             if (islbot(icm3).eq.0) then
+               icm4 = ndcomp + nsout(icm3)
+               do j = 1,naz
+                 il = (icm4-1)*ndax + j
+                 l = nvad(il) + filndx(4)
+                 flg = rhog(l)*abs(velg(l))*avol(l)*voidg(l)
+                 flstm(il) = flg*(1.0-quala(l))
+                 flstm0(il) = flstm(il)
+                 do inc = 1,noncn
+                   if (inc .eq. nonhy) then
+                     flwh2(il) = flg*quala(l)*qualan(l+inc-1)
+                     flwh20(il) = flwh2(il)
+                   endif
+                 enddo
+               enddo
+             endif
+           enddo
+         else
+           do j = 1,igp
+             icm1 = idsh(idfe(1,j))
+             do k = 1,naz
+               wtpm = 0.0
+               do i = 1,nfe(j)
+                 icm = idsh(idfe(i,j))
+                 il = (icm - 1)*ndax + k
+                 wt(i) = slbwd(icm)*nsigl(icm)
+                 if  (idcomp(icm) .eq. 5) then
+                  wtpm = wtpm + 2.0*wt(i)
+                 else
+                   wtpm = wtpm + wt(i)
+                 endif
+               enddo
+               do i1 = 1,nfe(j)
+                 icm = idsh(idfe(i1,j))
+                 il = (icm-1)*ndax + k
+                 l = nvad(il) + filndx(4)
+                 il1 = (ndcomp+nsout(icm)-1)*ndax + k
+                 l1 = nvad(il1) + filndx(4)
+                 ratio = wt(i1)/wtpm
+                 flg = rhog(l)*abs(velg(l))*avol(l)*voidg(l)
+                 flstm(il) = (1.0 - quala(l))*flg*ratio
+                 flstm0(il) = flstm(il)
+                 if (idcomp(icm).eq.5) then
+                   flstm(il1) = flstm(il)
+                   flstm0(il1) = flstm0(il)
+                 elseif (idcomp(icm).eq.2 .and. islbot(icm).eq.0) then
+                   flg1 = rhog(l1)*abs(velg(l1))*avol(l1)*voidg(l1)
+                   flstm(il1) = (1.0-quala(l1))*flg1
+                   flstm0(il1) = flstm(il1)
+                 endif
+                 if (noncn.ne.0) then
+                   do inc = 1,noncn
+                     if (inc .eq. nonhy) then
+                       flwh2(il) = flg*quala(l)*qualan(l+inc-1)*ratio
+                       flwh20(il) = flwh2(il)
+                       if (idcomp(icm).eq.5) then
+                         flwh2(il1) = flwh2(il)
+                         flwh20(il1) = flwh20(il)
+                       elseif (idcomp(icm).eq.2 .and. islbot(icm).eq.0)
+     &                 then
+                         flwh2(il1) = flg1*quala(l1)*qualan(l1+inc-1)*
+     &                   ratio
+                         flwh20(il1) = flwh2(il1)
+                       endif
+                     endif
+                   enddo
+                 endif
+               enddo
+             enddo
+           enddo
+         endif
+         if (noncn .lt. 1) then
+           fail = .true.
+           write (output,9160)
+ 9160  format ('0******** No. of noncondensible species is < 1.')
+         endif
+!  Initialize radiation h.t.c., quench elevation, coolant elevation,
+!  component stored energy, and thermal capacitance.
+         do i = 1,ndax*ndcomp
+           nfi(i)=0
+           rocrst(i) = rco(i)
+           rcrsto(i) = rco(i)
+           rcrsx0(i) = rco(i)
+           voidfu(i) = 1.0
+         enddo
+!  Initialize variables involved in relaxation of changes in area and
+!  volume of relap5 control volumes.
+         nmaxrx = 8
+         do i = 1,ndcomp
+           do k = 1,ndax
+             nsqarx(i,k) = 0
+             nsqvrx(i,k) = 0
+             do n = 1,nmaxrx
+               timarx(n,i,k) = 0.0
+               timvrx(n,i,k) = 0.0
+               delarx(n,i,k) = 0.0
+               delvrx(n,i,k) = 0.0
+             enddo
+           enddo
+         enddo
+         do k = 1,ndax
+           jnumrt(k) = 0
+           knumrt(k) = 0
+           do i = 1,numenc
+             qradab(i,k) = 0.0
+           enddo
+         enddo
+         numbtp = 0
+         numrtp = 0
+         do j = 1,ncomp
+           if (idcomp(j).ne.2) ishdcr(j) = 0
+           kbrssr(j) = 0
+           kbrsr0(j) = 0
+           npldrn(j) = 0
+           npldr0(j) = 0
+           nplguo(j) = 0
+           nplguz(j) = 0
+           nblkrf(j) = 0
+           nblkr0(j) = 0
+           mdtslp(j) = 0.0
+           mduslp(j) = 0.0
+           mdzslp(j) = 0.0
+           mdaslp(j) = 0.0
+           mdsslp(j) = 0.0
+           entslp(j) = 0.0
+           qdpslp(j) = 0.0
+           htcssr(j) = 0.0
+           timslp(j) = 0.0
+           dvspll(j) = 0.0
+           velslp(j) = 0.0
+           jnumbt(j) = 0
+           knumbt(j) = 0
+           qinv(j) = 0.0
+           qinvtp(j) = 0.0
+           ifaluc(j) = 0
+           thkhpn(j) = 0.0
+           fahdpn(j) = 1.
+           qgmhpn(j) = 0.0
+           qchdpn(j) = 0.0
+           qdhdpn(j) = 0.0
+           nshdpn(j) = 0
+           ibhdpn(j) = 0
+           nhrdpn(j) = 0
+           ztprub(j) = 0.0
+           ztpcoh(j) = 0.0
+           thkupn(j) = 0.0
+           zbtrub(j) = 0.0
+           zbtcoh(j) = 0.0
+           achdpn(j) = 300.0
+           bchdpn(j) = 0.0
+           cchdpn(j) = 0.0
+           tihdpn(j) = 0.0
+           hnpool(j) = 0.0
+           hchdpn(j) = 0.0
+           idebcm(j) = 0
+           qgmhpu(j) = 0.0
+           qcvhpu(j) = 0.0
+           nmetsw(j) = 0
+           nceram(j) = 0
+           ncerhp(j) = 0
+           thkcer(j) = 0.0
+           elvlo(j) =  0.0
+           trbun(j) = 0.0
+           trbunz(j) = 0.0
+           gs1bn(j) = 0.0
+           gs1bnz(j) = 0.0
+           gs2bn(j) = 0.0
+           gs2bnz(j) = 0.0
+           gs3bn(j) = 0.0
+           gs3bnz(j) = 0.0
+           gs4bn(j) = 0.0
+           gs4bnz(j) = 0.0
+           gs5bn(j) = 0.0
+           gs5bnz(j) = 0.0
+           gs6bn(j) = 0.0
+           gs6bnz(j) = 0.0
+         enddo
+cljs since thkcer(15) and thkcer(16) store cumulative values and
+cljs analysis may have less than 16 components, initialize these values
+cljs here.
+         thkcer(15) = 0.0
+         thkcer(16) = 0.0
+         elvlc = rl(1)
+         imaxtp = 0
+         jmaxtp = 0
+         do i = 1,naz
+           do j = 1,ncomp
+             efstor(i,j) = 0.0
+             efrcpa(i,j) = 0.0
+!  Calculate average temperature of fuel at each axial and radial
+!  location.
+             if (idcomp(j) .eq. 0) then
+               m = ndax*(j-1) + 1
+               nfstrt = nrcon1(m)
+               nfwide = nrcond(m) - nfstrt + 1
+               stemav(i,j) = avfunc(ngeom(j),xcond3(nfstrt,i,j),tcond3
+     &         (nfstrt,i,j),nfwide)
+             else
+               stemav(i,j) = tcond3(1,i,j)
+             endif
+           enddo
+         enddo
+cljs  identify inner and outer nodes of gap region in shroud         
+         nmxgap = 0
+         matgs1 = 0
+       do j = 1,ncomp
+       icomp = j
+         if(idcomp(j).eq.2)then
+         do inaz = 1, naz
+         ishgpi(inaz,icomp) = 0
+         ishgpo(inaz,icomp) = 0
+         kx = ndax*(icomp-1) + inaz
+         do i =1, numelm2(inaz,icomp)
+         im = mshmt3(i,inaz,icomp)
+cljs  set gas gap temperature to nominal value
+         t0 = 1000.                        
+         t1 = 1000.                             
+         ro0 = fnro(im,t0)
+cljs  start of block of coding setting values to variables for
+cljs  calculating radiation heat transfer across gap in shroud
+               if(ro0.gt.10.0)then
+               nmxgap=0
+               else
+cljs           material in this mesh "m-1" is a gas
+cljs  set up variables for calculating effective thermal conductivity
+cljs  due to radiation heat transfer across gap
+                 if(nmxgap.eq.0)then
+cljs  first mesh in gas gap                            
+                  matgs1=mshmt3(i,inaz,icomp)
+                  ishgpi(inaz,icomp) = i   
+cljs  identify outer most mesh in gap
+                 nn1=i
+                 nn2=nrodes(kx)-1   
+                 nsw=0
+                   do nngap=nn1,nn2
+                     if(nsw.eq.0)then                              
+                       if(mshmt3(nngap,inaz,icomp).eq.matgs1)then
+                       nmxgap=nngap
+                       ishgpo(inaz,icomp) = nngap
+                       else
+                       nsw=1
+                       end if
+                     end if
+                   end do
+                 end if
+               end if
+         end do
+         end do
+         end if
+       end do
+c  end of block for effective k for gap in shroud
+cljs  end loop for identifying inner and outer nodes for shroud
+         do i = 1,ndax
+           qbps(i) = 0.0
+           qwgbps(i) = 0.0
+           qgmbps(i) = 0.0
+           do j = 1,ndcomp
+             frcmo2(i,j) = 0.0
+             frairm(i,j) = 0.0
+             frcmn2(i,j) = 0.0
+             frcmar(i,j) = 0.0
+             frcmh2(i,j) = 0.0
+             frmh2o(i,j) = 0.0
+             froxpl(i,j) = 0.0
+             unuca(i,j) = 0.0
+             unucda(i,j) = 0.0
+             lcrucb(i,j) = 0
+             irubpp(i,j) = 0
+             porcom(i,j) = 0.65
+             diacom(i,j) = 1.e-2
+             nblkrd(i,j) = 0
+             damlev(i,j) = 0.0
+             unucgm(i,j) = 0.0
+             frcpen(i,j) = 1.0
+             wuorub(i,j) = 0.0
+             wzorub(i,j) = 0.0
+             haddod(i,j) = 0.0
+             haddnw(i,j) = 0.0
+             powadd(i,j) = 0.0
+             wagrub(i,j) = 0.0
+             wssrub(i,j) = 0.0
+             powrub(i,j) = 0.0
+             qdebcl(i,j) = 0.0
+             irubqq(i,j) = 0
+             irubnh(i,j) = 0
+             frmltu(i,j) = 0.0
+             idebqn(i,j) = -1
+             emltdb(i,j) = 0.0
+             dzfrcq(i,j) = 0.0
+             dmltax(i,j) = 0.0
+             dmltx0(i,j) = 0.0
+             frcsp0(i,j) = 0.0
+             frcspr(i,j) = 0.0
+             ienblk(i,j) = 0
+             brchv(i,j) = 0.0
+!  Initialize variables added for modeling liquefied cladding slumping
+!  as drops and oxidizing, oxidation of cohesive debris resulting from
+!  blockage of drops, and oxidation of rubble debris.
+             zdrops(i,j) = 0.0
+             rdrops(i,j) = 0.0
+             zdrpsz(i,j) = 0.0
+             tdrops(i,j) = 0.0
+             tdrpsz(i,j) = 0.0
+             wdrop0(i,j) = 0.0
+             wdrop1(i,j) = 0.0
+             wdrpmx(i,j) = 0.0
+             heffox(i,j) = 0.0
+             qdrops(i,j) = 0.0
+             udrops(i,j) = 0.0
+             idrfz1(i,j) = 0
+             ndrfz1(i,j) = 0.0
+             wdrfz1(i,j) = 0.0
+             wfzsp1(i,j) = 0.0
+             wfzsa1(i,j) = 0.0
+             tnxdr1(i,j) = 0.0
+             pdrfz1(i,j) = 0.0
+             fdrmn1(i,j) = 0.0
+             fudfz1(i,j) = 0.0
+             kfail1(i,j) = 0
+             wfzuo1(i,j) = 0.0
+             wfzzr1(i,j) = 0.0
+             wdfzm1(i,j) = 0.0
+             hfzox1(i,j) = 0.0
+             wuobc1(i,j) = 0.0
+             wuobc2(i,j) = 0.0
+             wzrbc1(i,j) = 0.0
+             wzrbc2(i,j) = 0.0
+             woxbc1(i,j) = 0.0
+             woxbc2(i,j) = 0.0
+             idrfz2(i,j) = 0
+             ndrfz2(i,j) = 0.0
+             wdrfz2(i,j) = 0.0
+             wfzsp2(i,j) = 0.0
+             wfzsa2(i,j) = 0.0
+             tnxdr2(i,j) = 0.0
+             tnxsp1(i,j) = 0.0
+             tnxsp2(i,j) = 0.0
+             pdrfz2(i,j) = 0.0
+             fdrmn2(i,j) = 0.0
+             fudfz2(i,j) = 0.0
+             kfail2(i,j) = 0
+             wfzuo2(i,j) = 0.0
+             wfzzr2(i,j) = 0.0
+             wdfzm2(i,j) = 0.0
+             hfzox2(i,j) = 0.0
+             udrpsz(i,j) = 0.0
+             qcdrps(i,j) = 0.0
+             qgrdox(i,j) = 0.0
+             qoxcht(i,j) = 0.0
+             qoxchb(i,j) = 0.0
+             qsdrps(i,j) = 0.0
+             hgdrps(i,j) = 0.0
+             hgdrpz(i,j) = 0.0
+             wzrdrp(i,j) = 0.0
+             wuodrp(i,j) = 0.0
+             fadrop(i,j) = 0.0
+             fadrpz(i,j) = 0.0
+             wslomx(i,j) = 0.0
+             wslom2(i,j) = 0.0
+             tmxful(i,j) = 0.0
+             tmxfl0(i,j) = 0.0
+             oxdhmx(i,j) = 0.0
+             toxhmx(i,j) = 0.0
+             ishrem(i,j) = 0
+             fafdrp(i,j) = 0.0
+             fafdpz(i,j) = 0.0
+             wgcoh(i,j) = 0.0
+             wgcohz(i,j) = 0.0
+             wgcoht(i,j) = 0.0
+             wgchtz(i,j) = 0.0
+             wgtop(i,j) = 0.0
+             wgtopz(i,j) = 0.0
+             hefctp(i,j) = 0.0
+             hefctz(i,j) = 0.0
+             hefcbz(i,j) = 0.0
+             wgbot(i,j) = 0.0
+             wgbotz(i,j) = 0.0
+             wgbott(i,j) = 0.0
+             wgbttz(i,j) = 0.0
+             wgrd(i,j) = 0.0
+             wgrdz(i,j) = 0.0
+             qcohst(i,j) = 0.0
+             hgcohs(i,j) = 0.0
+             hgchsz(i,j) = 0.0
+             fudrop(i,j) = 0.0
+             fudrpz(i,j) = 0.0
+             fucoht(i,j) = 0.0
+             fuchtz(i,j) = 0.0
+             fucohb(i,j) = 0.0
+             fuchbz(i,j) = 0.0
+             ndrops(i,j) = 0.0
+             ndrpsz(i,j) = 0.0
+             kdrops(i,j) = 0
+             kdrpsz(i,j) = 0
+             idrops(i,j) = 0
+             idrpsz(i,j) = 0
+             qsdrgs(i,j) = 0.0
+             fadrpg(i,j) = 0.0
+             fafdrg(i,j) = 0.0
+             qcdrgs(i,j) = 0.0
+             windrp(i,j) = 0.0
+             wzgdrp(i,j) = 0.0
+             zdrpgs(i,j) = 0.0
+             zdrgsz(i,j) = 0.0
+             tdrpgs(i,j) = 0.0
+             tdrgsz(i,j) = 0.0
+             rdrpgs(i,j) = 0.0
+             udrpgs(i,j) = 0.0
+             udrgsz(i,j) = 0.0
+             idrpgs(i,j) = 0
+             idrgsz(i,j) = 0
+             ndrpgs(i,j) = 0
+             ndrgsz(i,j) = 0
+             kdrpgs(i,j) = 0
+             kdrgsz(i,j) = 0
+             tnxdr1(i,j) = 0.0
+             tnxdr2(i,j) = 0.0
+             tzrdeb(i,j) = 0.0
+             wzrdeb(i,j) = 0.0
+             wgzrd0(i,j) = 0.0
+             wgzrd1(i,j) = 0.0
+             tuodeb(i,j) = 0.0
+             wguod0(i,j) = 0.0
+             wguod1(i,j) = 0.0
+             tzodeb(i,j) = 0.0
+             ddbeff(i,j) = 0.0
+             qdebox(i,j) = 0.0
+             fuocld(i,j) = 0.0
+             wmxcld(i,j) = 0.0
+             hefcld(i,j) = 0.0
+             wmxful(i,j) = 0.0
+             nzrdeb(i,j) = 0.0
+             nuodeb(i,j) = 0.0
+             nzodeb(i,j) = 0.0
+             hgdeb(i,j) = 0.0
+             qdboxm(i,j) = 0.0
+             hgdebm(i,j) = 0.0
+             rsscn0(i,j) = 0.0
+             rsscn1(i,j) = 0.0
+             rzrcn0(i,j) = 0.0
+             rzrcn1(i,j) = 0.0
+             powadz(i,j) = 0.0
+             unucaz(i,j) = 0.0
+             thkssm(i,j) = 0.0
+             thkpls(i,j) = 0.0
+             qssrbk(i,j) = 0.0
+             tkssm0(i,j) = 0.0
+             tkpls0(i,j) = 0.0
+             qssrb0(i,j) = 0.0
+             qrfl(i,j) = 0.0
+             qwgrfl(i,j) = 0.0
+             gamrfl(i,j) = 0.0
+             thkcol(i,j) = 0.0
+             thkcl0(i,j) = 0.0
+             thkemb(i,j) = 0.0
+             tcoluo(i,j) = 0.0
+             thkem0(i,j) = 0.0
+             nssrht(i,j) = 0
+             mssrmc(i,j) = nrodes((j-1)*ndax+i)
+             mssrmx(i,j) = nrodes((j-1)*ndax+i)
+             nssrh0(i,j) = 0
+             mssrm0(i,j) = 0
+             msrmx0(i,j) = 0
+             kdyn = (j - 1)*ndax + i
+             treftm = 300.0
+             rhozr = cden(treftm)
+!  wtgnmx(i,j) = weight gain of oxygen for total oxidation of
+!  cladding at axial node i of component j (kg O/m length).
+             if (idcomp(j).eq.0 .or. idcomp(j).eq.6) then
+               wtgnmx(i,j) = (32.0/91.22)*rhozr*pi*(rnoxd(kdyn)**2 -
+     &         rci(kdyn)**2)
+             else
+               if (idcomp(j) .eq. 2) then
+                 wtgnmx(i,j) = (32.0/91.22)*rhozr*(rnoxd(kdyn) -
+     &           rci(kdyn))
+               else
+                 wtgnmx(i,j)=0.0
+               endif
+             endif
+           enddo
+         enddo
+         ztpool = 0.0
+         pipool = 0.0
+         bgthqd = 0.0
+         bgthqi = 0.0
+         bgthi = 0.0
+         ndbreg = 0
+         wzrslp = 0.0
+         wurslp = 0.0
+         walslp = 0.0
+         wlislp = 0.0
+         wcdslp = 0.0
+         wssslp = 0.0
+         wagslp = 0.0
+         wbcslp = 0.0
+         wuoslp = 0.0
+         wzoslp = 0.0
+         do k = 1,ndax
+           do n = 1,nxdbrg
+             nqndbl(k,n) = -1
+             qnchdb(k,n) = 0.0
+           enddo
+         enddo
+         do i = 1,2*ndax*ndcomp
+           qrseg2(i) = 0.0
+         enddo
+         scd22%qrdsur = 0.0
+         scd22%hgrad = 0.0
+         if (nvirn.ne.3 .and. nvirn.ne.4 .and. nvirn.ne.6) then
+           do mcp = 1,maxcpm
+             nstslp(mcp) = 0
+           enddo
+           nqcycl = 0
+           tupool = 3100.
+           tmltuo = 3100.0
+           wupool = 0.0
+           vlpool = 0.0
+           wzpool = 0.0
+           wapool = 0.0
+           wspool = 0.0
+           emltld = 0.0
+           qdpool = 0.0
+           repool = 0.0
+           qhpool = 0.0
+           dmaxcr = 0.0
+cljs addition
+           wuocum = 0.0
+           wzrcum = 0.0
+           wzocum = 0.0
+           wuocumz = 0.0
+           wzrcumz = 0.0
+           wzocumz = 0.0
+           wuohed = 0.0
+           wzrhed = 0.0
+           wzohed = 0.0
+           wzrhedz = 0.0
+           wzohedz = 0.0
+           wuohedz = 0.0
+           qlpoolr = 0.0
+           qcrustr = 0.0
+           tslpot = 0.0
+           tslpbt = 0.0
+           zslpot = 0.0
+           wdtslp = 0.0
+           wdtslb = 0.0
+           islpot = 0
+           frcbotn = 0.0
+           frcradn = 0.0
+           pexpool = 0.0
+           zbpool = 0.0
+           sedomer = 0.0
+           sudomer = 0.0
+           tcdomer = 0.0
+           radpool = 0.0
+!  Store initial flow area per component group and initial flow area
+!  per enclosure.
+           if (igp .ge. 1) then
+             do i = 1,igp
+               do k = 1,naz
+                 l = ngpv(i,k) + filndx(4)
+                 avols0(i,k) = avol(l)
+                 vs0(i,k) = v(l)
+               enddo
+             enddo
+             do i = 1,igp
+!  Assume the flow area per axial node i applies for all axial nodes.
+               l = ngpv(i,1) + filndx(4)
+               aflwto(i) = avol(l)
+               ng1 = 0
+               do k1 = 1,icp(i)
+                 icm1 = ngpc(i,k1)
+                 if (idcomp(icm1).eq.0 .and.
+     &           rpel((icm1-1)*ndax+1).gt.0.2e-3) then
+                   ng1 = ng1 + nsigl(icm1)
+                 else
+                   aflwgp(i,icm1) = 0.0
+                 endif
+               enddo
+               ang1 = float(ng1)
+               anrden(i) = ang1
+               do k1 = 1,icp(i)
+                 icm1 = ngpc(i,k1)
+                 if (idcomp(icm1).eq.0 .and.
+     &           rpel((icm1-1)*ndax+1).gt.0.2e-3) then
+                   aflwgp(i,icm1) = (float(nsigl(icm1))/ang1)*aflwto(i)
+                 endif
+               enddo
+             enddo
+           endif
+         endif
+       endif
+       do j = 1,ncomp
+         lhvol(j) = -1
+         uhvol(j) = -1
+         i = filndx(4)
+         do m = 1,nvols(i)
+           if (volno(i) .eq. vollh(j)) lhvol(j) = i - filndx(4)
+           if (volno(i) .eq. voluh(j)) uhvol(j) = i - filndx(4)
+           i = i + ivskp
+         enddo
+         if (lhvol(j) .lt. 0) then
+           write (output,9170) 'lower head',vollh(j),j
+ 9170  format ('0******** Error, ',a,' volume, ',i9,
+     & ' , specified for component',i3,' non-existent.')
+           call inp7 (40000400+j*10000,2)
+           fail = .true.
+         endif
+         if (uhvol(j) .lt. 0) then
+           write (output,9170) 'upper head',voluh(j),j
+           call inp7 (40000400+j*10000,1)
+           fail = .true.
+         endif
+       enddo
+       if (nbypss .gt. 0) then
+         do j = 1,nbypss
+           lbypss(j) = -1
+           i = filndx(4)
+           do m = 1,nvols(i)
+             if (volno(i) .eq. lbpsin(j)) lbypss(j) = i - filndx(4)
+             i = i + ivskp
+           enddo
+           if (lbypss(j) .lt. 0) then
+             write (output,9170) 'bypass',lbpsin(j),j
+             call inp7 (40001101,j)
+             fail = .true.
+           endif
+         enddo
+       endif
+!  Get the index offsets for volumes ncvol, ncnvol, and nvoltp.
+       do mcp = 1,maxcpm
+         invc(mcp) = -1
+       enddo
+       incn= -1
+       inv = -1
+       invtp = -1
+       i = filndx(4)
+       do m = 1,nvols(i)
+         do mcp = 1,maxcpm
+             idmvol=volno(i)
+           if (volno(i) .eq. ncvolc(mcp)) invc(mcp) = i - filndx(4)
+         enddo
+         if (volno(i) .eq. ncnvol) incn= i - filndx(4)
+         if (volno(i) .eq. ncvol) then
+           inv = i - filndx(4)
+!  Set vollh0 only for new problem.
+           if (newrst) vollh0 = v(i)
+         endif
+         if (volno(i) .eq. nvoltp) invtp = i - filndx(4)
+         i = i + ivskp
+       enddo
+       do mcp=1,maxcpm
+         if (icoup(mcp).gt.0 .and. invc(mcp).lt.0) then
+           iknt = 1030 + mcp
+           call inp7 (iknt,2)
+           fail = .true.
+         endif
+       enddo
+       if (incn .lt. 0) then
+         if (ncnvol .gt. 0) then
+           call inp7(21000000,2)
+           fail = .true.
+         endif
+       endif
+       do mcp = 1,maxcpm
+         if (icoup(mcp) .le. 0) cycle
+         if (nslphs(mcp).eq.2 .or. nslphs(mcp).eq.3) then
+           do i =1,ncmesh(mcp)
+             if (icmesh(i,mcp).lt.1 .or. icmesh(i,mcp).gt.ncomp) then
+               call inp7 (1040+mcp,i)
+               fail = .true.
+             endif
+           enddo
+         endif
+         call gpcoup (1)
+!  Call subroutine cour5i to calculate and store relap5 index
+!  for each couple node with convective radiative heat transfer.
+         call cour5i( a(ir5pt), a(ivrdpt), a(ivcnpt), a(ivrapt),
+     &   a(ivfspt), a(i41), ncevr5, nrad, fail)
+!  Zero out couple arrays that are input to relap5 energy terms.
+         if (newrst) call cour5s (ncevr5,a(ivcnpt),a(iqcopt),a(iqwcpt),
+     &   a(igmcpt),a(iqotpt),a(iqolpt),a(iqfopt),a(igmopt))
+         call gpcoup (2)
+       enddo
+       call iups
+cljs  add coding to calculate radial node at surface of each
+cljs  component in enclosure.
+         do i = 1,numenc
+           do nj = 1,snc1(i)%ncompe
+             j = ngroup(i,nj,2)
+c     set default value
+             nensur(i,j) = 1
+             if (idcomp(j).eq.2.and. ishrd(i).ne.j) then
+             nensur(i,j) = 1
+             else
+             nensur(i,j) = nrods2(1,j)
+             end if
+             if(idcomp(j).eq.0)then
+             nensur(i,j) = nrods2(1,j)
+             end if
+             if(idcomp(j).eq.8)then
+               if (scd1(j)%ngrupe .eq. i) then
+                 if (nj.ge. 2.and. j.eq.ngroup(i,nj-1,2)) then
+c  Segment 2 calculations. slbwdl=0 when the segment is missing
+c  so that qradab is calculated correctly in subroutine radcc2.
+                 nensur(i,j) = 13
+                 else
+c  Segment 1 calculations. slbwdl=0 when the segment is missing.
+c  so that qradab is calculated correctly in subroutine radcc2.
+                 nensur(i,j) = 7
+                 end if
+               else
+c  Interstitial calculations.
+               nensur(i,j) = 12
+               end if
+             endif
+           end do
+         end do
+cljs  end addition of coding for surface radial node numbers
+cljs  begin coding for initialization of variables used for calculating
+cljs  oxidation of outside surface (radial node 1) of shroud component
+         do j = 1,ndcomp
+         nsurox(j) = 0
+           do i = 1, ndax
+           oxdeot(i,j) = 0.0
+           oxdwct(i,j) = 0.0
+           alfaot(i,j) = 0.0
+           oxdhct(i,j) = 0.0
+           xnalft(i,j) = 0.0
+           xnoxdt(i,j) = 0.0
+           oxdwct(i,j) = 0.0
+           wtgnmx2(i,j) = 0.0
+           froxpl2(i,j) = 0.0
+           effshz2(i,j) = 0.0
+           effsh2(i,j) = 0.0
+           thkstm2(i,j) = 0.0
+           xmetin(i,j) = 0.0
+           sroxd2(i,j) = 0.0
+           h2oxsho(i,j) = 0.0
+           noxidet(i,j) = 0
+           oxdeotz(i,j) = 0.0
+           oxdwctz(i,j) = 0.0
+           noxidetz(i,j) = 0
+           xnoxdtz(i,j) = 0.0
+           xnalftz(i,j) = 0.0
+           end do
+         end do
+cljs  check for oxidation of outside surface of shroud
+         do j = 1,ndcomp
+           do i = 1,ndax
+             if(idcomp(j).eq.2)then
+cljs           if(mshmt3(1,i,j).eq.1.or.mshmt3(1,i,j).eq.5)then
+               if(mshmt3(1,i,j).eq.1)then
+cljs  Zr or ZrO2 surface at radial node 1
+               noxidet(i,j) = 0
+               noxidetz(i,j) = noxidet(i,j)
+               nsurox(j) = 1
+               oxdeot(i,j) = 2.4e-6
+               alfaot(i,j) = oxdeot(i,j)
+               effshz2(i,j) = 2.54e-6
+               effoxdo(i,j) = 2.54e-6
+               rcoi2sh(i,j) = rcos(j)
+               rco2sh(i,j) = rcos(j)
+               effsh2(i,j) = 2.54e-6
+               oxdwct(i,j) = 3.826e-3
+               rnalfsh(i,j) = xcond3(numelm2(i,j)+1,i,j)-oxdeot(i,j)
+               rnoxdsh(i,j) = xnalft(i,j)
+               rnoxdshz(i,j) = rnoxdsh(i,j)
+               rnalfshz(i,j) = rnalfsh(i,j)
+               oxdwctz(i,j) = oxdwct(i,j)
+               oxdeotz(i,j) = oxdeot(i,j)
+               oxdeotz(i,j) = oxdeot(i,j)
+               oxdwctz(i,j) = oxdwct(i,j)
+               noxidetz(i,j) = noxidet(i,j)
+               xnoxdtz(i,j) = xnoxdt(i,j)
+               xnalftz(i,j) = xnalft(i,j)
+               effshz2(i,j) = effsh2(i,j)
+               xmetin(i,j) = rco2(i,j) - xcond3(2,i,j)
+cljs  find coordinate of inside surface of metallic layer on outside
+cljs  surface (radial node 1) of shroud
+               xmetin(i,j) = xcond3(2,i,j)
+cljs  assume oxide thickness never greater than to mesh spaces
+                 if(mshmt3(2,i,j).eq.1.and.mshmt3(1,i,j).eq.1)then
+                 xmetin(i,j) = xcond3(3,i,j)
+                 end if
+               rci2sh(i,j) = rcos(j) - xmetin(i,j)
+               wtgnmx2(i,j) = (32.0/91.22)*rhozr*xmetin(i,j)
+               end if
+             end if
+           end do
+         end do
+       return
+       end

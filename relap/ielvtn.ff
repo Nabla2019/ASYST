@@ -1,0 +1,332 @@
+*mlist
+       subroutine ielvtn
+!  Checks and edits positions around each loop of each hydrodynamic
+!  system for each coordinate direction.
+!  If the positions around each are not closed within 0.0001 meters,
+!  an error message is printed.
+!
+!  Cognizant engineer: rjw.
+!
+       use hynmod
+       use lpdatc
+       use voldat
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+!
+!  Local variables.
+       real dzzk(3),dzzkq(3),dzzl(3),dzzlq(3),elk(3),elkq(3),ell(3),
+     & ellq(3),ft,rpi180,xft,xinit(3),xinitp(3),xinitq(3),xinitr(3),
+     & yinit(3),yinitp(3),yinitq(3),yinitr(3)
+       logical err,errl(3),finis,skip,skipk,skipl
+       integer i,ien,im,is,iz,jnit,k,kq,kx,l,lastv,lb,lq,lx,mj,
+     & vnit
+       character clos*13,closq*13,junalf*8,labl(2)*4,lcord(3)*1,volalf*8
+       real*8, allocatable :: xyzq(:,:)
+       type (node), allocatable :: glrt(:)
+!
+       data ft/0.3048/,rpi180/1.745329252e-2/
+       data labl/'(m) ','(ft)'/
+       data lcord/'x','y','z'/
+       data junalf/'junction'/ volalf/'  volume'/
+!
+!  Set up output units.
+       if (unito) then
+         lb = 1
+         xft = 1.0
+       else
+         lb = 2
+         xft = 1.0/ft
+       endif
+!
+!  Write out positions, starting with first volume and continuing with
+!  connected volumes.
+       if (iand(ihlppr(2),ishft(1,22)).ne.0) then
+         write (output,"('1',9x,'Reference volumes and volume and juncti
+     &on positions for each loop and segment for each hydrodynamic syste
+     &m')")
+         write (output,"('0',4x,'node',6x,'node',3x,'computational posit
+     &ion coordinates ',a4,17x,'display position coordinates 'a4/
+     & 5x,'type',7x,'no.',3x,'x',13x,'y',13x,'z',27x,'x',13x,'y',13x,
+     & 'z')") (labl(lb),i=1,2)
+       endif
+       call hynodclear (0)
+       hynnsys = nloops
+       vindxold = filndx(4)
+       jindxold = filndx(5)
+       allocate (hyn(hynnsys))
+       i = filndx(4)
+       do mj = 1,nvols(i)
+         vctrl(i) = iand(vctrl(i),not(131072))
+         i = i + ivskp
+       enddo
+       i = filndx(5)
+       do mj = 1,njuns(i)
+         jcex(i) = iand(jcex(i),not(1))
+         i = i + ijskp
+       enddo
+       allocate (xyzq(3,nvols(filndx(4))))
+       is = 1
+  200  i = filndx(4)
+       do mj = 1,nvols(i)
+         if (iand(vctrl(i),131072) .eq. 0) then
+           if (hyposv(i+2) .gt. -9.e74) go to 21
+         endif
+         i = i + ivskp
+       enddo
+       go to 1000
+   21  lastv = i
+       jnit = 0
+       vnit = volno(i)
+       allocate (glrt(3*lpdat(is)%lijn))
+       ien = 1
+       xinit = hyposv(i:i+2)
+       glrt(1)%cxr = xinit
+       mj = (i - filndx(4))/ivskp + 1
+       xyzq(:,mj) = xinit
+       xinitp = xinit*xft
+       xinitq = xinitp
+       glrt(1)%indx = i
+       glrt(1)%opt = 0
+       clos = ' '
+       closq = ' '
+       vctrl(i) = ior(vctrl(i),131072)
+       if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     & write (output,3003) is,lpdat(is)%lsysnm,vnit,xinitp,labl(lb)
+ 3003  format (' Reference volume of system',i5,' named ',a10,' is',i10,
+     & ' and has center position',1p,3g14.6,' ',a4,'.')
+       go to 490
+  400  i = filndx(5)
+       do mj = 1,njuns(i)
+         if (iand(jcex(i),1) .eq. 0) then
+           if (ij1vn(i).ne.0 .and. ij2vn(i).ne.0) then
+             kq = ij1vn(i)
+             k = filndx(4) + (ij1vn(i) - 1)*ivskp
+             lq = ij2vn(i)
+             l = filndx(4) + (ij2vn(i) - 1)*ivskp
+             skipk = iand(vctrl(k),131072) .ne. 0
+             skipl = iand(vctrl(l),131072) .ne. 0
+             if (skipk .or. skipl) then
+               jnit = 0
+               clos = ' '
+               closq = ' '
+               if (skipk) then
+                 lastv = k
+                 vnit = junftl(i)
+                 xinit = hyposv(k:k+2)
+                 xinitr = xyzq(:,kq)
+               else
+                 lastv = l
+                 vnit = junftl(i+1)
+                 xinit = hyposv(l:l+2)
+                 xinitr = xyzq(:,lq)
+               endif
+               ien = ien + 1
+               glrt(ien)%cxr = xinitr
+               glrt(ien)%indx = lastv
+               glrt(ien)%opt = 0
+               xinitp = xinit*xft
+               xinitq = xinitr*xft
+               go to 490
+             endif
+           endif
+         endif
+         i = i + ijskp
+       enddo
+       hyn(is)%ntries = ien
+       allocate (hyn(is)%glr(1:ien))
+       hyn(is)%glr = glrt(1:ien)
+!c
+!      write (12,"('Systeml',i3)") is
+!      do i = 1,ien
+!        if (iand(glrt(i)%opt,1) .eq. 0) then
+!          mj = volno(glrt(i)%indx)
+!        else
+!          mj = junno(glrt(i)%indx)
+!        endif
+!        write (12,"(i5,i10.9,3es13.5,i3)") i,mj,glrt(i)%cxr,
+!    &   glrt(i)%opt
+!      enddo
+!c
+       deallocate (glrt)
+       is = is + 1
+       go to 200
+  490  finis = .true.
+  491  i = filndx(5)
+       do mj = 1,njuns(i)
+         if (iand(jcex(i),1) .eq. 0) then
+           if (ij1vn(i).ne.0 .and. ij2vn(i).ne.0) then
+             kq = ij1vn(i)
+             k = filndx(4) + (ij1vn(i) - 1)*ivskp
+             lq = ij2vn(i)
+             l = filndx(4) + (ij2vn(i) - 1)*ivskp
+             skipk = iand(vctrl(k),131072) .ne. 0
+             skipl = iand(vctrl(l),131072) .ne. 0
+             if ((skipk .or. skipl) .and.
+     &       (lastv.eq.k .or. lastv.eq.l)) then
+               if (jnit .eq. 0) then
+                 where (abs(xinitp) .lt. 1.0e-8) xinitp = 0.0
+                 where (abs(xinitq) .lt. 1.0e-8) xinitq = 0.0
+                 if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     &           write (output,"('0',a8,i10.9,1p,3g14.6,14x,3g14.6)")
+     &           volalf,vnit,xinitp,xinitq
+               endif
+               skip =  skipk .and. skipl
+               kx = k + iand(ishft(jcex(i),-12),7)
+               lx = l + iand(ishft(jcex(i),-9),7)
+               dzzk = hydxc(kx:kx+12:6)
+               if (iand(jc(i),4) .ne. 0) dzzk = -dzzk
+               if (guinval(i) .eq. 0.0) then
+                 dzzkq = dzzk
+               else
+                 dzzkq(3) = guinang(i)*rpi180
+                 dzzkq(1) = guinval(i)*cos(dzzkq(3))
+                 dzzkq(2) = guinval(i)*sin(dzzkq(3))
+                 iz = iand(ishft(jcex(i),-13),3)
+                 elkq(iz+1) = 0.0
+                 do im = 1,2
+                   iz = mod(iz+1,3)
+                   elkq(iz+1) = dzzkq(im)
+                 enddo
+                 dzzkq = matmul(vol(lq)%hyanpr(:,:),elkq)
+                 dzzkq = dzzk + dzzkq
+               endif
+               dzzl = hydxc(lx:lx+12:6)
+               if (iand(jc(i),8) .ne. 0) dzzl = -dzzl
+               if (guinval(i+1) .eq. 0.0) then
+                 dzzlq = dzzl
+               else
+                 dzzlq(3) = guinang(i+1)*rpi180
+                 dzzlq(1) = guinval(i+1)*cos(dzzlq(3))
+                 dzzlq(2) = guinval(i+1)*sin(dzzlq(3))
+                 iz = iand(ishft(jcex(i),-10),3)
+                 ellq(iz+1) = 0.0
+                 do im = 1,2
+                   iz = mod(iz+1,3)
+                   ellq(iz+1) = dzzlq(im)
+                 enddo
+                 dzzlq = matmul(vol(lq)%hyanpr(:,:),ellq)
+                 dzzlq = dzzl + dzzlq
+               endif
+               jnit = junno(i)
+               if (k .eq. lastv) then
+                 elk = hyposv(l:l+2)
+                 yinit = hyposv(k:k+2) + dzzk
+                 hyposv(l:l+2) = yinit + dzzl
+                 xinit = hyposv(l:l+2)
+                 ell = hyposv(l:l+2)
+                 elkq = xyzq(:,lq)
+                 yinitr = xyzq(:,kq) + dzzkq
+                 xyzq(:,lq) = yinitr + dzzlq
+                 xinitr = xyzq(:,lq)
+                 ellq = xyzq(:,lq)
+                 vctrl(l) = ior(vctrl(l),131072)
+                 vnit = junftl(i+1)
+                 lastv = l
+               else
+                 elk = hyposv(k:k+2)
+                 yinit = hyposv(l:l+2) - dzzl
+                 hyposv(k:k+2) = yinit - dzzk
+                 xinit = hyposv(k:k+2)
+                 ell = hyposv(k:k+2)
+                 elkq = xyzq(:,kq)
+                 yinitr = xyzq(:,lq) - dzzlq
+                 xyzq(:,kq) = yinitr - dzzkq
+                 xinitr = xyzq(:,kq)
+                 ellq = xyzq(:,kq)
+                 vctrl(k) = ior(vctrl(k),131072)
+                 vnit = junftl(i)
+                 lastv = k
+               endif
+               yinitp = yinit*xft
+               ien = ien + 1
+               glrt(ien)%cxr = yinitr
+               yinitq = yinitr*xft
+               glrt(ien)%indx = i
+               glrt(ien)%opt = 1
+               ien = ien + 1
+               xinitp = xinit*xft
+               glrt(ien)%cxr = xinitr
+               xinitq = xinitr*xft
+               glrt(ien)%indx = lastv
+               glrt(ien)%opt = 0
+               jcex(i) = ior(jcex(i),1)
+               finis = .false.
+!
+               if (skip) then
+                 clos = 'close'
+                 closq = 'close'
+                 glrt(ien)%opt = ior(glrt(ien)%opt,2)
+                 errl = abs(elk - ell) .gt. 1.0e-4
+                 err = any(errl)
+                 if (err) then
+                   clos = 'closerr(   )'
+                   if (errl(1)) clos(9:9) = lcord(1)
+                   if (errl(2)) clos(10:10) = lcord(2)
+                   if (errl(3)) clos(11:11) = lcord(3)
+                 endif
+                 if (errl(3) .or. (err .and. iand(print,16384))) then
+                   where (abs(ell) .lt. 1.0e-8) ell = 0.0
+                   write (output,3005) jnit,elk*xft
+ 3005  format ('0******** Closure by junction',i10,' shown below is inco
+     &rrect, position from loop is',1p,3g14.6,'.')
+                   fail = .true.
+                 endif
+                 errl = abs(elkq - ellq) .gt. 1.0e-4
+                 err = any(errl)
+                 if (err) then
+                   glrt(ien)%opt = ior(glrt(ien)%opt,4)
+                   closq = 'closerr(   )'
+                   if (errl(1)) closq(9:9) = lcord(1)
+                   if (errl(2)) closq(10:10) = lcord(2)
+                   if (errl(3)) closq(11:11) = lcord(3)
+                 endif
+               else
+                 clos = ' '
+                 closq = ' '
+               endif
+               where (abs(yinitp) .lt. 1.0e-8) yinitp = 0.0
+               where (abs(xinitp) .lt. 1.0e-8) xinitp = 0.0
+               where (abs(yinitq) .lt. 1.0e-8) yinitq = 0.0
+               where (abs(xinitq) .lt. 1.0e-8) xinitq = 0.0
+               if (iand(ihlppr(2),ishft(1,22)).ne.0) then
+                 write (output,"(' ',a8,i10.9,1p,3g14.6,14x,3g14.6/
+     &           ' ',a8,i10.9,3g14.6,1x,a13,3g14.6,1x,a13)")
+     &           junalf,jnit,yinitp,yinitq,volalf,vnit,xinitp,clos,
+     &           xinitq,closq
+               endif
+               go to 491
+             endif
+           endif
+         endif
+         i = i + ijskp
+       enddo
+       if (.not.finis) go to 490
+       go to  400
+!  Reset vctrl and jcex.
+ 1000  i = filndx(5)
+       do mj = 1,njuns(i)
+         jcex(i) = iand(jcex(i),not(1))
+         i = i + ijskp
+       enddo
+       i = filndx(4)
+       do mj = 1,nvols(i)
+         vctrl(i) = iand(vctrl(i),not(131072))
+         i = i + ivskp
+       enddo
+!  Set minimum and maximum of coordinates for each system.
+       do is = 1,hynnsys
+         do i = 1,3
+           elk(i) = minval(hyn(is)%glr%cxr(i))
+           ell(i) = maxval(hyn(is)%glr%cxr(i))
+         enddo
+         hyn(is)%mins = minval(elk)
+         hyn(is)%maxs = maxval(ell)
+       enddo
+       deallocate (xyzq)
+       return
+       end

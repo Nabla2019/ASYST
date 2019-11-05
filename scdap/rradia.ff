@@ -1,0 +1,217 @@
+*mlist
+*if def,selap
+       subroutine rradia(jcmp,idbuna,ptch1,nrows,nclmns)
+c  Reads input data for radiation heat transfer.
+c
+c  Cognizant engineer: ewc.
+c
+*in32 idat
+*in32end
+       use scdmod
+       implicit none
+       real ptch1,rdat(400)
+       integer jcmp,idbuna(20,20),nrows,nclmns
+       include 'scddat.h'
+       include 'scdout.h'
+       include 'scdcom.h'
+       include 'ndxara.h'
+       include 'tblsp.h'
+       include 'cons.h'
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'ufiles.h'
+       include 'radata.h'
+       include 'trnot1.h'
+c
+c  Local variables.
+       integer idat(400)
+       integer l1a(9),l1b(9),l2a(8),l2b(9)
+       integer inext,nstart,ndata,knt,knt1,knt2
+       equivalence (rdat(1),idat(1))
+c
+       data l1a/0,0,0,ndcomp,0,1,2,0,0/
+       data l1b/0,0,0,0,0,1,2,1,1/
+       data l2a/0,0,0,2,0,1,1,0/
+       data l2b/0,0,0,20,0,1,2,0,0/
+c
+       numenc = numenc + 1
+       write (output,9040) numenc
+ 9040  format ('0Radiation Enclosure Number ',i2)
+c  49cc1000 - Numbers of components in bundle.
+       l1a(1) = jcmp*10000 + 40001000
+       call inplnk (l1a(1),inext,nstart,ndata,fa(filndx(1)))
+       if (ndata .gt. 0) then
+         l1a(6) = 1
+         call inp2 (fa(filndx(1)),rdat,l1a)
+         if (l1a(6) .gt. 0) then
+           snc1(numenc)%nvfcal = 0
+           snc1(numenc)%ncompe = l1a(6)
+           do knt = 1,l1a(6)
+             ngroup(numenc,knt,1) = idat(knt)
+           enddo
+         endif
+         write (output,9000) snc1(numenc)%ncompe
+ 9000  format(' Has ',i2,' components.')
+       write(output,9105)numenc
+ 9105  format(' component numbers in enclosure number',i3,' :')
+       write(output,9106)(ngroup(numenc,knt,1),
+     & knt=1,snc1(numenc)%ncompe)
+ 9106  format(20i5)
+c  49cc1001-99 View Factors.
+         l1b(1) = jcmp*10000 + 40001001
+         l1b(2)= -l1b(1) - 98
+         l1b(3) = snc1(numenc)%ncompe*snc1(numenc)%ncompe
+         l1b(4) = l1b(3)
+         l1b(5) = 0
+         l1b(6) = 1
+         call inp2 (fa(filndx(1)),rdat,l1b)
+         if (l1b(6) .le. 0) then
+           fail = .true.
+           return
+         endif
+         knt = int(sqrt(float(l1b(6))))
+         if (mod(l1b(6),knt) .ne. 0) then
+           write (output,1000) 'View factor',numenc
+ 1000  format ('0********* Error - ',a,' input for enclosure ',i2,
+     & ' does not constitute a square matrix.')
+           fail = .true.
+           return
+         endif
+         ndata = 0
+         do knt2 = 1,knt
+           do knt1 = 1,knt
+             ndata = ndata + 1
+             fviewg(numenc,knt2,knt1) = rdat(ndata)
+           enddo
+         enddo
+         write(output,9121)numenc
+9121     format(/,' radiation view factor matrix defined for',
+     &   ' enclosure number',i3,' :')
+           do knt2 = 1,knt
+           write(output,9125)(fviewg(numenc,knt2,knt1),
+     &     knt1=1,knt)
+9125       format(11(2x,e10.4))
+           end do
+c  49cc1101 - 99 path length.
+         l1b(1) = jcmp*10000 + 40001101
+         l1b(2) = -l1b(1) - 98
+         l1b(6) = 1
+         call inp2 (fa(filndx(1)),rdat,l1b)
+         if (l1b(6) .le. 0) then
+           fail = .true.
+           return
+         endif
+         knt = int(sqrt(float(l1b(6))))
+         if (mod(l1b(6),knt) .ne. 0) then
+           write (output,1000) 'Path length',numenc
+           fail = .true.
+         endif
+         if (knt .eq. 1) then
+           pathlg(numenc,1,1) = rdat(1)
+         else
+           ndata = 0
+           do knt2 = 1,knt
+             do knt1 = 1,knt
+               ndata = ndata + 1
+               pathlg(numenc,knt2,knt1) = rdat(ndata)
+             enddo
+           enddo
+         endif
+cljs print path length matrix
+         write(output,9131)numenc
+9131     format(/,' path length matrix defined for',
+     &   ' enclosure number',i3,' ,path lengths are in units',
+     &   ' of meters :')
+         do knt2 =1,knt
+         write(output,9125)(pathlg(numenc,knt2,knt1),
+     &   knt1=1,knt)
+         end do
+       else
+cljs case of code calculated view factors
+c  49cc2000 - Pitch of Rods.
+         l2a(1) = jcmp*10000 + 40002000
+         l2a(6) = 1
+         call inp2 (fa(filndx(1)),rdat,l2a)
+         if (l2a(6) .gt. 0) then
+           snc1(numenc)%nvfcal = 1
+           ptch1 = rdat(1)
+           if (.not.uniti) ptch1 = ptch1*0.3048
+           if (l2a(6) .gt. 1) then
+             ishrd(numenc) = idat(2)
+             write(output,9107)numenc,ishrd(numenc)
+9107         format(/,' enclosure number',i3,' is enclosed',
+     &       ' by component number',i3,' which is assumed to',
+     &       ' a shroud type of component')
+           else
+             ishrd(numenc) = 0
+             write(output,9109)
+9109         format(/,' enclosure number',i3,' is not enclosed',
+     &       ' by a shroud component')
+           endif
+           if (unito) then
+             write (output,3000) ptch1,' m.'
+           else
+             write (output,3000) ptch1*3.28084,' ft.'
+           endif
+ 3000  format('0Pitch of rods = ',f8.5,a)
+         else
+           write (output,2011) l1a(1),l2a(1)
+ 2011  format('0********* Error - Radiation input missing.',
+     &     10x,'Either a ',i9,' or ',i9,' card must be used.')
+           fail = .true.
+         endif
+c  49cc2001 - 99 - Bundle component Matrix.
+         l2b(1) = jcmp*10000 + 40002001
+         l2b(2) = -l2b(1) - 98
+  201    call inplnk (l2b(1),inext,nstart,ndata,fa(filndx(1)))
+         if (ndata .lt. 0) then
+           fail = .true.
+           return
+         elseif (ndata .eq. 0) then
+           if (inext.lt.l2b(1) .or. inext.gt.-l2b(2)) then
+             write (output,2010) l2b(1),-l2b(2)
+ 2010  format ('0******** Cards ',i9,' to ',i9,' missing.')
+             fail = .true.
+             return
+           else
+             l2b(1) = inext
+             go to 201
+           endif
+         endif
+!mpf
+       write (12,"('deb rradia, ndata=',i6)") ndata
+         nrows = ndata
+         nclmns = ndata
+         l2b(3) = ndata*ndata
+!mpf
+       write (12,"('deb rradia nrows=',i6,' nclmns=',i6)") nrows,nclmns
+       write (12,"('deb rradia, l2b(3)=',i6)") l2b(3)
+         l2b(4) = l2b(3)
+         l2b(6) = 1
+         call inp2 (fa(filndx(1)),rdat,l2b)
+!mpf
+       write (12,"('deb rradia, rdat=',2es13.5)") rdat(1),rdat(400)
+       write (12,"('deb rradia, l2b(6)=',i6)") l2b(6)
+         if (l2b(6) .eq. 0) then
+           fail = .true.
+           return
+         endif
+!mpf
+       write (12,"('deb rradia nrows=',i6,' nclmns=',i6)") nrows,nclmns
+         do knt = 1,nrows
+           do knt1 = 1,nclmns
+!mpf
+       write (12,"('deb rradia nrows=',i6,' nclmns=',i6)") nrows,nclmns
+             idbuna(knt,knt1) = idat((knt-1)*nclmns + knt1)
+           enddo
+         enddo
+       write(output,9151)
+9151   format(/,' matrix defining layout of components in bundle:')
+         do knt = 1,nrows
+           write (output,"(20i2)") (idbuna(knt,knt1),knt1=1,nclmns)
+         enddo
+       endif
+       return
+       end
+*endif

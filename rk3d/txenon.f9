@@ -1,0 +1,137 @@
+      SUBROUTINE TXENON(
+     &  TPF,VOLU,SW,DXE,DSM,DIO,DPM,TNF,XXEAB,XSMAB,RNU,GI,GX,GP,
+     &  NCOLXY,NCOLZ,FRACTB )
+C     
+C     THIS SUBROUTINE SOLVES FOR THE TRANSIENT NUMBER DENSITIES OF
+C     THE TRANSIENT FISSION PRODUCTS
+C     
+      include 'param.fcb'
+      include 'power.fcb'
+      include 'perttr.fcb'
+      include 'cntl.fcb'
+      include 'start.fcb'
+      include 'soln2.fcb'
+      include 'xsec1.fcb'
+      include 'geom.fcb'
+      include 'time.fcb'
+      include 'fpxs.fcb'
+      include 'xeopt.fcb'
+      include 'nonfue.fcb'
+      include 'burn.fcb'
+
+      DIMENSION
+     &  DXE(NXYL,*)                  ,DIO(NXYL,*)            ,
+     &  DSM(NXYL,*)                  ,DPM(NXYL,*)            ,
+     &  SW(NXYL,NZ,*)                ,TNF(NXYL,NZ,*)         ,
+     &  TPF(NXYL,NZ,*)               ,VOLU(NXYL,*)           ,
+     &  XSMAB(NXYL,NZ,*)             ,RNU(NXYL,NZ,*)         ,
+     &  GI(NXYL,NZ,*)                ,GX(NXYL,NZ,*)          ,
+     &  GP(NXYL,NZ,*)                ,XXEAB(NXYL,NZ,*)       ,
+     &  NCOLXY(NXYLMAX,*)            ,NCOLZ(*)               ,
+     &  FRACTB(*)
+C     
+C     ...GX     : XENON_135 EFFECTIVE FISSION YIELD
+C     ...GI     : IODINE_135 EFFECTIVE FISSION YIELD
+C     ...GP     : PROMETHIUM_149 EFFECTIVE FISSION YIELD
+C     ...DXE    : XENON_135 CONCENTRATION
+C     ...DIO    : IODINE_135 CONCENTRATION
+C     ...DPM    : PROMETHIUM_149 CONCENTRATION
+C     ...DSM    : SAMARIUM_149 CONCENTRATION
+C     ...RLX    : XENON_135 DECAY CONSTANT
+C     ...RLI    : IODINE_135 DECAY CONSTANT
+C     ...RLPM   : PROMETHIUM_149 DECAY CONSTANT
+C     ...XA     : XENON_135 MICROSCOPIC ABSORPTION X_SECTION
+C     ...SA     : SAMARIUM_149 MICROSCOPIC ABSORPTION X_SECTION
+C     ...DELTAT : TRUE TRANSIENT TIME INTERVAL (SEC)
+C     ...DT     : FISSION PRODUCT TRANSIENT TIME INTERVAL (SEC)
+C     ...ITRAN  : CONTROL VARIABLE [ CONTROLS TRANSIENT CASE ]
+      
+C     
+C---- NORMALIZING THE FLUX TO POWER LEVEL 1.000
+C     
+      IF(ITRAN.NE.'Y') THEN
+       
+       IF(ITYPE.EQ.'EVP')THEN
+        
+        VOLFUEL = 0.000
+        SK1     = 0.000
+        DO 101 IZ=1,NZ
+         DO 100 IXY=1,NXYL
+          ICOL=NCOLXY(IXY,NCOLZ(IZ))
+          IF(ICOL.LE.NFUEXY)GO TO 100
+          VOLFUEL=VOLFUEL+VOLU(IXY,IZ)*FRACTB(IXY)
+          DO 95 IG=1,NG
+           SK1 = SK1 +(TPF(IXY,IZ,IG)*
+     &       SW(IXY,IZ,IG))*VOLU(IXY,IZ)*FRACTB(IXY)
+ 95       CONTINUE
+ 100     CONTINUE
+ 101    CONTINUE
+        
+        RN = VOLFUEL / SK1
+        
+       ELSEIF(ITYPE.EQ.'FSP')THEN
+        
+        RN = 1.00
+        
+       ENDIF
+       
+C     
+C-----SCALING THE FLUX TO THE AVERAGE POWER LEVEL
+C     
+       CON = RN * CCF* ( 1.0 + PROLD/PR )/2.0
+       DTEMP=DT
+       
+      ELSE
+       
+       CON =1.0
+       DTEMP=DELTAT
+       
+      ENDIF
+      
+      DO 110 IZ=1,NZ
+       DO 10 IXY=1,NXYL
+        IF (NCOLXY(IXY,NCOLZ(IZ)).LE.NFUEXY) THEN
+         DXE(IXY,IZ)=0.0
+         DSM(IXY,IZ)=0.0
+         DPM(IXY,IZ)=0.0
+         DIO(IXY,IZ)=0.0
+         GO TO 10
+        ENDIF
+        FP = 0.0
+        XAW = 0.0
+        SAW = 0.0
+        SIO = 0.
+        SXE = 0.
+        SPM = 0.
+        DO 11 IG=1,NG
+         SIO = SIO +  GI(IXY,IZ,IG) * (
+     &     TNF(IXY,IZ,IG)*SW(IXY,IZ,IG)/RNU(IXY,IZ,IG))*CON
+         SXE = SXE +  GX(IXY,IZ,IG) * (
+     &     TNF(IXY,IZ,IG)*SW(IXY,IZ,IG)/RNU(IXY,IZ,IG))*CON
+         SPM = SPM +  GP(IXY,IZ,IG) * (
+     &     TNF(IXY,IZ,IG)*SW(IXY,IZ,IG)/RNU(IXY,IZ,IG))*CON
+         XAW = XAW+ ( XXEAB(IXY,IZ,IG)*SW(IXY,IZ,IG) )*CON
+         SAW = SAW+ ( XSMAB(IXY,IZ,IG)*SW(IXY,IZ,IG) )*CON
+ 11     CONTINUE
+        
+        IF (IXE(IBU).EQ.4) THEN
+         DXE(IXY,IZ)=0.0
+         DIO(IXY,IZ)=0.0
+         GO TO 20
+        ENDIF
+        
+        DXE(IXY,IZ)= DXE(IXY,IZ)
+     &    + (  SXE + RLI*DIO(IXY,IZ)
+     &    -(XAW*1.E-24 + RLX )*DXE(IXY,IZ )) *DTEMP
+        DIO(IXY,IZ)= DIO(IXY,IZ)
+     &    +DTEMP* (  SIO-RLI*DIO(IXY,IZ)  )
+ 20     DSM(IXY,IZ)= DSM(IXY,IZ)
+     &    +DTEMP* (  RLPM*DPM(IXY,IZ)
+     &    - SAW *1.E-24*DSM(IXY,IZ)  )
+        DPM(IXY,IZ)= DPM(IXY,IZ)
+     &    +DTEMP* (  SPM-RLPM*DPM(IXY,IZ)  )
+        
+ 10    CONTINUE
+ 110  CONTINUE
+      RETURN
+      END

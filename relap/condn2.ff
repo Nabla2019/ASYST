@@ -1,0 +1,251 @@
+*mlist
+      subroutine condn2
+c
+c
+c  CONDN2 calculates the wall heat transfer coefficient for
+c  condensation.  Both vertical surfaces and horizontal pipes
+c  are considered.  The heat transfer resistance across the
+c  liquid film is calculated in HTFILM. Thus, it encompasses
+c  both heat transfer from the wall to the bulk fluid
+c  temperature (HWALL), and heat transfer from the
+c  bulk fluid temperature to the liquid/vapor interface
+c  (HINTF).  That is (for steady heat flow through a film):
+c
+c  HFILM*(TWALL-TINTF) = HWALL*(TWALL-TLIQ) = HINTF*(TLIQ-TINTF)
+c
+c  As HWALL is referenced to the liquid temperature, the
+c  fraction of the total resistance that occurs in the
+c  wall boundary layer must be determined.  However, there is
+c  no generally applicable method as this resistance is
+c  dependent on the temperature profile within the film. As
+c  a reasonable approach for thin films, the resistances
+c  will be split as for a laminar film:
+c
+c    HWALL = (8/5)*HFILM  and  HINTF = (8/3)*HFILM
+c
+c  Cognizant engineer: jmk.
+c
+c  Notes:
+c
+c         -  Film HTCs are calculated based on the volume hydraulic
+c            diameter.  This assumes that the liquid film is evenly
+c            distributed over all surfaces in the volume.
+c
+c         -  The smoothing functions of the original CONDEN
+c            have been removed.  This is possible as HTFILM was
+c            designed to make these transitions naturally.  The
+c            only smoothing function is to force dropwise
+c            condensation when insufficient liquid is present.
+c
+c         -  The dropwise condensation rate is limited when non-
+c            condensibles are present by a turbulent diffusion
+c            model (subroutine NCWALL).
+c
+c         -  As all of the heat is taken out of the liquid film,
+c            implicit coupling must be used between the wall
+c            conduction and fluid energy equations.
+c
+c         -  The noncondensable effect has now been placed on the
+c            interfacial HTC (subroutine NCFILM), the wall HTC
+c            is not degraded.
+c
+c         -  For wall condensation within a horizontal pipe, if
+c            the vapor flowrate is low so that the film is not
+c            highly sheared, then the contribution to HWALL due to
+c            the cold surface above the stratified layer must be
+c            added.
+c
+c         -  This routine is coded for 1-D version of RELAP5.
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+c  calling routine: HTRCL
+c
+c  routines called: HTFILM & NCWALL
+c
+      implicit none
+c
+       include 'fast.h'
+       include 'contrl.h'
+       include 'htrcom.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+      real direct, dtliq, dtsatt, dtvap, film, fwet, hdrop,
+     &     hfgpp, hfilm, hintf, hliq, hwall, qdrop, qliq,
+     &     qwall, rmin, rwall
+c
+      real a, hfact
+c
+c     Statement Function for Horizontal Pipe Condensation Factor.
+      hfact(a) = 0.70885 + a*(-1.1864 + a*(2.0641 - 1.52*a))
+c
+c --------------------------------------------------------------------
+c     Calculate Heat Transfer Coefficient across film.
+c --------------------------------------------------------------------
+c
+      call htfilm(iv,hfilm,'CONDEN')
+      hwall = 1.6*hfilm
+c
+c --------------------------------------------------------------------
+c     Special Treatment for Horizontal Pipes.  Use laminar film
+c     condensation on portion of pipe above stratified level as a
+c     lower limit on wall heat transfer.  Pipes with an inclination
+c     of less than 10 degrees are assumed horizontal.  The HTC
+c     correlation is from Collier eq. 10.101.  The factor given in
+c     Table 10.5 was recast as a function of liquid fraction and
+c     curvefit as a polynomial.
+c --------------------------------------------------------------------
+c
+c     Direction cosine for gravity vector.
+c
+      direct = (hydzc(iv2) + hydzc(iv2+1))/dl(iv1)
+c
+      if (abs(direct) .lt. 0.1737) then
+c
+         dtsatt = max(1.0,satt(iv) - tw)
+         hfgpp = sathg(iv) - sathf(iv) + 0.68*csubpf(iv)*dtsatt
+         hcond = hfact(voidf(iv))*sqrt(sqrt(rhof(iv)*
+     &   (rhof(iv) - rhog(iv))*gravcn*hfgpp*thconf(iv)**3/
+     &   (diamv(iv)*viscf(iv)*dtsatt)))
+c
+         if (hcond .gt. hfilm) then
+c
+c        Stratified Condensation is greater than Annular.
+c        - Augment wall HTC, but note inconsistency with interfacial
+c          package may limit overall heat transfer rate.
+c
+            hintf = 2.6667*hfilm
+c        - Heat balance through film gives wall HT resistance.
+            rwall = (hintf - hcond)/(hintf*hcond)
+c        - Minimum resistance from minimum film thickness.
+            rmin = 0.375*1.0e-05/thconf(iv)
+            rwall = max(rwall,rmin)
+            hwall = 1.0/rwall
+c
+         endif
+c
+      endif
+c
+c --------------------------------------------------------------------
+c     Apply film thickness limit to zero liquid HTC as phase diappears.
+c     Excess heat transfer is assumed to be dropwise condensation and
+c     the condensation rate is taken directly from the vapor phase.
+c     The ramp is started at a film thickness of 20 microns as this
+c     roughly corresponds to film breakup.  Below 1 micron, all the
+c     condensation is assumed to be dropwise.
+c --------------------------------------------------------------------
+c
+      film = 0.25*voidf(iv)*diamv(iv)
+cdbg
+c      write (output,9000) iv, hwall, film
+c 9000 format (5x,'CONDN2',i5,1p,6e14.5)
+cdbg
+c
+c     - Limit Heat Flux: needed to avoid unphysically high values
+c       when there is a large temperature diference.  Dropwise
+c       condensation has a maximum value at a relatively low
+c       temperature drop and then decreases as the temp. difference
+c       increases.
+c
+      dtliq = tw - tempf(iv) - 0.001
+      qwall = hwall*dtliq
+      qwall = max(-5.0e+05,qwall)
+      hwall = qwall/dtliq
+c
+      if (film .gt. 2.0e-05) then
+c
+c     - Film Condensation: all heat taken from liquid phase.
+c
+         htcf = hwall
+         qffo = htcf*dtliq
+         htcg = 0.0
+         qfgo = 0.0
+         qdrop = 0.0
+         hdrop = 0.0
+cdbg
+c      write  (output,9001) htcf, qffo, tw, tempf(iv)
+c 9001 format (5x,'no ramp',3x,1p,6e14.5)
+cdbg
+c
+      else
+c
+c     - Ramp to Dropwise Condensation: use GAMW and add vapor
+c       forced convection.
+c
+         fwet = 5.2632e+04*max(0.0,film - 1.0e-06)
+         htcf = fwet*hwall
+         qffo = htcf*dtliq
+cdbg
+c      write (output,9002) fwet, htcf, qffo, tw, tempf(iv)
+c 9002 format (5x,'ramp to dropwise',3x,1p,6e14.5)
+cdbg
+c
+c        - Contribution from vapor sensible heat transfer.
+         rhos = rhog(iv)
+         tf = tempg(iv)
+         thcons = thcong(iv)
+         viscs = viscg(iv)
+         cps = csubpg(iv)
+         beta = betagg(iv)
+         mode = 9
+         hliq = htcf
+         qliq = qffo
+c
+         call dittus
+c
+         htcg = (1.0 - fwet)*htcg
+         qfgo = (1.0 - fwet)*qfgo
+         htcf = hliq
+         qffo = qliq
+c
+c        - Contribution from dropwise condensation.  Note, as
+c          the interfacial resistance of the film is not added
+c          to this portion, the (8/3) factor is not used.
+c          Limit vapor temperature to saturation (no superheat).
+c          Also, restrict DTVAP to values less than zero.
+c
+         hdrop = hfilm
+         dtvap = tw - min(satt(iv),tempg(iv))
+         dtvap = min(dtvap,0.0)
+         qdrop = max(hdrop*dtvap,-5.0e+05)
+c
+c        - Limit Condensation Rate if NC Gas Present.
+c
+         if (quala(iv) .gt. 1.0e-09) then
+            call ncwall(iv,tw,qwall)
+            qdrop = max(qdrop,-qwall)
+         endif
+c
+         qdrop = (1.0 - fwet)*qdrop
+         hdrop = qdrop/(dtvap - 0.001)
+cdbg
+c      write (output,9003) htcg, qfgo, hdrop, dtvap, qdrop, tw,
+c     &                    satt(iv), tempg(iv)
+c 9003 format (5x,'vapor & drop',3x,1p,8e13.5)
+cdbg
+c
+      endif
+c
+c  Compute final values to return.  I don't know if all these quantities
+c  are really necessary, but they are set in the original CONDEN.
+       htcoef = htcf + htcg + hdrop
+       qfluxo = qffo + qfgo + qdrop
+       qfgo = qfgo + qdrop
+       htzht = htcoef
+       htzhff = htcf
+       htzhft = 0.0
+       htzhgg = htcg
+       htzhgt = 0.0
+       htzhgp = hdrop
+       htqot = qfluxo
+       htqof = qffo
+       htqog = qfgo
+       htgamf = 0.0
+       htgamg = htsa*recipv(iv)/max((hsteam(iv) - sathf(iv)),
+     & 1.0e4)
+       gamw = htgamg*qdrop
+       return
+       end

@@ -1,0 +1,364 @@
+*mlist
+*if def,selap
+      subroutine tgpset (ih,hcoef1,ncf2,te2,ntf2,areac,r,z,ix,imme,
+     &       afz,afu,afs,afa1,afa2,afux2,afzx2,
+     &afalum,aflith,afcadm,afsoil,ielem,jelem,elemij,fracml,
+     &tz,imetsw,vole,genz,ihsave,tmltel,arsave,htcmet,tskmet,
+     &nidtop,cnstop,powrat,tvapor,tave,immt,pore,tsat,qd,ncslp)
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: ewc.
+c
+*in32 ih
+*in32 ncf2
+*in32 ntf2
+*in32 ix
+*in32 imme
+*in32 ielem
+*in32 jelem
+*in32 elemij
+*in32 imetsw
+*in32 ihsave
+*in32 nidtop
+*in32 immt
+*in32end
+c      afz(n)=atomic fraction of zr in element n.
+c      afu(n)=metalic u.
+c      afs(n)=stainless steel.
+c      afa1(n)=silver-indium-cadmium.
+c      afa2(n)=boron carbide.
+c      afux2=uo2
+c      afzx2(n)=zro2.
+c      afalup(n)=aluminum.
+c      aflith(n)=lithium.
+c      afcadm(n)=cadmium.
+c      afsoil(n)=soil
+c      fracml(n)=fraction of element n that is melted.
+c      tz(i)=temperature of node i (k).
+c      ielem(n)=value of i coordinate for lower left corner of
+c               element n.
+c      jelem(n)=value of j coordinate for lower left corner of
+c               element n.
+c  elemij((maxj-1)*i+j)=element whose lower left corner is located
+c                           in i-j space at i,j coordinates.
+c      genz(1,n)=heat generation in first quadrant of element n (w).
+c      vole(1,n)=volume of first quadrant of element n(m**3).
+c      ihsave(n)=input set values for array ih.
+c      arsave(n)=input set values for array areac.
+c      imme(n)=indicator of how full element is with debris:
+c              0=empty; 1=partially full; 2=completely full.
+c      imetsw(n)=indicator of whether n-th convective node has
+c                convection of water or corium; 0=water, 1=corium.
+c     htcmet(n)=original input value for h.t.c. at convective node n
+c               (w/m**2.k). these h.t.c. are zero for all convective
+c      tskmet(n)=bulk fluid temperature for corium convection(k).
+c      nidtop(neltop) - identification number of neltop-th partially
+c                       filled element
+c      powrat(n) = reactor power as calculated by RELAP5 reactor
+c                  kinetics package at time that material slumped
+c                  into mesh # n (W).
+c      tave = temperature of material currently slumping into COUPLE
+c             mesh (K).
+c      immt(n) = indicator of how full element n was at start of time
+c                step, 0=empty, 1=partially full, 2=full.
+c      pore(n) = porosity of element n
+c      tsat    = saturation temperature for COUPLE mesh
+c      qd > 1.e-6 = lower head volume is at least partially filled
+c                   with water and thus debris with porosity is
+c                   quenched.
+c      ncslp = indicator of slumping occurring during this time step;
+c              = = no, 1 = yes.
+c
+       implicit none
+       include 'fast.h'
+       include 'iparm.h'
+       include 'parm.h'
+       include 'ufiles.h'
+       include 'contrl.h'
+       include 'comctl.h'
+       include 'rkinc.h'
+       include 'cmptim.h'
+       include 'trpblk.h'
+       include 'convarc.h'
+      integer ih(*),ncf2(*),ntf2(*),ix(5,*),imme(*),nidtop(*),
+     & ielem(*),jelem(*),elemij(*),imetsw(*),ihsave(*)
+      integer immt(*)
+      real hcoef1(*),te2(*),areac(*),r(*),z(*),cnstop(*),afz(*),
+     & afu(*),afs(*),afa1(*),afa2(*),afux2(*),afzx2(*),afalum(*),
+     & aflith(*),afcadm(*),afsoil(*),fracml(*),tz(*),vole(4,*),
+     & genz(4,*),arsave(*),htcmet(*),tskmet(*),tmltel(*),pore(*),
+     #tsat,qd
+      real powrat(*)
+      real tvapor,tave
+      integer ncslp
+c     Local variables.
+      integer i,i1,idyn,is,j,j1,jm1,js,k,ks,l,ls,mat,n,nn
+      real dvols,telem,tpave,zmax,zmin,tmin,vsump
+      real zutco1,fabend
+      real zmid,zminbt,zmaxbt,zmaxtp,zmintp,tminn
+      integer novlap,norent,nexstr,in,jn,kn,ln
+      real tpllit
+      integer nprobl
+      external fabend,zutco1
+c   nplset = switch to impose molten pool temperature on all
+c            nodes that are in molten pool, 0 = no, 1 = yes.
+c            This option turned on to compare COUPLE calculations with
+c            solutions in literature.
+c  tpllit = literature solution molten pool temperature.
+      data nprobl / 0/, tpllit/ 3073.0/
+       if(ncslp.eq.0)go to 390
+       do300n=1,numel
+       mat=ix(5,n)
+       if(mat.ne.1)go to 300
+c     imme(n)=1=element is partially full.
+       if(imme(n).ne.1)go to 300
+        is=ix(1,n)
+        js=ix(2,n)
+        ks=ix(3,n)
+        ls=ix(4,n)
+        zmid=0.25*(z(is)+z(js)+z(ks)+z(ls))
+        zmax=max(z(is),z(js),z(ks),z(ls))
+        zmin=min(z(is),z(js),z(ks),z(ls))
+        novlap=0
+        if(novlap.eq.0)then
+c     set bottom element nodes to temperature of slumping material.
+        if(z(is).le.zmid)tz(is)=tave
+        if(z(js).le.zmid)tz(js)=tave
+        if(z(ks).le.zmid)tz(ks)=tave
+        if(z(ls).le.zmid)tz(ls)=tave
+        end if
+300    continue
+c   If elements became completely filled due to slumping during time
+c   then set temperature of nodes in these elements to temperature of
+c   slumping material.
+       do310n=1,numel
+       mat=ix(5,n)
+       if(mat.ne.1)go to 310
+       if(imme(n).ne.2)go to 310
+c     immt(n) = indicator of status of fullness of element at start of
+c               time step; 0 = empty, 1 = partially full, 2 = full.
+        if(immt(n).eq.2)go to 310
+        is=ix(1,n)
+        js=ix(2,n)
+        ks=ix(3,n)
+        ls=ix(4,n)
+        tz(is)=tave
+        tz(js)=tave
+        tz(ks)=tave
+        tz(ls)=tave
+310    continue
+       do320n=1,numel
+       immt(n)=imme(n)
+320    continue
+390    continue
+c    If debris elements at this time do not have any debris in them,
+c    then set temperature of nodes of these elements to temperature of
+c    fluid at location of these elements.
+        do 600 n = 1,numel
+        mat=ix(5,n)
+cj      if material isn't debris, go to 600
+        if(mat.ne.1)go to 600
+cj      if element is full, go to 600.
+        if(imme(n).eq.2)go to 600
+        is=ix(1,n)
+        js=ix(2,n)
+        ks=ix(3,n)
+        ls=ix(4,n)
+        norent=0
+c    determine orientation of element.
+       zmintp=min(z(js),z(ks),z(ls))
+       zmaxtp=max(z(js),z(ks),z(ls))
+       if(abs(zmaxtp-zmintp).le.0.001)then
+c      "crotch element"
+       norent=2
+       if(r(is).lt.1.e-3)norent=1
+       endif
+       if(norent.ge.1)go to 450
+c
+c      quadrilateral element.
+c
+       zminbt=min(z(is),z(js))
+       zmaxbt=max(z(is),z(js))
+       if(z(js).gt.z(is))then
+       norent=4
+       else
+       norent=3
+       end if
+450    continue
+       if(imme(n).eq.0)then
+c   determine whether element below this element is partially filled.
+       i1=ielem(n)
+       j1=jelem(n)
+         if(j1.eq.1)then
+         tz(is)=tvapor
+         tz(js)=tvapor
+         tz(ks)=tvapor
+         tz(ls)=tvapor
+         go to 600
+         end if
+       jm1=j1-1
+       idyn=(maxj-1)*i1+jm1
+       nn=elemij(idyn)
+         if(imme(nn).ne.1)then
+         tz(is)=tvapor
+         tz(js)=tvapor
+         tz(ks)=tvapor
+         tz(ls)=tvapor
+         else
+c     partially filled element below this element, so only set top
+c     nodes to temperatures of fluid above debris,  the temperatures
+c     of the bottom nodes are set to the temperature of the nodes below
+c     that are in debris and that represent the surface of of debris
+c     at which convective heat transfer occurs, this is done to preclude
+c     artificial heat conduction across partially filled elements.
+           if(norent.eq.1.or.norent.eq.2)then
+           tz(ls)=tvapor
+           tz(ks)=tvapor
+           tz(js)=tvapor
+           end if
+           if(norent.eq.3)then
+           tz(ls)=tvapor
+           tz(ks)=tvapor
+           end if
+           if(norent.eq.4)then
+           tz(ks)=tvapor
+           tz(js)=tvapor
+           end if
+         end if
+       else
+c   element n is partially filled element.
+         if(norent.eq.1.or.norent.eq.2)then
+         tz(ls)=tz(is)
+         tz(ks)=tz(is)
+         tz(js)=tz(is)
+         end if
+         if(norent.eq.3)then
+         tz(ls)=tz(is)
+         tz(ks)=tz(js)
+         end if
+         if(norent.eq.4)then
+         tz(ks)=tz(ls)
+         tz(js)=tz(is)
+         end if
+       end if
+600     continue
+       if(qd.gt.1.e-6)then
+c    liquid phase water in lower head volume with debris
+       do616n=1,numel
+       if(ix(5,n).ne.1)go to 616
+       if(imme(n).eq.0)go to 616
+c    porosity limit for quenching needs to be consistent with that
+c    used in subroutine dbvpgn.
+       if(pore(n).lt.0.1)go to 616
+       is=ix(1,n)
+       js=ix(2,n)
+       ks=ix(3,n)
+       ls=ix(4,n)
+       tz(is)=tsat
+       tz(js)=tsat
+       tz(ks)=tsat
+       tz(ls)=tsat
+616    continue
+       end if
+       if(nprobl.eq.0)go to 626
+       vsump=0.0
+       tpave=0.0
+       do610n=1,numel
+       mat=ix(5,n)
+       if(mat.ne.1)go to 610
+       if(imme(n).ne.2)go to 610
+       i = ix(1,n)
+       j = ix(2,n)
+       k = ix(3,n)
+       l = ix(4,n)
+       nexstr=0
+        i1=ielem(n)
+        j1=jelem(n)
+        if(j1.le.1)go to 610
+        jm1=j1-1
+        idyn=(maxj-1)*i1+jm1
+        nn=elemij(idyn)
+        if(ix(5,nn).ne.1)nexstr=1
+        if(nexstr.eq.1)go to 610
+        in=ix(1,nn)
+        jn=ix(2,nn)
+        kn=ix(3,nn)
+        ln=ix(4,nn)
+        tminn=min(tz(in),tz(jn),tz(kn),tz(ln))
+        if(tminn.lt.tmltel(nn))go to 610
+       tmin=min(tz(i),tz(j),tz(k),tz(l))
+       if(tmin.lt.tmltel(n))go to 610
+       dvols=vole(1,n)+vole(2,n)+vole(3,n)+vole(4,n)
+       vsump  = vsump + dvols
+       telem  = 0.25*(tz(i)+tz(j)+tz(k)+tz(l))
+       tpave  = tpave + dvols*telem
+610    continue
+       if(vsump.gt.1.e-10)then
+       tpool=tpave/vsump
+       else
+       tpool=2873.0
+       end if
+c    set each node that is in molten pool to bulk average molten
+c    pool temperature.
+      tpool=tpllit
+      do620n=1,numel
+      mat=ix(5,n)
+      if(mat.ne.1)go to 620
+      if(imme(n).ne.2)go to 620
+      nexstr=0
+c    determine whether element is overlaying structural element.
+c    if so, then even if it is all melted, apply natural convection
+c    based effective conductivity since modeling of melt front in
+c    structural material is not being done.
+        i1=ielem(n)
+        j1=jelem(n)
+        if(nprobl.eq.1)then
+          if(i1.gt.1)then
+          go to 620
+          else
+          is=ix(1,n)
+          js=ix(2,n)
+          ks=ix(3,n)
+          ls=ix(4,n)
+          tz(is)=tpool
+          tz(js)=tpool
+          tz(ks)=tpool
+          tz(ls)=tpool
+          go to 620
+          end if
+        end if
+          if(nprobl.eq.0)then
+          jm1=j1-1
+          idyn=(maxj-1)*i1+jm1
+          else
+          i1=i1+1
+          jm1=j1
+          idyn=(maxj-1)*i1+jm1
+          end if
+        nn=elemij(idyn)
+        if(ix(5,nn).ne.1)nexstr=1
+        if(nexstr.eq.1)go to 620
+        in=ix(1,nn)
+        jn=ix(2,nn)
+        kn=ix(3,nn)
+        ln=ix(4,nn)
+        tminn=min(tz(in),tz(jn),tz(kn),tz(ln))
+        if(tminn.lt.tmltel(nn))go to 620
+        is=ix(1,n)
+        js=ix(2,n)
+        ks=ix(3,n)
+        ls=ix(4,n)
+        tmin=min(tz(is),tz(js),tz(ks),tz(ls))
+        if(tmin.ge.tmltel(n))then
+c   element is part of molten pool
+        tz(is)=tpool
+        tz(js)=tpool
+        tz(ks)=tpool
+        tz(ls)=tpool
+        end if
+620     continue
+626     continue
+      return
+      end
+*endif

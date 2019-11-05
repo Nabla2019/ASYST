@@ -1,0 +1,222 @@
+*mlist
+       subroutine sysitr
+c
+c  Solve system of equations by iteration.
+c
+c  Cognizant engineer: rjw.
+c
+       use lpdatc
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'jundat.h'
+       include 'scrtch.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer i,i1,i2,icr,is,iw,iwg,j,k,kl,l,m,matrxi,n
+       integer ll,ktv,ltv,ix,kk
+       logical once,sw,swt
+       real hold,sum,sumo,w(1)
+       equivalence (w(1),fa(1))
+c
+c  Normalize equations by setting diagonal to 1.0.  The convention for
+c  storing the sparse matrix is as follows.  The matrix elements are
+c  stored in coefp(k) while the rhs is stored in sourcp(is). The matrix
+c  is stored according to the classical sparse format. ipr stores the
+c  row pointers while irnr stores the column pointers.  An example:
+c  coefp/2,-1,(1st row),-1,2,-1,(2nd row),-1,2,-1,(3rd row)
+c  (tridiagonal matrix) should have ipr/1,3,6 and irnr/1,2,1,2,3,2,3,4
+c  meaning the 3rd element start in the 2nd row and the 6th element
+c  start in the 3rd row.
+c  matrix=1 for semi-implicit; matrix=2 for nearly implicit.
+c
+$if def,dbgprnt
+       if (help.ne.0 .and. iand(ihlppr(2),ishft(1,2)).ne.0) then
+         call helphd('sysitr',6)
+         if (matrix .eq. 1) then
+           write (output,2007)
+ 2007  format('0Pressure matrix'/1x,124('=')/1x,'eq.no.',1x,'volno',
+     & 4x,5('el.no.',2x,'coefp',6x),1x,'dia.dom.term'/1x,124('='))
+           l = 1
+           ll = 1
+           k = 1
+           ktv = lpr(issys,matrix)%ipr(l)
+           i = lpdat(issys)%liv
+           do m = 1,lpdat(issys)%livn
+             ltv = lpr(issys,matrix)%ipr(l+1) - 1
+             ix = ll - ktv
+             kl = k - ktv
+             hold = 2.0*abs(coefp(vctrld(i)))
+             do kk = ktv,ltv
+               hold = hold - abs(coefp(k))
+               ll = ll + 1
+               k = k + 1
+             enddo
+             write (output,2008) m,volno(i),
+     &       (lpr(issys,matrix)%irnr(kk+ix),coefp(kk+kl),kk = ktv,ltv)
+ 2008  format(1x,i6,i10.9,5(i6,1p,g13.5),(/17x,5(i6,g13.5)))
+             write (output,2009) hold
+ 2009  format('+',111x,1p,g13.5)
+             l = l + 1
+             ktv = ltv + 1
+             i = i + ivskp
+           enddo
+         endif
+       endif
+$endif
+       matrxi = issys + matrix
+       if (matrix .eq. 1) then
+         once = .false.
+         j = 1
+         k = 1
+         i = lpdat(issys)%liv
+         do is = 1,lpdat(issys)%livn
+           gerr = 1.0/coefp(vctrld(i))
+           sourcp(is) = gerr*sourcp(is)
+           hold = -2.0
+           i1 = lpr(issys,matrix)%ipr(j)
+           i2 = lpr(issys,matrix)%ipr(j+1) - 1
+           do n = i1,i2
+             coefp(k) = gerr*coefp(k)
+             hold = hold + abs(coefp(k))
+             k = k + 1
+           enddo
+           once = hold .gt. 0.0
+           j = j + 1
+           i1 = i2 + 1
+           i = i + ivskp
+         enddo
+         if (once) then
+           if (help.ne.0 .and. iand(ihlppr(2),ishft(1,2)).ne.0)
+     &     write (output,2151)
+ 2151  format ('0******** Matrix is not diagonally dominant.')
+           lpdat(issys)%lsuces = 3
+           go to 25
+         endif
+       endif
+c  Solution of equations by alternating direction Gauss-Seidel
+c  iterations.
+c  Initialize solution vector by moving right hand side vector into
+c  solution vector.  Set up for forward pass which must update the first
+c  equation on the first pass only.
+       kl = 1
+       if (matrix .eq. 1) then
+         i = lpdat(issys)%liv
+         do j = 1,lpdat(issys)%nvr(matrxi)
+           w(j) = 0.0
+           w(kl) = 1.0/p(i)
+           i = i + ivskp
+           kl = kl + 1
+         enddo
+       else
+         i = lpdat(issys)%lij
+         do m = 1,lpdat(issys)%lijn
+           w(j) = velfj(i)
+           if (w(j) .ne. 0.0) then
+             w(kl) = 1.0/w(j)
+           else
+             w(kl) = 1.0
+           endif
+           w(j+1) = velgj(i)
+           if (w(j+1) .ne. 0.0) then
+             w(kl+1) = 1.0/w(j+1)
+           else
+             w(kl+1) = 1.0
+           endif
+           i = i + ijskp
+           kl = kl + 2
+           j = j + 2
+         enddo
+       endif
+       icr = 100
+       iw = 0
+       n = iw
+       iwg = n + lpdat(issys)%nvr(matrxi)
+       is = 1
+       k = 0
+       j = 0
+       l = 0
+       kl = 0
+       sumo = 1.0e30
+       sw = .true.
+c  Forward loop.
+  110  is = is + 1
+       j = j + 1
+       i1 = lpr(issys,matrix)%ipr(j)
+       i2 = lpr(issys,matrix)%ipr(j+1) - 1
+       hold = sourcp(is)
+       do i = i1,i2
+         k = k + 1
+         l = l + 1
+         hold = hold - coefp(k)*w(lpr(issys,matrix)%irn(l)+iw)
+       enddo
+       n = n + 1
+       kl = kl + 1
+       w(n) = w(n) + hold
+       hold = abs(hold)
+       swt = hold*w(kl) .gt. 0.0001
+       sw = sw .or. swt
+       if (n .lt. iwg) go to 110
+       if (.not.sw) go to 9
+       sum = hold
+       sw = swt
+c
+       i = i2 - i1
+       k = k - i
+       l = l - i
+  125  is = is - 1
+       j = j - 1
+       i1 = lpr(issys,matrix)%ipr(j)
+       i2 = lpr(issys,matrix)%ipr(j+1) - 1
+       hold = sourcp(is)
+       do i = i1,i2
+         k = k - 1
+         l = l - 1
+         hold = hold - coefp(k)*w(lpr(issys,matrix)%irn(l)+iw)
+       enddo
+       n = n - 1
+       kl = kl - 1
+       w(n) = w(n) + hold
+       hold = abs(hold)
+       sum = sum + hold
+       swt = hold*w(kl) .gt. 0.0001
+       sw = sw .or. swt
+       if (n .gt. 1) go to 125
+       if (.not.sw) go to 9
+       if (sum .gt. sumo) go to 150
+       sumo = sum
+       sw = swt
+       i = i2 - i1
+       k = k + i
+       l = l + i
+       icr = icr - 1
+       if (icr .gt. 0) go to 110
+c  Nonconverging solution.
+  150  if (help.ne.0 .and. iand(ihlppr(2),ishft(1,2)).ne.0)
+     & write (output,2150)
+ 2150  format ('0******** Hydrodynamic iterative relaxation solution is
+     &nonconverging.')
+       lpdat(issys)%lsuces = 3
+       go to 25
+c  Move solution to right hand side storage.
+    9  is = 1
+       k = lpdat(issys)%nvr(matrix)
+       j = 1
+       do i = 1,k
+         sourcp(i) = w(j)
+         j = j + 1
+       enddo
+   25  continue
+c  25  if (help .eq. 0) return
+c      if( iand(ihlppr(2),ishft(1,2)).ne.0 ) then
+c      write (output,2006) icr,sum,sumo
+c2006  format (' ###',i10,1p,2e13.5)
+c      is = lpdat(issys)%ixirn(matrxi)
+c      write (output,5002) (w(i),i=is,iwg)
+c5002  format ('0w',1p/(10e13.5))
+c      endif
+       return
+       end

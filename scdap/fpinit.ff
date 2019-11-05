@@ -1,0 +1,520 @@
+*mlist
+*if def,selap
+       subroutine fpinit
+c
+c  Initializes the fission product data.
+c
+c  Cognizant engineer: ewc (esm).
+c
+*in32 fpint
+*in32end
+c
+       use lpdatc
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'htsrcm.h'
+       include 'fpfast.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c  General input and processing.
+       integer fpint(1)
+       real fpreal(1)
+       equivalence (fpint(1),ia(1))
+       equivalence (fpreal(1),fa(1))
+       integer volnum,tmpoff
+       real fid,ftbnid,sum
+       integer ispsk,isysk,ispvk,ivolk,isrfk
+       integer i4,i8
+       integer j,j1,jn,k,l1,n,iloc,lloc,msiz,mvsiz
+       integer nsys,isys,isys1,isysn,ksys
+       integer jsno,jsys,jsys1,jvol,jvol1,jvoln
+       integer nvol,ivol,ivol1,ivoln,lvol
+       integer nsp, isp, isp1, ispn, ksp
+       integer nbin,ibin,isrf
+       integer nwrds,minvol,maxvol,nmin,nmax
+       integer jsrf,jsrfno,lsrfno,lrflag
+       integer isfdes, lcntgs, lcontg
+      real  pdmin, pdmax
+      parameter  (pdmin = 1.0e-08, pdmax = 1.0e-03)
+       logical delete,chng,found,need
+       parameter (ispsk = 3)
+       character spname*4
+c
+      need = .false.
+      fid = 0.0
+c  Determine length of contiguous memory available.
+      l1 = lcontg(1)
+c     Check if required system and volume data files are available.
+      if (filid(4).eq.0.0 .or. nloops.eq.0.0) then
+         fail = .true.
+         write (output,'(a)')
+     * '0******** Fission product transport data entered but no hydrodyn
+     *amic systems are present.'
+         go to 320
+      endif
+      i4 = filndx(4)
+c  If fission product transport systems are available, reflect possible
+c  hydrodynamic system changes into fission product transport systems.
+       chng = .false.
+       call ftbsft (filid(34),l1,2,filndx(34))
+       nsys = fpnsys(filndx(34))
+       if (nsys.gt.0 .and. iand(iextra,1).ne.0) then
+         fail = .true.
+         write (output,'(a)')
+     *  '0******** This version is not capable of renodalization with fi
+     *ssion product transport.'
+         go to 320
+      endif
+      nbin = fpnbin(filndx(34))
+      nsp = fpnsp(filndx(34))
+      isysk = 3 + nsp
+      isys1 = filndx(34) + fpsyso(filndx(34))
+      isysn = isys1 + (nsys-1)*isysk
+      ispvk = 5 + nbin
+      ivolk = 4 + nsp*ispvk
+      isrfk = 10 + nsp*ispsk
+      fpsysk(filndx(34)) = isysk
+      fpvolk(filndx(34)) = ivolk
+      fpsrfk(filndx(34)) = isrfk
+      fpspvk(filndx(34)) = ispvk
+      fpspsk(filndx(34)) = ispsk
+      if (fpinpo(filndx(34)).gt.0) then
+c        Determine length of input data temporarily stored in the
+c        fission product data file.
+         msiz = filsiz(34) - fpinpo(filndx(34))
+         filsiz(34) = fpinpo(filndx(34))
+         fpinpo(filndx(34)) = 0
+c        Delete any existing surface data.
+         if (nsys .gt. 0) then
+            filsiz(34) = fpvolo(isysn) + fpnvol(isysn)*ivolk
+         endif
+         chng = .true.
+c        Check if sufficient memory is available for a 'scratch' file.
+c        If so, request file name, reserve memory, and move the input
+c        data to the temporary memory file.
+         l1 = l1 - msiz
+         if (l1.lt.0) then
+            need = .true.
+            go to 320
+         endif
+         fid = ftbnid(1)
+         call ftbrsv (fid,msiz,1,iloc)
+         call ftbmov (fpint[filndx(34)+filsiz(34)),fpint[iloc),msiz)
+         lloc = iloc + msiz
+c  Reserve all available space to extend fp data.
+         l1 = lcntgs(filid(34),1)
+         call ftbsft (filid(34),l1,2,filndx(34))
+c  Process fission product system insertions and deletions.
+         if (fpint(iloc).eq.0) then
+            nwrds = fpint(iloc+1)
+            iloc = iloc + 2
+            do 160 n = 1,nwrds
+               volnum = fpint(iloc)
+               iloc = iloc + 1
+               delete = volnum .lt. 0
+               volnum = abs(volnum)
+c  Check if specified volume is a fission product volume.
+               found = .false.
+               if (nsys.gt.0) then
+                  isys = isys1
+   20             continue
+                  if (isys .le. isysn) then
+                     ivol1 = filndx(34) + fpvolo(isys)
+                     nvol = fpnvol(isys)
+                     ivoln = ivol1 + (nvol-1)*ivolk
+                     ivol = ivol1
+   30                continue
+                     if (ivol .le. ivoln) then
+                        if (volnum.ne.fpvoln(ivol)) then
+                           ivol = ivol + ivolk
+                           go to 30
+                        else
+                           found = .true.
+                        endif
+                     else
+                        isys = isys + isysk
+                        go to 20
+                     endif
+                  endif
+               endif
+               if (delete) then
+c                 Delete fission product system.
+                  if (.not. found) then
+c                    Deletion but no fission product volume found.
+                     fail = .true.
+                     write (output,'(a,i10,a)')
+     * '0******** Volume number',volnum,' entered to delete a fission pr
+     *oduct system is not part of a fission product system.'
+                  else
+c                    Deletion and volume found.
+                     write (output,'(a,i10,a)')
+     * '0Fission product system including volume',volnum,'is being delet
+     *ed.'
+c                    Decrement number of systems.
+                     nsys = nsys - 1
+c                    Determine size of volume data to be deleted.
+c                    Delete volume data.
+                     lvol = nvol * ivolk
+                     mvsiz = filsiz(34) - ((ivol1-filndx(34)) + lvol)
+                     if (mvsiz .gt. 0) then
+                       call ftbmov (fpvoln[ivol1+lvol),fpvoln[ivol1),
+     &                 mvsiz)
+                     endif
+                     filsiz(34) = filsiz(34) - lvol
+c                    Delete system data.
+                     msiz = filsiz(34) - ((isys-filndx(34)) + isysk)
+                     if (msiz.gt.0) then
+                       call ftbmov(fpsysn[isys+isysk),fpsysn[isys),msiz)
+                     endif
+                     filsiz(34) = filsiz(34) - isysk
+c                    Realign system volume data offsets.
+                     ksys = isys
+                     isysn = isysn - isysk
+                     do isys = isys1,isysn,isysk
+                       if (isys .lt. ksys) then
+                         fpvolo(isys) = fpvolo(isys) - isysk
+                       else
+                         fpvolo(isys) = fpvolo(isys) - isysk - lvol
+                       endif
+                     enddo
+                  endif
+               else
+c  Insert fission product system.
+                  if (found) then
+c  Insertion and an existing system.
+                     write (output,'(a,i10,a)')
+     * '0Fission product system including',volnum,' being reinitialized.
+     *'
+                  else
+c  Insertion and system not a existing fp system.
+c  Determine pointers in system data file for first and last
+c  hydrodynamic systems.
+                     jsys1 = 1
+c  Locate hydrodynamic volume and system.
+c  Hydrodynamic system number is the ordinal of the system.
+c  For each system, volume data is stored sequentially in the volume
+c  data file.  Volume pointers are incremented accordingly.
+                     jsno = 1
+                     jsys = jsys1
+                     jvol1 = i4
+                     found = .false.
+   70                continue
+                     if (jsys .le. nloops) then
+                        nvol = lpdat(jsys)%livn
+                        jvoln = jvol1 + (nvol-1)*ivskp
+                        jvol = jvol1
+   80                   continue
+                        if (jvol .le. jvoln) then
+                           if (volnum.ne.volno(jvol)) then
+                              jvol = jvol + ivskp
+                              go to 80
+                           else
+                              found = .true.
+                           endif
+                        else
+                           jsys = jsys + 1
+                           jsno = jsno + 1
+                           jvol1 = jvol1 + nvol*ivskp
+                           go to 70
+                        endif
+                     else
+                        fail = .true.
+                        write (output,'(a,i10,a)')
+     * '0******** Volume number',volnum,' entered to specify a fission p
+     *roduct system is not a hydrodynamic volume.'
+                     endif
+c  Insert new system.
+                     if (found) then
+                        write (output,'(a,i3,a,i10,a)')
+     * '0System',jsno,' including volume',volnum,' defined for fission p
+     *roduct transport.'
+c  Locate position in list of existing fp systems.
+                        isys = isys1
+   90                   continue
+                        if (isys .le. isysn) then
+                           if (fpsysn(isys).le.jsno) then
+                              isys = isys + isysk
+                              go to 90
+                           endif
+                        endif
+c  Determine offset for insertion of new volume data.
+                        if (isys .eq. isys1) then
+                           ivol1 = filndx(34) + fpsyso(filndx(34)) +
+     *                     nsys*isysk
+                        elseif (isys .le. isysn) then
+                           ivol1 = filndx(34) + fpvolo(isys)
+                        else
+                           ivol1 = filndx(34) + fpvolo(isysn) +
+     &                     fpnvol(isysn)*ivolk
+                        endif
+c  Determine size of volume data to be inserted.
+c  Realign offsets to volume data.
+                        lvol = nvol * ivolk
+                        ksys = isys
+                        if (isysn .gt. isys1) then
+                           do 120 isys = isys1, isysn, isysk
+                              if (isys .lt. ksys) then
+                                 fpvolo(isys) = fpvolo(isys) + isysk
+                              else
+                                 fpvolo(isys) = fpvolo(isys) + isysk +
+     &                              lvol
+                              endif
+  120                         continue
+                        endif
+                        isysn = isysn + isysk
+                        isys = ksys
+c  Open window for new volume data.
+                        msiz = filsiz(34) - (ivol1 - filndx(34))
+                        filsiz(34) = filsiz(34) + lvol
+                        if (filsiz(34).gt.l1) then
+                           need = .true.
+                           go to 320
+                        endif
+                        if (msiz .gt. 0) then
+                        call ftbmov (fpvoln[ivol1),fpvoln[ivol1+lvol),
+     &                  -msiz)
+                        endif
+c  Open window for new fp system data.
+                        msiz = filsiz(34) - (isys-filndx(34))
+                        filsiz(34) = filsiz(34) + isysk
+                        if (filsiz(34).gt.l1) then
+                           need = .true.
+                           go to 320
+                        endif
+                        if (msiz.gt.0) then
+                           call ftbmov (fpsysn[isys),
+     &                     fpsysn[isys+isysk),-msiz)
+                        endif
+                        ivol1 = ivol1 + isysk
+c  Increment number of systems.
+                        nsys = nsys + 1
+c  Add new system data.
+                        fpsysn(isys) = jsno
+                        fpnvol(isys) = nvol
+                        fpvolo(isys) = ivol1 - filndx(34)
+                        ivoln = ivol1 + (nvol-1)*ivolk
+c  Initialize species independent volume data.
+                        jvol = jvol1
+                        do 130 ivol = ivol1,ivoln,ivolk
+                           fpvoln(ivol) = volno(jvol)
+                           fpnsrf(ivol) = 0
+                           fpstep(ivol) = 0.0
+                           jvol = jvol + ivskp
+  130                      continue
+                     endif
+                  endif
+                  if (found) then
+c  (Re)initialize species dependent volume data.
+                     do 150 ivol = ivol1,ivoln,ivolk
+                        isp = ivol
+                        do 145 ispn = 1,nsp
+                           fpsrc(isp) = 0.0
+                           fpvtm(isp) = 0.0
+                           fpstm(isp) = 0.0
+                           fpliq(isp) = 0.0
+                           fpvap(isp) = 0.0
+                           do 140 ibin = 1, nbin
+                              fpbin(isp+ibin-1) = 0.0
+  140                         continue
+                          isp = isp + ispvk
+  145                      continue
+  150                   continue
+                  endif
+               endif
+  160          continue
+            fpnsys(filndx(34)) = nsys
+         endif
+c  Process initial conditions.
+         if (iloc.lt.lloc) then
+            if (fpint(iloc).eq.1) then
+               found = nsys .ne. 0
+               if (.not. found) then
+                  fail = .true.
+                  write (output,'(a)')
+     * '0******** Fission product initialization data entered, but all f
+     *ission product systems have been deleted.'
+               else
+c  Set pointers for all volumes in all systems.
+                  ivol1 = filndx(34) + fpvolo(isys1)
+                  ivoln = filndx(34) + fpvolo(isysn) +
+     *            (fpnvol(isysn)-1)*ivolk
+               endif
+  170          continue
+               if (fpint(iloc).eq.1) then
+                  minvol = fpint(iloc+1)
+                  maxvol = fpint(iloc+2)
+                  iloc = iloc + 3
+  180             continue
+                  if (iloc.lt.lloc) then
+                    if (fpint(iloc).eq.2) then
+                      if (found .and. minvol.gt.0) then
+                        write (spname,'(a4)') fpreal(iloc+1)
+                        call fpspix (spname, ksp)
+                        if (ksp .gt. 0) then
+                          sum = 0.0
+                          do ibin = 1,nbin
+                            sum = sum + fpreal(iloc+4+ibin-1)
+                          enddo
+                          do ivol = ivol1,ivoln,ivolk
+                            if (fpvoln(ivol).ge.minvol .and.
+     &                        fpvoln(ivol).le.maxvol) then
+                              isp = ivol + (ksp-1)*ispvk
+                              fpliq(isp) = fpreal(iloc+2)
+                              fpvap(isp) = fpreal(iloc+3)
+                              fpvtm(isp) = fpliq(isp) + fpvap(isp) +
+     &                        sum
+                              do ibin = 1,nbin
+                                fpbin(isp+ibin-1) =
+     &                          fpreal(iloc+4+ibin-1)
+                              enddo
+                            endif
+                          enddo
+                          iloc = iloc + 4 + nbin
+                        endif
+                      endif
+                      go to 180
+                    endif
+                    go to 170
+                  endif
+               endif
+            endif
+         endif
+      endif
+c  Compute species mass totals in each system
+      do 300 isys = isys1, isysn, isysk
+         ivol1 = filndx(34) + fpvolo(isys)
+         ivoln = ivol1 + (fpnvol(isys)-1)*ivolk
+         do 310 ivol = ivol1, ivoln, ivolk
+            ksp = isys
+            do 801 isp = 1,nsp
+              fpsysm(ksp) = 0.0
+              ksp= ksp + 1
+  801       continue
+            ksp = isys
+            isp = ivol
+            do 800 ispn = 1,nsp
+               fpsysm(ksp) = fpsysm(ksp) + fpvtm(isp) + fpstm(isp)
+               ksp = ksp + 1
+               isp = isp + ispvk
+  800          continue
+  310       continue
+  300    continue
+c  Realign heat structures to fission product volumes.
+       if ((iand(iextra,3).ne.0 .or. chng) .and. filid(8).ne.0.0) then
+         i8 = filndx(8)
+c  Determine pointers to offsets to first and last surface data.
+         j1 = i8
+         jn = j1 + nhtstr(i8) - 1
+c  Determine pointers for first and last fp volume data over
+c        all systems.
+         ivol1 = filndx(34) + fpvolo(isys1)
+         ivoln = filndx(34) + fpvolo(isysn) + (fpnvol(isysn)-1)*ivolk
+c  Set pointer to first fp surface data block.
+         isrf = filndx(34) + filsiz(34)
+         do 290 ivol = ivol1,ivoln,ivolk
+            fpsrfo(ivol) = isrf - filndx(34)
+c  Check if volume is attached to RELAP5 or SCDAP heat structures
+c  (surfaces).  Locate surfaces in increasing order.
+            nmin = 0
+            nmax = 1000000000
+  250       continue
+            found = .false.
+            do 270 j = j1, jn
+c  Determine pointer to surface data, using offset.
+               jsrf = i8 + ihtptr(j)
+               do 260 k = 0,1
+c  Retrieve volume number and check for a match.  If it matches, get
+c  surface number and check for a new minimum.
+                  volnum = htbvc(jsrf+k)
+                  if (volnum.gt.0) then
+                     if (fpvoln(ivol).eq.volnum) then
+                        jsrfno = htstno(jsrf)
+                        if (nmin.lt.jsrfno .and. jsrfno.lt.nmax) then
+c  New miminum is found; save flag for left or right volume, save
+c  offset to end of time temperature.
+                           found = .true.
+                           nmax = jsrfno
+                           lsrfno = jsrfno
+                           lrflag = k
+                           tmpoff = htxft(jsrf)
+c  Use left mesh point temperature value for left volume; use right
+c  mesh point temperature value for right volume.  Increment offset by
+c  number of mesh points - 1 for right volume.
+                           if (lrflag .eq. 1) then
+                             tmpoff = tmpoff + htnmpt(jsrf) - 1
+                           endif
+                        endif
+                     endif
+                  endif
+  260          continue
+  270       continue
+            if (found) then
+               nmin = lsrfno
+               nmax = 1000000000
+c  Increment number of surfaces for current volume; increase file size
+c  for fp data.
+               fpnsrf(ivol) = fpnsrf(ivol) + 1
+               filsiz(34) = filsiz(34) + isrfk
+               if (filsiz(34).gt.l1) then
+                  need = .true.
+                  go to 320
+               endif
+c              Initialize surface data.
+               fpsrfn(isrf) = lsrfno
+               fpsflr(isrf) = lrflag
+               fpsfto(isrf) = tmpoff
+               fpsfmt(isrf) = 0
+               fpsfar(isrf) = 0.0
+               fpsfan(isrf) = 0.0
+               fpsfra(isrf) = 0.0
+               fpsfbs(isrf) = 0.0
+               fpsfgs(isrf) = 0.0
+               fpsfbv(isrf) = 0.0
+               isp1 = isrf
+               ispn = isp1 + (nsp-1)*ispsk
+               do 280 isp = isp1,ispn
+                  fpsfmc(isp) = 0.0
+                  fpsfma(isp) = 0.0
+                  fpsfmp(isp) = 0.0
+  280             continue
+c  Increment surface pointer for next surface.
+               isrf = isrf + isrfk
+               go to 250
+            endif
+  290       continue
+      endif
+      if (nsys.eq.0) then
+         write (output,'(a)')
+     * ' **** error **** in routine fpinit',
+     * '0All fission product systems have been deleted.'
+c  Delete fp data file from memory and disk.
+         call fabend
+         call ftbdel (filid(34))
+         filid(34) = 0.0
+         filsiz(34) = 0
+         filndx(34) = 0
+      elseif (chng) then
+c  Delete old fp data file from disk; reserve a new file, and copy new
+c  fp data file from memory to disk.
+         call ftbsft (filid(34),filsiz(34),2,filndx(34))
+      endif
+c
+c  Initialization of Aerosol bin model. Previously done in subroutine
+c  FPREAD  (krk, 4/92).
+       call fpabin (pdmin, pdmax, nbin, fpdbgr(filndx(34)))
+c
+  320 continue
+      if (need) then
+         fail = .true.
+         write (output,'(3a)')
+     * '0******** Not enough space to initialize fission product data.'
+      endif
+c  Delete scratch file from memory.
+       if (fid.ne.0.0) then
+         if (isfdes(fid).ne.0) call ftbdel (fid)
+       endif
+       return
+       end
+*endif

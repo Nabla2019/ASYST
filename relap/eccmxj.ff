@@ -1,0 +1,395 @@
+*mlist
+       subroutine eccmxj (i, jm1, kk, lz, ix, n)
+c
+c  Subroutine calculates the interfacial friction factor for the volume
+c  in which the mixing of ecc liquid with cold leg flow and steam
+c  condensation occures.  This volume uses a different flow regime map
+c  (for condensation).              SZR, 19890427.
+c
+c  Cognizant engineer: rar,ras (szr).
+c
+c *** References cited in this subroutine:
+c
+c *** Ref 1= T.N. Tandon, H.K. Varma and C.P.Gupta, "A New Flow Regime
+c            Map for Condensation Inside Horizontal Tubes,"  Journal of
+c            Heat Transfer, vol 104, pp763-768, (Nov. 1982).
+c
+c *** Ref 2= R.A. Dimenna et al., "RELAP5/MOD2 Models and
+c            Correlations" NUREG/CR-5194(August 1988).
+c
+       use invtbl
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'cons.h'
+       include 'contrl.h'
+       include 'eccmxc.h'
+       include 'jundat.h'
+       include 'scrtch.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+       integer  i, jm1, jm2, jm3, k1, k2, k3, km, kk,
+     & lz, ix, mflag, n, nh
+c
+       real ficb(6), ficmv(11)
+c
+       real    aad, acirc, agfa, agfd, alfad, alff, alpbub, alphab,
+     1    alphac, amixer, cann, ddrop, deltaf,
+     2    deltf, deltfm, dia, djet, drom, dstarr, dvel, elamda,
+     3    elm, f11, falf, fic1, fidivd, fijet,
+     4    firsti, galf, gamma, gammas, gast, gm, hafang, htheta,
+     5    pb, pdiff, pmv, pp, psw, red,
+     6    refr, roml, romv, sbubb, sig, slugc, stargj, svoid, svslg,
+     7    tv1, tv2, van, vbs, vcrit, vff, vfgbb, vfres, vgg, vlclm,
+     8    voidb, voider, vscg, vscl, vsmsq, vstar, wes, wlinj,
+     9    wsteam, wstm1, wstm2
+      logical reflod
+c
+c                   ================================
+c     calculations
+      reflod = .false.
+      fijet = cmpphi(n)
+c
+      jm2 = invj(lz+1)%invvnx
+      jm3 = invj(lz+2)%invvnx
+c
+c                   * definition of connecting volume indexes.
+      km = kk
+      k1 =ij1nx(jm1)
+      k2 =ij1nx(jm2)
+      k3 =ij1nx(jm3)
+      if(k2 .eq. km) k2 =ij2nx(jm2)
+      if(k3 .eq. km) k3 =ij2nx(jm3)
+c
+c *** defining short names for the indexed variables and other
+c     prameters.
+c
+      amixer = avol(km)
+      dia    = diamv(km)
+      djet   = diamj(jm1)
+      elm    = dl(km)
+      galf   = voidj(i)
+      falf   = 1.0 - galf
+      pmv    = p(km)
+      roml   = rhof(km)
+      romv   = rhog(km)
+      sig    = sigma(km)
+      vgg    = velg(km)
+      vff    = velf(km)
+      vscl   = viscf(km)
+      vscg   = viscg(km)
+      drom   = roml - romv
+      fidivd = 1.0/max(1.0e-8,sin(fijet))
+      acirc  = piovr4*dia*dia
+c
+c *** reset ficmv
+c
+       do  10  nh=1, 11
+               ficmv(nh) = 0.0
+   10  continue
+c
+      wlinj = ajun(jm1)*voidfj(jm1)*rhofj(jm1)*velfj(jm1)
+      wstm1 = ajun(jm2)*voidgj(jm2)*rhogj(jm2)*velgj(jm2)
+      wstm2 = ajun(jm3)*voidgj(jm3)*rhogj(jm3)*velgj(jm3)
+      wsteam = 0.5*abs(wstm1 + wstm2)
+      gm     = 0.5*abs(voidfj(jm2)*rhofj(jm2)*velfj(jm2)+voidfj(jm3)*
+     &         rhofj(jm3)*velfj(jm3)+voidgj(jm2)*rhogj(jm2)*velgj(jm2)
+     &         +voidgj(jm3)*rhogj(jm3)*velgj(jm3))
+c
+c ****   modified liquid velocity due to the ecc jet impact.
+c
+         pdiff = p(k1) -pmv
+         vsmsq = 2.0*max(0.0, pdiff)/rhof(k1)+velf(k1)*velf(k1)
+         vlclm = min(abs(velfj(jm2)), abs(velfj(jm3)))
+c
+c ****   resultant liquid velocity in the mixer:
+         vfres = sqrt(vsmsq+vlclm*vlclm)
+c
+c *** determination of flow patterns based on Ref. 1, with an added
+c     zone of bubbly flow for void fractions less than 0.2, and
+c     inclusion of intermediate zones for smooth transitions.
+c
+      stargj = wsteam/amixer/sqrt(gravcn*dia*romv*drom)
+      voider = (1. - galf)/galf
+c ****  limitation of voider (for void > 0.99999)
+c
+         if (voider .le. 1.0e-5) then
+             galf   = 0.99999
+             falf   = 1.0 -galf
+             voider = 1.0e-5
+         endif
+c
+c ***  ============  FLOW REGIME DETERMINATION LOGIC  ============
+c
+      if (voider .gt. 3.) mflag= 11
+c        mflag = 11 for bubbly flow
+      if (((voider .gt. 3.) .and. (voider .le. 4.)) .and.
+     &   (stargj .le. 0.01)) mflag= 10
+c        mflag = 10 for transition between bubbly and plug flow
+      if (((voider .gt. 0.5) .and. (voider .le. 4.)) .and.
+     &   (stargj .gt. 0.0125)) mflag = 9
+c        mflag = 9 for slug flow
+      if (((voider .gt. 0.625) .and. (voider .le. 4.)) .and.
+     &   ((stargj .gt. 0.01) .and. (stargj .le. 0.0125))) mflag = 8
+c        mflag = 8 for transition beween plug and slug flow
+      if ((stargj . le. 0.01) .and. (voider .le. 3.)) mflag = 7
+c        mflag = 7 for plug flow
+      if (((voider .gt. 0.5) .and. (voider .le. 0.625)) .and.
+     &   ((stargj .gt. 0.01) .and. (stargj .le. 0.0125))) mflag = 6
+c        mflag = 6 for transition between wavy, plug and slug flows
+      if (((voider .gt. 0.5) .and. (voider .le. 0.625)) .and.
+     &   ((stargj .gt. 0.0125) .and. (stargj .le. 1.0))) mflag = 5
+c        mflag = 5 for transition between wavy and slug flow
+      if ((stargj .le. 1.0) .and. (voider .le. 0.5)) mflag = 1
+c        mflag = 1 for wavy flow
+      if ((voider .le. 0.5) .and. (stargj .gt. 1.)) mflag = 2
+c        mflag = 2 for the transition between wavy and annular flows
+      if ((voider .le. 0.5) .and. (stargj .gt. 1.125)) mflag = 3
+c        mflag = 3 for annular flow
+      if ((voider .le. 0.5) .and. (stargj .gt. 6.)) mflag = 4
+c        mflag = 4 for dispersed droplet flow
+c
+c     ==============================================================
+c
+c ****       MAIN TYPES OF FICB
+c       ----------------------------------------------------------
+c
+c *** NOTE;  There are six basic modes of interfacial friction:
+c            ficb(1)  for wavy flow
+c            ficb(2)  for plug flow
+c            ficb(3)  for slug flow
+c            ficb(4)  for bubbly flow
+c            ficb(5)  for annular, semi-annular flow
+c            ficb(6)  for dispersed droplet flow
+c       ----------------------------------------------
+c
+      if((mflag.le.2) .or. ((mflag.eq.5) .or. (mflag.eq.6))) then
+c ****   wavy flow
+c
+c ****   interfacial area calculation for stratified flow is done
+c        using the angle facing the two-phase level in the cold leg.
+c        and the exposed jet length in steam, eljet.
+c
+         svoid  = min(galf, falf)
+         hafang = htheta(svoid)
+         if (galf .ge. falf) then
+              hafang = pi -hafang
+         endif
+c
+c ****   interfacial friction calculation for wavy flow:
+c        following calculations are based on the model for interfacial
+c        friction in horizontally stratified flow in RELAP5/mOD2 (see
+c        page 6A-7 of Ref. 2)
+c
+         tv1  = pi*galf*dia/max((hafang+sin(hafang)), 1.0e-10)
+         tv2  = vscg/(romv*tv1*(abs(vgg-vff)+0.01))
+         tv1  = max((64.0*tv2), (0.3164*tv2**0.25))
+         tv2  = 1.273239545*sin(hafang)/dia
+c ****   interfacial friction for wavy flow.
+         ficb(1) = 0.125*romv*tv2*tv1
+c
+      endif
+c                                                     ******************
+c
+      if(((mflag.ge.6) .and. (mflag.le.8)) .or. (mflag.eq.10)) then
+c        plug flow
+c ****   in this flow regime, interfacial frition, is calculated as
+c        for the wavy flow, but the interfacial area is interpolated
+c        between horizontally stsratified and complete circular area.
+c
+c ****   interfacial area calculation for stratified flow, using the
+c        angle facing the two-phase level in the cold leg.
+c
+         svoid  = min(galf, falf)
+         hafang = htheta(svoid)
+         if (galf .ge. falf) then
+            hafang = pi -hafang
+         endif
+c
+c ****    calculation of interfacial friction components:
+         tv1  = pi*galf*dia/max((hafang+sin(hafang)), 1.0e-10)
+         tv2  = vscg/(romv*tv1*(abs(vgg-vff)+0.01))
+         tv1  = max((64.0*tv2), (0.3164*tv2**0.25))
+         tv2  = 1.273239545*sin(hafang)/dia
+         ficb(2) = 0.125*romv*tv2*tv1
+         tv1   = max(0.0, min(1.0, 0.4*(voider -0.5)))
+         ficb(2) = ficb(2)*(1.0 -tv1) + tv1*romv/elm
+c ****   above is the basic mode of interfacial friction for plug flow.
+c ****   note: the interfacial friction coefficient, Cd, is 100% for
+c        plug flow.
+c
+      endif
+c                                                *******************
+c
+      if((mflag.ne.7) .and. ((mflag.ge.5) .and. (mflag.le.9))) then
+c ****  slug flow
+c       calculate ficb for slug flow (includingbubbles contribution).
+c       The following lines are according to the interfacial friction
+c       model for slug flow as described in Ref. 1, but modified for
+c       ECCMIXJ.
+c
+         alphab = 0.20
+         alphac = 0.666
+         slugc = 6.778/(alphac-alphab)
+         vfgbb =exp(-slugc*(galf-alphab))
+         alpbub=alphab*vfgbb
+c
+         vbs   = galf
+         if (galf .lt. 1.0e-5) then
+             vbs   = 1.0e-5
+             vfgbb  = vfgbb*vbs*1.0e5
+         endif
+         voidb =(vbs-alpbub)/(1.0-alpbub)
+         dvel  =abs(vgg-vff)*vfgbb**2
+         call fidis2(fic1,dvel,alpbub,sbubb,i,0,km,diamj(i),reflod)
+         svslg =4.5*voidb/dia
+         sbubb = (1.0-voidb)*sbubb*vfgbb
+         ficb(3) = (1.0-voidb)*(fic1+1.225*svslg*roml*(1.0-voidb)**2)
+c
+      endif
+c                                                ********************
+      if(mflag.ge.10) then
+c ****   bubbly flow
+c ****   calculation of iterfacial friction, ficb, for bubbly flow,
+c        using equations given on page 6A-1 of ref 1.
+c
+         vfgbb = abs(vgg - vff)
+         alpbub = galf
+         if (galf .lt. 1.0e-5) then
+             alpbub = 1.0e-5
+             vfgbb  = vfgbb*alpbub*1.0e5
+         endif
+       dvel = vfgbb
+         call fidis2(fic1,dvel,alpbub,sbubb,i,0,km,diamj(i),reflod)
+       ficb(4) = fic1
+c
+      endif
+c                                           ************************
+      if((mflag.ge.2) .and. (mflag.le.4)) then
+c ****  calculate ficb for for annular, semi-annular and dispersed
+c       droplet flows accaording to the RELAP5/MOD2 model, documented
+c       on pages 6A-1 and 6A-2 of Ref 2.
+             aad    = 1.0e-7
+             tv1    = max(2.*aad, min(2.0e-3*(romv/roml),2.e-4))
+             gamma  =(falf-aad)/(tv1-aad)
+             gammas = 1.0
+             if((galf.gt.0.8) .and. (falf.lt.tv1)) gammas = gamma
+             refr   = roml*falf*abs(vff)*dia/vscl
+             gast   = 1.0e-4*refr**0.25
+             vcrit  = 0.5*sqrt(drom*gravcn*galf*acirc/(romv*dia))
+c ****       the following factor of 2./sqrt(1.0e-7) on vcrit is used
+c            in lieu of (1.0-cos(hafang))/sqrt(sine(hafang)), as no
+c            stratification is stipulated in annular-droplet flow (see
+c            page 4-26 of ref 1)
+             vcrit  = max(632.6*vcrit, abs(vgg)*1.0e-15, 1.0e-30)
+             vstar  = max(abs(vgg), 1.0e-15)
+             elamda = vstar/vcrit
+             f11 = gammas *max(0.0,(1.-gast))*exp(-4.0e-5*elamda**6.)
+             alff   = max(0.0, falf*f11)
+             cann   = (30.*alff)**0.125
+             agfa   = (4.0*cann/dia)*sqrt(1.0-alff)
+c
+             deltf  = 0.5*dia*(1.0-sqrt(1.0-alff))
+             deltfm = deltf*sqrt(gravcn*drom/sig)
+             deltaf = max(1.0e-8, deltfm)
+             dstarr = dia*sqrt(gravcn*drom/sig)
+             tv2    = min(30.0, 1.0/dstarr)
+             tv2    = 0.0025 +0.1375*10**(9.07*tv2)
+     &                *deltaf**(1.63+4.74*tv2)
+             ficb(5)= tv2*romv*agfa*cann
+c
+c ****       interfacial friction for droplets, accaording to the
+c            RELAP5/MOD2 model documented on pages 6A-2 and 6A-3 of
+c            ref 1.
+             tv2   = abs(vgg - vff)
+             dvel  = tv2*(1.0 -f11)
+             if ((galf.gt.0.8) .or. (falf.lt.tv1))
+     &       dvel  = tv2*(1.0 -gamma*f11)
+             if (falf .lt. 1.0e-6) dvel = dvel*falf*1.0e6
+             wes   = max(1.5*sig, 1.0e-10)
+             tv2   = aad
+             if ((galf .gt. 0.8) .or. (falf .lt. tv1))
+     &       tv2   = aad*gamma+1.0e-5*(1.0-gamma)
+             alfad = max(tv2, (falf-alff)/(1.0-alff), 1.0e-5)
+             vstar = max(dvel*dvel,(wes/(romv*min(.0025*alfad**0.333
+     &               , dia))))
+             ddrop = (romv*vstar)/wes
+             red   = wes*(1.0-alfad)**2.5/(vscg*sqrt(vstar))
+             tv1   = (5.0+0.37*red**0.75)/red
+             agfd  = 3.6*alfad*(1.0 - alff)*ddrop
+c ****       interfacial friction for droplet flow
+             ficb(6) = tv1*romv*agfd
+c
+c ****       interfacial friction for annular-droplet flow
+             ficb(5) = ficb(5)+ ficb(6)
+c
+      endif
+c
+c     ============================================================
+c
+c ****   APPORTIONMENT OF HIFMV, FICMV, FWALF AND FWALG VALUES
+c                     FOR DIFFERENT MFLAG NUMBERS
+c        -----------------------------------------------------
+c
+      if(mflag .eq. 1) then
+              ficmv(1) = ficb(1)
+      endif
+c
+      if(mflag .eq. 2) then
+              van = min(1.0, max((9.0 -8.0*stargj), 0.0))
+              ficmv(2) = ficb(1)*van +ficb(5)*(1.0 -van)
+      endif
+c
+      if(mflag .eq. 3) then
+              ficmv(3) = ficb(5)
+      endif
+c
+      if(mflag .eq. 4) then
+              ficmv(4) = ficb(6)
+      endif
+c
+      if(mflag .eq. 5) then
+              psw = min(1.0, max((8.0*voider -4.0), 0.0))
+              ficmv(5) = ficb(3)*psw +ficb(1)*(1.0 -psw)
+      endif
+c
+      if(mflag .eq. 6) then
+          pp  = min(1.0, max(400.*stargj -4.0, 0.0))
+          psw = min(1.0, max((8.0*voider -4.0), 0.0))
+          firsti   = ficb(2)*(1.0 -pp) +ficb(3)*pp
+          ficmv(6) = firsti*psw +ficb(1)*(1.0 -psw)
+      endif
+c
+      if(mflag .eq. 7) then
+              ficmv(7) = ficb(2)
+      endif
+c
+      if(mflag .eq. 8) then
+          pp = min(1.0,max(400.*stargj -4.0, 0.0))
+          ficmv(8) = ficb(2)*(1.0 -pp) +ficb(3)*pp
+      endif
+c
+      if(mflag .eq. 9) then
+              ficmv(9) = ficb(3)
+      endif
+c
+      if(mflag .eq. 10) then
+              pb  = min(1.0, max((voider -3.0), 0.0))
+              ficmv(10) = ficb(4)*pb +ficb(2)*(1.0 -pb)
+      endif
+c
+      if(mflag .eq. 11) then
+              ficmv(11) = ficb(4)
+      endif
+c
+c ****      variable to be returned to PHAINTJ:
+c           -----------------------------------
+        do  60  nh=1,  11
+                  if (mflag . eq. nh) then
+                     fij(i)  = ficmv(nh)
+                     flompj(ix) = 15 + nh
+                  endif
+  60    continue
+      return
+      end

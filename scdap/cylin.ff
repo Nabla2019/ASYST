@@ -1,0 +1,297 @@
+*mlist
+*if def,selap
+      subroutine cylin
+c
+c This subroutinedrives the SCDAP control rod analysis.
+c
+c Cognizant engineer: ewc.
+c
+      implicit none
+*call comctl
+*call contrl
+*call fast
+*call scddat
+*call radata
+*call plndat
+*call solcom
+*call nbtim
+*call cmptim
+*call miscon
+*call ptscom
+*call fpnonv
+*call voldat
+*call fpfast
+*call cmatp
+*call cons
+*call trnot1
+*call iocom
+*call effprp
+*call tblsp
+*call debout
+*call intcom
+*call ndxara
+*call nhtara
+*call fpdkht
+*call scdads
+*call scdcom
+*call scdout
+*call trnot2
+*call ufiles
+c  Local variables.
+      real tsur, effcp, effcpc, effgen, effk,
+     # wconab, wcongt, wconss, afracl, avoidl, hremov,
+     # azira, dum, estimd, fnsigl, haddbt,
+     # poxfr, rel1,
+     # rel2, snrelr, snrem, tcld, timdbf, vzira, eta,
+     # usmach, avir
+      real avfunc
+      integer i, i34, ierr, ir, isp, ispo, ispvk,
+     +iwarn, kx, l, mz, m2, mdyn, n, nag, ncd,
+     +nelm, nsn, nvolin, mltabi, mltgti, mltssi
+      real tgtset
+      integer lhyvol,lmaxgt,lmax
+      dimension tsur(ndax),
+     # effcp(ndrd,ndax), effcpc(ndax), effgen(ndrd,ndax),
+     # effk(ndrd,ndax), mltabi(ndax), mltgti(ndax),
+     # mltssi(ndax), wconab(ndax), wcongt(ndax), wconss(ndax),
+     # afracl(ndax), avoidl(ndax), hremov(ndax),
+     # avir(ndrd,ndax)
+c
+      external brchsw,ccdata,cpress,cstate,effhtc,efprop,
+     +fpspix,gridsc,heatc2,liqcon, meshgn,nheat,oxdcon,rfrzn,
+     +tinr,trate,tspowr,usmach,avfunc
+c
+      mz = ndax * ( icomp - 1 ) + 1
+      m2 = ndax * 2 * ( icomp - 1 ) + 1
+      n = ndrd * ndax * ( icomp - 1 ) + 1
+      eta = usmach(1)
+      naxpz(icomp) = naz
+cljs  set to zero mass of control rod material slumping below core
+cljs  during time step.
+      wbotsr(icomp)=0.0
+      wbotzr(icomp)=0.0
+      wbotab(icomp)=0.0
+c override fragmentation due to quench until debris models are
+c implemented in scdsimp.
+      do 10 i = 1,naz
+        ifrag(mz-1+i) = 0
+c calculate cross section of control rod
+        afuel(mz-1+i)=pi*rco(mz)**2
+c start of time step temperatures
+        do 10 l=1,nrodes(mz-1+i)
+          tcnd03(l,i,icomp)=tcond3(l,i,icomp)
+   10 continue
+      idsrup(icomp) = 0
+      estimd = 0.0
+      timdbf = timdb + deltdb
+      timec = timdb
+        call ccdata
+        do 30 i=1,naz
+          tsur(i)=tcond3(nrods2(i,icomp),i,icomp)
+          tsur0(i)=tcnd03(nrods2(i,icomp),i,icomp)
+          l=nvad(ndax*(icomp-1)+i)+filndx(4)
+          tcolc(ndax*(icomp-1)+i)=voidg(l)*tempg(l)+voidf(l)*tempf(l)
+   30   continue
+c Get power for this Scdap component.
+        call tspowr
+        call nheat(afuel(mz), ncrust(icomp), dum)
+        do 60 i=1,naz
+          if(icohpp(i,icomp).eq.1) noxide(mz-1+i)=3
+          if(irubpp(i,icomp).eq.1) noxide(mz-1+i)=3
+          if(wremsr(mz-1+i).gt.1.e-10) noxide(mz-1+i)=3
+          if(wremzr(mz-1+i).gt.1.e-10) noxide(mz-1+i)=3
+   60   continue
+        call oxdcon
+        do 70 i = 1,naz
+c put outer clad radius back if > crust radius
+          rocrst(mz-1+i) = max(rocrst(mz-1+i),rco(mz-1+i))
+c compute beta zircaloy thickness.
+   70   continue
+        wdtqlp(icomp)=0.0
+        do 80 i=1,naz
+          qchlbn(i,icomp)=0.0
+c      calculate flow area around guide tube.
+c      pitch is assumed same for all components
+          avoidl(i)=pitch(1)**2 -pi*rco(mz+i-1)**2
+   80   continue
+        call liqcon(dt, dzcond(mz), naz, rl(icomp), rci(mz),
+     +  rco(mz), rnoxd(mz), rci(mz), rpel(mz), riss(mz), rftemp, tsur,
+     +  tsur0, zcond(mz), avoidl, ndisrp(mz), vladeb(mz), nfi
+     +  (mz), rocrst(mz), wbotab(icomp), wbotsr(icomp), wbotzr(icomp),
+     +  wfroab(mz), wfrosr(mz), wfrozr(mz), wremab(mz), wremsr(mz),
+     +  wremzr(mz), hadd(mz), haddbt, hremov, wconab, wconss, wcongt,
+     +  afracl, dzfrcl(mz), mltabi, mltssi, mltgti, timec)
+        wdtqlp(icomp)=float(nsigl1)*haddbt
+        do 90 i=1,naz
+          if(hadd(mz-1+i).gt.1.0)then
+            qchlbn(i,icomp)=float(nsigl1)*hadd(mz-1+i)
+            hadd(mz-1+i)=1.0
+          end if
+   90   continue
+        do 100 i = 1,naz
+          if(wremsr(mz+i-1).gt.1.e-10)icohpp(i,icomp)=1
+          nfrslg(mz-1+i) = 0
+  100   continue
+c turn breach switch on if cladding breach occurred.
+        call brchsw (nfi(mz),nzero,naz,ibrch(icomp))
+        call cpress(ibrch(icomp),nvirn,naz,ngeom(icomp),
+     +  nrcond(mz), nrodes(mz), pcool, tcond(n), xcond(n), pgas(icomp))
+        call cstate
+c calculate temperatures for axial nodes which do not belong to
+c a debris region or are not void.
+        icoht(icomp) = 0
+        icohb(icomp) = 0
+c Note.  Coding deleted that switched temperature solution from
+c 2-d to 1-d after material relocation began.
+        do 120 i = 1,naz
+c calculate new radial mesh.
+          call meshgn (nrcldi(mz-1+i),nrodes(mz-1+i),rci(mz-1+i), rco
+     +    (mz-1+i), xcond3(1,i,icomp))
+c calculate power from oxidation heat and liquifying
+c material for control rod.
+          poxfr = (oxdhfc(i,icomp))*pi*rcos(icomp)** 2+ hadd
+     +    (mz-1+i)/(dzcond(mz-1+i)*dt)
+c inaz passed by common to define current axial node
+          inaz = i
+          kx = mz + i - 1
+          call effhtc(poxfr, unuc(i), tsur(i), tsur0(i),
+     +      effcp(1,i) ,effcpc(i) ,effcpf(kx) ,effgen(1,i),effk(1,i),
+     +      effqf(kx))
+cljs   set residual values to effcp and efffpc after material
+cljs   relocation
+              if(wremsr(mz+i-1).gt.1.0e-10)then
+                lmax=nrods2(i,icomp)-1
+cljs            faccpr = 0.1
+                  do l=1,lmax
+cljs                if(effcp(l,i).lt.(faccpr*2.2e+6))then
+cljs  set nominal values to control rod thermal properties at
+cljs  axial nodes where material has slumped away.
+                    effcp(l,i)=2.e+6                  
+                    effk(l,i)=20.0 
+                    effgen(l,i)=0.0
+cljs                end if
+                  end do
+                effcpc(i) = 2.e+6
+                effqf(kx) = 0.0
+cljs            if(effcpc(i).lt.(faccpr*2.2e+6))effcpc(i)=
+cljs &          faccpr*2.2e+6
+cljs            effqf(kx)=0.0
+              end if
+  120   continue
+        call heatc2( icomp,effk,effcp,effgen,nvirn )
+        do 200 i = 1,naz
+          nelm = numelm(mz+i-1)
+          do 190 ir = 1,nelm
+            avir(ir,i) = pi*dzcond(mz+i-1)*( xcond3(ir+1,i,icomp)+
+     +      xcond3(ir,i,icomp) )* ( xcond3(ir+1,i,icomp)-xcond3
+     +      (ir,i,icomp) )
+  190     continue
+  200   continue
+        do 220 i = 1,naz
+          nelm = numelm(mz+i-1)
+          do 210 ir = 1,nelm
+            qstor(icomp) = qstor(icomp) + effcp(ir,i)*avir(ir,i)*0.5*
+     +      ((tcond3(ir+1,i,icomp)+tcond3(ir,i,icomp)) - (tcnd03(ir +1,
+     +      i,icomp)+ tcnd03(ir,i,icomp)) )*nsigl(icomp)
+            qedt(icomp)=qedt(icomp)+effgen(ir,i)*avir(ir,i)*dt* nsigl
+     +      (icomp)
+  210     continue
+          qodt(icomp) = qodt(icomp) + (oxdhcc(i,icomp)+oxdhfc(i,icomp) )
+     +    *dzcond(mz+i-1)*dt*nsigl(icomp)
+          qndt(icomp) = 0.0
+          qsdt(icomp) = qodt(icomp) + qndt(icomp)
+  220   continue
+        if (qstor0(icomp) .eq. 0.0) then
+c calculate initial stored energy.
+          do i=1,naz
+            do ir=1,numelm(mz+i-1)
+              qstor0(icomp) = qstor0(icomp) + effcp(ir,i) * avir
+     &        (ir,i) * (tcnd03(ir+1,i,icomp) + tcnd03(ir,i,icomp) )
+            enddo
+          enddo
+          qstor0(icomp) = qstor0(icomp) * 0. 5* nsigl(icomp)
+        end if
+c remove grid spacers which are above melt temperature.
+        call gridsc
+        timec = timec + dt
+c compute average thermal properties and stored energy for component.
+      call efprop (effcp,effk,effgen,naz,ngeom(icomp),numelm(mz),
+     +tcond(n),xcond(n),6,10,ifrag(mz),efrcpa(1,icomp),effka(1,icomp),
+     +efgena(1,icomp), efstor(1,icomp), efstr0(1,icomp), tcond0(n) )
+      do 240 i = 1,naz
+        tcld=tcond3(nrodes(mz-1+i),i,icomp)
+        if (tcld .gt. 2573.0) then
+          rel1=fpstt(icmp,i,2)*(0.5+0.001*(tcld-2573.0))
+          rel2=fpstt(icmp,i,3)*(0.8+0.0004*(tcld-2573.0))
+          rel1=0.1*max(rel1,fpstt(icmp,i,2))
+          rel2=0.7*max(rel2,fpstt(icmp,i,3))
+          fpstr(icmp,i,2)=rel1/dt
+          fpstr(icmp,i,3)=rel2/dt
+          if(rel1.gt.10*eta)fpstt(icmp,i,2)=fpstt(icmp,i,2)-rel1
+          if(rel2.gt.10*eta)fpstt(icmp,i,3)=fpstt(icmp,i,3)-rel2
+        else if (tcld .ge. 1673.0) then
+          rel1=fpstt(icmp,i,2)*(0.05+0.0005*(tcld-1673.0))
+          rel2=fpstt(icmp,i,3)*(0.5+0.00033*(tcld-1673.0))
+          rel1=0.1*rel1
+          rel2=0.7*rel2
+          fpstr(icmp,i,2)=rel1/dt
+          fpstr(icmp,i,3)=rel2/dt
+          if(rel1.gt.10*eta)fpstt(icmp,i,2)=fpstt(icmp,i,2)-rel1
+          if(rel2.gt.10*eta)fpstt(icmp,i,3)=fpstt(icmp,i,3)-rel2
+        end if
+  240 continue
+c If no aerosol calculation has been specified, then return.
+      if (filid(34) .eq. 0.0) return
+      i34 = filndx(34)
+      ispvk = fpspvk(i34)
+      call fpspix ('Ag  ', nag)
+      if (nag .gt. 0) then
+        ispo = i34 + (nag-1)*ispvk
+        do 250 i = 1, naz
+          isp = nvhydf(icmp,i) + ispo
+          fpsrc(isp) = fpsrc(isp) + fpstr(icmp,i,2)
+  250   continue
+      endif
+      call fpspix ('Cd  ', ncd)
+      if (ncd .gt. 0) then
+        ispo = i34 + (ncd-1)*ispvk
+        do 260 i = 1, naz
+          isp = nvhydf(icmp,i) + ispo
+          fpsrc(isp) = fpsrc(isp) + fpstr(icmp,i,3)
+  260   continue
+      endif
+c Calculate tin release from guide tube.
+      call fpspix ('Sn  ', nsn)
+      if (nsn .eq. 0) return
+      ispo = i34 + (nsn-1)*ispvk
+c calculate release of tin from cladding.
+      do 270 i = 1, naz
+        mdyn=ndax*(icomp-1)+i
+        tcld=tcond3(nrodes(mz-1+i),i,icomp)
+        if(tcld.lt.1000.)go to 270
+        if(wremzr(mdyn).gt.1.e-10)go to 270
+        if(fpstt(icomp,i,1).lt.1.e-12)go to 270
+c Calculate volume of oxidized cladding.
+        vzira=pi*dzcond(mdyn)*(rnoxd(mdyn)**2-rci(mdyn)**2)
+        azira=2.*pi*rnoxd(mdyn)*dzcond(mdyn)
+        snrem=fpstt(icomp,i,1)
+        isp = nvhydf(icomp,i) + ispo
+c Calculate relap5 volume index.
+        nvolin=nvad((icomp-1)*ndax+i)+filndx(4)
+c Get concentration of tin in vapor state in coolant.
+        call tinr(tcld,vzira,azira,snrem,fpvap(isp),tcolc(mdyn),pcool,
+     +  snrelr, nvolin, ierr, iwarn)
+        if(ierr.gt.0)then
+c Print to check indexes.
+          write (output,9000)ierr
+ 9000 format('0Error in subroutine tinr, ierr=',i5)
+          fail = .true.
+        end if
+c Update inventory to account for release.
+        fpstt(icomp,i,1)=fpstt(icomp,i,1)-snrelr*dt
+        fnsigl=float(nsigl(icomp))
+        fpsrc(isp)=fnsigl*snrelr+fpsrc(isp)
+  270 continue
+      return
+      end
+*endif

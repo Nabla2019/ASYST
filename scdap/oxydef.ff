@@ -1,0 +1,135 @@
+*mlist
+*if def,selap
+       subroutine oxydef (oxlis,kaxn,nshap)
+c
+c  oxydef computes the oxidation rate limit and limit ratio.
+c
+c  Cognizant engineer: cma.
+c   kaxn = axial node (input)
+c   nshap = indicator of shape of surface that is oxidizing;
+c           0=vertical cylindrical surface,
+c           1=vertical slab surface,
+c           2=drops of frozen cladding,
+c           3=rubble debris.
+c     calling subroutines:  oxidiz
+c     subroutines called:   polate
+c     engineer/programmer:  c m allison
+c
+       implicit none
+       integer kaxn
+       real oxlis
+*call fast
+*call comctl
+*call voldat
+*call ufiles
+*call scddat
+*call buntim
+*call cmptim
+*call scdcom
+*call scdout
+*call tblsp
+*call ndxara
+*call miscon
+*call trnot2
+*call oxcom4
+*call contrl
+*call dbacct
+c     input variables                  description
+c        oxyftr                    diffusion limit coming
+c                                  out of 'statep'
+c        kaxn                          axial node number
+c
+c     output variables                 description
+c        oxlis              oxidation rate limit per unit surface area
+c                                       (kg/m2 s)
+c
+c     local variables                  description
+c        nn             current index for scdap volume
+c
+c  Local variables.
+       integer nn
+       integer nshap,ndifap,kvdef
+       integer ndbg
+       real tsur,tmltbk
+       real dif1,htctot,dif2,facblk
+cljs
+       real qualamx,voidsh
+       real snfunc
+       external snfunc
+       data tmltbk / 3120./
+cljs
+       data qualamx /0.99/
+       data voidsh / 0.0001/
+c define the limit on oxidation by consuming all existing steam
+         ndbg=0
+      stmlmt(kaxn,icomp)= 0.8888889*
+     # flstm(ndax*(icomp-1)+kaxn)/snfunc(ngeom(icomp),
+     # rco2(kaxn,icomp),dzcnd2(kaxn,icomp),slbwd(icomp))
+c Define the rate limit based on mass diffusion
+c See volume 2 page 3-3
+c     To preclude turning off mass diffusion limit for case of
+c     stagnant pool of water in part of node, reference voidf in
+c     volume one node above node kaxn.
+      facblk = 1.
+      kvdef=kaxn+1
+      if(kaxn.eq.naz)kvdef=kaxn
+      nn = nvad((icomp-1)*ndax + kvdef) + filndx(4)
+      tsur=tcond3(nrods2(kaxn,icomp),kaxn,icomp)
+      htctot=hfixg((icomp-1)*ndax+kaxn)
+      diflmt(kaxn,icomp)=oxyftr(nn)*htctot
+      if(nshap.le.1.or.nshap.eq.3)then
+        dif1=diflmt(kaxn,icomp)
+        if(nshap.le.1)then
+c   intact rods
+          if(modidx(2). ne. 1)then
+            if(voidf(nn).ge.voidsh)dif1=stmlmt(kaxn,icomp)
+          else 
+            if(voidf(nn).ge.voidsh .and. shtflg(icomp,kaxn).eq.1)
+     &      dif1=stmlmt(kaxn,icomp)
+          end if
+        else
+c   debris caused by quenching of embrittled fuel rods.
+          if(voidf(nn).ge.voidsh)dif1=stmlmt(kaxn,icomp)
+        end if
+      else
+        if(voidf(nn).le.voidsh)then
+          dif1=diflmt(kaxn,icomp)
+          if(fadrop(kaxn,icomp).gt.fbafll)
+     #      dif1=facblk*dif1
+          if(kaxn.ge.2)then
+            if(fadrop(kaxn-1,icomp).gt.fbafll .and.
+     #        voidf(nn).lt.voidsh) dif1=facblk*dif1
+          end if
+        else
+          dif1=stmlmt(kaxn,icomp)
+        end if
+      end if
+cljs   testing
+cljs  if(quala(nn).ge.qualamx)then
+cljs  dif1 = 0.0
+cljs  end if
+      dif2=dif1
+c Now limit oxidation to existing steam
+c If reflood shattering don't apply mass diffusion limits
+      if(shtflg(kaxn,icomp).eq.1)ioxlm(kaxn,icomp)=0
+c If reflood, do not apply diffusion limit.
+c    ioxlm is on/off switch for limiting oxidation based on diffusion
+c    limit; set on card 400n4000, n = component number;
+c    0 = limit off, 1 = limit on, read in subroutine rfuel.
+      ndifap=0
+      if(ioxlm(kaxn,icomp).ne.0)ndifap=1
+      diflmt(kaxn,icomp)=dif2
+      if(ndifap.eq.0)then
+        oxlis=stmlmt(kaxn,icomp)
+      else
+        oxlis=min(dif2,stmlmt(kaxn,icomp))
+      endif
+c If double sided oxidation, cut limit in half
+      if (int(brchv(kaxn,icomp)).ne.0) oxlis = 0.5*oxlis
+c   apply protection against numerical instability that may cause
+c   temperature to be greater than temperature at which oxidation
+c   precluded by blockage formation.
+      if(tsur.gt.tmltbk)oxlis=0.0
+      return
+      end
+*endif

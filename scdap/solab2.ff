@@ -1,0 +1,154 @@
+*mlist
+       subroutine solab2(kb,naz,tsur,tsol,tliqav,wbotab,
+     & haddbt,dz,wfroab,avoidl,hadd,rftemp,ifrag,vladeb,dzfrcl,
+     & hremov,wremgt)
+! 
+!  Descriptive sentence for solgt goes here.
+!  Relocation of absorber on the guide tube
+!
+!#     calling subroutine: liqcon2
+!#     subroutines called: matpro
+!#
+!#     argument list :
+!#     kb        = elevation at which liquid neutron ab-
+!#                  sorber material begins to flow. (m)
+!#                  (input)
+!#     naz       = number of axial zones      (input)
+!#     tsur(k)   = inner surface temperture of guide tube
+!#                 axial zone k at end of time step. (k).
+!#                 (input)
+!#      tsol    = solidification temperature (k)   (input)
+!#      tliqav    = average temperature of liquified mater-
+!#                  at start of flow. (k)   (input)
+!#    wbotab    = mass of liquified guide absorber
+!#                which flowed below bottom
+!#                of core. (kg)    (input/output)
+!#     wflo      = mass of liquified material at start of
+!#                 flow. (kg)    (input)
+!#     haddbt    = heat added to region below core due to
+!#                 flow of liquified control rod material.
+!#                 (j)     (input/output)
+!#     dz(k)     = height of each axial zone  (m)  (input)
+!#    wfroab(k) = mass of solidified guide tube
+!#                axial zone k. (kg)    (input/output)
+!#     avoidl(k) = flow area around guide tube. (m**2)
+!#                 (input)
+!#     hadd(k)   = heat added to axial zone k during time
+!#                 step due to flow of liquified control
+!#                 rod material. (j)    (output)
+!#     rftemp    = reference temperature for enthalpy cal-
+!#                 culations. normally, rftemp is set equal
+!#                 to room temperature. (k)    (input)
+!#     ifrag(k)  = variable indicating whether or not in-
+!#                 tact control rod, debris bed or void
+!#                 region exists in axial zone k.
+!#                 0 = intact control rod
+!#                 1 or 2 = debris bed
+!#                 3 = void region
+!#                 (input)
+!#     vladeb(k) = volume of liquid which can be absorbed
+!#                 by debris bed in axial zone k. (m**2)
+!#                 (input)
+!#    dzfrcl(k) = fraction of height of axial zone k which
+!#                solidified control rod material resting
+!#                on top of debris bed.  (input/output)
+!#    hremov(k)=heat removed from axial zone  k (J)
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+!
+       include 'contrl.h'
+       include 'ufiles.h'
+       include 'scddat.h'
+       include 'conele.h'
+!
+       integer kb,naz
+       real(kr) tliqav,tsol,wbotab, haddbt,rftemp
+!
+       integer ifrag
+       real(kr) tsur,dz,avoidl,vladeb,wfroab,hadd,dzfrcl,woxdwf,
+     # oxdwf,hremov ,wremgt 
+       dimension tsur(ndax),dz(*),avoidl(ndax),ifrag(*),vladeb(*),
+     # wfroab(*), hadd(*),dzfrcl(*),hremov(*),wremgt(*)
+!
+c  Local variables.
+       integer ictype,k,ksol,nsw,l
+       integer ndbg,kbsol,kstack
+       real hrem, aden,aenthl,wfbc,wfbo,rho,vol,vols,enthab
+       external aden,aenthl
+c
+c       find first axial zone below zone kb which is cooler
+c       than solidification temperature 
+        ictype=2
+        nsw=0
+        ksol=0
+        enthab=aenthl(ictype,tliqav,rftemp) 
+        wfbc=wrbszo(kb,icomp,11)
+        wfbo=wrbszo(kb,icomp,12)
+        do150k=kb,1,-1
+          if(k.eq.kb)goto 150
+          if(nsw.eq.1)goto 150
+          if(wremgt(k).ge.1.e-10)goto 150
+          if(tsur(k).lt.tsol)then
+            nsw=1
+            ksol=k
+          end if
+          if(nsw.eq.1)go to 150
+          if(ifrag(k).eq.1.or.ifrag(k).eq.2)then
+            nsw=1
+            ksol=k
+          end if
+  150  continue        
+        if(ksol.ge.1) go to 200
+c
+c       calculate mass and heat added to region below
+c       bottom of core.
+                        
+        wbotab=wbotab+wfbc+wfbo
+        haddbt=haddbt+(wfbc+wfbo)*enthab
+        go to 850
+  200   continue
+       kbsol=ksol  
+       if(ifrag(kbsol).eq.0)then
+          wfroab(kbsol)=wfroab(kbsol)+wfbc+wfbo
+          hadd(kbsol)=hadd(kbsol)+(wfbc+wfbo)*enthab 
+          wrbszo(kbsol,icomp,11)=wrbszo(kbsol,icomp,11)
+     &                                      +wrbszo(kb,icomp,11)
+          wrbszo(kbsol,icomp,12)=wrbszo(kbsol,icomp,12)
+     &                                      +wrbszo(kb,icomp,12)
+
+        else
+           rho=aden(ictype,tliqav)
+           vol=wfbc/rho+wfbo/1.38/rho
+           if(vol.le.vladeb(kbsol))vols=vol
+           if(vol.gt.vladeb(kbsol))vols=vladeb(k)
+           wfroab(kbsol)=wfroab(kbsol)+(wfbc+wfbo)*vols/vol
+           hadd(kbsol)=hadd(kbsol)+(wfbc+wfbo)
+     #            *enthab*vols/vol  
+           wrbszo(kbsol,icomp,11)=wrbszo(kbsol,icomp,11)
+     &                                +wrbszo(kb,icomp,11)*vols/vol
+           wrbszo(kbsol,icomp,12)=wrbszo(kbsol,icomp,12)
+     &                                +wrbszo(kb,icomp,12)*vols/vol
+           if((vol-vols).lt.1.e-10)go to 240
+           kstack=kbsol+1
+!
+!      stack balance of liquid on top of debris.
+!
+           if(kstack.gt.naz)kstack=naz
+           wfroab(kstack)=wfroab(kstack)+(vol-vols)/vol*(wfbc+wfbo)
+           hadd(kstack)=hadd(kstack)+(vol-vols)/vol
+     #   *(wfbc+wfbo)*enthab
+           dzfrcl(kstack)=dzfrcl(kstack)+(vol-vols)/avoidl(kstack)
+           wrbszo(kbsol,icomp,11)=wrbszo(kbsol,icomp,11)
+     &                           +wrbszo(kb,icomp,11)*(vol-vols)/vol
+           wrbszo(kbsol,icomp,12)=wrbszo(kbsol,icomp,12)
+     &                           +wrbszo(kb,icomp,12)*(vol-vols)/vol
+  240    continue
+        end if
+  850   continue
+  
+         hremov(kb)=hremov(kb)+(wfbc+wfbo)*enthab
+         wrbszo(kb,icomp,11)=0.0
+         wrbszo(kb,icomp,12)=0.0
+        return
+        end
+*endif

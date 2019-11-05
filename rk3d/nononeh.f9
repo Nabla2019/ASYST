@@ -1,0 +1,354 @@
+      SUBROUTINE NONONEH(IXY,KL,
+     $  JNEM,DIR1N,IB,VOLU,BETAT,BETATLAM,
+     $  TCD,TNF,TXT,SIGDSN,XHIP,
+     $  SEXT,SW,LSEXTZ,LSEXTR,
+     $  AL,TF,TD,FL,SXT,EXC,SWS,AK,CSH0,SNH1,CSH2,IDIR)
+C     
+C     THIS ROUTINE SOLVES A ONE-NODE PROBLEM. IT IS USED ONLY FOR
+C     EDGE NODES WITHOUT A ZERO CURRENT BOUNDARY CONDITION
+C     WHEN UPDATING THE NET CURRENTS BY NONNEM.
+C     *** FOR HEXAGONAL GEOMETRY WITH CONFORMAL MAPPING ***
+C     
+C     VARIABLE DESCRIPTION :
+C     
+C     AL   :TOTAL X-SEC
+C     TF   :FISSION X-SEC
+C     TD   :DIFFUSION COEFFICIENT
+C     FL   :FLUX
+C     FS   :FISSION SOURCE
+C     EXC  :NODAL EXPANSION COEFFICIENTS
+C     
+      
+      include 'param.fcb'
+      include 'che.fcb'
+      include 'geom.fcb'
+      include 'xsec1.fcb'
+      include 'extsor.fcb'
+      include 'confmap.fcb'
+      include 'bcshex.fcb'
+
+      INTEGER*8   DIR1N !vmq
+      DIMENSION SXT(NG)
+      DIMENSION EXC(5,NG),AL(NG),TF(NG),TD(NG),FL(NG)
+      
+      DIMENSION
+     $  SEXT(*)                     ,VOLU(NXYL,*)           ,
+     $  LSEXTZ(*)                   ,LSEXTR(*)              ,
+     $  BETATLAM(NXYL,NZ,NG)        ,BETAT(NXYL,NZ)         ,
+     $  TCD(NXYL,NZ,*)              ,TNF(NXYL,NZ,*)         ,
+     $  TXT(NXYL,NZ,*)         ,
+     $  XHIP(NXYL,NZ,NG)            ,SW(NXYL,NZ,*)          ,
+     $  SIGDSN(NXYL,NZ,NG,NMG),SWS(6,NXYL,NZ,NG)
+      DIMENSION AK(NXYL,NZ,NG),CSH0(NXYL,NZ,NG),SNH1(NXYL,NZ,NG),
+     $  CSH2(NXYL,NZ,NG)
+
+      REAL*8 AMAT2(64),BRHS2(12),XOUT2(12)      !vmq
+      REAL*8 JNEM(NG),FSG(4) !vmq
+      REAL*8 SINHU(4),COSHU(4)
+C     
+C     ZERO OUT ARRAYS
+C     
+      DO I=1,64
+       AMAT2(I)=0.
+      ENDDO
+      DO I=1,12
+       BRHS2(I)=0.0
+       XOUT2(I)=0.0
+      ENDDO
+
+      U=CBASE/2.
+      DO IG=1,NG
+       JNEM(IG)=0.0
+       SINHU(IG) =SINH(AK(IXY,KL,IG)*U)
+       COSHU(IG) =COSH(AK(IXY,KL,IG)*U)
+       DO I=1,5
+        EXC(I,IG)=0.0
+       ENDDO
+      ENDDO
+C     
+C     SAVE CROSS SECTIONS INTO GROUP DEPENDENT ARRAYS
+C     
+      DO 200 IG=1,NG
+       AL(IG) = TXT(IXY,KL,IG)
+       TF(IG) = TNF(IXY,KL,IG)/FLAMDA
+       TD(IG) = TCD(IXY,KL,IG)
+       FL(IG) = SW(IXY,KL,IG)
+       SXT(IG) = 0.0
+ 200  CONTINUE
+      
+      DO 419 IG=1,NGF
+       SXT(IG)=LSEXTR(IXY)*LSEXTZ(KL)*SEXT(IG)
+ 419  CONTINUE
+
+      DO 121 IG=1,NG
+       FSG(IG)=TF(IG)*( (1.0 - BETAT(IXY,KL))*
+     $   XHIP(IXY,KL,IG)+ BETATLAM(IXY,KL,IG) )
+ 121  CONTINUE
+
+      DO 110 IG=1,NG
+C      
+C     SOLVE A,a0, a2 USING 0TH MOM., 2ND MOM., AND FLUX AVE.
+C     EQUATIONS
+C     
+C     6X6 MATRIX SYSTEM FOR NG=2
+C     
+C     ....A  -  a2 -
+C     --------------
+C     1|  1  -  2  -  0th mom
+C     2|  -  3  -  4  0th mom
+C     3|  5  6  7  8  2nd mom
+C     4|  9 10 11 12  2nd mom
+C     
+C     12X12 MATRIX SYSTEM FOR NG=4
+C     
+C     .....A  -  -  -  a2 -  -  -
+C     ---------------------------
+C     .1|  1  -  -  -  2  -  -  - 0th mom
+C     .2|  -  3  -  -  -  4  -  - 0th mom
+C     .3|  -  -  5  -  -  -  6  - 0th mom
+C     .4|  -  -  -  7  -  -  -  8 0th mom
+C     .5|  9 10 11 12 13 14 15 16 2nd mom
+C     .6| 17 18 19 20 21 22 23 24 2nd mom
+C     .7| 25 26 27 28 29 30 31 32 2nd mom
+C     .8| 33 34 35 36 37 38 39 40 2nd mom
+C     
+C     
+C     OTH MOMENT
+C     
+C     A: 1,3 for NG=2 and 1,3,5,7 for NG=4
+       I=(IG-1)*2+1
+       AMAT2(I)=-2*TD(IG)*AK(IXY,KL,IG)*SINHU(IG)*K0/CBASE
+C     a2: 2,4 for NG=2 and 2,4,6,8 for NG=4
+       I=(IG-1)*2+2
+       AMAT2(I)=-2*TD(IG)*K0*K1/W2DENOM
+C     RHS
+       ADUM=0.0
+       DO IGG=1,NG
+        IF(IG.NE.IGG) THEN
+         IGP=IGG
+         IF(IGG.GT.IG) IGP=IGG-1
+         ADUM=ADUM+(TF(IGG)*( (1.0 - BETAT(IXY,KL))*
+     $     XHIP(IXY,KL,IG)+ BETATLAM(IXY,KL,IG) )
+     $     +SIGDSN(IXY,KL,IG,IGP))*FL(IGG)
+        ENDIF
+       ENDDO
+       BRHS2(IG)=-(AL(IG)-FSG(IG))*FL(IG)*K0
+     $   +ADUM +QU0(IG)-LU0(IG)
+C     
+C     2ND MOMENT
+C     
+C     A: 5,10 for NG=2 and 9,18,27,36 for NG=4
+       I=IG*(2*NG+1)
+       AMAT2(I)=(1./(4*CBASE*K1*W2DENOM))*
+     $   ( SINHU(IG)*TD(IG)*(-16*K1**2/AK(IXY,KL,IG)
+     $   +8.*K0**2*AK(IXY,KL,IG))
+     $   +CBASE*K1**2*TD(IG)*
+     $   (8*COSHU(IG)-2*CBASE*AK(IXY,KL,IG)*SINHU(IG)))
+     $   +(AL(IG)-FSG(IG))*CSH2(IXY,KL,IG)
+C     a2: 7,12 for NG=2 and 13,22,31,40 for NG=4 
+       I=(IG-1)*(2*NG+1)+(3*NG+1)
+       AMAT2(I)=1./(4*CBASE*K1*W2DENOM*W2DENOM) *
+     $   (8*TD(IG)*CBASE*(-K1**3*(CBASE**2/12.-(K0/K1)**2)
+     $   +K0**2*K1)
+     $   +CBASE*K1**2*TD(IG)*(8*K1*(U**2-(K0/K1)**2)
+     $   -2*CBASE**2*K1)) + AL(IG)-FSG(IG)
+C     A and a2 term from other group
+       DO IGG=1,NG
+        IF(IGG.NE.IG)THEN
+         IGP=IGG
+         IF(IGG.GT.IG)IGP=IGG-1
+         I=(2*NG+1)+(IG-1)*2*NG+(IGG-1)*1
+         AMAT2(I)=(TF(IGG)*( (1.0 - BETAT(IXY,KL))*
+     $     XHIP(IXY,KL,IG)+ BETATLAM(IXY,KL,IG) )
+     $     +SIGDSN(IXY,KL,IG,IGP))*CSH2(IXY,KL,IGG)
+         AMAT2(I)=-AMAT2(I)
+         I=(IG-1)*2*NG+(3*NG+1)+(IGG-1)*1
+         AMAT2(I)=-(TF(IGG)*( (1.0 - BETAT(IXY,KL))*
+     $     XHIP(IXY,KL,IG)+ BETATLAM(IXY,KL,IG) )
+     $     +SIGDSN(IXY,KL,IG,IGP))
+        ENDIF
+       ENDDO
+C     RHS
+       BRHS2(IG+NG)=QU2(IG)-LU2(IG)
+ 110  CONTINUE
+
+
+      IF(NG.EQ.2)THEN
+       CALL ONENODE4(AMAT2,BRHS2,XOUT2)
+      ELSEIF(NG.EQ.4)THEN
+       CALL ONENODE8(AMAT2,BRHS2,XOUT2)
+      ENDIF
+      DO 313 IG=1,NG
+       EXC(1,IG)=XOUT2(IG)
+       EXC(5,IG)=XOUT2(IG+NG)
+C     
+C     FLUX AVERAGE CONSTRAINT
+C     
+       EXC(3,IG)=(FL(IG)*FLRAT-EXC(1,IG)*CSH0(IXY,KL,IG))
+ 313  CONTINUE
+C     
+C     ZERO-OUT ARRAYS
+C     
+      DO I=1,64
+       AMAT2(I)=0.
+      ENDDO
+      DO I=1,12
+       BRHS2(I)=0.0
+       XOUT2(I)=0.0
+      ENDDO
+C     
+C     SOLVING FOR B AND a1 COEFFICIENTS
+C     
+C     4X4 matrix for NG=2
+C     ....1  2  3  4
+C     --------------
+C     1|  1  -  2  -
+C     2|  -  3  -  4
+C     3|  5  6  7  8   
+C     4|  9 10 11 12
+C     
+C     8X8 matrix for NG=4
+C     
+C     ... 1  2  3  4  5  6  7  8
+C     ---------------------------
+C     1|  1  -  -  -  2  -  -  -
+C     2|  -  3  -  -  -  4  -  -
+C     3|  -  -  5  -  -  -  6  -
+C     4|  -  -  -  7  -  -  -  8
+C     5|  9 10 11 12 13 14 15 16
+C     6| 17 18 19 20 21 22 23 24
+C     7| 25 26 27 28 29 30 31 32
+C     8| 33 34 35 36 37 38 39 40
+C     
+      IF(DIR1N.NE.1.AND.DIR1N.NE.-1)STOP 'NONONEH - error in DIR1N'
+      
+      DO 111 IG=1,NG
+C     
+C     BOUNDARY CONDITIONS
+C     
+C     
+C---- ZERO CURRENT
+C     
+       IF(IB.EQ.0)THEN
+C     B term
+        I=(IG-1)*2+1
+        AMAT2(I)=-TD(IG)*AK(IXY,KL,IG)*COSHU(IG)
+C     a1 term
+        I=(IG-1)*2+2
+        AMAT2(I)=-TD(IG)*K1
+C     RHS
+        BRHS2(IG)=TD(IG)*(EXC(1,IG)*AK(IXY,KL,IG)*DIR1N*SINHU(IG)+
+     $    DIR1N*EXC(5,IG)*K1*CBASE/W2DENOM)
+C     
+C---- ZERO FLUX
+C     
+       ELSEIF(IB.EQ.1)THEN
+C     B term
+        I=(IG-1)*2+1
+        AMAT2(I)=DIR1N*SINHU(IG)
+C     a1 term
+        I=(IG-1)*2+2
+        AMAT2(I)=DIR1N*K1*U
+C     RHS
+        BRHS2(IG)=-
+     $    (EXC(1,IG)*COSHU(IG)+EXC(3,IG)*K0
+     $    +EXC(5,IG)*K1*(U**2-(K0/K1)**2)/W2DENOM)
+       ELSEIF(IB.EQ.2)THEN
+C     
+C---- NON-REENTRANT
+C     
+C     B term
+        I=(IG-1)*2+1
+        AMAT2(I)=DIR1N*SINHU(IG)+DIR1N*2*TD(IG)*AK(IXY,KL,IG)*COSHU(IG)
+C     a1 term
+        I=(IG-1)*2+2
+        AMAT2(I)=DIR1N*K1*U+DIR1N*2*K1*TD(IG)
+C     RHS
+        BRHS2(IG)=-
+     $    (EXC(1,IG)*COSHU(IG)+EXC(3,IG)*K0
+     $    +EXC(5,IG)*K1*(U**2-(K0/K1)**2)/W2DENOM
+     $    +DIR1N*2*TD(IG)*(EXC(1,IG)*AK(IXY,KL,IG)*DIR1N*SINHU(IG)
+     $    +DIR1N*EXC(5,IG)*K1*CBASE/W2DENOM))
+
+       ELSE
+        STOP 'NONONEH - wrong BC'
+       ENDIF
+C     
+C     FIRST MOMENT
+C     
+C     B term
+       ISTART=2*NG
+       ISKIP=2*NG+1
+       I=ISTART+(IG-1)*ISKIP+1
+       AMAT2(I)=K1*TD(IG)*(-AK(IXY,KL,IG)*COSHU(IG)+2*SINHU(IG)/CBASE)
+     $   +(AL(IG)-FSG(IG))*SNH1(IXY,KL,IG)
+C     a1 term
+       ISTART=3*NG
+       I=ISTART+(IG-1)*ISKIP+1
+       AMAT2(I)=AL(IG)-FSG(IG)
+C     B and a1 term from other group
+       ISTART=2*NG
+       ISKIP=2*NG
+       DO IGG=1,NG
+        IF(IGG.NE.IG)THEN
+         IGP=IGG
+         IF(IGG.GT.IG)IGP=IGG-1
+         I=ISTART+(IG-1)*ISKIP+IGG
+         AMAT2(I)=-(TF(IGG)*( (1.0 - BETAT(IXY,KL))*
+     $     XHIP(IXY,KL,IG)+ BETATLAM(IXY,KL,IG) )
+     $     +SIGDSN(IXY,KL,IG,IGP))*SNH1(IXY,KL,IGG)
+         I=ISTART+NG+(IG-1)*ISKIP+IGG
+         AMAT2(I)=-(TF(IGG)*( (1.0 - BETAT(IXY,KL))*
+     $     XHIP(IXY,KL,IG)+ BETATLAM(IXY,KL,IG) )
+     $     +SIGDSN(IXY,KL,IG,IGP))
+        ENDIF
+       ENDDO
+C     RHS
+       BRHS2(IG+NG)=QU1(IG)-LU1(IG)
+
+ 111  CONTINUE
+      
+      IF(NG.EQ.2)THEN
+       CALL ONENODE4(AMAT2,BRHS2,XOUT2)
+      ELSEIF(NG.EQ.4)THEN
+       CALL ONENODE8(AMAT2,BRHS2,XOUT2)
+      ENDIF
+
+      DO 112 IG=1,NG
+       EXC(2,IG)=XOUT2(IG)
+       EXC(4,IG)=XOUT2(IG+NG)
+ 112  CONTINUE
+C     
+C     CALCULATE NEM CURRENT
+C     A  = EXC(1)
+C     B  = EXC(2)
+C     a0 = EXC(3)
+C     a1 = EXC(4)
+C     a2 = EXC(5)
+C     
+      IDUM=(IDIR-1)*2+1
+      DO 500 IG=1,NG
+       JNEM(IG)=-TD(IG)*(
+     $   EXC(1,IG)*AK(IXY,KL,IG)*DIR1N*SINHU(IG)
+     $   +EXC(2,IG)*AK(IXY,KL,IG)*COSHU(IG)
+     $   +EXC(4,IG)*K1
+     $   +DIR1N*EXC(5,IG)*CBASE*K1/W2DENOM  )
+       JNEM(IG)=JNEM(IG)*1.42510306
+C     
+C     SURFACE FLUXES
+C     
+       IF(DIR1N.EQ.-1)THEN
+        SWS(IDUM,IXY,KL,IG)=
+     $    EXC(1,IG)*COSHU(IG)+EXC(2,IG)*-SINHU(IG)+EXC(3,IG)*K0+
+     $    EXC(4,IG)*K1*(-U)+
+     $    EXC(5,IG)*K1*(U**2-(K0/K1)**2)/W2DENOM
+       ELSEIF(DIR1N.EQ.1)THEN
+        SWS(IDUM+1,IXY,KL,IG)=
+     $    EXC(1,IG)*COSHU(IG)+EXC(2,IG)*SINHU(IG)+EXC(3,IG)*K0+
+     $    EXC(4,IG)*K1*U+
+     $    EXC(5,IG)*K1*(U**2-(K0/K1)**2)/W2DENOM
+       ENDIF
+ 500  CONTINUE
+
+      RETURN
+      END

@@ -1,0 +1,528 @@
+*mlist
+       subroutine ht2tdp (ih,jo,time,dtime)
+c
+c  ht2tdp solves the 2-d transient heat problem and computes the radial
+c
+c  Cognizant engineer: rjw.
+c
+       use gentblc
+$if def,rk3d,1
+       use rkinc
+       implicit none
+       integer ih,jo
+       real time,dtime
+c
+c  time -- time at beginning of current time step.
+c  dtime -- current time step size.
+c
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'convarc.h'
+       include 'htrflb.h'
+       include 'radhtc.h'
+       include 'htscr1.h'
+       include 'htscr2.h'
+       include 'htsrcm.h'
+       include 'rflhtc.h'
+       include 'rkinc.h'
+       include 'statec.h'
+       include 'tmsrcm.h'
+       include 'trpblk.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       real ascra(4),ascrb(4),bktn,bkto,dtovr2,gterm,hcchf,
+     & power(1),powin,qdi,qdo,tchf,term,term1,term1i,term1o,termi,
+     & termo,tfref,tibn,tqf,tempn,vdfref
+       integer colbdy,hindex,i,iy,idx,idxo,
+     & iicl,indi,indih,inde,indix,inds,indy,indz,int1,int2,inttem,
+     & iplas,irupt,izr,izro,j,jr,k,kidx,knum,m,nmy,nn
+       equivalence (s(8),tfref),(s(9),vdfref),(s(11),gterm)
+       equivalence (prop(3),bktn),
+     & (prop(4),hcchf),(prop(5),tchf),(prop(6),tqf),(prop(7),tibn)
+       equivalence (prop(8),power(1)),(prop(9),powin),
+     & (prop(12),bkto)
+       logical err
+c
+       indz=inscr1+nqfmov
+       htdz(indz)=0.0
+       indzhs(indz)=indzhs(indz-nscra1)
+       indzhs(indz+1) = indzhs(indz-nscra1+1)
+       nmy=meshy-1
+       nn = htnmpt(jo) - 1
+       idxo = htgom(jo) + filndx(8)
+       dtovr2=dtime*0.5
+c
+c  Begin heat source calculation.
+       indy=inscr2
+       term=0.0
+       indi=0
+c  For inside and outside metal-water source terms.
+       termi = 0.0
+       termo = 0.0
+       do j=inscr1,indz,nscra1
+         hindex = indzhs(j)
+         if (hindex .eq. indi) go to 108
+         indi = hindex
+         i = htsrt(hindex)
+         if (i .ne. 0) go to 10
+         power(1) = 0.0
+         htpown(hindex) = 0.0
+         go to 14
+   10    if (i .lt. 1000) go to 13
+$if -def,rk3d,1
+         if (i.le.10000 .or. i.ge.100000) then
+$if def,rk3d,1
+         if (i.le.10000 .or. i.gt.100000) then
+           power(1) = fa(htsrt(hindex+1)+filndx(21))
+$if def,rk3d
+         elseif (i .eq. 100000) then
+           htpown(hindex) = rk4o(htsrt(hindex+1))%htpow
+$endif
+         else
+           power(1) = cnvarn(htsrt(hindex+1)+filndx(27))
+         endif
+   14    htpown(hindex) = power(1)
+         htpowo(hindex) = power(1)
+         go to 11
+   13    i = htsrt(hindex+1)
+         bktn = time + dtime
+         if (gen(i)%gttrp(1) .eq. 0) go to 21
+         if (trptm(gen(i)%gttrp(2)) .ge. 0.0) go to 22
+         bktn = trptm(gen(i)%gttrp(2))
+         go to 21
+   22    bktn = bktn - trptm(gen(i)%gttrp(2))
+   21    if (bktn .ne. gen(i)%gtarg) go to 12
+         power(1) = gen(i)%gtval(1)
+         go to 11
+   12    call gtpolat (gen(i)%gtinfo,gtptr(i)%gtbl,bktn,power(1:1),err)
+         gen(i)%gtarg = bktn
+         gen(i)%gtval(1) = power(1)
+   11    htpown(hindex) = power(1)
+         power(1) = (power(1) + htpowo(hindex))*0.5
+         qdo = 0.0
+         qdi = 0.0
+         if (succes .eq. 0) then
+c  Save stuff when advancement is successful.
+           oxtio(hindex)  = oxti(hindex)
+           oxtoo(hindex)  = oxto(hindex)
+           h2geno(hindex) = h2gen(hindex)
+         endif
+c  If metal/water reaction flag ne 0 call qmwr to get qdi,qdo.
+         if (iand(imw(hindex),16384) .ne. 0)
+     &   call qmwr(hindex,qdi,qdo,dtime)
+c  iicl = inside clad node number.
+         iicl   = iand( imw(hindex),511)
+   16    powin = power(1)*dtovr2*htfctr(hindex)
+  108    idx = idxo
+         term1=htdz(j)*powin
+c  Divide by 2, since only integrate over dt/2 per pass and pass through
+c  twice with adi method.
+         term1i = htdz(j) * qdi * 0.5
+         term1o = htdz(j) * qdo * 0.5
+         inde = indy
+         do i=1,htnmpt(jo)
+           htpws(inde) = (term+term1)*htsrc(idx)
+           if (i-1 .eq. iicl ) htpws(inde) = htpws(inde) + termi +
+     &     term1i
+           if (i.eq. htnmpt(jo)) htpws(inde) = htpws(inde) + termo +
+     &     term1o
+           idx = idx + htgskp
+           inde = inde+mesh4
+         enddo
+         term = term1
+         termi = term1i
+         termo = term1o
+         indy = indy + nscra2
+       enddo
+c
+c  End of heat source calculation.
+c  Get material properties.
+      call mdata2 (jo)
+c
+      if (help .ne. 0) then
+        if( iand(ihlppr(1),ishft(1,9)).ne.0 ) then
+          write (output,7772)
+ 7772    format (' mdata2 output; (vertical strips)'/'    i    j',
+     &   6x,'htb2=temp',9x,'httc2=k',11x,'htvhc2=rhocp')
+          iy = inscr2
+          kidx = inscr2 + mesh4
+          colbdy = htnmpt(jo)-1
+          do i = 1,colbdy
+            do j = 1,meshy
+              tempn = (tmpscr(iy)+tmpscr(iy+mesh4))*0.5
+              write (output,7771) i,j,tempn,httc2(kidx),htvhc2(kidx)
+ 7771  format (2i5,1p,4g18.7)
+              iy = iy + nscra2
+              kidx = kidx + nscra2
+            enddo
+          enddo
+        endif
+      endif
+c  rho*c terms.
+       j = indz+nscra1
+       do i = inscr1,indz,nscra1
+         httr2(i) = 0.0
+         htdz(j) = htdz(j-nscra1)
+         j = j - nscra1
+       enddo
+      htdz(inscr1)=0.0
+      idx=idxo
+      indy=inscr1
+      htc2(indy)=0.0
+      do 206 i=1,nn
+      htf2(indy)=htrvwt(idx)
+      indy=indy+nscra1
+      htc2(indy)=htlvwt(idx)
+      idx=idx+htgskp
+  206 continue
+      htf2(indy)=0.0
+      idx=inscr1
+      indy=inscr2
+      inds=indtol-mesh4+nscra2
+      inde=inscr2+mesh4
+      do 220 i=1,htnmpt(jo)
+      do 216 j=inscr1,indz,nscra1
+      htvhc2(indy)=(htdz(j)+htdz(j+nscra1))*(httr2(j)
+     1     *htc2(idx)+htf2(idx)*htvhc2(inde))
+      httr2(j)=htvhc2(inde)
+      indy=indy+nscra2
+      inde=inde+nscra2
+  216 continue
+      inde=min(inde,inds)
+      idx=idx+nscra1
+  220 continue
+c
+c    multiply heat conductivity by dt/2
+      indy=inscr2+mesh4
+      do 224 i=indy,indtol,nscra2
+      httc2(i)=httc2(i)*dtovr2
+  224 continue
+c
+c    compute aijt for all intervals
+      indz=indz-nscra1
+      do 304 i=inscr1,indz,nscra1
+  304 httr2(i)=0.0
+      indy=inscr2
+      idx=inscr1
+      inde=inscr2+mesh4
+      do 316 i=1,htnmpt(jo)
+      do 312 j=inscr1,indz,nscra1
+      term=httc2(inde)+httc2(inde+nscra2)
+      aijt(indy)=(httr2(j)*htc2(idx)+htf2(idx)*term)*htbd2(j)
+      httr2(j)=term
+      indy=indy+nscra2
+      inde=inde+nscra2
+  312 continue
+      aijt(indy)=0.0
+      indy=indy+nscra2
+      inde=min(inde+nscra2,inds)
+      idx=idx+nscra1
+  316 continue
+c
+c    compute aijr for all intervals
+c
+      indy=inscr2
+      idx=idxo
+      indz=indz+nscra1
+      do 324 i=1,nn
+      do 320 j=inscr1,indz,nscra1
+      aijr(indy)=httc2(indy+mesh4)*(htdz(j)+htdz(j+nscra1))
+     1    *htsrwt(idx)
+      indy=indy+nscra2
+  320 continue
+      idx=idx+htgskp
+  324 continue
+c    note -- httc2 has been destoryed
+c
+c    store boundary conditions in the scratch arrays
+c    left -- httr2, htbc2; right -- aijr(last col.), htbd2
+      bkto=areao(idxo)*dtovr2
+      bktn=arean(idxo)*dtovr2
+       call ftbmov (htdzlm(inxrfl(ih+1)),htdz(inscr1),nqfmov)
+      indz=indz-nscra1
+c  initialization for radiation heat flux.
+       if (filid(38) .eq. 0.0) go to 329
+         indih  = 0
+         jr     = filndx(38)
+c        save pointer for studsvik radiation.
+         izro   = jr + irhflx(jr)
+  329  continue
+      do 330 i=1,4
+  330 ascrb(i)=0.0
+      do 342 i=inscr1,indz,nscra1
+      do 334 j=1,4
+  334 ascra(j)=httr2(i+j)*htdz(i)
+c    add radiation heat heat flux to b.c.
+c                            any radiation calc?
+       if (filid(38) .eq. 0.0) go to 337
+c                            yes, indix = heat structure index (hindex)
+         indix = indzhs(i+2)
+c                            are we still inside the same 1d h.s.?
+         if (indix.eq.indih) go to 336
+c                            no, get index for radiation heat flux
+           indih  = indix
+           izr    = izro + 2 * (indix - filndx(8))
+  336    continue
+         ascra(3)   = ascra(3)   -  qlrad(izr) * htdz(i)
+         ascra(4)   = ascra(4)   -  qrrad(izr) * htdz(i)
+  337  continue
+      httr2(i)=(ascra(1)+ascrb(1))*bkto
+      aijr(indy)=(ascra(2)+ascrb(2))*bktn
+      htbc2(i)=(ascra(3)+ascrb(3))*bkto
+      htbd2(i)=(ascra(4)+ascrb(4))*bktn
+      do 338 j=1,4
+  338 ascrb(j)=ascra(j)
+      indy=indy+nscra2
+  342 continue
+      indz=indz+nscra1
+      httr2(indz)=ascra(1)*bkto
+      aijr(indy)=ascra(2)*bktn
+      htbc2(indz)=ascra(3)*bkto
+      htbd2(indz)=ascra(4)*bktn
+c
+c    start -- column inversion
+c    left boundary
+      indy=inscr2
+      power(1)=0.0
+      do 362 i=inscr1,indz,nscra1
+      htb2(i)=htvhc2(indy)+aijt(indy)+power(1)
+      htc2(i)=-aijt(indy)
+      htf2(i)=aijr(indy)*tmpscr(indy+mesh4)+tmpscr(indy)
+     1  *(htvhc2(indy)-aijr(indy)-httr2(i))+htpws(indy)
+     2  +htbc2(i)
+      power(1)=aijt(indy)
+      htts2(i)=tmpscr(indy)
+      indy=indy+nscra2
+  362 continue
+c   get temperature solution
+      call htcsol(nmy,nscra2,indy-nscra2)
+c   middle columns
+      do 370 i=2,nn
+      power(1)=0.0
+      do 366 j=inscr1,indz,nscra1
+      htb2(j)=htvhc2(indy)+aijt(indy)+power(1)
+      htc2(j)=-aijt(indy)
+      indi=indy-mesh4
+      htf2(j)=htpws(indy)+aijr(indi)*htts2(j)+aijr(indy)
+     1    *tmpscr(indy+mesh4)+tmpscr(indy)*(htvhc2(indy)
+     2    -aijr(indy)-aijr(indi))
+      power(1)=aijt(indy)
+      htts2(j)=tmpscr(indy)
+      indy=indy+nscra2
+  366 continue
+      call htcsol(nmy,nscra2,indy-nscra2)
+  370 continue
+c
+c    right boundary
+      power(1)=0.0
+      do 382 i=inscr1,indz,nscra1
+      htb2(i)=htvhc2(indy)+aijt(indy)+power(1)
+      htc2(i)=-aijt(indy)
+      indi=indy-mesh4
+      htf2(i)=aijr(indi)*htts2(i)+tmpscr(indy)
+     1  *(htvhc2(indy)-aijr(indi)-aijr(indy))+htpws(indy)+htbd2(i)
+      power(1)=aijt(indy)
+      indy=indy+nscra2
+  382 continue
+      call htcsol(nmy,nscra2,indy-nscra2)
+c
+c   end -- column inversion
+c   temperatures have been advanced to time + dtime/2
+c
+c   start -- row inversion
+      indy=inscr1+nn*nscra1
+      do 400 i=inscr1,indy,nscra1
+  400 htts2(i)=0.0
+c    rearrange aijt such that the bottom row are zero
+      indy=inscr2+nscra2
+      j=indtol
+      do 402 i=indy,indtol,nscra2
+      aijt(j)=aijt(j-nscra2)
+      j=j-nscra2
+  402 continue
+      aijt(j)=0.0
+c
+c    all rows except the top one
+      indy=inscr2
+      indz=indz-nscra1
+      do 412 i=inscr1,indz,nscra1
+      inds=inscr1
+c    left boundary point
+      htb2(inds)=htvhc2(indy)+aijr(indy)+httr2(i)
+      htc2(inds)=-aijr(indy)
+      idx=indy+nscra2
+      htf2(inds)=aijt(indy)*htts2(inds)+aijt(idx)*tmpscr(idx)
+     1   +tmpscr(indy)*(htvhc2(indy)-aijt(indy)-aijt(idx))
+     2   +htpws(indy)+htbc2(i)
+      htts2(inds)=tmpscr(indy)
+      inds=inds+nscra1
+      indi=indy+mesh4
+c    middle points
+      do 408 j=2,nn
+      htb2(inds)=htvhc2(indi)+aijr(indi-mesh4)+aijr(indi)
+      htc2(inds)=-aijr(indi)
+      idx=indi+nscra2
+      htf2(inds)=aijt(indi)*htts2(inds)+aijt(idx)*tmpscr(idx)
+     1   +tmpscr(indi)*(htvhc2(indi)-aijt(indi)-aijt(idx))+htpws(indi)
+      htts2(inds)=tmpscr(indi)
+      indi=indi+mesh4
+      inds=inds+nscra1
+  408 continue
+c    right boundary point
+      htb2(inds)=htvhc2(indi)+aijr(indi-mesh4)+aijr(indi)
+      idx=indi+nscra2
+      htf2(inds)=aijt(indi)*htts2(inds)+aijt(idx)*tmpscr(idx)
+     1  +tmpscr(indi)*(htvhc2(indi)-aijt(indi)-aijt(idx))
+     2  +htbd2(i)+htpws(indi)
+      htts2(inds)=tmpscr(indi)
+      call htcsol(nn,mesh4,indi)
+      indy=indy+nscra2
+  412 continue
+c
+c    top row
+      indz=indz+nscra1
+      inds=inscr1
+      htb2(inds)=htvhc2(indy)+aijr(indy)+httr2(indz)
+      htc2(inds)=-aijr(indy)
+      htf2(inds)=aijt(indy)*htts2(inds)+tmpscr(indy)*(htvhc2(indy)
+     1   -aijt(indy))+htpws(indy)+htbc2(indz)
+      inds=inds+nscra1
+      indi=indy+mesh4
+      do 416 j=2,nn
+      htb2(inds)=htvhc2(indi)+aijr(indi-mesh4)+aijr(indi)
+      htc2(inds)=-aijr(indi)
+      htf2(inds)=aijt(indi)*htts2(inds)+tmpscr(indi)*(htvhc2(indi)
+     1   -aijt(indi))+htpws(indi)
+      indi=indi+mesh4
+      inds=inds+nscra1
+  416 continue
+      htb2(inds)=htvhc2(indi)+aijr(indi-mesh4)+aijr(indi)
+      htf2(inds)=aijt(indi)*htts2(inds)+tmpscr(indi)*(htvhc2(indi)
+     1   -aijt(indi))+htpws(indi)+htbd2(indz)
+      call htcsol(nn,mesh4,indi)
+!
+!  End of row inversion.
+!  New temperatures have been obtained.
+!
+!  Average heat structure quantities
+       call ftbmov (htdzlm(inxrfl(ih+1)),htdz(inscr1),nqfmov)
+!
+!  Zero-out the heat transfer rates and coefficents.
+       i = lhtrfl(ih) + filndx(8)
+       do m = 1,htnusr(jo)
+         hindex = ihtptr(i) + filndx(8)
+         htrnro(hindex)=0.0
+         htrnrn(hindex)=0.0
+         htbcao(hindex) = 0.0
+         htbcan(hindex) = 0.0
+         htrfno(hindex+idrfl) = 0.0
+         htrgno(hindex+idrfl)=0.0
+         i = i + 1
+       enddo
+!
+       i = inscr1
+       inde = inscr2
+       indy = inxrfl(ih)
+       indi = nn*mesh4
+       do k = 1,htnusr(jo)
+         hindex = indzhs(i)
+!
+!  Radial mesh point temperatures at the center line.
+         inttem = htxft(hindex) + filndx(8)
+         idx = inde + (nmzht(indy)/2)*nscra2
+         do j = 1,htnmpt(jo)
+           httmp(inttem) = tmpscr(idx)
+           inttem = inttem + 1
+           idx = idx + mesh4
+         enddo
+         irupt = ishft(iand(imw(hindex),512), -9)
+         iplas = ishft(iand(imw(hindex),2048), -11)
+!  If the rod is not ruptured get the heatup rate.
+         if (iplas.eq.1 .and. irupt.eq.0) then
+           iicl = iand(imw(hindex),511)
+           idx = htnmpt(hindex)
+           int1 = htxit(hindex) + filndx(8)
+           int2 = htxft(hindex) + filndx(8)
+           hetrat(hindex) = (httmp(int2+iicl-1) + httmp(int2+idx-1) -
+     &     httmp(int1+iicl-1) - httmp(int1+idx-1))*.5/dtht
+         endif
+         idx = indzhs(i+1)
+         knum = nmzht(indy)
+         do j = 1,knum
+!
+!  Heat transfer coefficients.
+           htbcao(hindex) = htbcao(hindex) + htb2(i)*htbc2(i)
+           htbcan(hindex) = htbcan(hindex) + htc2(i)*htbc2(i)
+c          htbc2 = 1/knum
+!
+!  Heat transfer fluxes.
+           ascrb(1) = (tmpscr(inde)+tmpscr(inde+nscra2))*0.5
+           htrnro(hindex) = htrnro(hindex) + (htb2(i)*ascrb(1) -
+     &     htf2(i))*htbc2(i)
+           ascrb(2) = (tmpscr(inde+indi) + tmpscr(inde+indi+nscra2))*0.5
+           htrnrn(hindex) = htrnrn(hindex) + (htc2(i)*ascrb(2) -
+     &     htts2(i))*htbc2(i)
+           htrgno(hindex+idrfl) = htrgno(hindex+idrfl) +
+     &     htv1(i)*(ascrb(1+idrfl) - tempg(idx))*htbc2(i)
+!
+!  Wall vapor generation term reduce gamw (htv2) by number of
+!  fines since gamw was calculated with the full surface area
+           htrfno(hindex+idrfl) = htrfno(hindex+idrfl) +
+     &     htv2(i)*htbc2(i)
+           inde = inde + nscra2
+           i = i + nscra1
+         enddo
+         indy = indy + 1
+       enddo
+!
+!  Average volume temperatures.
+       i = lhtrfl(ih) + filndx(8)
+       do m = 1,htnusr(jo)
+         hindex = ihtptr(i) + filndx(8)
+         htvatp(hindex) = 0.0
+         idx = idxo
+         indz = htxft(hindex) + filndx(8)
+         do j = 1,htnmpt(jo)
+           htvatp(hindex) = htvatp(hindex) + htavwt(idx)*httmp(indz)
+           idx = idx + htgskp
+           indz = indz + 1
+         enddo
+!  Set time step advancement.
+         htimeo(hindex) = time
+         htdt(hindex) = dtime
+         i = i + 1
+       enddo
+!
+!  Store new surface temperatures
+       idx = inxrfl(ih+3)
+       indy = inxrfl(ih)
+       inde = inxlsr(1)
+       indi = inxlsr(2)
+       do i = 1,htnusr(jo)
+         inds = (nmzht(indy)/2)*nscra2
+         do j = 1,2
+           tmpsfo(idx) = tmpscr(inde)
+           tmpsfo(idx+1) = tmpscr(indi)
+           inde = inde + inds
+           indi = indi + inds
+           idx = idx + 2
+         enddo
+         indy = indy + 1
+       enddo
+       tmpsfo(idx) = tmpscr(inde)
+       tmpsfo(idx+1) = tmpscr(indi)
+!
+!  Store new temperatures.
+       inde = meshy*htnmpt(jo)
+       idx = inscr2
+       inttem = inxtmn
+       do i = 1,inde
+         tmprfn(inttem) = tmpscr(idx)
+         inttem = inttem + 1
+         idx = idx + nscra2
+       enddo
+       return
+       end

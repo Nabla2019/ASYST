@@ -1,0 +1,140 @@
+*mlist
+*if def,selap
+      subroutine hrstm2(twall,tstm,pres,jwall,jbl,xzro,twalmx,
+     *                  emissw,emissv,hr,xboxcb,itgas)
+c
+c  hrstm2 computes in-vessel structural radiation
+c  heat transfer to steam surrounding the structures.
+c
+c  Cognizant engineer: ewc (ljo fpg).
+c
+c******************************************************************
+c
+c     hrstm2              1-jan-92
+c
+c     the BWR canister/control blade modules were developed at ORNL
+c     by L.J.Ott under the auspices of the NRC sponsored Boiling
+c     Water Reactor Severe Accident Technologies programs.
+c
+c     for information or assistance, call
+c                 L.J.Ott (fts)-624-0324 or (615)-574-0324
+c                 F.P.Griffin (fts)-626-4684 or (615)-576-4684
+c
+c******************************************************************
+c
+c        twall  :  input  - wall temperature (deg f)
+c        tstm   :  input  - steam temperature (deg f)
+c        pres   :  input  - steam partial pressure (psia)
+c        jwall  :  input  - type of wall
+c                           =1 zircaloy (or zro2)
+c                           =2 stainless steel
+c        jbl    :  input  - method of computing the beam length
+c                           =1 canister to steam (intact geometry)
+c                           =2 control blade to steam (intact geometry)
+c        xzro   :  input  - if jwall=1, thickness of zro2 (cm)
+c        twalmx :  input  - maximum wall temperature (deg f)
+c        xboxcb :  input  - separation between canister and
+c                           control blade (ft)
+c        itgas  :  input  - flag for treating gas as transparent or
+c                           absorbing/emitting medium
+c                           =0 transparent, set aemisv=0.0001
+c                           =1 absorbing/emitting, set aemisv=1.0
+c
+c        emissw :  output - calculated wall emissivity
+c        emissv :  output - calculated vapor emissivity (at tstm)
+c        hr     :  output - radiation heat transfer coefficient
+c                           (btu/hr*sq.ft*deg f)
+c
+c
+c
+c     the methods for evaluating the mean beam lengths are taken from
+c     pages 305-307 of holman's 'heat transfer',1976 by mcgraw-hill.
+c
+c
+c
+c     dimensions needed for computing beam lengths:
+c         ccb  = distance between canister and control blade (in)
+c
+c
+c
+c
+      implicit none
+c
+      real            absor , aemisv, bl(2) , ccb   , emissv, emissw,
+     *                hr    , pres  , qradfx, r     , tk    ,
+     *                tstm  , twall , twalmx, xboxcb, xzro  , xzroft
+c
+      integer         itgas , jbl   , jwall
+c
+      if(itgas.eq.0)then
+        aemisv=0.0001
+      else
+        aemisv=1.0
+      end if
+c *** initial set-up: compute mean equivalent beam lengths for
+c     radiation for all jbl configurations.
+c
+         ccb=xboxcb*12.0
+c   canister to steam (outside) with intact geometry
+         bl(1)=1.8*ccb/12.0
+c   control blade to steam (intact geometry)
+         bl(2)=bl(1)
+c
+c *** determine wall emissivity
+c
+      xzroft=xzro/30.48
+      go to(18,48),jwall
+c
+c-----zircaloy (matpro, nureg/cr-0497, pgs 229-239)
+c
+c     maximum temperature < 1500 k (2240 f)
+c
+   18 if(xzroft.le.3.28e-07)then
+         emissw=0.125+6.25e-05*((twall+459.67)/1.8)
+      else if(xzroft.ge.1.273e-05)then
+         emissw=0.808642-15.24*xzroft
+      else
+         emissw=0.325+3.7978e04*xzroft
+      end if
+      if(twalmx.le.2240.0)go to 58
+c
+c     maximum temperature > 1500 k
+c
+      emissw=emissw*exp((1500.0-(twalmx+460.0)/1.8)/300.0)
+      emissw=max(0.325,emissw)
+      go to 58
+c
+c-----stainless steel
+c
+   48 tk=(twall+459.67)/1.8
+      emissw=(0.188789+tk*(-4.973569e-04+tk*(2.013559e-06+tk*(
+     *        -2.074722e-09+8.275058e-13*tk))))
+      emissw=min(emissw,0.995)
+c
+c *** determine steam emissivity and absorptivity
+c
+   58 if(pres*bl(jbl).lt.0.03)go to 64
+      call absorp(pres,tstm,twall,bl(jbl),absor,emissv,aemisv,1)
+c
+c *** compute radiation heat flux
+c
+c-----check temperature difference
+      if(abs(twall-tstm).le.0.01)go to 68
+c
+      r=1.0/(1.0/emissw+1.0/absor-1.0)
+c
+      qradfx=r*0.1713*(((twall+460.0)/100.0)**4-((tstm+460.0)/100.0)**4)
+c
+c *** compute radiation 'heat transfer coefficient'
+c
+      hr=abs(qradfx/(twall-tstm))
+      return
+c
+   64 emissv=0.00001
+   68 hr=0.0
+      return
+c
+c *** finished
+c
+      end
+*endif

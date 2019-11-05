@@ -1,0 +1,211 @@
+*mlist
+       subroutine prednb
+c
+c
+c  Computes the forced convection heat transfer correlations.
+c
+c  Cognizant engineer: rjw,rws.
+c
+*in32 is
+*in32 ls
+*in32end
+c
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'flood.h'
+       include 'htrcom.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+       real xcuthi,xcutlo,alp,alpha,alo,cohdm,diff,diff1,dpdt,
+     & f,filmt,ht1,ht2,hinter,qmic,qmac,
+     & pmic,prandl,px,refl,retph,sf,xmf,xtt,zero
+       logical err
+       external tchf
+c
+       parameter (zero = 0.0)
+       parameter (xcutlo = 0.95)
+       parameter (xcuthi = 0.99)
+c  diff1 = 1./(xcuthi - xcutlo)
+       parameter (diff1 = 25.0)
+c
+       hinter(alo,ht1,ht2,alp,diff) = ht1 + (ht2 - ht1)*(alp - alo)*diff
+c
+       hmic = 0.0
+       hmac = 0.0
+       htcg = 0.0
+       qfgo = 0.0
+       pmic = 1.0
+       prandl = csubpf(iv)*viscf(iv)/thconf(iv)
+c
+       if (help .ne. 0) then
+       if( iand(ihlppr(1),ishft(1,23)).ne.0 ) then
+         if( iand(vctrlx(iv),1).ne.0 ) then
+         write (output,150) thconf(iv),viscf(iv),
+     &   csubpf(iv),sigma(iv),dtsat,rhof(iv),rhog(iv),hfgp
+         endif
+       endif
+       endif
+  150  format (5x,'prednb - thconf',8x,'viscf',9x,'csubpf',8x,'sigma',
+     & 9x,'tw-tsatt',6x,'rhof',10x,'rhog',10x,'hfgp'/12x,1p,8e14.6)
+         tf = min(tempf(iv), tsatt(iv))
+c          The min liquid velocity of the Chen data base was 0.06 m/s.
+c          Therefore have f=1 when velf .lt. .06
+         refl = max(gliqa,voidf(iv)*rhof(iv)*0.06,1.0)
+         f = 1.0
+         cohdm = thconf(iv)/htdiam
+         if (tf .ge. tsatt(iv) - 5.0) then
+c
+c what coding is called for the above if test
+c depends on chngno 62
+c
+           if (chngno(62)) then
+c
+c chngno 62
+c Calculate Annular Film Thickness: d/D
+c
+             filmt = 0.5 * (1.0 - sqrt(voidg(iv)))
+             filmt = max (0.0025,filmt)
+c
+c Use The Film Thickness In Lieu Of
+c The Chen F Factor.
+c
+             f = max(1.0, 0.25/filmt)
+           else
+             xtt = (ggasa/refl)**0.9
+     &       *sqrt(rhof(iv)/rhog(iv))*(viscg(iv)/viscf(iv))**0.1
+c       do not let xtt be greater than 100 (see plot in manual VOL 4)
+             xtt = min(xtt,100.0)
+             if (xtt .gt. 0.1) f = 2.35*(xtt + 0.213)**0.736
+             f = f - 0.2*max(min(tsatt(iv) - tempf(iv),5.0),0.0)
+     &       *(f - 1.0)
+           endif
+         endif
+         refl = refl*htdiam/viscf(iv)
+c  Ramp f to 1. as dtsat goes to 0. so there is continuity between
+c  conden and prednb.
+         if (dtsat .lt. 1.0) f = hinter(0.0,1.0,f,dtsat,1.0)
+c
+           rhos = rhof(iv)
+           cps  = csubpf(iv)
+           viscs = viscf(iv)
+           thcons = thconf(iv)
+           tf = tempf(iv)
+           beta = betaff(iv)
+           mode = 2
+         call dittus
+           hmac = htcoef
+         hmac = hmac*f
+c
+c  Calculate the micor term of chen's correlation.
+c  Do not let the Chen supression factor go below the data (70).
+         retph = min( 70.0, refl*f**1.25*1.e-4 )
+         if (retph .lt. 32.5) then
+           sf = 1.0/(1.0+0.12*retph**1.14)
+         elseif (retph .lt. 70.0) then
+           sf = 1.0/(1.0+0.42*retph**0.78)
+         else
+           sf = 0.0797
+         endif
+c
+         if (nfluid .eq. 1) then
+           call psatpd (tw,px,dpdt,1,err)
+         elseif (nfluid .eq. 2) then
+           call pstpd2 (tw,px,dpdt,1,err)
+         else
+           call strsat (fa(ndxstd),1,tw,px,dpdt,err)
+         endif
+         if (err) px = pcrit
+         pmic = px - p(iv)
+         if (pmic.gt.0.0 .and. dtsat.ge.0.0) then
+           pmic = pmic**0.75
+           hmic = 0.00122*thconf(iv)**0.79*csubpf(iv)**0.45*
+     &     rhof(iv)**.49*(dtsat/(hfgp*rhog(iv)))**.24*pmic*sf/
+     &     (sqrt(sigma(iv))*viscf(iv)**.29)
+         endif
+c
+         if (irwt .ne. 0) then
+           rhos = rhog(iv)
+           cps  = csubpg(iv)
+           viscs = viscg(iv)
+           thcons = thcong(iv)
+           tf = tempg(iv)
+           beta = betagg(iv)
+           mode = -9
+         call dittus
+           htcg = htcoef
+           xmf = voidf(iv)
+           if (dlev(iv) .gt. 0.0) xmf = dlev(iv)/dl(iv)
+           hmac = hmac*xmf
+           hmic = hmic*xmf
+           htcf = hmac + hmic
+           htcg = htcg*(1.0 - xmf)
+           htcoef = htcf + htcg
+           qfluxo = htcoef*tw - hmic*tsatt(iv) - hmac*tempf(iv)
+     &     - htcg*tempg(iv)
+           qfgo = htcg*(tw - tempg(iv))
+           qffo = qfluxo - qfgo
+         else
+           if (qualep .gt. xcutlo) then
+             mode = 9
+             tf = tempg(iv)
+             beta = betagg(iv)
+             cps = csubpg(iv)
+             thcons = thcong(iv)
+             viscs = viscg(iv)
+             rhos = rhog(iv)
+            call dittus
+             alpha = min(qualep, xcuthi)
+             hmac = hinter(xcutlo,hmac,zero,alpha,diff1)
+             hmic = hinter(xcutlo,hmic,zero,alpha,diff1)
+             htcg = hinter(xcutlo,zero,htcg,alpha,diff1)
+             qfgo = htcg*(tw - tempg(iv))
+           endif
+           htcf = hmac + hmic
+           htcoef = htcf + htcg
+           qfluxo = htcoef*tw - hmic*tsatt(iv) - hmac*tempf(iv)
+     &     - htcg*tempg(iv)
+           qffo = qfluxo - qfgo
+         endif
+c On an achilles calculation with ssdtt=7 the liquid became superheated
+c the heat flux went negative. Negative heat flux in nucleate boiling is
+c bit much. If this happens reduce the hmac term so that qmac=-(qmic+qga
+c This will make the heat flux be zero. A Neptune run says do not do
+c this when the heat flux was negative because the gas was superheated.
+c Allow this next path if qfgo is still zero at this point.
+       if (qfluxo .lt. 0.0 .and. qfgo .eq. 0.) then
+         qmic = hmic*(tw-tsatt(iv))
+         qmac = -(qmic + qfgo)
+         hmac = qmac/(tw-tempf(iv))
+         qfluxo = 0.0
+         qffo = qmac + qmic
+         htcf = hmac + hmic
+         htcoef = htcf + htcg
+       endif
+       htzht = htcoef
+       htzhff = hmac
+       htzhft = hmic
+       htzhgg = htcg
+       htzhgt = 0.0
+       htzhgp = 0.0
+       htqot = qfluxo
+       htqof = qffo
+       htqog = qfgo
+c
+       if (help .ne. 0) then
+       if( iand(ihlppr(1),ishft(1,23)).ne.0 ) then
+         if( iand(vctrlx(iv),1).ne.0 ) then
+         write (output,350) hmac, f, hmic, sf, htcoef,
+     1   qfluxo, chf
+         endif
+       endif
+       endif
+  350  format ('    prednb ',3x,'hmac',10x,'f',13x,'hmic',10x,'sf',12x
+     & ,'htcoef',8x,'qfluxo',8x,'chf'/12x,1p,7e14.6)
+       return
+       end

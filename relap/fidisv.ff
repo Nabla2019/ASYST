@@ -1,0 +1,115 @@
+*mlist
+       subroutine fidisv (vfg,alp,rdiam,rey,surfa,i,k,diamvh,reflod)
+c
+c
+c  fidisv computes interphase drag term for bubbles and droplets.
+c
+c  Cognizant engineer: ras (kuo).
+c
+c  Arguement list definitions:
+c    vfg    - relative velocity                  (input),
+c    alp    - liquid/vapor fraction              (input),
+c    rdiam  - recipical of bubble/drop diameter (output),
+c    rey    - bubble/drop reynolds number       (output),
+c    surfa  - bubble/drop surface area          (output),
+c    i      - volume index                       (input),
+c    k      - computation flag
+c             k = 0 => bubbles,
+c             k = 1 => droplets,
+c             k = 2 => reflood droplets          (input),
+c    diamvh  Equivalent flow diameter            (input).
+c
+       implicit none
+c
+       include 'fast.h'
+       include 'contrl.h'
+       include 'stcom.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer i,k
+       real alp,dcon(3),diam,diamvh,dmin,preduc,
+     & rdiam,rey,surfa,vfg,vfg2,voidx,web(3),xa
+       logical reflod
+c
+c      data dcon/5.0e-3,2.5e-3,2.0e-4/,web/5.,1.5,6./
+       if (reflod) then
+         dcon(1) = 5.e-03
+         dcon(2) = 1.5e-03
+         dcon(3) = 2.e-04
+         web(1) = 5.0
+         web(2) = 1.5
+         web(3) = 1.5
+       else
+         dcon(1) = 5.e-03
+         dcon(2) = 2.5e-03
+         dcon(3) = 2.e-04
+         web(1) = 5.0
+         web(2) = 1.5
+         web(3) = 6.0
+       endif
+c
+c  Increase Weber Number from 3.0 to 12. Average drop=1/2 max size.
+c
+       xa = max(web(k+1)*sigma(i),1.0e-10)
+c  In postchf, limit drop diameters to be min 0f 0.1 in = 0.00254 m.
+c  Suggestion of Len Ward NE Utilites.
+       if (k .eq. 2) then
+         vfg  = max(abs(vfg),.001)
+         diam = xa/(rhog(i)*vfg**2)
+c  The following is for mist (dry wall) flow k=2.
+c  FLECHT steam temperatures are high indicating possibly big drops
+c  at low pressure.
+c  On the RIT heated tube test the wall temperatures do not turn over
+c  because the steam temperature is high so we need
+c  small drops at high pressure.  We can lower the minimum drop size
+c  as a function of pressure.
+c  The pressure range to interpolate over is unknown.
+c  Use an interolation range p-reduced from .25 to .025 as a quess.
+         preduc = p(i)/pcrit
+         if (preduc .lt. 0.25) then
+           if (preduc .lt. 0.025) then
+             dmin = dcon(2)
+           else
+             dmin = dcon(2) + (dcon(3) - dcon(2))*4.44444*(preduc -
+     &       0.025)
+           endif
+         else
+           dmin = dcon(3)
+         endif
+         diam = max(diam,dmin)
+         diam = min(diamvh,dcon(2),diam)
+         rdiam = 1.0/diam
+         surfa = 3.6*alp*rdiam
+c
+c ----   DSL, 3/20/96 change Re number to fit R5 manual and Ishii-Chalwa
+c ----   paper on dispersed droplet flow
+c ----   Ishii-Chawla reference, R5 manual & NUREG/CR-1230
+c
+         rey  = rhog(i)*vfg*diam*((1.-alp)**2.5)/viscg(i)
+c
+c        rey = rhog(i)*vfg*diam/viscg(i)
+       else
+         vfg2 = max(vfg**2,xa/(rhof(i+k)*min(dcon(k+1)*
+     &   alp**0.333333333,diamvh)))
+         rdiam = rhof(i+k)*vfg2/xa
+         if (chngno(13)) rdiam = min(rdiam,1.0/dcon(k+1))
+         voidx = 1.0 - alp
+         if (k .ne. 1) then
+           rey = xa*voidx/(viscf(i)*sqrt(vfg2))
+         else
+c
+           if (chngno(55)) then
+c
+c     Limit drop diameter to > 84 microns (TRAC)
+c
+              rdiam = min(rdiam,1.0/84.0e-6)
+c
+           endif
+c
+           rey = xa*voidx**3/(viscg(i)*sqrt(vfg2*voidx))
+         endif
+         surfa = 3.6*alp*rdiam
+       endif
+       return
+       end

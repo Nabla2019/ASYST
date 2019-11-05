@@ -1,0 +1,924 @@
+*mlist
+*if def,selap
+       subroutine oxidiz (oxdeo,alfao,oxdwc,oxdwc0,oxdhc,oxdhf,
+     & rnoxd,rnalf,nfrslg,tzr,oxdwz,daxdis,noxide)
+crpcversion_latest
+c
+c  Computes zircaloy cladding oxidation.
+c
+c  Cognizant engineer: cma.
+c     calling subroutines:  fuelan, simuan, slabc
+c     subroutines called:   avfunc, oxcrst, oxstat,
+c                           oxydef,qlimit,snfunc,vfunc,
+c                           vsfunc
+c
+c     input variables                  description
+c        oxdwc0         cladding oxide weight gain from previous time
+c                         step (kg/m2)
+c        daxdis(k,icomp)    height of cladding that has slumped from node
+c                       due to interaction and melting with Inconel
+c                       spacer grid (m).
+c
+c     i/o variables                    description
+c        alfao          cladding outer alpha thickness (m)
+c        nfrslg         indicator of frozen slug in axial zone
+c                         model is being used
+c        noxide         cladding oxidation flag, if non zero cladding i
+c                         completely oxidized
+c        oxdeo          cladding outer oxide thickness (m)
+c        oxdwc          cladding oxide weight gain (kg/m2)
+c
+c     output variables                 description
+c        oxdhc          cladding oxidation heat generation (w/m)
+c        oxdhf          frozen film oxidation heat generation (w/m3)
+c        oxdwz          oxide weight gain in cladding zircaloy (kg)
+c        rnalf          inner radius or leftmost coordinate of outer
+c                         alpha layer (m)
+c        rnoxd          inner radius or leftmost coordinate of outer
+c                         oxide layer (m)
+c        tzr            thickness of zr portion of cladding (m)
+c
+c     local variables                  description
+c        oxlis0         oxidation steam starvation rate limit per
+c                         unit surface area for previous time step
+c                         (kg/m2-s)
+c        toxlim         minimum cladding surface temperature for
+c                         oxidation calculation (k)
+c        wtlim          weight gain limit (kg/m2)
+c        zrden          density of zircaloy (kg/m3)
+c        zrheat         heat of reaction used in heat generation
+c                         calculation (j/kg)
+c
+       use lpdatc
+       implicit none
+       include 'cons.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'scddat.h'
+       include 'scntl.h'
+       include 'scdcom.h'
+       include 'scdout.h'
+       include 'miscon.h'
+       include 'ndxara.h'
+       include 'fecom.h'
+       include 'cmatp.h'
+       include 'oxcom1.h'
+       include 'oxcom2.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'tblsp.h'
+       include 'statec.h'
+       include 'dbacct.h'
+       include 'buntim.h'
+       include 'oxairv.h'
+       integer nfrslg(ndax),noxide(ndax)
+       real oxdeo(ndax),alfao(ndax),oxdwc(ndax),oxdwc0(ndax),
+     & oxdhc(ndax),oxdhf(ndax),rnoxd(ndax), rnalf(ndax),tzr(ndax),
+     & oxdwz(ndax),daxdis(ndax)
+c Local variables.
+       integer i,il,iln,im,in,noxzr,noxmat,nshap
+       integer kdyn
+       integer ilt,jnon,nlvol
+       real quaair,quani,quahy
+       real co,do,oxlis0,rcmid,toxlim,uo
+       real avfunc,qlimit,snfunc,vfunc,vsfunc
+       real wtlimd,rwgn,rthk,srftmp
+       real fatot,frcout,wtgmax,effow1
+       real o2mw,zrmw,fnro,soxwgn,soxthk
+       real molair,moloxy,molnit,frcarg,frcoxy,frcnit,sumbot,
+     &      frcwox,frcwn2,frcwar,yh20,yn2,numer
+       real flow,wg,thbsa,thsa,f1,ynlim,onemu,rhzr,rhzrx,wmzr,wmzrx
+       real slen,fraca,ratwg,delwg,dheat,thx,thm,thxg
+       real ratoxc,mssair,delt,thbe,rcx,tempc,denom,molarg,yh2o,yo2
+clfm  
+       real thxd
+       real flowg,frcflw,yolim,rci1,rco1,rcm,wgrat,thxe
+       real mssnit,mssarg,thm1,thx0
+       real wtmh2o,smh2o,smh2
+       real cirrd1
+       real yar
+       real ratthk,thkmt1,thkoxe
+       real rodfla,frcfla
+       real thbka,thbks
+       real toxpsi
+       real yh2
+       real sfunc1
+       integer ibrk,iopt,iopen,jjj
+       integer iselct,ishre
+       integer nswgam
+       integer ndbg,ndbgi,kz
+c
+       external oxdair
+c
+       data uo/1.827834e5/, co/10310.75/, do/0.52257/
+       ndbg=0
+         if(timehy.ge.12499.0.and.timehy.lt.12500.0)ndbg=2 
+           if(ndbg.eq.2)then
+           write(output,9005)timehy,icomp,nonhy,nonair,nonni
+9005       format(' OXIDIZ entered; timehy=',e12.6,
+     &     ' icomp=',i5,' nonhy=',i5,' nonair=',i5,' nonni=',i5)
+           write(output,9007)gaman(3860)
+9007       format(' OXIDIZ; gaman(3860)',e10.4)
+           end if
+c  Define non nodally dependent constants.
+cljs  toxlim is lower bound of temperature for SCDAP oxidation modeling
+cjcb  special version with toxlim set to 400 K
+       toxlim = 1000.0
+       toxlim = 400.0
+cljs   toxpsi is lower bound of temperature for PSI oxidation modeling
+cljs   toxpsi = 773.
+cljs   set toxpsi to PSI recommended value
+       toxpsi = 400.
+       o2mw = 32.
+       zrmw = 91.22
+       thzta = 1.35*zrden/zoxden
+       ia(ixpc) = 1
+c  Do loop on axial nodes.
+       do i = 1,naz
+         ndbgi=0
+         srftmp = tcond3(nrods2(i,icomp),i,icomp)
+cljs check for presence of air in fluid
+       ilt =(icomp-1)*ndax + i
+       nlvol = nvad(ilt) + filndx(4)
+       cirrd1 = 2.0*pi*rco2(i,icomp)
+       quaair=0.0
+         do jnon=1,noncn
+           if(nonair.eq.jnon)then
+           quaair=qualan(nlvol+jnon-1)
+           end if
+           if(nonni.eq.jnon)then
+           quani=qualan(nlvol+jnon-1)
+           end if
+           if(nonhy.eq.jnon)then
+           quahy=qualan(nlvol+jnon-1)
+           end if
+         end do
+c  set default values for plotting
+         frcmh2(i,icomp) = 0.0
+         frmh2o(i,icomp) = 0.0
+         frcmn2(i,icomp) = 0.0
+         frcmar(i,icomp) = 0.0
+         frcmo2(i,icomp) = 0.0
+c         frairm(i,icomp) = 0.0
+         iselct=2
+           if(nsoxar.eq.1.or.nsoxar.eq.2)then      
+cljs         if(idcomp(icomp).eq.0.or.idcomp(icomp).eq.6)then
+             if((idcomp(icomp).eq.0).or.(idcomp(icomp).eq.6).or.
+     &       (idcomp(icomp).eq.2))then
+c    apply PSI oxidation models to fuel rods and simulator rods
+             iselct=1
+             end if
+           end if
+         select case(iselct)
+         case(1)
+              h2oxd2(i,icomp) = 0.0
+              oxdhc(i) = 0.0
+              oxdhf(i) = 0.0
+              yo2 = 0.0
+              yn2 = 0.0
+              yh2o = 0.0
+c           yh2o = mole fractions of steam in gas phase
+c           mole fractions of H2O will be function of (1.-quala(nlvol))/
+c           mole weight of H2O (16+2=18).
+c           denom = total moles of gas in volume nlvol per unit volume
+              denom = 0.0
+              do jjj=1,noncn
+                if(voidg(nlvol).ge.1.e-6)then
+                denom = denom + quala(nlvol)*rhog(nlvol)
+     &          *qualan(nlvol+jjj-1)/wmolea(jjj)
+                end if
+              end do
+c             add on moles of H2O in steam phase
+                if(voidg(nlvol).ge.1.e-6)then
+                denom = denom + 
+     &                  (1.-quala(nlvol))*rhog(nlvol)/18.
+                end if
+c   molair = molecular weight of air (28.9)
+c   moloxy = molecular weight of oxygen (32)
+c   molnit = molecular weight of nitrogen
+c   molarg = molecular weight of argon
+c   the variables defining molecular for the various gas species are
+c   also defined in the relap5 subroutine rnoncn.
+             molair = 28.963
+             moloxy = 32.0
+             molnit = 28.01403
+             molarg = 39.948
+c  calculate mass fractions of O2, N2, and argon in air.
+c   frcarg = mole fractions of argon in air
+c   frcoxy = mole fractions of O2 in air
+c   frcnit = mole fractions of N2 in air
+             frcarg = 0.0096
+             frcoxy = 0.2095
+c   adjust mole fraction of N2 so sum of moles equals 1.
+             frcnit = 1. - frcoxy - frcarg
+c   calculate mass fractions of each gas species
+             sumbot = molnit*frcnit + moloxy*frcoxy +
+     &                molarg*frcarg
+c  frcwox= mass fraction of oxygen in air (0.2095)
+             frcwox = moloxy*frcoxy/sumbot
+c  frcwn2 = mass fraction of N2 in air
+            frcwn2 = molnit*frcnit/sumbot
+c  frcwar = mass fraction of argon in air
+            frcwar = molarg*frcarg/sumbot
+cljs        frcwar = frcarg
+              if(voidg(nlvol).ge.1.e-6)then
+              yh2o = (1.-quala(nlvol))*(rhog(nlvol)
+     &               /18.)/denom
+              else
+              yh2o = 0.0
+              end if
+            frmh2o(i,icomp)=yh2o
+c           yn2 = mole fractions of nitrogen in fluid.
+c           sum mole fraction of pure N2 species being tracked and
+c           mole fractions of N2 in air being tracked.
+              numer = 0.0
+              if(voidg(nlvol).ge.1.e-6)then
+                if(nonni.ge.1)then
+                numer = quala(nlvol)*qualan(nlvol+nonni-1)*rhog(nlvol)/
+     &                  wmolea(nonni)    
+                end if
+                if(nonair.ge.1)then
+                numer = numer +
+     &               quala(nlvol)*qualan(nlvol+nonair-1)*rhog(nlvol)*
+     &               frcnit/wmolea(nonair)
+                end if
+              yn2 = numer/denom                                   
+              else
+              yn2 = 0.0
+              end if
+              frcmn2(i,icomp) = yn2
+cljs calculate mole fractions of air in mixture
+cljs calculate mole fractions of air in mixture
+            if(voidg(nlvol).ge.1.e-6)then
+              if(nonair.ge.1)then
+              numer = quala(nlvol)*qualan(nlvol+nonair-1)*rhog(nlvol)/
+     &                wmolea(nonair)
+              frairm(i,icomp) = numer/denom
+              else
+              frairm(i,icomp) = 0.0
+              end if
+            else
+            frairm(i,icomp) = 0.0
+            end if
+clfm  change the way to calculate Ar concentration
+c           yar = mole fractions of argon in fluid.
+c           sum mole fraction of pure Ar species being tracked and
+c           mole fractions of N2 in air being tracked.
+              numer = 0.0
+              if(voidg(nlvol).ge.1.e-6)then
+                if(nonar.ge.1)then
+                numer = quala(nlvol)*qualan(nlvol+nonar-1)*rhog(nlvol)/
+     &                  wmolea(nonar)    
+                end if
+                if(nonair.ge.1)then
+                numer = numer +
+     &               quala(nlvol)*qualan(nlvol+nonair-1)*rhog(nlvol)*
+     &               frcarg/wmolea(nonair)
+                end if
+              yar = numer/denom                                   
+              else
+              yar = 0.0
+              end if
+            frcmar(i,icomp) = yar
+clfm  endchange the way to calculate Ar concentration           
+cljs  calculate mole fractions of H2 in gas phase
+              yh2 = 0.0
+              if(voidg(nlvol).ge.1.e-6.and.nonhy.ge.1)then
+              yh2 = quala(nlvol)*qualan(nlvol+nonhy-1)*rhog(nlvol)/
+     &              wmolea(nonhy)
+              end if
+                if(denom.ge.1.e-8)then
+                frcmh2(i,icomp) = yh2/denom
+                else
+                frcmh2(i,icomp) = 0.0
+                end if
+              if(voidg(nlvol).ge.1.e-6.and.nonair.ge.1)then
+c           yo2 = mole fractions of oxygen in fluid.
+            yo2 = quala(nlvol)*qualan(nlvol+nonair-1)*
+clfm o2 molar fraction correction
+     &       (rhog(nlvol)/wmolea(nonair))*frcoxy/denom
+              else
+              yo2 = 0.0
+              end if
+            frcmo2(i,icomp) = yo2
+              if(frcmn2(i,icomp).lt.1.e-6)frcmn2(i,icomp)=0.0
+              if(frcmo2(i,icomp).lt.1.e-6)frcmo2(i,icomp)=0.0
+              if(frcmar(i,icomp).lt.1.e-6)frcmar(i,icomp)=0.0
+clfm280911 avoiding as well h2o negative
+              if(frmh2o(i,icomp).lt.1.e-6)frmh2o(i,icomp)=0.0
+c
+              if(srftmp.le.toxpsi.or.froxpl(i,icomp).ge.0.999.or.
+     &        wzrbc2(i,icomp).ge.1.e-10)then
+              sroxd((icomp-1)*ndax+i) = 0.0
+              cycle
+              end if
+clfm ishrem comented out
+c     if ishrem(i,icomp) = 1, then Zr cladding at that node for
+c     shroud has slumped away.
+c              if(idcomp(icomp).eq.2.and.modidx(3).eq.1.and.
+c     &        ishrem(i,icomp).eq.1)then
+c              cycle
+c              end if
+clfm replace ishrem by ishre and set to zero
+              ishre=0
+c     if ishre = 1, then Zr cladding at that node for
+c     shroud has slumped away.
+              if(idcomp(icomp).eq.2.and.modidx(3).eq.1.and.
+     &        ishre.eq.1)then
+              cycle
+              end if
+c     case for oxidation of Zr in presence of air
+c     store metallic thickness taking into account ballooning.
+              if(nbgair(i,icomp).eq.0)then
+              nbgair(i,icomp) = 1
+              tmtair(i,icomp) = rnoxd(i) - rci2(i,icomp)
+              end if
+c   map scdap variables into oxdair variables.
+            nswair(i,icomp) = 1
+            delt=dt
+c           thbeg(i,icomp)=thbe(local)=current effective breakaway
+c           thickness of oxide layer at axial node i of component j (m).
+c           initial value = 6.e-6 m (new variable)
+c           (input and output)
+            thbe = thbeg(i,icomp)
+c           delwgg(i,icomp)=delwg=weight gain this time step (kg/m2)
+c                         (output)
+c           oxdwc(i) = accumulated oxide weight gain at axial node i
+c                    = oxdwc(i) + delwg
+c           dheatg(i,icomp) = dheat = heat generated by oxidation this
+c                         time step (J) (output).
+c           oxdhc(i) = heat generation at axial node i (W/m)
+c                    = dheat*2.0*pi*rco2(i,icomp)*dzcnd2(i,icomp)/(dt*
+c                      dzcnd2(i,icomp))
+c                      the above coding assumes oxdair output has
+c                      values/unit area, as it appears to be.
+c           calculate H2 generation rate
+c           thx = thickness of oxide scale (m).
+c           Is this variable thickness from oxidation of steam?
+c           oxdeo(i) = oxide thickness at axial node i; subroutine
+c                      fuelan calls oxidiz with argument oxdeo(mz)
+c                      where mz = ndax*(j-1) + 1
+c                       (input and output)
+            thx = rco2(i,icomp)-rnoxd(i)
+c           thm = thickness of remaining metallic layer (m) 
+cljs        thm = rnoxd(i) - rci2(i,icomp)
+            thm = tmtair(i,icomp)
+c           rci1 = inner radius of cladding = rci2(i,icomp).
+            rci1 = rci2(i,icomp)
+c           rco1 = outer radius of metallic cladding = rnoxd(i) (m).
+            rco1 = rco2(i,icomp)
+c           rcx = outer radius of oxide shell = rnoxd(i) + oxdeo(i) (m).
+ctesting    rcx = rnoxd(i) + oxdeo(i)
+            rcx = rco2(i,icomp)                     
+c           tempc = surface temperature of cladding
+            tempc = srftmp 
+c           flow = total flow rate of oxygen, including H2O and O2 (g/s)
+c           flowg = total flow rate of gases, including water vapor
+c                   (kg/s)
+              if(voidg(nlvol).ge.1.e-6)then
+              flowg = voidg(nlvol)*avol(nlvol)*abs(velg(nlvol))
+     &        *rhog(nlvol)
+              else
+              flowg = 0.0
+              end if
+              frcflw = 0.0
+cljs   frcflw = fraction O2 in flow (in gas H2O or in air or in O2)
+              if(yo2.lt.yolim)then
+c    for case of low O2 flow, only consider O2 in steam because
+c    subroutine oxdair only then models oxidation in steam.
+              frcflw = voidg(nlvol)*(1.-quala(nlvol))*(16./18.) 
+              else
+                if(nonair.ge.1)then
+                frcflw = voidg(nlvol)*
+     &          quala(nlvol)*qualan(nlvol+nonair-1)*frcwox       
+                end if
+              end if
+clfm  including shroud              
+c ljs added lines 071210 b
+           if(idcomp(icomp).eq.2)then
+c shroud
+           frcfla = slbwd(icomp)*pitch(icomp)/avol(nlvol)
+c for small bundles, frcfla could exceed 0.5
+c ljs suggested limiting frcfla to 0.05 ljs130111
+c             if(frcfla.gt.0.5)frcfla=0.5
+             if(frcfla.gt.0.05)frcfla=0.05
+           else
+c ljs added lines 071210 e modified 130111
+c  
+            frcfla = fperim(i,icomp)/float(nsigl(icomp))
+c     calculate flow per rod in flow channel; also include shroud area
+          endif
+clfm including shroud
+            flow = 1000.*frcfla*frcflw*flowg
+cljs    if no significant air or steam flow, bypass call to oxdair
+cljs    and set oxidation rate terms to zero.
+              if(flow.lt.1.e-10)then
+              cycle
+              end if
+c           wgrat = rate of oxygen weight gain (kg/m2.s)
+c           wg = cumulative weight gain of oxygen (kg/m2)
+c   calculations of oxdair appear to be per unit of surface area.
+            wg = oxdwc(i)
+c           thbsa = oxide thickness at time of breakaway of oxide
+c                   layer (may be two values, one for pre-oxidation
+c                   in presence of steam, other for oxidation in 
+c                   presence of air. (new variable). (initialize to
+c                   0.0, store for each axial node of each component.
+c                   (input and output).
+            thbsa = thbsag(i,icomp)
+c           thsa = an oxide thickness used in calculating a minimum
+c                  thickness (input and output) (initialize to 0.0)
+            thsa = thsag(i,icomp)
+c           f1 = parameter tracking extent of process leading to 
+c                breakaway of oxide layer (input and output)
+c                (initialize to 0.0) (unitless) 
+            f1 = f1air(i,icomp)
+c           ibrk = indicator of type of gas present at start of oxidation
+c                  (initialize to value of 0) (input and output)
+            ibrk = ibkarg(i,icomp)
+c           iopt = index specifying correlations for oxidation in steam,
+c                  air, and oxygen, respectively. (input)
+c                  iopt = 0 = default (add to read of SCDAP input).
+c     
+            iopt = iopair
+c     add variables previously in common block to argument list.
+c           ynlim = user-defined breakaway parameter
+c                 = minimum value of N2 fraction for air breakaway.
+            ynlim = ynlimg
+c           yolim = user-defined minimum value of O2 fraction for
+c                   oxygen oxidation.
+            yolim = yolimg
+c           onemu = small length scale (microns) (user-defined)
+c                 = order of 1.e-6?
+            onemu = onemug
+            thx0 = thkstm(i,icomp)
+c           rhzr = 6500. densitiy of metallic Zr (kg/m3)
+            rhzr = 6500.
+c           rhzrx = 5600. density of oxidized Zr (kg/m3)
+            rhzrx = 5600.
+c           wmzr = 91.22 = atomic weight of Zr
+            wmzr = 91.22
+c           wmzrx = 123.22 = atomic weight of ZrO2.
+            wmzrx = 123.22
+c           thm1 = metallic thickness at start of oxidation in air (m)?
+c           thm1 = as=fabricated oxide thickness (m) ?
+            thm1 = rcos(icomp) - rcii(icomp)
+cljs  simplify variables used by oxdair
+            rcm = rnoxd(i)
+            dheat = 0.0
+            fraca = fairx1
+            slen = dzcnd2(i,icomp)
+            iopen = iopeng
+            call oxdair(delt,thbe,delwg,dheat,thx,thm,rcm,rcx,tempc,
+     &                  yh2o,yn2,yo2,flow,wgrat,wg,
+     &                  thbsa,thsa,f1,rci1,rco1,ynlim,yolim,
+     &                  onemu,thm1,slen,fraca,
+     &                  thxe,thx0,ratwg,thbka,thbks,
+     &                  ibrk,iopt,iopen,kz,icomp,nobrka,ndbg,
+     &                  thxd)
+            delwgg(i,icomp) = delwg
+            oxdwc(i) = wg
+c           calculate H2 generation rate
+cljs       h2oxd2(i,icomp) = (1.0-quala(nlvol))*
+cljs &     ((oxdwc(i) - oxdwc0(i))*
+cljs       h2oxd2(i,icomp) = ((oxdwc(i) - oxdwc0(i))*
+cljs   subroutine oxdair calculates weight gain per unit area.
+cljs   If oxidation in air rather than steam, then no H2 production
+cljs         if((yo2+yn2).le.1.e-4)then
+               if(ndbg.eq.1)then
+               write(output,9021)i,yo2,yolim,yh2o,frcmo2(i,icomp)
+9021           format(' OXIDIZ; i=',i5,' yo2=',e10.4,' yolim=',e10.4,
+     &         ' yh2o=',e10.4,' frcmo2=',e10.4)
+               end if
+cljs         if(yo2.le.1.e-4)then
+             if(yo2.le.yolim)then
+             h2oxd2(i,icomp) = (delwg*
+     &       snfunc(ngeom(icomp),rco2(i,icomp),dzcnd2(i,icomp),
+     &       slbwd(icomp))/8.0)/dt
+             h2oxd2(i,icomp) = max(0.0,h2oxd2(i,icomp))
+               if(ndbg.eq.2)then
+               write(output,9035)i,icomp,h2oxd2(i,icomp)
+9035           format(' OXIDIZ 9035; i=',i5,' icomp=',i5,      
+     &         ' h2oxd2=',e10.4)
+               end if
+c     update array storing steam consumed.
+cljs  code apparently never applies sroxd; gaman for steam consumption
+cljs  calculated in subroutine oxidiz.
+              sroxd((icomp-1)*ndax+i) = 9.0*h2oxd2(i,icomp)
+              else
+              h2oxd2(i,icomp) = 0.0
+              sroxd((icomp-1)*ndax+i) = 0.0
+              end if
+               if(ndbg.eq.1)then
+               write(output,9023)i,h2oxd2(i,icomp)
+9023           format(' OXIDZ; i=',i5,' h2oxd2=',e10.4)
+               end if
+            dheatg(i,icomp) = dheat
+            if(idcomp(icomp).eq.0.or.idcomp(icomp).eq.6)then
+            oxdhc(i) = dheat*2.0*pi*rco2(i,icomp)/dt
+            else
+c           shroud
+            oxdhc(i) = dheat*slbwd(icomp)/dt
+            end if
+cljs  account for double-sided oxidation
+              if(int(brchv(i,icomp)).ne.0)then
+              h2oxd2(i,icomp) = 2.0*h2oxd2(i,icomp)
+              oxdhc(i) = 2.0*oxdhc(i)
+              end if
+            oxdeo(i) = thx
+cljs          if(yh2o.ge.0.001)then
+              if(quaair.lt.yolim)then
+cljs    case of only steam oxidation
+              thkstm(i,icomp) = thx
+              end if
+            rnoxd(i) = rcm
+              if(rnoxd(i).lt.rci2(i,icomp))then
+              rnoxd(i) = rci2(i,icomp)
+              end if
+            rcoi((icomp-1)*ndax+i) = rcx
+            rco2(i,icomp) =rcx
+cljs set constants involved in calculating difference between thickness
+cljs of metal and its thickness when oxidized to same values as in 
+cljs subroutine oxidair.
+c           rhzr = density of metallic Zr.
+c           rhzrx = density of oxidic Zr.
+            ratthk = rhzrx*wmzr/(rhzr*wmzrx)
+            thkmt1 = rnoxd(i)-rci2(i,icomp)
+            thkoxe = ratthk*(rco2(i,icomp)-rnoxd(i))
+            froxpl(i,icomp) = 1.0 - thkmt1/(thkmt1+thkoxe)    
+              if(int(brchv(i,icomp)).ne.0)then
+c    case of double-sided oxidation
+              thkoxe = 2.*ratthk*(rco2(i,icomp)-rnoxd(i))
+              thkmt1 = thkmt1 - thkoxe
+              froxpl(i,icomp) = 2.*froxpl(i,icomp)
+                if(thkmt1.le.1.e-6)froxpl(i,icomp)=1.0
+              end if
+            tmtair(i,icomp)=thkmt1
+            thbeg(i,icomp) =thbe
+            thbsag(i,icomp) = thbsa
+            thsag(i,icomp) = thsa
+            f1air(i,icomp) = f1
+            thbkag(i,icomp) = thbka
+            thbksg(i,icomp) = thbks
+            ibkarg(i,icomp) = ibrk
+            rbkarg(i,icomp) = float(ibkarg(i,icomp))
+            thxeg(i,icomp) = thxe
+            ratwgg(i,icomp) = ratwg
+c   map oxdair variables into SCDAP variables.
+c    calculate gaman( ) and enthn( )
+c  first calculate consumption of air into mixture of Argon and
+c  nitrogen
+c     ratoxc = rate of consumption of oxygen in air
+c              at axial node (kg/m3.s)
+c    For case of mixture of steam and air, can we get amount
+c    of air consumed from weight gain?
+              if(ndbg.eq.1)then
+              write(output,9061)nlvol,nonhy,noncn
+9061          format(' OXIDIZ; nlvol=',i7,' nonhy=',i5,' noncn=',i5)
+              end if
+cljs        if(quaair.lt.0.00001)then
+            if(quaair.lt.yolim)then
+            ratoxc = 0.0
+            nswgam = 0
+            else
+            nswgam = 1
+cljs        ratoxc = quala(nlvol)*float(nsigl(icomp))*2.*
+            ratoxc = float(nsigl(icomp))*2.*
+ 
+     &               pi*rco2(i,icomp)*
+     &               dzcnd2(i,icomp)*(oxdwc(i)-oxdwc0(i))/dt
+            end if
+c  obtain index for air as noncondensable
+          if(nswgam.eq.1)then
+            do in = 1,noncn
+            if(in.ne.nonair)cycle
+            iln = nlvol + in -1
+c     mssair = mass of air consumed during time step at axial node.
+            mssair = ratoxc/frcwox
+            gaman(iln)=gaman(iln)-mssair*recipv(nlvol)
+             enthn(iln) = uaox(in) + cvaox(in)*srftmp +
+     &                    0.5*dcvax(in)*(srftmp-tao)**2
+            end do
+c   generate N2 and argon to account for consumption of air
+            do in =1,noncn
+              if(in.ne.nonni)cycle
+            iln = nlvol + in -1
+c     mssnit = mass of nitrogen resulting from consumption of O2 in air
+            mssnit = frcwn2*mssair
+            gaman(iln) = gaman(iln) + mssnit*recipv(nlvol)
+            enthn(iln) = uaox(in) + cvaox(in)*srftmp +
+     &                   0.5*dcvax(in)*(srftmp-tao)**2
+            end do
+            do in = 1,noncn
+              if(in.ne.nonar)cycle
+c    mssarg = mass of argon resulting from consumption of oxygen in air
+            mssarg = frcwar*mssair
+              iln = nlvol + in -1
+              gaman(iln) = gaman(iln) + mssarg*recipv(nlvol)           
+              enthn(iln) = uaox(in) + cvaox(in)*srftmp +
+     &                     0.5*dcvax(in)*(srftmp-tao)**2
+            end do
+          else   
+cljs     case of oxidation in steam atmosphere, add hydrogen
+            do in = 1,noncn
+              if(in.ne.nonhy)cycle
+              iln = nlvol + in -1
+              gaman(iln) = gaman(iln) + isgl*recipv(nlvol)*               
+     &        h2oxd2(i,icomp)
+                if(ndbg.eq.1)then
+                write(output,9075)h2oxd2(i,icomp),gaman(iln)
+9075            format(' OXIDIZ; h2oxd2=',e10.4,' gaman=',e10.4)
+                end if
+              enthn(iln) = uaox(in) + cvaox(in)*srftmp +
+     &                     0.5*dcvax(in)*(srftmp-tao)**2
+            end do
+          end if
+         case(2)
+cljs add mole fraction calculation for gas phase.
+              yo2 = 0.0
+              yn2 = 0.0
+              yh2o = 0.0
+c           yh2o = mole fractions of steam in gas phase
+c           mole fractions of H2O will be function of (1.-quala(nlvol))/
+c           mole weight of H2O (16+2=18).
+c           denom = total moles of gas in volume nlvol per unit volume
+              denom = 0.0
+              do jjj=1,noncn
+                if(voidg(nlvol).ge.1.e-6)then
+                denom = denom + quala(nlvol)*rhog(nlvol)
+     &          *qualan(nlvol+jjj-1)/wmolea(jjj)
+                end if
+              end do
+c             add on moles of H2O in steam phase
+                if(voidg(nlvol).ge.1.e-6)then
+                denom = denom + 
+     &                  (1.-quala(nlvol))*rhog(nlvol)/18.
+                end if
+c   molair = molecular weight of air (28.9)
+c   moloxy = molecular weight of oxygen (32)
+c   molnit = molecular weight of nitrogen
+c   molarg = molecular weight of argon
+c   the variables defining molecular for the various gas species are
+c   also defined in the relap5 subroutine rnoncn.
+             molair = 28.963
+             moloxy = 32.0
+             molnit = 28.01403
+             molarg = 39.948
+c  calculate mass fractions of O2, N2, and argon in air.
+c   frcarg = mole fractions of argon in air
+c   frcoxy = mole fractions of O2 in air
+c   frcnit = mole fractions of N2 in air
+             frcarg = 0.0096
+             frcoxy = 0.2095
+c   adjust mole fraction of N2 so sum of moles equals 1.
+             frcnit = 1. - frcoxy - frcarg
+c   calculate mass fractions of each gas species
+             sumbot = molnit*frcnit + moloxy*frcoxy +
+     &                molarg*frcarg
+c  frcwox= mass fraction of oxygen in air (0.2095)
+             frcwox = moloxy*frcoxy/sumbot
+cljs         frcwox = frcoxy
+c  frcwn2 = mass fraction of N2 in air
+            frcwn2 = molnit*frcnit/sumbot
+cljs        frcwn2 = frcnit
+c  frcwar = mass fraction of argon in air
+            frcwar = molarg*frcarg/sumbot
+cljs        frcwar = frcarg
+              if(voidg(nlvol).ge.1.e-6)then
+              yh2o = (1.-quala(nlvol))*(rhog(nlvol)
+     &               /18.)/denom
+              else
+              yh2o = 0.0
+              end if
+            frmh2o(i,icomp)=yh2o
+c           yn2 = mole fractions of nitrogen in fluid.
+c           sum mole fraction of pure N2 species being tracked and
+c           mole fractions of N2 in air being tracked.
+              numer = 0.0
+              if(voidg(nlvol).ge.1.e-6)then
+                if(nonni.ge.1)then
+                numer = quala(nlvol)*qualan(nlvol+nonni-1)*rhog(nlvol)/
+     &                  wmolea(nonni)    
+                end if
+                if(nonair.ge.1)then
+                numer = numer +
+     &               quala(nlvol)*qualan(nlvol+nonair-1)*rhog(nlvol)*
+     &               frcnit/wmolea(nonair)
+                end if
+              yn2 = numer/denom                                   
+              else
+              yn2 = 0.0
+              end if
+            frcmn2(i,icomp) = yn2
+cljs calculate mole fractions of air in mixture
+            if(voidg(nlvol).ge.1.e-6)then
+              if(nonair.ge.1)then
+              numer = quala(nlvol)*qualan(nlvol+nonair-1)*rhog(nlvol)/
+     &                wmolea(nonair)
+              frairm(i,icomp) = numer/denom
+              else
+              frairm(i,icomp) = 0.0
+              end if
+            else
+            frairm(i,icomp) = 0.0
+            end if          
+clfm  change the way to calculate Ar concentration
+c           yar = mole fractions of argon in fluid.
+c           sum mole fraction of pure Ar species being tracked and
+c           mole fractions of Ar in air being tracked.
+              numer = 0.0
+              if(voidg(nlvol).ge.1.e-6)then
+                if(nonar.ge.1)then
+                numer = quala(nlvol)*qualan(nlvol+nonar-1)*rhog(nlvol)/
+     &                  wmolea(nonar)    
+                end if
+                if(nonair.ge.1)then
+                numer = numer +
+     &               quala(nlvol)*qualan(nlvol+nonair-1)*rhog(nlvol)*
+     &               frcarg/wmolea(nonair)
+                end if
+              yar = numer/denom                                   
+              else
+              yar = 0.0
+              end if
+            frcmar(i,icomp) = yar
+clfm  endchange the way to calculate Ar concentration
+cljs  calculate mole fractions of H2
+              yh2 = 0.0
+              if(voidg(nlvol).ge.1.e-6.and.nonhy.ge.1)then
+              yh2 = quala(nlvol)*qualan(nlvol+nonhy-1)*rhog(nlvol)/
+     &              wmolea(nonhy)
+              end if
+                if(denom.ge.1.e-8)then
+                frcmh2(i,icomp) = yh2/denom
+                else
+                frcmh2(i,icomp) = 0.0
+                end if
+              if(voidg(nlvol).ge.1.e-6.and.nonair.ge.1)then
+c           yo2 = mole fractions of oxygen in fluid.
+           yo2 = quala(nlvol)*qualan(nlvol+nonair-1)*
+clfm  o2 molar fraction correction
+     &         (rhog(nlvol)/wmolea(nonair))*frcoxy/denom
+              else
+              yo2 = 0.0
+              end if
+            frcmo2(i,icomp) = yo2
+              if(frcmn2(i,icomp).lt.1.e-6)frcmn2(i,icomp)=0.0
+              if(frcmo2(i,icomp).lt.1.e-6)frcmo2(i,icomp)=0.0
+              if(frcmar(i,icomp).lt.1.e-6)frcmar(i,icomp)=0.0
+clfm280911 avoiding as well h2o negative
+              if(frmh2o(i,icomp).lt.1.e-6)frmh2o(i,icomp)=0.0
+c
+cljs end add mole fraction calculation
+         nswair(i,icomp) = 0
+         ibkarg(i,icomp) = 0
+         rbkarg(i,icomp) = 0.0
+         if ((rcrst2(i,icomp) - rco2(i,icomp)) .lt. 1.e-10)
+     &   nfrslg(i) = 0
+         rcmid = rci2(i,icomp)
+c  Modify cladding inside radius for double sided oxidation.
+c  (brchv=1 means breach).
+         if (int(brchv(i,icomp)) .ne. 0) then
+c  Calculate midplane radius for equal volume on both sides.
+           if (ngeom(icomp) .eq. 2) then
+             kdyn = (icomp - 1)*ndax + i
+c  Determine when oxidation complete for double-sided oxidation.
+c  Wtlimd = molecular wt of o2/mw of zr *zr density*volume.
+             wtlimd = twopi*rco2(i,icomp)*oxdwc(i)
+c  Account for double-sided oxidation.
+             wtlimd = 2.*wtlimd
+             if (wtlimd .ge. wtgnmx(i,icomp)) noxide(i) = 2
+           else
+             if (idcomp(icomp) .eq. 2) then
+               wtlimd = 2.0*oxdwc(i)
+               if (wtlimd .ge. wtgnmx(i,icomp)) noxide(i) = 2
+             else
+               rcmid = 0.5*(rcoi2(i,icomp) + rci2(i,icomp))
+             endif
+           endif
+         else
+           if (idcomp(icomp) .ne. 2) then
+             wtlimd = twopi*rco2(i,icomp)*oxdwc(i)
+           else
+             wtlimd=oxdwc(i)
+           endif
+           if (wtlimd .ge. wtgnmx(i,icomp)) noxide(i) = 2
+         endif
+         oxdhf(i) = 0.0
+         if (noxide(i).ge.1 .or. srftmp.lt.toxlim .or. scntrl(13)) then
+           oxdhc(i) = 0.0
+           h2oxd2(i,icomp) = 0.0
+           sroxd((icomp-1)*ndax+i) = 0.0
+           tzr(i) = max(rnoxd(i)-rcmid, 0.0)
+           oxdwz(i) = (oxdwc(i)*snfunc(ngeom(icomp),rco2(i,icomp),
+     &     dzcnd2(i,icomp),slbwd(icomp)) -
+     &     o2mw/zrmw*zrden*vfunc(ngeom(icomp),rco2(i,icomp),rnoxd(i),
+     &     dzcnd2(i,icomp),slbwd(icomp)))
+           froxpl(i,icomp) = cirrd1*oxdwc(i)/wtgnmx(i,icomp)
+           if (oxdwz(i) .lt. 0.0) oxdwz(i) = 0.0
+         else
+c  nshap = 0 = do not force application of diffusion limit.
+           nshap=0
+           call oxydef(oxlis0,i,nshap)
+           kaxndb = i
+           noxmat = imatr3(nmater2(i,icomp),i,icomp)
+           oxdwc0(i) = oxdwc(i)
+           froxpl(i,icomp) = cirrd1*oxdwc(i)/wtgnmx(i,icomp)
+           if (noxmat.le.3 .or. noxmat.eq.5) then
+             fatot=fadrop(i,icomp)
+c   If reflood is occurring, then assume cracks in oxide prevent
+c   drops of relocated material from sufficating oxidation at that
+c   location.
+             im = (icomp - 1)*nx + i
+             il = nvad(im)+filndx(4)
+             if (voidf(il) .ge. 0.0001) fatot = 0.0
+             wtgmax = wtgnmx(i,icomp)
+             if (wtgmax .lt .1.e-10) then
+               wtlim = o2mw/zrmw*zrden*
+     &         vsfunc(ngeom(icomp),rco2(i,icomp),rcmid)
+             elseif (idcomp(icomp).ne.2) then
+               wtlim=wtgmax/(twopi*rco2(i,icomp))
+             else
+               wtlim=wtgmax
+             endif
+             if (int(brchv(i,icomp)) .ne. 0) wtgmax = 0.5*wtgmax
+             effow1=effow0(i,icomp)
+             noxzr = noxide(i)
+             call oxstat(rcmid,srftmp,oxlis0,oxdeo(i),oxdwc(i),alfao(i),
+     &       rnoxd(i),rnalf(i),noxide(i),oxdwc0(i),fatot,wtgmax,effow1)
+             thkstm(i,icomp) = oxdeo(i)
+             froxpl(i,icomp) = cirrd1*oxdwc(i)/wtgnmx(i,icomp)
+             oxdhc(i) = (91.22/32.0)*zrheat*(oxdwc(i) - oxdwc0(i))*
+     &       snfunc(ngeom(icomp),rco2(i,icomp),1.0,slbwd(icomp))/dt
+             oxdwz(i) = (oxdwc(i)*snfunc( ngeom(icomp), rco2(i,icomp),
+     &       dzcnd2(i,icomp),1.0) - o2mw/zrmw *zrden*vfunc(ngeom(icomp),
+     &       rco2(i,icomp),rnoxd(i),dzcnd2(i,icomp),1.0))
+             oxdwz(i) = max(oxdwz(i),0.0)
+             effoxw(i,icomp)=effow1
+           elseif (noxmat.eq.18 .or. noxmat.eq.19) then
+             rwgn = soxwgn(srftmp)
+             if (rwgn.lt.0.) rwgn=0.0
+             oxdwc(i) = sqrt(oxdwc(i)**2 + rwgn*dt)
+             if (oxdwc(i).lt.oxdwc0(i))oxdwc(i) = oxdwc0(i)
+             froxpl(i,icomp) = cirrd1*oxdwc(i)/wtgnmx(i,icomp)
+             oxdhc(i)=1.5738e+6 * (oxdwc(i)-oxdwc0(i) )/dt
+             rthk = soxthk(srftmp)
+             oxdeo(i) = sqrt(oxdeo(i)**2 + rthk*dt)
+             thkstm(i,icomp) = oxdeo(i)
+           else
+             fail=.true.
+             write(output,9000)noxmat
+ 9000  format('0********* OXIDIZ has unknown material, index =',i3)
+           endif
+           delwg = oxdwc(i)-oxdwc0(i)
+           h2oxd2(i,icomp) = ((oxdwc(i) - oxdwc0(i))*
+     &     snfunc(ngeom(icomp),rco2(i,icomp),dzcnd2(i,icomp),
+     &     slbwd(icomp))/8.0)/dt
+c  Reduce heat generation by fraction of height of axial node
+c  that is blocked by debris.
+           frcout=dzfrcq(i,icomp)
+c  Add to fractional height the fractional height of Zr that has
+c  slumped from node due to interaction with Inconel spacer grid.
+           frcout=frcout+daxdis(i)/dzcnd2(i,icomp)
+           if(fdrmn2(i,icomp).gt.frcout)frcout=fdrmn2(i,icomp)
+           if(frcout.gt.1.0)frcout=1.0
+           oxdhc(i)=(1.-frcout)*oxdhc(i)
+           h2oxd2(i,icomp)=(1.-frcout)*h2oxd2(i,icomp)
+c  DOuble hydrogen production and heat generation to account for double
+c  sided oxidation near breach.
+           im = (icomp - 1)*nx + i
+           il = nvad(im) + filndx(4)
+           if (int(brchv(i,icomp)) .ne. 0) then
+             h2oxd2(i,icomp) = h2oxd2(i,icomp)*2.0
+             oxdhc(i) = oxdhc(i)*2.0
+           endif
+           sroxd((icomp-1)*ndax+i) = h2oxd2(i,icomp)*9.0
+           tzr(i) = rnoxd(i) - rcmid
+           if(tzr(i).lt.0.0) tzr(i) = 0.0
+         endif
+         h2oxd2(i,icomp)=max(0.,h2oxd2(i,icomp))
+         if (.not.scntrl(8)) then
+c  Add hydrogen to hydrodynamic volume.
+           im = (icomp - 1)*nx + i
+c  Check for case of rod-like geometry in only part of axial node and in
+c  which upstream and downstream junctions of volume are 100% blocked.
+           if (ienblk(i,icomp).eq.1) im=(icomp-1)*nx+itopdb(i,icomp)
+           il = nvad(im)+filndx(4)
+           do in=1,noncn
+             if (in .ne. nonhy) cycle
+             iln = il + in - 1
+             gaman(iln)=gaman(iln)+isgl*recipv(il)*h2oxd2(i,icomp)
+             enthn(iln) = uo + co*srftmp + do/2.0* (srftmp-tao)**2
+           enddo
+         endif
+       end select
+       enddo
+         if(ndbg.eq.1)then
+         write(output,9091)icomp,gaman(3859),gaman(3860)
+9091     format(' OXIDIZ at end; icomp=',i5,' gaman(3859)=',e10.4,
+     &   ' gaman(3860)=',e10.4)
+         end if
+       return
+       end
+*endif

@@ -1,0 +1,591 @@
+*mlist
+*if def,selap
+      subroutine liqsol(compj, denuo2, dtmac , dz    , faxial, naz   ,
+     *                 pcool , pgas  , pitch , qin   , ri    , rl    ,
+     *                 ro    , rpel  , teff  , tox   , tsur  , tsur0 ,
+     *                 tzr   , z     , zgrid , nfrslg, rocrmx,
+     *                 rocrst, volcrs, wbotuo, wbotzr, wfrouo,
+     *                 wfrozr, wremuo,  hadd  , haddbt, hremov,
+     *                 kfail , mltswz, roliq , slglen, wuo2  , wzr   ,
+     *                 fmix  , nwet  , avoidl, afracl, tmpfal,
+     *                 dzfrcl, vladeb, ifrag , woxsol, woxzr , stozro,
+     *                 tmac  , vfuel , flwh2 , flstm , burnup, wuorem,
+     *                 wremzo, ruomlt, wuomlt, wmltzo, wbotox, dzfrac,
+     *                 rfrces, igrdsp, wincl , thincl,  winfro,
+     *                 winliq, wzrinc, wzrgfz, igrinc, dzrinf, dinzrf,
+     *                 daxdis, thkgpl, daxgrd, retabg, thetgr, drgrdm,
+     * dia1gr, dza1gr,oxdwc,rnoxd,rci,rcoi,ruliq,winrem,wremzr,nfi,
+     # wuobng,unuca,powadd,kmnpol,idcomp,kfail1)
+c
+c  liqsol calculates the meltdown of fuel rods.
+c
+c  Cognizant engineer: ljs
+c#    calling routine:     fuelan
+c#    subroutines called:  disuo2, hamsub, maxrad, pliq, slgflo,
+c#                         trickl, volrad, zofail
+c#    engineer/programmer: l.j.siefken/w.j.suitt
+c#    input variables:        description
+c#    denuo2              density of u-o2.
+c#    dtmac               scdap time step.
+c#    dz                  height of each axial zone.
+c#    faxial              axial force in the cladding.
+c#    mltswz              switch to indicate whether or not melting of z
+c#    naz                 number of axial nodes.
+c#    ngrid               number of grid spacers.
+c#     pcool    coolant pressure around fuel rod, n/m**2
+c#     pgas     gas pressure in fuel rod, n/m**2
+c#    pitch               distance between fuel rod centers.
+c#    qin                 net thermal energy input to axial zone k per u
+c#    ri(z)               inside  radius of cladding at elevation z.
+c     rfrces              melt radius fraction at which escape occurrs.
+c#    rl                  length of stack of fuel pellets in fuel rod.
+c#    ro(z)               outside radius of cladding at elevation z.
+c#    rpel                radius to outside surface of the fuel pellets.
+c#    teff                effective annular gap for extrusion of liquid
+c#    tox(z)              thickness of zr-o2 layer on outside of claddin
+c#    tsur(z)             temperature of surface over which slug flows a
+c#    tsur0               same as tsur but for start of the time step.
+c#    tzr(k)              thickness of zr portion of cladding in zone k.
+c#    z                   elevations of axial nodes.
+c#    zgrid               elevations of the grid spacers.
+c#
+c#    i/o variables:          description
+c#    igrdsp              indicates existence/condition of grid spacer
+c#                            0 = no grid spacer at this axial node
+c#                            1 = intact grid spacer
+c#                            2 = grid spacer has dissolved oxide shell
+c                                 and is now interacting with fuel rod
+c                                 cladding.
+c                          3 = grid spacer slumping away this time step.
+c                             4 = grid spacer slumped away.
+c     igrinc(k) = indicator of grid spacer material; 0=zr, 1=inconel.
+c#    nfi                 indicator of breach at axial zone k.
+c#    nfrslg              indicator of frozen slug in axial zone k.
+c#    rocrmx              maximum outer radius of frozen zry-uo2 on outs
+c#    rocrst              average outer radius of frozen zry-uo2 on outs
+c#    ruliq               inner radius of annulus of dissolved uo2(m).
+c#    volcrs              volume of frozen zry-uo2 in axial zone k(m**3)
+c#    wbotuo              mass of uo2 which has dripped below bottom of
+c#    wbotzr              mass of zr which has dripped below bottom of f
+c#    wfrouo              mass of uo2 which has dripped into axial zone
+c#    wfrozr              mass of zr which has dripped into axial zone k
+c#    wincl        mass of as-fabricated grid spacer at axial node k
+c#    thincl              thickness of inconel grid space at node k
+c#    winfro              mass of inconel slumped/frozen at axial node k
+c#    winliq              mass of liquified inconel at axial node k
+c#    winrem              mass of inconel removed from axial node k
+c#    wremuo              mass of uo2 removed from axial zone k by disso
+c#    wremzr              mass of zr removed from axial zone k by liquef
+c#    wzrinc              mass of zr liquified due to reaction with
+c#                            inconel grid spacer
+c#    wzrgfz              mass of zr liquified by inconel reaction and
+c#                            frozen at axial node k
+c     retabg(k) = radius of surface area of contact between grid spacer
+c                 and fuel rod cladding (m).
+c     thetgr(k) = angle measuring circumferential spreading of reaction
+c                 in fuel rod cladding from eutectic reaction with grid
+c                 spacer (radians). due to symmetry, reaction zone is
+c                 completely spread when thetgr=pi/8.
+c     drgrdm(k) = change in radius of liquefaction of grid spacer
+c                 during past time step (m).
+c     dia1gr(k) = position of melt front in one-dimensional system for
+c                 case of front being adjusted to account for new
+c                 contact area - inconel (m)
+c     dza1gr(k) = same as dia1gr but for zr.
+c     wuobng(k) = mass of UO2 at axial node k (kg)
+c     unuca(k)  = linear heat generation due to nuclear heating at axial
+c                 node k (W/m).
+c     kmnpol = lowest axial node that is part of molten pool.
+c              If no molten pool, then kmnpol = naz +1.
+c     idcomp = identification of type of component;
+c              idcomp=0=fuel rod, idcomp=6=electrical heater rod.
+c     kfail1(k)=indicator of oxide shell breach at node k, 0=no, 1=yes.
+c#
+c#    output variables:       description
+c#    hadd                heat added to axial zone k during time step by
+c#    haddbt              heat added to region below fuel rod during tim
+c#    hremov              heat removed from axial zone k during time ste
+c#    kfail               number of axial zone in which failure of cladd
+c     kfalox = axial node at which cladding oxide shell fails independen
+c              of presence of inconel spacer grid.
+c#     slglen(k)    volume of reliquified crust which
+c#                  solidified in axial zone k during
+c#                  time step.
+c#    wuo2                weight of dissolved uo2.
+c#    wzr                 weight of dissolved zr.
+c#     fmix = mixing factor for eddy diffusion heat transfer
+c#     nwet = indicator wetting model
+c#            0 = mixture wets cladding surface
+c#            1 = mixture does not wet cladding surface
+c
+c        avoidl = flow area around fuel rod. (m**2)(input)
+c      avoidl is defined in subroutine cfdata by equation :
+c     avoidl=(pitch)**2-pi*rco(i)**2
+c       it takes into account flow area reduction due to ballooning
+c      but not crust formation.
+c        afracl = fractional reduction in flow area due
+c                 crust formation. if afracl = 1.0 , then
+c                 flow channel around fuel rod is completely
+c                 blocked. (output)
+c         tmpfal    = input maximum temperature for no fail-
+c                     ure of zro2. if tmpfal < 2000. , then
+c                     input value of tmpfal is ignored and
+c                     failure is determined from zro2 stress
+c                     calculations.  (k)    (input)
+c         dzfrcl(k) = fraction of height of axial zone k
+c                     which is completely filled with solidi-
+c                     fied zr-u-o.    (input)
+c         vladeb(k) = mass of  liquified zr-u-o which slumps
+c                     into molten pool at axial zone k.
+c                     (kg/rod)  (output)
+c         ifrag(k)  = variable indicating whether or not in-
+c                     tact fuel rod, debris bed, or void re-
+c                     gion exists in axial zone k.
+c                     0 = intact fuel rod
+c                     1 or 2 = debris bed
+c                     3 = void region
+c                     (input)
+c         woxsol(k) = mass of oxygen from oxidation in
+c                     solidified zr-u-o in axial zone k.(kg)
+c                     (input/output)
+c       woxzr(k)  = mass of oxygen absorbed by in situ
+c                   zr layer in axial zone k (kg) (input)
+c        stozro(k) = stoichiometry of zro2 layer on
+c                    outside of cladding in axial zone k.
+c                    for perfect stoichiometry, stozro(k)=2.
+c                    (input)
+c        tmac      = current time. (s)   (input)
+c        vfuel(k)  = volume of fuel in axial zone k. (m**3)
+c                    input vfuel(k) is modified to account for
+c                    reduction in volume due to liquified uo2
+c                    flowing out of breach in cladding zro2
+c                    layer.
+c                    (input/output)
+c        flwh2(k)  = mass flow rate of hydrogen within coolant
+c                    channel. (kg/s)  (input)
+c        flstm(k)  = mass flow rate of steam within coolant
+c                    channel. (kg/s)  (input)
+c        powadd(k) = nuclear heat generation in liquefied material that
+c                    slumps from node k (W).
+c
+      implicit none
+*call cons
+*call scddat
+*call buntim
+*call tblsp
+*call dbacct
+      integer compj,naz,nfrslg,kfail,mltswz,nwet,ifrag,
+     *igrdsp,igrinc,kfalox,kfal1
+       integer nfi
+       integer kfail1(ndax)
+      real denuo2,dtmac,dz,faxial,pcool,pgas,pitch,qin,ri,rl,ro,rpel,
+     *teff,tox,tsur,tsur0,tzr,z,zgrid,rocrmx,rocrst,volcrs,
+     *wbotuo,wbotzr,wfrouo,wfrozr,wremuo,hadd,haddbt,
+     *hremov,roliq,slglen,wuo2,wzr,fmix,avoidl,afracl,tmpfal,
+     *dzfrcl,vladeb,woxsol,woxzr,stozro,tmac,vfuel,flwh2,flstm,
+     *burnup,wuorem,wremzo,ruomlt,wuomlt,wmltzo,wbotox,dzfrac,
+     *rfrces,wincl,thincl,winfro,winliq,wzrinc,wzrgfz,
+     *dzrinf,dinzrf,daxdis,thkgpl,daxgrd,retabg,thetgr,drgrdm
+      real dia1gr,dza1gr
+      real wuobng,unuca,powadd
+       real oxdwc,rnoxd,rci,rcoi,ruliq,winrem,wremzr
+      dimension z(ndax)  , tsur(ndax)  , ro(ndax)    , tzr(ndax)   ,
+     *       ri(ndax)    , dz(ndax)    , volcrs(ndax), wuo2(ndax)  ,
+     *       wzr(ndax)   , zgrid(ngrid), rpel(ndax)  , tsur0(ndax) ,
+     *       qin(ndax)   , teff(ndax)  ,
+     *       hadd(ndax)  , hremov(ndax), nfrslg(ndax), wfrouo(ndax),
+     *       wfrozr(ndax), wremuo(ndax),  avoidl(ndax),
+     *       rocrmx(ndax), rocrst(ndax), mltswz(ndax), afracl(ndax),
+     *       tox(ndax)   , slglen(ndax), roliq(ndax) , flwh2(ndax) ,
+     *       dzfrcl(ndax), vladeb(ndax), ifrag(ndax) , flstm(ndax) ,
+     *       woxsol(ndax), woxzr(ndax) , faxial(ndax), stozro(ndax),
+     *       vfuel(ndax) , wremzo(ndax), wuorem(ndax), dzfrac(ndax),
+     *       ruomlt(ndax), wuomlt(ndax), wmltzo(ndax), burnup(ndax),
+     *       igrdsp(ndax),  winfro(ndax), wincl(ndax) ,
+     *       thincl(ndax), winliq(ndax), wzrinc(ndax), wzrgfz(ndax),
+     *       dzrinf(ndax), dinzrf(ndax), daxdis(ndax), thkgpl(ndax),
+     *       daxgrd(ndax), retabg(ndax), thetgr(ndax), drgrdm(ndax)
+      dimension wuobng(ndax),unuca(ndax),powadd(ndax)
+      dimension igrinc(ndax),dia1gr(ndax),dza1gr(ndax)
+      dimension oxdwc(ndax),rnoxd(ndax),rci(ndax),rcoi(ndax)
+      dimension ruliq(ndax),winrem(ndax),wremzr(ndax)
+       dimension nfi(ndax)
+       dimension kfaila(ndax),kfailg(ndax)
+*call prnt
+*call ufiles
+*call blageo
+*call contrl
+c
+c  local variables.
+      integer k,kremov,ktopf,mltfg1,mltfg2,nbrmod,ntrckl
+      real afraco,afracu,afracz,awox,awzr,deltox,disflg,dum1,dum2,
+     *frcenr,ftmelt,frmlt2,fotmtl,fcomp,fhefus,hfuszo,rftemp,
+     *rhozo,rhozr,sigabr,sighbr,sigrbr,thkave,tliq,tliq0,tuomlt,
+     *tzomlt,tzrmlt,wodm,woxsum,wsum,
+     *wuo1,wuo2dm,wuoint,wuosum,wzo1,wzoint,wzrdm,wzrsum,wzrgrd,
+     #rliqsw
+c     represent liquefaction at appropriate time with molten pool
+c     model.  This modeling is performed in subroutines rubtrn and
+c     heatld.
+      data rliqsw /0.100/
+       integer nswzri,kmnpol,k2,idcomp,mslump
+       integer kfaila,kaxn
+       integer kfailg,nvolrd
+       integer nsw,igrdp0(ndax)
+      integer ndbg
+      real cden,fenthl,pliq,zoden,zonthl,brntot,brnave
+      real wuotot,wzrtot,woxtot
+      real rhomix,voltot,voldrp,moltot
+      real mlwtuo,mlwtzr
+      real zuden
+      real gaddum
+      external zuden
+      external cden,fenthl,pliq,zoden,zonthl
+      external atomfr,disuo2,fhyprp,hamsub,maxrad,slgfl2,slgflo,volrad,
+     *zofail,zoprp
+      external diszri
+       data rftemp/300./ ,fotmtl/2.0/ ,fcomp/0.0/ ,fhefus/27.4e+04/
+     & awzr/91.22/ ,awox/15.9994/
+      data hfuszo/ 7.06e+5/
+c initialize variables
+        ndbg=0
+      gaddum = 0.0
+      k2=0
+      kfail=0
+      kfalox=0
+      haddbt = 0.0
+      ntrckl=0
+      mltfg1 = 0
+      mltfg2 = 0
+      tliq0 = 0.0
+      wuosum = 0.0
+      wzrsum = 0.0
+      woxsum = 0.0
+      wbotuo=0.0
+      wbotzr=0.0
+      wbotox=0.0
+      brntot = 0.0
+      do 10 k = 1, naz
+c    initialize array indicating whether liquefied material breached
+c    oxide shell during time step.
+        kfaila(k)=0
+        kfailg(k)=0
+   10   brntot = brntot + burnup(k)
+      nswzri=0
+      do 20 k = 1,naz
+      if(nswzri.eq.1)go to 20
+        winliq(k)=0.0
+        wzrinc(k)=0.0
+        igrdp0(k)=igrdsp(k)
+c perform calculation for both zr and inconel grid spacers.
+c igrdsp=2=liquefaction of grid spacer during this time step.
+        if(igrdsp(k) .ne. 2.or.tsur(k).le.1273.0.or.
+     #  tzr(k).le.1.e-5)go to 20
+c       Do not perform calculation of liquefaction and slumping at
+c       axial node 1.  Material that liquefies at this node is assumed
+c       to be supported by core plate.
+c***    delete concept of grid spacer supported by core plate.
+c***    if(k.eq.1)go to 20
+c grid spacer is now interacting with cladding.
+        rhozr = cden(tsur(k))
+        wzrgrd = pi*((ri(k) + tzr(k))**2 - ri(k)**2)*thincl(k)*rhozr
+        call diszri(k,compj,igrdsp(k),wincl(k),winliq(k),wzrgrd,
+     *  wzrinc(k),tzr(k),tox(k),tsur(k),ro(k),dzrinf(k),
+     * dinzrf(k),daxdis(k),thkgpl(k),
+     * pitch,igrinc(k),thincl(k),dz(k),daxgrd(k),retabg(k),thetgr(k),
+     * drgrdm(k),dia1gr(k),dza1gr(k))
+       if(igrdsp(k).eq.3)then
+       write(output,9200)k,compj
+9200   format(' Grid spacer slumping at axial node #',i3,
+     # ' component #',i3)
+       dzfrcl(k)=0.0
+       nswzri=1
+       end if
+   20   continue
+      brnave = brntot/real(naz)
+      call fhyprp (brnave ,fcomp ,tuomlt ,tliq)
+      do 30 k = 1, naz
+        hadd(k)    = 0.0
+        hremov(k)  = 0.0
+        wuo2(k)    = 0.0
+        wzr(k)     = 0.0
+        wmltzo(k)  = 0.0
+        mltswz(k)  = 0
+        wuomlt(k)  = 0.0
+   30   continue
+c determine if any melting or freezing has occured
+      do 50 k = naz , 1 , -1
+c     If fuel pellet almost completely dissolved, then do not
+c     model metallic meltdown. Instead, subroutine rubtrn will
+c     identify this location as becoming part of molten pool.
+        if(igrdsp(k).eq.3.and.igrdp0(k).eq.2
+     #  .and.(ruliq(k)/rpel(k)).gt.rliqsw)then
+          kfailg(k) = 1
+          kfail=k
+          ktopf=kfail
+          nbrmod=0
+          mltfg1=1
+          go to 70
+        endif
+        if(irubpp(k,compj).eq.1) go to 50
+        if(ifrag(k).eq.3) go to 50
+        if (tzr(k) .gt. 1.e-8) then
+          wuo2dm=0.0
+          rhozr = cden(tsur(k))
+          wzrdm = pi*((ri(k) + tzr(k))**2 - ri(k)**2)*dz(k)*rhozr
+          wodm = woxzr(k)
+          call atomfr(wuo2dm, wzrdm, wodm, afracu, afracz, afraco)
+          tzrmlt = pliq( afraco, afracu, afracz )
+        else
+          wzrdm = 0.0
+          tzrmlt = 2900.
+        endif
+        call zoprp (stozro(k) ,tzomlt ,tliq ,dum1 ,dum2)
+        if (tsur(k) .gt. tzrmlt)  then
+          wzr(k)=wzrdm
+          if (wzr(k) .gt. 0.0)  mltfg1 = k
+          if (wzr(k) .lt. 0.0)  wzr(k) = 0.0
+        end if
+c check for melting zro2 and uo2.
+c    Disable coding fron here to statement 50 by comparing tsur(k) to
+c    5000.0 K; the melting of UO2 and ZrO2 is now represented elesewhere
+c***    if(tsur(k).lt.tzomlt)go to 50
+        if(tsur(k).lt.5000.0)go to 50
+c check to see if all zro2 removed at this axial node.
+        kremov=0
+        wzo1=0.0
+        wuo1=0.0
+        rhozo=zoden(tsur(k))
+c frcenr = fraction of available energy put into melting.
+        if(qin(k).lt.1.e-10)go to 50
+        frcenr=1.0
+c to avoid error (in fstate?) that zeros out qmat when
+c all zro2 melted, force a residual amount of zro2.
+        if(tox(k).gt.1.e-5)kremov=1
+        if(kremov.eq.1.and.tsur(k).lt.(tuomlt-10.0))go to 50
+        if(kremov.eq.1.and.tsur(k).ge.(tuomlt-10.0))go to 40
+        wzoint=pi*(ro(k)**2-(ro(k)-tox(k))**2)*dz(k)*rhozo
+c***    subroutine slgfl2 is disabled.
+c***    mltfg2=k
+c using energy equation, calculate mass of zro2 melting
+c during time step at this node.
+        wzo1=qin(k)*dz(k)*dtmac/hfuszo
+c check to see if all zro2 melted.
+        if(wzo1.gt.wzoint)then
+          frcenr=1.-wzoint/wzo1
+          wzo1=wzoint
+        else
+          frcenr=0.0
+        end if
+        mltswz(k)=1
+        wremzo(k)=wremzo(k)+wzo1
+c reduce thickness of zro2 layer according to amount of zro2
+c which melted during time step.
+        deltox=wzo1/(2.*pi*ro(k)*rhozo*dz(k))
+        tox(k)=tox(k)-deltox
+        if(tox(k).lt.0.0)tox(k)=0.0
+c       if (printz)  write (output,310) k ,wzo1 ,deltox ,tox(k)
+c woxsum = accumulative mass of liquid zro2 dripping this time
+c step.
+        wzrsum=wzrsum+(awzr/(awzr+stozro(k)*awox))*wzo1
+        woxsum=woxsum+(stozro(k)*awox/(awzr+stozro(k)*awox))*wzo1
+c       if (printz)  write (output,320) k ,wremzo(k) ,wzrsum ,woxsum
+c tliq0 = sum of temperature times mass
+        tliq0=tliq0+wzo1*tzomlt
+c wmltzo(k) = accumulative mass of liquified zro2 at node k.
+        wmltzo(k)=wmltzo(k)+wzo1
+        hremov(k)=hremov(k)+wzo1*zonthl(tzomlt+10.0,rftemp)
+c if all thermal energy expended in melting zro2 or if temperature
+c less than melting temperature of uo2, do not check for fuel melt-
+c ing during this time step.
+        if(frcenr.le.1.e-10)go to 50
+        if(tsur(k).lt.(tuomlt-10.0))go to 50
+   40   continue
+c calculate mass of liquid uo2.
+        kremov=0
+c wuo2dm = mass of uo2 dissolved by zr.
+        wuo2dm=wremuo(k)
+        wuoint=vfuel(k)*denuo2
+        if(wuorem(k).ge.(wuoint-1.e-4))kremov=1
+        if(kremov.eq.1)go to 50
+c wuo1 = mass of uo2 liquified at this node during time step.
+        wuo1=frcenr*qin(k)*dz(k)*dtmac/fhefus
+        mltswz(k)=1
+c       if (printz)  write (output,330) wuoint ,wuo1 ,wuorem(k) ,k
+c check to see if all uo2 melted.
+        if((wuo1+wuorem(k)).gt.wuoint)then
+          wuo1=wuoint-wuorem(k)
+        end if
+c wuomlt(k) = mass of uo2 that melts during time step (kg).
+        wuomlt(k)=wuo1
+c calculate outer radius of melting uo2 assuming melting
+c begins at center.
+        if(wuo1.ge.1.e-10)then
+c***   subroutine slgfl2 is disabled.
+c**       mltfg2 = k
+          wuosum = wuosum + wuomlt(k)
+          tliq0 = tliq0 + wuomlt(k)*tuomlt
+          wuorem(k) = wuorem(k) + wuomlt(k)
+          ftmelt = tuomlt
+          frmlt2 = 1.0
+          hremov(k) = hremov(k) + wuomlt(k)
+     &      * fenthl(tuomlt+10.0,fcomp,fotmtl,ftmelt,frmlt2,fhefus,
+     &      gaddum)
+        end if
+   50   continue
+      ntrckl=0
+c bwr blade/box lateral spreading occurs during timesteps when
+c fuel/simulator rods and grid spacers are not relocating.  for
+c fuel/simulator rods, mltfg1 indicates when all cladding zr has
+c melted, and kfail indicates when the cladding zro2 shell has failed
+c (typically later).  note that iblfsp=0 when the bwr blade/box
+c component is inactive
+      if(mltfg1.eq.0 .and. ntrckl.eq.0 .and. iblfsp(compj).gt.0) goto 70
+      if ((mltfg1 .eq. 0) .and. (ntrckl .eq. 0))  go to 110
+c compute the amount of dissolved uo2 and
+c check for new breach in the outer zr-o2 layer of the fuel rod.
+c if no new failure, proceed to the calculation of the volume
+c of frozen crust in each axial zone.
+c set disflg for dissolution front model, eventual user input
+      disflg = 0.0
+      call disuo2 (denuo2, disflg, dz    , naz   , rpel  , tsur  ,
+     #            ruliq,wuo2,wzr,woxzr,daxdis,ifrag,kfail1,idcomp)
+      call zofail (naz,nfi,tox,tsur,tsur0,tzr,wuo2,wzr,kfalox,
+     # ifrag,woxzr,sighbr,sigabr,sigrbr,nbrmod,winrem,
+     # ruliq,oxdwc, rnoxd,rci,ro,rpel,kfaila,wremzr,kfail1,dz)
+      if(kfalox.gt.0)then
+      if((wzr(kfalox)+wuo2(kfalox)).lt.
+     # 1.e-6)kfalox=0
+c      If fuel pellet is mostly dissolved, then do not model
+c      metallic meltdown. Instead, subroutine rubtrn identifies
+c      this location as being becoming part of molten pool.
+         if(kfalox.ge.1)then
+         if((ruliq(kfalox)/rpel(kfalox)).le.rliqsw)kfalox=0
+         end if
+      end if
+70    continue
+       nsw=0
+       do75k=1,naz
+       if(nsw.eq.1)go to 75
+       if(kfaila(k).gt.0)then
+      if((wzr(k)+wuo2(k)).lt.1.e-6)kfaila(k)=0
+       end if
+       if(kfaila(k).gt.0)kfalox=k
+       if(kfailg(k).gt.0)then
+       if((wzrinc(k)+winliq(k)).lt.1.e-6)kfailg(k)=0
+       end if
+       if(kfailg(k).eq.k)kfail=k
+       mslump=0
+       if(kfail.eq.k.or.kfalox.eq.k)mslump=1
+         if(kfalox.eq.k)then
+           if(kfail1(kfalox).eq.0.and.kfailg(kfalox).eq.0)then
+           kfail1(kfalox)=1
+           wuobc2(k,compj)=wuo2(k)
+           wzrbc2(k,compj)=wzr(k)
+           woxbc2(k,compj)=woxzr(k)
+           end if
+         end if
+      if(mslump.eq.1.or.iblfsp(compj).gt.0)then
+      if(mslump.eq.1)then
+c perform the heat and mass subtraction calculation
+        kfal1=kfalox
+        if(kfail.ge.1)kfal1=kfail
+        call hamsub(kfal1,naz,tsur,wuo2,wremuo,wremzr,wzr,hremov,
+     *              ktopf,ifrag,rftemp,vfuel,denuo2,wfrozr,wfrouo,
+     *              wzrinc,winliq,winrem,winfro)
+        nsw=1
+c change iblfsp to negative value to indicate bwr blade/box lateral
+c spreading does not occur because cladding or grid spacer relocation
+c occurs instead
+          if(iblfsp(compj) .gt. 0) iblfsp(compj)=-iblfsp(compj)
+      else
+c bwr blade/box lateral spreading into fuel bundle
+          kfail=iblfsp(compj)
+          ktopf=kfail
+      endif
+c compute the slug flow and cooling calculations.
+c     relocation for fuel rods is calculated by subroutine drpflo.
+          if(idcomp.ne.0.and.idcomp.ne.6)then
+          call slgflo (dz,ktopf,naz,ri,ro,rpel,tox,tsur,tzr,z,zgrid,
+     *    nfrslg,rocrmx,ruliq,wbotuo,wbotzr,wfrouo,wfrozr,wremzr,
+     *    hadd,haddbt,kfail,wuo2,wzr,fmix,nwet,k2,vladeb,ifrag,avoidl,
+     #    afracl,dzfrcl,woxsol,woxzr,wbotox,winfro,winliq,wzrinc,igrdsp,
+     #    winrem)
+          end if
+      end if
+75     continue
+  110 continue
+      if (mltfg2 .eq. 0)  go to 120
+c consider case of uo2 melting.
+c tliq0 = sum of mass*temperature from each zone contibuting
+c liquid.
+      wsum=wuosum+wzrsum+woxsum
+      if(wsum.lt.1.e-10)then
+        mltfg2=0
+        go to 120
+      end if
+      tliq0 = tliq0 / wsum
+      thkave = .002
+      call slgfl2 (dz,tliq0,denuo2,naz,stozro,rpel,ri,ro,rocrst,
+     *rocrmx,tox,tsur,thkave,tzr,z,zgrid,wbotuo,wbotzr,wfrouo,wfrozr,
+     *nfrslg,hadd,haddbt,mltfg2,wuosum,wzrsum,woxsum,
+     *fmix,nwet,vladeb,ifrag,avoidl,afracl,dzfrcl,woxsol,woxzr,wremuo,
+     *wremzr,wbotox,wremzo,winliq,winfro,winrem)
+  120 continue
+c***   calculate relocation of drops.
+      call drpflo(z,dz,tsur,tsur0,wzrinc,winliq,tox,
+     # tzr,ro,wuobng,unuca,wremuo,powadd,pitch,igrdsp,kfaila,kfailg,
+     # naz,compj,idcomp,kfail1)
+c      calculate mass of UO2 and Zr in droplet form at each axial node.
+       nvolrd=0
+       do160k=naz,1,-1
+        if(idrops(k,compj).eq.1.and.kdrops(k,compj).ge.1)then 
+       kaxn=kdrops(k,compj)
+         if(kaxn.ge.1)then
+         wfrouo(kaxn) = wfrouo(kaxn) + wuobc2(k,compj)
+         wfrozr(kaxn) = wfrozr(kaxn) + wzrbc2(k,compj)
+c   update number of drops at node.
+         wuotot = wfrouo(kaxn)
+         wzrtot = wfrozr(kaxn)
+c    store weight gain O2 for complete oxidation of collection of drops
+         wslom2(kaxn,compj) = (32.0/91.22)*wzrtot
+         woxtot = 0.0
+         afracu = 0.0
+         afracz = 1.0
+         afraco = 0.0
+           if(wzrtot.gt.1.e-6)then
+           call atomfr(wuotot,wzrtot,woxtot,afracu,afracz,afraco)
+           end if
+         rhomix = zuden(afracu,afracz,tsur(kaxn))
+         voltot = (wfrouo(kaxn) + wfrozr(kaxn))/rhomix
+         voldrp = 0.666666*pi*rdrops(k,compj)**3
+         ndrfz2(kaxn,compj) = voltot/voldrp
+c    fraction of UO2 and Zr based on moles
+c        mlwtzr = molecular weight of Zr
+c        mlwtuo = molecular weight of the dissoled UO2
+         mlwtzr = 91.22
+         mlwtuo = 270.
+         moltot = (wuotot/mlwtuo) + (wzrtot/mlwtzr)
+         fudfz2(kaxn,compj) = (wuotot/mlwtuo)/moltot
+         end if
+        nvolrd=1
+        end if
+160    continue
+       if(nvolrd.eq.1)then
+      call volrad(dz    , naz   , ro    , wfrouo, wfrozr, rocrst,
+     * volcrs, rocrmx, avoidl, afracl,
+     * dzfrcl, ifrag , slglen, woxsol, winfro,
+     # vladeb)
+      call maxrad(naz   , pitch , rocrst, nfrslg,
+     *            rocrmx, ifrag )
+       end if
+      do140k=1,naz
+        nfrslg(k)=0
+  140   continue
+      do  170  k = 1,naz
+        if ( ruliq(k) .le. 0.0 )   ruliq(k) = 1.0e-08
+  170   continue
+      return
+  560 format(' time                =',e11.5,' s')
+      end
+*endif

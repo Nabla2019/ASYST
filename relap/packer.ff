@@ -1,0 +1,201 @@
+*mlist
+       subroutine packer
+!
+!  Determines if water packing occurs, and if it does, modifies terms
+!  used in the velocity equations.
+!
+!  Cognizant engineer: rar kuo (hxc)
+!
+       use invtbl
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'scrtch.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       logical packo,lflagg,streto
+       integer i,ii,inout,is,ixs,ix,jx,kk,l,ll,lsign,m,mm,nmap
+       real elevat,hld,factor,fact1,fact2
+c  Data statements.
+       data fact1/1.0e4/,fact2/1.0e6/
+c
+c  Search over volumes for those real volumes needing water packing
+c  correction.
+       packo = .false.
+       streto = .false.
+       i = lpdat(issys)%liv
+       ix = ixvff
+       do m = 1,lpdat(issys)%livn
+         imap(i) = iand(imap(i),not(ishft(1,30)))
+         imap(i) = iand(imap(i),not(ishft(1,8)))
+         nmap = iand(imap(i),63)
+         xpack(ix) = ((voidgo(i).le.0.12
+     &   .and. voidgo(i).gt.0.0) .or. iand(vctrl(i),16).ne.0) .and.
+     &   tempf(i) .le. satt(i) .and.
+     &   iand(imap(i),1024).ne.0 .and.
+     &   iand(vctrl(i),1).eq.0 .and. iand(vctrl(i),128).eq.0
+         xpack(ix) = xpack(ix) .and. .not.chngno(51)
+         packo = packo .or. xpack(ix)
+c
+         stret(ix) = (iand(ishft(imap(i),-28),1).ne.0)
+     &   .and. (iand(vctrl(i),128).eq.0)
+     &   .and. (voidgo(i).le.0.02 .or. voidgo(i).ge.0.98)
+         stret(ix) = stret(ix) .and. chngno(32)
+         streto = streto .or. stret(ix)
+         i = i + ivskp
+         ix = ix + scskp
+       enddo
+c  If no packing corrections needed, return, otherwise apply correction.
+       if (.not.packo .and. .not.streto) return
+       i = lpdat(issys)%liv
+       ix = ixvff
+       do is = 1,lpdat(issys)%livn
+         if (xpack(ix)) then
+           l = invfnd(i)
+           do mm = 1,invcnt(i)
+             jx = invj(l)%invvnx
+             inout = iand(ishft(invj(l)%invjun,-1),1)
+             lsign = iand(invj(l)%invjun,1)
+             lflagg = (lsign.eq.0 .and. inout.ne.0) .or.
+     &       (lsign.eq.1 .and. inout.eq.0)
+             kk = ij1nx(jx)
+             ll = ij2nx(jx)
+             if (.not.lflagg) then
+               ii = kk
+             else
+               ii = ll
+             endif
+             kk = kk + iand(ishft(jcex(jx),-12),7)
+             ll = ll + iand(ishft(jcex(jx),-9),7)
+             if (voidgo(ii).gt.0.12 .and. iand(jc(jx),3).eq.0) then
+               elevat = hydzc(kk)
+               if (iand(jc(jx),4) .ne. 0) elevat = -elevat
+               hld = hydzc(ll)
+               if (iand(jc(jx),8) .ne. 0) hld = -hld
+               elevat = elevat + hld
+               if ((lflagg .or. elevat.le.0.0) .and.
+     &         (.not.lflagg .or. elevat.ge.0.0)) then
+                 if (athrot(jx) .ne. 0.0) then
+                   if (sourcp(is) .ge. 0.0023*po(i)) then
+                     lpdat(issys)%lpackr = 1
+                     imap(i) = ior(imap(i),ishft(1,30))
+                     jcex(jx) = ior(jcex(jx),ishft(1,16))
+                     if( help.ne.0 )
+     &               write (output,2000) timehy,ncount,volno(i),
+     &               junno(jx),sourcp(is),po(i),voidgo(i),tempf(i),
+     &               satt(i),volno(ii),voidgo(ii)
+ 2000  format ('0Water packing occurred, timehy =',1p,g15.7,', ncount ='
+     & ,i10,', volno(i) =',i10.9,', junno(jx) =',i10.9,/,25x,
+     & 'sourcp(is) =',1p,g15.7,', po(i) =',g15.7,', voidgo(i) =',
+     & g15.7,/,25x,'tempf(i) =',g15.7,', satt(i) =',g15.7,
+     & ', volno(ii) =',i10.9,/,25x,'voidgo(ii) =',1p,g15.7)
+                     vctrlx(i) = ior(vctrlx(i),ishft(1,3))
+                     jcex(jx) = ior(jcex(jx),ishft(1,20))
+                     rhofj(jx) = rhof(i)
+                     voidfj(jx) = voidf(i)
+                     ufj(jx) = uf(i)
+                     ixs = jcnxs(jx)
+                     factor = max(fact1,min(fact2,(fact2-fact1)*
+     &               5.8015095e-7*(p(i)-8.6184463e6) + fact1))
+                     if (.not.lflagg) then
+                       scvj1(ixs)  = -0.01
+                       vfdpl(ixs) = vfdpl(ixs)*factor
+                     else
+                       scvj1(ixs)  = 0.01
+                       vfdpk(ixs) = vfdpk(ixs)*factor
+                     endif
+                   endif
+                 endif
+               endif
+             endif
+             l = l + 1
+           enddo
+         endif
+         i = i + ivskp
+         ix = ix + scskp
+       enddo
+c
+c  If no stretch corrections needed, return, otherwise apply correction.
+       if (streto) then
+         i = lpdat(issys)%liv
+         ix = ixvff
+         do is = 1,lpdat(issys)%livn
+           if (stret(ix)) then
+             l = invfnd(i)
+             do mm = 1,invcnt(i)
+               jx = invj(l)%invvnx
+               inout = iand(ishft(invj(l)%invjun,-1),1)
+               lsign = iand(invj(l)%invjun,1)
+               lflagg = (lsign.eq.0 .and. inout.ne.0) .or.
+     &         (lsign.eq.1 .and. inout.eq.0)
+               kk = ij1nx(jx)
+               ll = ij2nx(jx)
+               if (.not.lflagg) then
+                 ii = kk
+               else
+                 ii = ll
+               endif
+               kk = kk + iand(ishft(jcex(jx),-12),7)
+               ll = ll + iand(ishft(jcex(jx),-9),7)
+               if (voidgo(ii).gt.0.12 .and. iand(jc(jx),3).eq.0) then
+                 elevat = hydzc(kk)
+                 if (iand(jc(jx),4) .ne. 0) elevat = -elevat
+                 hld = hydzc(ll)
+                 if (iand(jc(jx),8) .ne. 0) hld = -hld
+                 elevat = elevat + hld
+                 if ((lflagg .or. elevat.le.0.0) .and.
+     &           (.not.lflagg .or. elevat.ge.0.0)) then
+                   if (athrot(jx) .ne. 0.0) then
+                     if (sourcp(is) .le. - 0.05*po(i)) then
+                       lpdat(issys)%lpackr = 1
+                       imap(i) = ior(imap(i),ishft(1,8))
+                       jcex(jx) = ior(jcex(jx),ishft(1,17))
+                       if( help.ne.0 )
+     &                 write (output,2001) timehy,ncount,volno(i),
+     &                 junno(jx),sourcp(is),po(i),voidgo(i),tempf(i),
+     &                 satt(i),volno(ii),voidgo(ii)
+ 2001  format ('0Water stretch occurred, timehy =',1p,g15.7,', ncount ='
+     & ,i10,', volno(i) =',i10.9,', junno(jx) =',i10.9,/,25x,
+     & 'sourcp(is) =',1p,g15.7,', po(i) =',g15.7,', voidgo(i) =',
+     & g15.7,/,25x,'tempf(i) =',g15.7,', satt(i) =',g15.7,
+     & ', volno(ii) =',i10.9,/,25x,'voidgo(ii) =',1p,g15.7)
+                       vctrlx(i) = ior(vctrlx(i),ishft(1,3))
+                       jcex(jx) = ior(jcex(jx),ishft(1,21))
+                       rhofj(jx) = rhof(ii)
+                       voidfj(jx) = voidf(ii)
+                       ufj(jx) = uf(ii)
+                       rhogj(jx) = rhog(ii)
+                       voidgj(jx) = voidg(ii)
+                       ugj(jx) = ug(ii)
+                       ixs = jcnxs(jx)
+                       factor = max(fact1,min(fact2,(fact2-fact1)*
+     &                 5.8015095e-7*(p(i)-8.6184463e6) + fact1))
+                       if (.not.lflagg) then
+                         scvj1(ixs) =  0.01
+                         vfdpl(ixs) = vfdpl(ixs)*factor
+                         scvj3(ixs) = 0.01
+                         vgdpl(ixs) = vgdpl(ixs)*factor
+                       else
+                         scvj1(ixs) = - 0.01
+                         vfdpk(ixs) = vfdpk(ixs)*factor
+                         scvj3(ixs) = - 0.01
+                         vgdpk(ixs) = vgdpk(ixs)*factor
+                       endif
+                     endif
+                   endif
+                 endif
+               endif
+               l = l + 1
+             enddo
+           endif
+           i = i + ivskp
+           ix = ix + scskp
+         enddo
+       endif
+       return
+       end

@@ -1,0 +1,727 @@
+*mlist
+       subroutine imlp
+!  Prepares a multple loop table, loads the number of volumes,
+!  junctions, and components per loop, and establishes the order for
+!  processing.
+!
+!  Cognizant engineer: rjw.
+!
+*in32 markv
+*in32 markv1
+*in32 markv2
+*in32 markj1
+*in32 markj2
+*in32end
+c
+       use jundat
+       use lpdatc
+       use voldat
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'lcntrl.h'
+       include 'mxnfcd.h'
+       include 'sysdatc.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+!
+!  Local variables.
+       type (jund), allocatable :: jun2(:)
+       type (vold), allocatable :: vol2(:)
+       integer ni(2),cnt,markv(l_),markv1(l_),markv2(l_),markj1(l_),
+     & markj2(l_)
+       logical li(2),skip,tfail,skipp,tfaill
+       equivalence (markv(1),vctrln(1)),(markv1(1),vctrld(1)),
+     & (markv2(1),vctrls(1)),(markj1(1),jcnx1(1)),(markj2(1),jcnx2(1))
+       integer i,i1,icur,ije,inext,is,isave,iv,ive,ivnew,ivv,j,j1,
+     & l,l1,l2,lcnt,ll,lnum,lo,lpxx,ls,lv,lvx,m,n,ndxsv,nmat,nn,nns,
+     & nn1,nn2,nn3,nn4,nsrch
+       integer isfdes,lcontg,itype,ibor
+       character chwrd*8
+!
+!  Get space for loop table.
+       l2 = lcontg(1)
+       filsiz(28) = nusys(filndx(28)) + 1
+       l1 = max(filsiz(3),filsiz(4),filsiz(5)) + 3*nvols(filndx(4)) +
+     & filsiz(28)
+       if (l2 .lt. l1) go to 200
+       call ftbsft (filid(28),l1,2,filndx(28))
+!  Temporarily change order of volume numbers to maintain desired order
+!  of volumes and junctions within a component.
+       l = filndx(3)
+       do m = 1,ncmps(l)
+         cmpopt(l) = iand(cmpopt(l),not(2))
+         if (cmptyp(l) .eq. 16) then
+           cnt = cmpnum(l)*1000000
+           i = nvco(l) + filndx(4)
+           do ive = 1,nvc(l)
+             nn3 = volno(i) - cnt
+             nn1 = nn3/100000
+             nn3 = nn3 - nn1*100000
+             nn2 = nn3/1000
+             nn3 = (nn3 - nn2*1000)/10
+             volno(i) = cnt + nn3*10000 + nn2*100 + nn1*10
+             i = i + ivskp
+           enddo
+           i = njco(l) + filndx(5)
+           do ive = 1,njc(l)
+             nn4 = junno(i) - cnt
+             nn1 = nn4/100000
+             nn4 = nn4 - nn1*100000
+             nn2 = nn4/1000
+             nn4 = nn4 - nn2*1000
+             nn3 = nn4/10
+             nn4 = nn4 - nn3*10
+             junno(i) = cnt + nn4*100000 + nn3*1000 + nn2*10 + nn1
+             i = i + ijskp
+           enddo
+         endif
+         l = l + cmplen(l)
+       enddo
+!  Set up loops over components, volumes, and junctions.
+       lvx = filndx(28) + filsiz(28)
+       ive = filndx(4) + (nvols(filndx(4)) - 1)*ivskp
+       if (filsiz(5) .eq. 0) go to 175
+       ije = filndx(5) + (njuns(filndx(5)) - 1)*ijskp
+       cnt = 1
+       lv = lvx + 1
+       lo = lv
+       vlpndx(lv) = volno(filndx(4))
+       vlpndx(lv+1) = 1
+c  Initialize markv for volumes and markj for junctions.
+       i = filndx(4)
+       do m = 1,nvols(i)
+         markv(i) = 0
+         markv1(i) = 0
+         markv2(i) = 0
+         i = i + ivskp
+       enddo
+       j = filndx(5)
+       do m = 1,njuns(j)
+         markj1(j) = 0
+         markj2(j) = 0
+         j = j + ijskp
+       enddo
+c  Find volumes in each system.
+       is = 1
+       markv(filndx(4)) = 1
+   11  skip = .false.
+       iv = 1
+c  Loop over volumes.
+       i = filndx(4)
+       do m = 1,nvols(i)
+         if (markv(i) .ne. 0) go to 13
+c  Search for junctions connecting this volume.
+         j = filndx(5)
+         do n = 1,njuns(j)
+           if (markj1(j) .ne. 0) go to 14
+           ni(1) = ij1vn(j)
+           ni(2) = ij2vn(j)
+           if (ni(1) .eq. iv) then
+             l = filndx(4) + (ni(2) - 1)*ivskp
+           else
+             if (ni(2) .ne. iv) go to 14
+             l = filndx(4) + (ni(1) - 1)*ivskp
+           endif
+           if (markv(l) .eq. 0) go to 14
+           markv(i) = 1
+           lv = lv + 2
+           cnt = cnt + 1
+           vlpndx(lv) = volno(i)
+           vlpndx(lv+1) = iv
+           markj1(j) = is
+           skip = .true.
+           exit
+   14      j = j + ijskp
+         enddo
+   13    iv = iv + 1
+         i = i + ivskp
+       enddo
+       if (skip) go to 11
+c  Search for components in which not all junctions have been processed.
+       l = filndx(3)
+       do m = 1,ncmps(l)
+         if (cmptyp(l) .eq. 0) go to 19
+         if (njc(l) .eq. 0) go to 19
+         ni(1) = 0
+         j = filndx(5) + njco(l)
+         do n = 1,njc(l)
+           if (markj1(j) .ne. 0) ni(1) = ni(1) + 1
+           j = j + ijskp
+         enddo
+         if (ni(1) .eq. njc(l)) go to 19
+         if (ni(1) .ne. 0) go to 23
+         j = filndx(5) + njco(l)
+         do n = 1,njc(l)
+           if (markv(filndx(4)+(ij1vn(j)-1)*ivskp).ne.0 .or.
+     &     markv(filndx(4)+(ij2vn(j)-1)*ivskp).ne.0) go to 31
+           j = j + ijskp
+         enddo
+         go to 19
+   31    markj1(j) = is
+   23    j = filndx(5) + njco(l)
+         do n = 1,njc(l)
+           if (markj1(j) .eq. 0) then
+             if (ij1vn(j).eq.0 .or. ij2vn(j).eq.0) go to 25
+             ni(2) = ij1vn(j)
+             i = filndx(4) + (ij1vn(j) - 1)*ivskp
+             if (markv(i) .eq. 0) go to 21
+             ni(2) = ij2vn(j)
+             i = filndx(4) + (ij2vn(j) - 1)*ivskp
+             if (markv(i) .eq. 0) go to 21
+   25        markj1(j) = is
+           endif
+           j = j + ijskp
+         enddo
+   19    l = l + cmplen(l)
+       enddo
+       go to 22
+c  User error, merge systems.
+   21  fail = .true.
+       write (output,2010) cmpnum(l)
+ 2010  format ('0******** Component',i4,' has junctions connecting volum
+     &es in different systems, systems merged for further processing.')
+       markv(i) = 1
+       lv = lv + 2
+       cnt = cnt + 1
+       vlpndx(lv) = volno(i)
+       vlpndx(lv+1) = ni(2)
+       go to 11
+   22  nns = 1
+       i = filndx(4)
+       do m = 1,nvols(i)
+         if (markv(i) .eq. 0) go to 26
+         nns = nns + 1
+         i = i + ivskp
+       enddo
+       skip = .true.
+       go to 27
+   26  i = filndx(4) + (nns - 1)*ivskp
+       markv(i) = 1
+       vlpndx(lv+3) = volno(i)
+       vlpndx(lv+4) = nns
+   27  vlpndx(lo-1) = cnt
+       cnt = 1
+       lv = lv + 3
+       lo = lv
+       if (.not.skip) then
+         is = is + 1
+         go to 11
+       endif
+       nloops = is
+       if (allocated(lpdat)) call lpdatclear (.true.)
+       allocate (lpdat(nloops))
+c  Sort pointers into increasing order within system.
+       lv = lvx
+       do l = 1,is
+         icur = 1
+         lo = lv + 1
+         do m = 1,vlpndx(lv)
+           inext = 1000000000
+           j = lo
+           do i = icur,vlpndx(lv)
+             if (vlpndx(j) .lt. inext) then
+               inext = vlpndx(j)
+               ndxsv = j
+             endif
+             j = j + 2
+           enddo
+           if (lo .ne. ndxsv) then
+             isave = vlpndx(lo)
+             vlpndx(lo) = vlpndx(ndxsv)
+             vlpndx(ndxsv) = isave
+             isave = vlpndx(lo+1)
+             vlpndx(lo+1) = vlpndx(ndxsv+1)
+             vlpndx(ndxsv+1) = isave
+           endif
+           icur = icur + 1
+           lo = lo + 2
+         enddo
+         lv = lo
+       enddo
+!  Rearrange file(4) in loop order by using extra space in file(28).
+       allocate (vol2(nvolsv))
+       j = 1
+       ivnew = lo
+       vlpndx(ivnew) = nvols(filndx(4))
+       lv = lvx
+       do l = 1,is
+         lv = lv + 1
+         do i = 1,vlpndx(lv-1)
+           iv = filndx(4) + (vlpndx(lv+1) - 1)*ivskp
+           call ftbmov (fa(iv+1),fa(ivnew+1),ivskp)
+           vol2(j) = vol(vlpndx(lv+1))
+           ivnew = ivnew + ivskp
+           j = j + 1
+           lv = lv + 2
+         enddo
+       enddo
+       call ftbmov (fa(lo),fa(filndx(4)),filsiz(4))
+       vol = vol2
+       deallocate (vol2)
+c  Mark each volume with loop number.
+       i = filndx(4)
+       lv = lvx
+       do l = 1,is
+         do m = 1,vlpndx(lv)
+           markv1(i) = l
+           i = i + ivskp
+         enddo
+         lv = lv + 2*vlpndx(lv) + 1
+       enddo
+c  Redo pointers to volumes in ij1 and ij2.
+       j = filndx(5)
+       do m = 1,njuns(j)
+         lp1: do nn = 1,2
+           lv = lvx
+           ivv = 1
+           do l = 1,is
+             lv = lv + 1
+             do i = 1,vlpndx(lv-1)
+               if (ij1vn(j+nn-1) .eq. vlpndx(lv+1)) then
+                 ij1vn(j+nn-1) = ivv
+                 cycle lp1
+               endif
+               ivv = ivv + 1
+               lv = lv + 2
+             enddo
+           enddo
+         enddo lp1
+         j = j + ijskp
+       enddo
+!  Rearrange file(5) in loop order by using extra space in file(28).
+       allocate (jun2(njunsj))
+       i = 1
+       ivnew = lo
+       vlpndx(ivnew) = njuns(filndx(5))
+       do l = 1,is
+         j = filndx(5)
+         do m = 1,njuns(j)
+           if (markj1(j) .eq. l) then
+             call ftbmov (fa(j+1),fa(ivnew+1),ijskp)
+             jun2(i) = jun(m)
+             ivnew = ivnew + ijskp
+             i = i + 1
+           endif
+           j = j + ijskp
+         enddo
+       enddo
+       call ftbmov (fa(lo),fa(filndx(5)),filsiz(5))
+       jun = jun2
+       deallocate (jun2)
+!
+       icur = 1
+       lv = filndx(5)
+       do l = 1,is
+         do
+           inext = 1000000000
+           skip = .true.
+           j = lv
+           do m = icur,njuns(filndx(5))
+             if (markj1(j) .eq. l) then
+               if (junno(j) .le. inext) then
+                 inext = junno(j)
+                 ndxsv = j
+                 skip = .false.
+               endif
+             endif
+             j = j + ijskp
+           enddo
+           if (.not.skip) then
+             if (lv .ne. ndxsv) then
+               call ftbmov (fa(lv+1),fa(lo),ijskp)
+               call ftbmov (fa(ndxsv+1),fa(lv+1),ijskp)
+               call ftbmov (fa(lo),fa(ndxsv+1),ijskp)
+             endif
+             icur = icur + 1
+             lv = lv + ijskp
+             if (icur .le. njuns(filndx(5))) cycle
+           endif
+           exit
+         enddo
+       enddo
+c  Initialize portions of hydrodynamic system controls.
+       do ls = 1,nloops
+         lpdat(ls)%lsuces = 0
+         lpdat(ls)%lnoncn = noncn
+         lpdat(ls)%lnonmf = nonmf
+         lpdat(ls)%lsysnm = ' *none* '
+         lpdat(ls)%systms = 0.0
+         lpdat(ls)%systmc = 0.0
+         lpdat(ls)%systmo = 0.0
+         lpdat(ls)%sysmer = 0.0
+         lpdat(ls)%sysebt = 0.0
+         lpdat(ls)%sysdtc = 0.0
+       enddo
+c  Set hydrodynamic system controls for volumes.
+       lpxx = 1
+       lpdat(lpxx)%livnn = 1
+       iv = 1
+       i = filndx(4)
+       do m = 1,nvols(i)
+         markv2(i) = iv
+         do
+           if (markv1(i) .eq. lpxx) exit
+           lpdat(lpxx)%livn = iv
+           lpxx = lpxx + 1
+           lpdat(lpxx)%livnn = iv
+         enddo
+         iv = iv + 1
+         i = i + ivskp
+       enddo
+       lpdat(lpxx)%livn = iv
+c  Set hydrodynamic system controls for junctions.
+       lpxx = 1
+       lpdat(lpxx)%lijnn = 1
+       lpdat(lpxx)%lij = 1
+       iv = 1
+       i = filndx(5)
+       do m = 1,njuns(i)
+         markj2(i) = iv
+         do
+         if (markj1(i) .eq. lpxx) exit
+           lpdat(lpxx)%lijn = iv
+           lpxx = lpxx + 1
+           lpdat(lpxx)%lijnn = iv
+           lpdat(lpxx)%lij = iv
+         enddo
+         iv = iv + 1
+         i = i + ijskp
+       enddo
+       do
+         lpdat(lpxx)%lijn = iv
+         if (lpxx .ge. nloops) exit
+         lpxx = lpxx + 1
+         lpdat(lpxx)%lij = iv
+       enddo
+c  Reorder component block.
+       i = filndx(4)
+       j = filndx(5)
+       lv = lvx
+       vlpndx(lv) = ncmps(filndx(3))
+       li(1) = .true.
+       li(2) = .true.
+       ni(1) = volno(i)/1000000
+       ni(2) = junno(j)/1000000
+  134  if (ni(1) .ne. ni(2)) go to 190
+       nsrch = ni(1)
+       go to 195
+  190  if (markv1(i) - markj1(j)) 174,192,171
+  192  nsrch = min(ni(1),ni(2))
+       go to 195
+  171  nsrch = ni(2)
+       go to 195
+  174  nsrch = ni(1)
+  195  l = filndx(3)
+       do ll = 1,ncmps(l)
+         if (iand(cmpopt(l),2) .eq. 0) then
+           if (cmptyp(l) .ne. 0) then
+             if (cmpnum(l) .eq. nsrch) go to 196
+           endif
+         endif
+         l = l + cmplen(l)
+       enddo
+       go to 170
+  196  nvcn(l) = markv2(i)
+       nvco(l) = (markv2(i) - 1)*ivskp
+       njcn(l) = markj2(j)
+       njco(l) = (markj2(j) - 1)*ijskp
+       call ftbmov (fa(l+1),fa(lv+1),cmplen(l))
+       cmpopt(l) = ior(cmpopt(l),2)
+       lv = lv + cmplen(l)
+       if (li(1)) then
+         i = i + nvc(l)*ivskp
+         if (i .gt. ive) then
+           i = ive
+           li(1) = .false.
+         endif
+       endif
+       if (li(2)) then
+         j = j + njc(l)*ijskp
+         if (j .gt. ije) then
+           j = ije
+           li(2) = .false.
+         endif
+       endif
+       if (li(1)) go to 172
+       if (.not.li(2)) go to 170
+       ni(2) = junno(j)/1000000
+       go to 171
+  172  ni(1) = volno(i)/1000000
+       if (.not.li(2)) go to 174
+       ni(2) = junno(j)/1000000
+       go to 134
+  170  l = filndx(3)
+       do ll = 1,ncmps(l)
+         if (iand(cmpopt(l),2) .eq. 0) then
+           call ftbmov (fa(l+1),fa(lv+1),cmplen(l))
+           lv = lv + cmplen(l)
+         endif
+         l = l + cmplen(l)
+       enddo
+       call ftbmov (fa(lvx),fa(filndx(3)),filsiz(3))
+       l = filndx(3)
+       do m = 1,ncmps(l)
+         if (cmptyp(l) .eq. 16) then
+           cnt = cmpnum(l)*1000000
+           i = nvco(l) + filndx(4)
+           do ive = 1,nvc(l)
+             nn3 = volno(i) - cnt
+             nn1 = nn3/10000
+             nn3 = nn3 - nn1*10000
+             nn2 = nn3/100
+             nn3 = (nn3 - nn2*100)/10
+             volno(i) = cnt + nn3*100000 + nn2*1000 + nn1*10
+             i = i + ivskp
+           enddo
+           i = njco(l) + filndx(5)
+           do ive = 1,njc(l)
+             nn4 = junno(i) - cnt
+             nn1 = nn4/100000
+             nn4 = nn4 - nn1*100000
+             nn2 = nn4/1000
+             nn4 = nn4 - nn2*1000
+             nn3 = nn4/10
+             nn4 = nn4 - nn3*10
+             junno(i) = cnt + nn4*100000 + nn3*1000 + nn2*10 + nn1
+             i = i + ijskp
+           enddo
+         endif
+         l = l + cmplen(l)
+       enddo
+c  Set hydrodynamic system controls for components.
+       ls = 1
+       lpdat(ls)%lic = 1
+       lpdat(ls)%liv = filndx(3)
+       lcnt = 1
+       l = filndx(3)
+       do ll = 1,ncmps(l)
+         i1 = 0
+         j1 = 0
+         if (cmptyp(l) .ne. 0) then
+           if (nvc(l) .ne. 0) then
+             i = nvco(l) + filndx(4)
+             i1 = markv1(i)
+           endif
+           if (njc(l) .ne. 0) then
+             j = njco(l) + filndx(5)
+             j1 = markj1(j)
+           endif
+         endif
+         if (i1.ne.ls .and. j1.ne.ls) then
+           lpdat(ls)%licn = lcnt
+           ls = ls + 1
+           lpdat(ls)%lic = lcnt
+           lpdat(ls)%liv = l
+         endif
+         lcnt = lcnt + 1
+         l = l + cmplen(l)
+       enddo
+       lpdat(ls)%licn = lcnt
+       do ls = 1,nloops
+         lpdat(ls)%licn = lpdat(ls)%licn - lpdat(ls)%lic
+         lpdat(ls)%lic = lpdat(ls)%liv - filndx(3)
+         lpdat(ls)%livn = lpdat(ls)%livn - lpdat(ls)%livnn
+         lpdat(ls)%liv = (lpdat(ls)%livnn - 1)*ivskp
+         lpdat(ls)%livne = lpdat(ls)%livnn + lpdat(ls)%livn - 1
+         lpdat(ls)%lijn = lpdat(ls)%lijn - lpdat(ls)%lij
+         lpdat(ls)%lijne = lpdat(ls)%lijnn + lpdat(ls)%lijn - 1
+         if (lpdat(ls)%lijn .eq. 0) then
+           write (output,"('0******** System',i3,' has no junctions (tem
+     &porary coding restriction to be removed).')") ll
+           fail = .true.
+         endif
+         lpdat(ls)%lij = (lpdat(ls)%lij - 1)*ijskp
+       enddo
+c  Initialize inlet elevations.
+       i = filndx(4)
+       do m = 1,nvols(i)
+         hyposv(i:i+2) = -9.e74
+         i = i + ivskp
+       enddo
+       lv = filndx(28)
+       if (nusys(lv) .le. 0) then
+c  Set default reference volume to zero elevation.
+         do l = 1,nloops
+           m = filndx(4) + lpdat(l)%liv
+           hyposv(m:m+2) = 0.0
+         enddo
+         go to 175
+       endif
+       nmat = nusys(lv)/isyskp
+       if (nmat .ne. nloops) then
+         if (iand(ihlppr(2),ishft(1,22)) .ne. 0)
+     &   write (output,2002) nloops,nmat
+ 2002  format ('0$$$$$$$$ Number of hydrodynamic systems found,',i5,', i
+     &s inconsistant with number of systems specified,',i5,'.')
+       endif
+       do 332 j1 = 1,nmat
+         do l = 1,nloops
+           is = filndx(4) + lpdat(l)%liv
+           do ll = 1,lpdat(l)%livn
+             nn1 = abs(sysvol(lv))
+             nn2 = mod(nn1,10)
+             nn3 = nn1 - nn2
+             if (volno(is) .eq. nn3) go to 341
+             is = is + ivskp
+           enddo
+         enddo
+         fail = .true.
+         write (output,2004) sysvol(lv)
+ 2004  format ('0******** Volume',i10.9,' not found in any system, set s
+     &ystem to water and zero elevation.')
+         go to 340
+  341    if (lpdat(l)%lsuces .ne. 0) then
+           write (output,2003) sysvol(lv),i,sysnam(lv)
+ 2003  format ('0******** Volume ',i10.9,' attempts to reinitialize syst
+     &em',i5,' named ',a10,'.')
+           fail = .true.
+         else
+           lpdat(l)%lsuces = -1
+           write (chwrd,"(a8)") sysnam(lv)
+           lpdat(l)%lsysnm = chwrd
+           if (iand(print,16384) .eq. 0) then
+             hyposv(is:is+1) = 0.0
+             hyposv(is+2) = sysel(lv)
+           else
+             hyposv(is:is+2) = sysel(lv:lv+2)
+             if (sysvol(lv) .ge. 0) then
+               if (nn2 .eq. 1) then
+                 hyposv(is) = hyposv(is) + hydxc(is)
+               elseif (nn2 .eq. 2) then
+                 hyposv(is) = hyposv(is) - hydxc(is+1)
+               elseif (nn2 .eq. 3) then
+                 hyposv(is+1) = hyposv(is) + hydyc(is)
+               elseif (nn2 .eq. 4) then
+                 hyposv(is+1) = hyposv(is) - hydyc(is+1)
+               elseif (nn2 .eq. 5) then
+                 hyposv(is+2) = hyposv(is) + hydzc(is)
+               elseif (nn2 .eq. 6) then
+                 hyposv(is+2) = hyposv(is) - hydzc(is+1)
+               endif
+             else
+               if (iand(nn2,4) .eq. 0) then
+                 hyposv(is) = hyposv(is) + hydxc(is)
+               else
+                 hyposv(is) = hyposv(is) - hydxc(is+1)
+               endif
+               if (iand(nn2,2) .eq. 0) then
+                 hyposv(is+1) = hyposv(is) + hydyc(is)
+               else
+                 hyposv(is+1) = hyposv(is) - hydyc(is+1)
+               endif
+               if (iand(nn2,1) .eq. 0) then
+                 hyposv(is+2) = hyposv(is) + hydzc(is)
+               else
+                 hyposv(is+2) = hyposv(is) - hydzc(is+1)
+               endif
+             endif
+           endif
+           if (iand(sysopt(lv),1) .ne. 0) lpdat(l)%lnoncn = 0
+           if (iand(sysopt(lv),2) .ne. 0) lpdat(l)%lnonmf = 0
+           skip = .false.
+           tfail = .false.
+           skipp = .false.
+           tfaill = .false.
+           is = filndx(4) + lpdat(l)%liv
+           do m = 1,lpdat(l)%livn
+             i1 = volmat(is)
+             itype = iand(ishft(vctrl(is),-8),1023) + 1
+             ibor = itype/10
+             itype = itype - ibor*10
+             if (iand(vctrl(is),8) .eq. 0) then
+               if (sysmat(lv) .ne. 0) skip = skip .or. i1.ne.sysmat(lv)
+               if (itype .ge. 5 .and. itype .le. 7 .and.
+     &         lpdat(l)%lnoncn .eq. 0) skipp = .true.
+             else
+               if (i1 .eq. 0) then
+                 volmat(is) = sysmat(lv)
+               else
+                 tfail = tfail .or. (i1 .ne. sysmat(lv))
+               endif
+               if (itype .ge. 5 .and. itype .le. 7 .and.
+     &         lpdat(l)%lnoncn .eq. 0) tfaill = .true.
+             endif
+             is = is + ivskp
+           enddo
+           if (skip) write (output,2006) sysnam(lv), sysvol(lv)
+ 2006  format ('0******** Fluid specified for system ',a10,' with refere
+     &nce volume',i10.9,' conflicts with unchanged volumes fluid.')
+           if (tfail) write (output,2007) sysnam(lv), sysvol(lv)
+ 2007  format ('0******** Fluid specified for system ',a10,' with refere
+     &nce volume',i10.9,' conflicts with new/changed volumes fluid.')
+           if (skipp) write (output,2011) sysnam(lv),sysvol(lv)
+ 2011  format ('0******** Info flag for system ',a10,' with reference vo
+     &lume',i10.9,' conflicts with unchanged volumes noncondensible.')
+           if (tfaill) write (output,2012) sysnam(lv),sysvol(lv)
+ 2012  format ('0******** Info flag for system ',a10,' with reference vo
+     &lume',i10.9,' conflicts with new/changed volumes noncondensible.')
+           fail = fail .or. skip .or. tfail .or. skipp .or. tfaill
+         endif
+  340    lv = lv + isyskp
+  332  continue
+c  Check to see if all systems are set.
+       do l = 1,nloops
+         if (lpdat(l)%lsuces .ge. 0) then
+           if (iand(ihlppr(2),ishft(1,22)) .ne. 0)
+     &     write (output,2005) i,lpdat(l)%lsysnm
+ 2005  format ('0$$$$$$$$ System',i5,' named ',a10,' is not initialized
+     &by cards 120-129.')
+           hyposv(filndx(4)+lpdat(l)%liv) = 0.0
+           hyposv(filndx(4)+lpdat(l)%liv+1) = 0.0
+           hyposv(filndx(4)+lpdat(l)%liv+2) = 0.0
+         endif
+         lpdat(l)%lsuces = 0
+       enddo
+c  Set unspecified volumes to water and check that each system has only
+c  one fluid.
+  175  do l = 1,nloops
+         tfail = .false.
+         skip = .false.
+         is = filndx(4) + lpdat(l)%liv
+         do ll = 1,lpdat(l)%livn
+           i1 = volmat(is)
+           if (i1 .ne. 0) go to 364
+           is = is + ivskp
+         enddo
+         i1 = 1
+  364    is = filndx(4) + lpdat(l)%liv
+         do ll = 1,lpdat(l)%livn
+           j1 = volmat(is)
+           if (j1 .eq. 0) j1 = i1
+           tfail = tfail .or. (j1 .ne. i1)
+           if (j1 .gt. mxnfld) then
+             skip = .true.
+             j1 = 1
+           endif
+           volmat(is) = j1
+           is = is + ivskp
+         enddo
+         if (tfail) write (output,2008) i,lpdat(l)%lsysnm
+ 2008  format ('0******** Not all volumes in system',i5,' named ',a10,
+     & ' have the same fluid.')
+         if (skip) write (output,2009) i,lpdat(l)%lsysnm
+ 2009  format ('0******** One or more volumes in system',i5,' named ',
+     & a10,' specify an illegal fluid.')
+         fail = fail .or. tfail .or. skip
+       enddo
+c  Move files to lower memory.
+       call ftbsft (filid(28),filsiz(28),2,filndx(28))
+       call fmvlwr
+       nfluid = 0
+       return
+c
+c  Write error message for insufficient space.
+  200  write (output,"('0******** Insufficient space for system tables.'
+     &)")
+       filsiz(28) = 0
+       if (isfdes(filid(28)) .ne. 0) call ftbdel (filid(28))
+       filid(28) = 0.0
+       fail = .true.
+       return
+       end

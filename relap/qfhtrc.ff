@@ -1,0 +1,268 @@
+*mlist
+      subroutine qfhtrc (ih,jo)
+c
+c  Subroutine computes reflood heat transfer coefficients using the
+c  pattern obtained in the subroutine qfsrch.
+c  Cognizant engineer:  hxc.
+c
+       implicit none
+       integer ih,jo
+       include 'contrl.h'
+       include 'comctl.h'
+       include 'fast.h'
+       include 'flood.h'
+       include 'htrflb.h'
+       include 'htscr1.h'
+       include 'htscr2.h'
+       include 'htsrcm.h'
+       include 'htrcom.h'
+       include 'rflhtc.h'
+       include 'statec.h'
+       include 'tmsrcm.h'
+       include 'voldat.h'
+       include 'ufiles.h'
+c
+c  Local variables.
+       integer hindex,inds,indy,indz,j,knum,m,num
+       real c2,convap,dtmpmc,eliqd,evapr,gterm,gterm1,hcchf,hcchfa,
+     & hcfb,hcliq,hradlq,hradvp,parfct,reyn2,subfct,sumgf,tbscal,
+     & tchf,term1,term2,term3,term4,
+     & tfref,tibn,tmpbdy,tmpsb,tqf,tqff,vdfref,aratio
+       equivalence (s(8),tfref),(s(9),vdfref),(s(10),sumgf),
+     & (s(11),gterm)
+       equivalence (s(14),gterm1),(s(15),dtmpmc)
+       equivalence (prop(1),tmpbdy),(prop(2),hradvp),(prop(3),hradlq),
+     & (prop(4),hcchf),(prop(5),tchf),(prop(6),tqf),(prop(7),tibn),
+     & (prop(8),term3),(prop(10),convap),(prop(11),evapr),
+     & (prop(12),eliqd),(prop(13),hcfb),(prop(9),term4),
+     & (prop(14),hcchfa),(prop(15),term1),(prop(16),term2),
+     & (prop(18),tqff),(prop(19),c2),(prop(20),parfct),(prop(21),tmpsb),
+     & (prop(22),subfct),(prop(24),reyn2),(prop(25),hcliq),
+     & (prop(26),tbscal)
+       external chfcal,htrc1
+c
+c  dlmesh = the height of each fine mesh
+c  ztopq  = distance of the top quench front from the bottom of
+c           the test section.
+c  zcurr    = distance from the bottom of test sction to the node
+c           in question
+          real dlmesh,ztopq,zcurr
+c****************************************************
+       inds = inxlsr(1+idrfl)
+       indz = inscr1
+       indy = inxrfl(ih)
+       zqf = 0.
+       zqftop = zbun
+       zcurr = 0.
+c
+       do 999 m = 1,htnusr(jo)
+         iv = indzhs(indz+1)
+         hindex = indzhs(indz) + idrfl
+         num = ishft(htbnts(hindex),-12)
+         iv1 = iv + num
+         iv2 = iv1 + num
+         knum   = nmzht(indy)
+         dlmesh = dl(iv)/float(knum)
+         htdiam = hthdmo(hindex)
+         htsa   = htsrfo(hindex)
+         drod   = 2.0*htrado(hindex)
+         pitdia = htpovd(hindex)
+         htlenc = htlncf(hindex)
+         htopta = iand(htbnts(hindex),127)
+c  nrir-mk mod block 1 begins
+         pgopta = pgopti(hindex)
+         pgflag = pgcall(hindex)
+         if (velf(iv) .ge. 0.) then
+           htlen = htlnfo(hindex)
+           gridk = grdkfo(hindex)
+           if (pgopta .gt. 0) then
+             ivindx = htivfo(hindex)
+             gridz = quale(ivindx)
+           else
+             gridz = grdzfo(hindex)
+           endif
+         else
+           htlen = htlnro(hindex)
+           gridk = grdkro(hindex)
+           if (pgopta .gt. 0) then
+             ivindx = htivro(hindex)
+             gridz = quale(ivindx)
+           else
+             gridz = grdzro(hindex)
+           endif
+         endif
+c  nrir-mk mod block 1 ends
+         axpf = apfaco(hindex)
+         qfluxo = htbcco(hindex)
+         hfg = sathg(iv) - sathf(iv)
+         rhos   = rhof(iv)
+         viscs  = viscf(iv)
+         thcons = thconf(iv)
+         tf     = tempf(iv)
+c
+           delgrv = (hydzc(iv2) + hydzc(iv2+1))*gravcn
+c                                                      1-D mass flux
+           ggasa = max(abs(ggas(iv)),0.001)
+           gliqa = max(abs(gliq(iv)),0.001)
+           gabs  = ggasa + gliqa
+           gcross = 0.
+           gcrosf = 0.
+c                                            Is this a 3-D problem?
+         if (iand(imap(iv+1),16384) .eq. 0
+     &         .and. iand(imap(iv+2),16384) .eq. 0) then
+c                                      put the correct sign on mass flux
+           g = sign(gabs,delgrv*gliq(iv))
+           if (htopta .eq. 34) then
+c                 Multiply G by average area to rod gap area for HTC.
+               aratio = (pitdia**2 - 0.7854)/(pitdia**2 - pitdia)
+             gcrosf = gliqa*aratio
+             gabs = 0.
+           endif
+         else
+c                                            other 2  3-D mass fluxs
+           if(htopta .eq. 10 .or. htopta .eq. 11) then
+c                 Multiply G by average area to rod gap area for HTC.
+               aratio = (pitdia**2 - 0.7854)/(pitdia**2 - pitdia)
+c                                             vertical bundle primary z
+             if (num .eq. 0) then
+c                     bundle is parallel with x so just need cross flows
+               gcross = max((ggas(iv)**2 + ggas(iv+1)**2),0.001)
+               gcross = gcross + gliq(iv)**2 + gliq(iv+1)**2
+               gcross = sqrt(gcross)*aratio
+               g = gabs*sign(1.0,g)*sign(1.0,gliq(iv))
+             elseif (num .eq. 1) then
+c                     bundle is parallel with y
+               ggasa = max(abs(ggas(iv+1)),0.001)
+               gliqa = max(abs(gliq(iv+1)),0.001)
+               gabs  = ggasa + gliqa
+               gcross = ggas(iv)**2 + ggas(iv+2)**2
+               gcross = gcross + gliq(iv)**2 + gliq(iv+2)**2
+               gcross = sqrt(gcross)*aratio
+               g = sign(gabs,delgrv*gliq(iv+1))
+             else
+c                     bundle is parallel with z
+               ggasa = max(abs(ggas(iv+2)),0.001)
+               gliqa = max(abs(gliq(iv+2)),0.001)
+               gabs  = ggasa + gliqa
+               gcross = ggas(iv)**2 + ggas(iv+1)**2
+               gcross = gcross + gliq(iv)**2 + gliq(iv+1)**2
+               gcross = sqrt(gcross)*aratio
+               g = sign(gabs,delgrv*gliq(iv+2))
+             endif
+           elseif (htopta .eq. 34) then
+               aratio = (pitdia**2 - 0.7854)/(pitdia**2 - pitdia)
+c                                      horizontal bundle primary x or y
+               if (num .eq. 0) then
+                 gabs = ggas(iv) + gliq(iv)
+                 gabs = max(abs(gabs),0.001)
+                 gliqa = gliq(iv+1)**2 + gliq(iv+2)**2
+                 gliqa = max(sqrt(gliqa),0.001)
+                 gcrosf = gliqa*aratio
+               elseif (num .eq. 1) then
+                 gabs = ggas(iv+1) + gliq(iv+1)
+                 gabs = max(abs(gabs),0.001)
+                 gliqa = gliq(iv)**2 + gliq(iv+2)**2
+                 gliqa = max(sqrt(gliqa),0.001)
+                 gcrosf = gliqa*aratio
+               else
+                 gabs = ggas(iv+2) + gliq(iv+2)
+                 gabs = max(abs(gabs),0.001)
+                 gliqa = gliq(iv)**2 + gliq(iv+1)**2
+                 gliqa = max(sqrt(gliqa),0.001)
+                 gcrosf = gliqa*aratio
+               endif
+           else
+c                                                     3d with no bundle.
+             ggasa = sqrt(ggasa**2 + ggas(iv+1)**2 + ggas(iv+2)**2)
+             gliqa = sqrt(gliqa**2 + gliq(iv+1)**2 + gliq(iv+2)**2)
+             ggasa = max(ggasa,0.001)
+             gliqa = max(gliqa,0.001)
+             gabs  = ggasa + gliqa
+             g = sign(gabs,delgrv*gliq(iv+num))
+           endif
+         endif
+         if (iand(vctrl(iv),ishft(1,30)) .ne. 0) then
+           ibundl = 1
+         else
+           ibundl = 0
+         endif
+         fstrat = fstrt(iv)
+         call chfcal
+         chfmuo(hindex) = chfmul
+         htchfo(hindex) = chf*htfftr(hindex)
+         pgcall(hindex) = pgflag
+c
+         do 140 j=1,knum
+           tw = (tmpscr(inds) + tmpscr(inds+nscra2))*0.5
+           zcurr = zcurr + dlmesh
+           ztopq = zbun - wettop
+           zqftop = max(0.,ztopq - zcurr)
+           zqf = max(0.,zcurr - wetbot)
+c
+           call htrc1 (htstno(hindex))
+c
+           if (mode .ge. 5) then
+             if (zcurr .lt. wetbot) then
+c Shrink wetbot
+               if (tw .gt. twchf) then
+                 wetbot = wetbot - dlmesh
+               endif
+             endif
+             if (zcurr .gt. (ztopq + 0.000001)) then
+c Shrink wettop
+               if (tw .gt. twchf) then
+                 wettop = max(0.,wettop - dlmesh)
+               endif
+             endif
+           else
+             if (zcurr .gt. wetbot) then
+               if (zcurr .le. (wetbot + dlmesh)) then
+c Advance wetbot
+                 if (zcurr .lt. ztopq) wetbot = wetbot + dlmesh
+                 wetbot = min(wetbot,ztopq)
+               elseif ((zcurr + dlmesh) .ge. ztopq) then
+c Advance wettop
+                 if (zcurr .gt. (wetbot + dlmesh)) then
+                   if (ztopq .ge. zcurr) then
+                     if (zcurr .le. (ztopq + dlmesh)) then
+                       if (tw .lt. twchf) then
+                         wettop = wettop + dlmesh
+                       endif
+                     endif
+                   endif
+                 endif
+               endif
+             endif
+           endif
+c
+           htcoef = htcoef*htfftr(hindex)
+           qfluxo = qfluxo*htfftr(hindex)
+           htb2(indz+idrfl) = htcoef
+           htf2(indz+idrfl) = max((htcoef*tw - qfluxo),0.)
+           htv2(indz) = gamw*htfftr(hindex)
+           htv1(indz) = htcg*htfftr(hindex)
+           indz=indz+nscra1
+           inds=inds+nscra2
+       if (help .ne. 0) then
+         if (iand(ihlppr(1),ishft(1,13)) .ne. 0) then
+           if (iand(vctrlx(iv),1) .ne. 0) then
+             write (output,5100) htstno(jo)
+ 5100  format(3x,'qfhtrc output:'2x,'htstno= 'i12)
+             write (output,5150) m,knum,j,mode,zcurr,wetbot
+     &       ,wettop,zbun,ztopq,zqf,zqftop
+           endif
+         endif
+       endif
+ 5150  format(4x,'cell',2x,'fine-tot',1x,'curr-fine'
+     & ,3x,'mode',4x,'zcurr',6x,'wetbot',4x
+     & ,'wettop',6x,'zbun',6x,'ztopq',6x,'zqf',7x,'zqftop'
+     & ,/,5x,i2,5x,i3,5x,i2,3x,i8,2x,3f10.5,4x
+     & ,f8.3,3x,3(f8.4,2x))
+  140    continue
+         htmod(hindex) = 40. + mode
+         if (quala(iv) .gt. 1.0e-9 ) htmod(hindex)=htmod(hindex)+20
+  170    indy = indy + 1
+  999  continue
+c
+       return
+       end

@@ -1,0 +1,348 @@
+      SUBROUTINE NONTWOC
+     @  ( IZ,IZP,IXY,IXYP,TL,TLP,PL1,PLP1,PL2,PLP2,
+     @  ADF,ADFP,WIDTH,WIDTHP,JNEM,IFLAG,VOLU,SW,XHIP,TCD,TNF,TXT,
+     &  SIGDSN,SEXT,BETAT,BETATLAM,SCAT,PC,
+     &  LSEXTZ,LSEXTR,SXT,SXTP,AMAT1,XOUT1,BRHS1,AMAT2,XOUT2,BRHS2,
+     &  AMAT3,XOUT3,BRHS3,EXC,A1,A2,A3,A4,AL,ALP,TF,TFP,SSCAT,
+     &  SSCATP,TD,TDP,FL,FLP)
+C     
+C     THIS SUBROUTINE SOLVES THE TWO-NODE PROBLEM AND
+C     RETURNS THE NEM CURRENT 'JNEM'.
+C     ********** FOR CARTESIAN GEOMETRY **************
+C     
+C     THIS SUBROUTINE FILLS IN THE 16X16 (FOR 2 GROUPS)
+C     OR 32X32 (FOR 4 GROUPS) MATRIX OF THE 2-NODE PROBLEM,
+C     AND CALLS THE ANALYTIC SOLVERS WHICH ARE DIFFERENT
+C     REGARDING THE NUMBER OF GROUPS.
+C     
+C     WE HAVE TAKEN ADVANTAGE OF THE REDUCIBILITY
+C     OF THE MATRIX. FOR ONE 2-NODE PROBLEM, INVOLVING
+C     SAY NODE L AND L+1, THE EVEN EXPANSION COEFFICIENTS
+C     FOR THE FLUX OF NODE L+1 ARE THE SAME AS FOR THE ONES
+C     FOR THE 2-NODE PROBLEM INVOLVING NODE L+1 AND L+2.
+C     SO WE DON'T HAVE TO SOLVE FOR THEM TWICE!
+C     
+      include 'param.fcb'
+      include 'geom.fcb'
+      include 'che.fcb'
+      include 'xsec1.fcb'
+      include 'extsor.fcb'
+      
+C.....VARIABLE DESCRIPTION
+C     
+C     SXT    : EXTERNAL SOURCE IN NODE L
+C     THE MATRIX OF THE 2-NODE PROBLEM CAN BE REDUCED
+C     SO THAT WE CAN SOLVE ACTUALLY 3 SYSTEMS, 2 SMALL
+C     FOR THE EVEN COEFFICIENTS OF EVERY NODE (L, L+1)
+C     AND A LARGER ONE FOR THE ODD COEFFICIENTS.
+C     AMAT1 : COEFFICIENTS OF THE FIRST MATRIX
+C     AMAT2 : COEFFICIENTS OF THE SECOND MATRIX
+C     AMAT3 : COEFFICIENTS OF THE THIRD MATRIX
+C     EXC   : 4 EXPANSION COEFFICIENTS FOR EACH GROUP FOR NODE L
+C     AL    : TOTAL X-SEC FOR NODE L
+C     TFP   : FISSION X-SEC FOR NODE L+1
+C     TD    : DIFFUSION COEFFICIENT FOR NODE L
+C     FL    : FLUX
+C     ADF   : ASSEMBLY DISCONTINUITY FACTORS
+C     FS    : FISSION SOURCE (NODE L)
+C     
+      DIMENSION    SW(NXYL,NZ,*)         ,VOLU(NXYL,*)          ,
+     &  LSEXTZ(*)             ,LSEXTR(*)             ,
+     &  XHIP(NXYL,NZ,*)       ,SCAT(NXYL,NZ,*)       ,
+     &  TCD(NXYL,NZ,*)        ,TNF(NXYL,NZ,*)        ,
+     &  TXT(NXYL,NZ,*)        ,SIGDSN(NXYL,NZ,NG,*)  ,
+     &  SEXT(*)               ,BETAT(NXYL,*)         ,
+     &  BETATLAM(NXYL,NZ,*)
+      
+      DIMENSION PC(*)
+      DIMENSION SXT(NG),SXTP(NG)
+      DIMENSION AMAT1(14*NG-16), XOUT1(2*NG), BRHS1(2*NG)
+      DIMENSION AMAT2(14*NG-16), XOUT2(2*NG), BRHS2(2*NG)
+      DIMENSION AMAT3(28*NG-24), XOUT3(4*NG), BRHS3(4*NG)
+      
+      DIMENSION EXC(4,NG)
+      DIMENSION A1(NG),A2(NG),A3(NG),A4(NG)
+      
+      DIMENSION AL(NG),ALP(NG),TF(NG),TFP(NG),SSCAT(NG),SSCATP(NG)
+      DIMENSION TD(NG),TDP(NG),FL(NG),FLP(NG)
+      
+      DIMENSION TL(NG),TLP(NG),PL1(NG),PLP1(NG),PL2(NG),PLP2(NG)
+      DIMENSION ADF(NG),ADFP(NG)
+      REAL*8 JNEM(NG) !vmq
+      
+      IF (NG.EQ.2) THEN
+       NDIM1 = 4
+       NDIM2 = 8
+      ELSE
+       NDIM1 = 8
+       NDIM2 = 16
+      ENDIF
+      WID2 = WIDTH * WIDTH
+      WID2P = WIDTHP * WIDTHP
+      WIDI = 1./WIDTH
+      WIDI2 = WIDI * WIDI
+      WIDIP = 1./WIDTHP
+      WIDI2P = WIDIP * WIDIP
+      
+      DO 10 I = 1,2*NG
+       BRHS1 (I) = 0.0
+       BRHS2 (I) = 0.0
+ 10   CONTINUE
+      
+      DO 12 J = 1,14*NG-16
+       AMAT1(J) = 0.0
+       AMAT2(J) = 0.0
+ 12   CONTINUE
+      
+      DO 101 I = 1,4*NG
+       BRHS3 (I) = 0.0
+ 101  CONTINUE
+      
+      DO 121 J = 1,28*NG-24
+       AMAT3(J) = 0.0
+ 121  CONTINUE
+      
+      FS = 0.0
+      FSP = 0.0
+      
+      DO 200 IG=1,NG
+       AL(IG) = TXT(IXY,IZ,IG)
+       TF(IG) =  TNF(IXY,IZ,IG)/FLAMDA
+       ALP(IG) = TXT(IXYP,IZP,IG)
+       TFP(IG) =  TNF(IXYP,IZP,IG)/FLAMDA
+       TD(IG) = TCD(IXY,IZ,IG)
+       TDP(IG) = TCD(IXYP,IZP,IG)
+       FL(IG) = SW(IXY,IZ,IG)
+       FLP(IG) = SW(IXYP,IZP,IG)
+       FS = FS
+     &   + TF(IG)*FL(IG)
+       FSP = FSP
+     &   + TFP(IG)*FLP(IG)
+       SXT(IG) = 0.0
+       SXTP(IG) = 0.0
+ 200  CONTINUE
+      DO 201 IG=1,NG
+       SSCAT(IG) = SCAT(IXY,IZ,IG)/VOLU(IXY,IZ)
+       SSCATP(IG) = SCAT(IXYP,IZP,IG)/VOLU(IXYP,IZP)
+ 201  CONTINUE
+      
+      DO 419 IG=1,NG
+       SXT(IG)  = DBLE(LSEXTR(IXY))*DBLE(LSEXTZ(IZ))*SEXT(IG)
+       SXTP(IG) = DBLE(LSEXTR(IXYP))*DBLE(LSEXTZ(IZP))*SEXT(IG)
+       
+ 419  CONTINUE
+C     
+      IF(IFLAG.EQ.1) THEN
+       
+C     
+C     WE RETRIEVE THE COEFFICIENTS WE HAVE SOLVED FOR PREVIOUSLY
+C     
+       
+       DO 216 IND = 1,NDIM1
+        XOUT1(IND) = PC(IND)
+ 216   CONTINUE
+      ELSE
+       
+C     WE SOLVE FOR THE EVEN EXPANSION COEFFICIENTS OF NODE L
+C     ONLY IF NODE L IS THE FIRST ONE ON A LINE.
+       
+       
+       DO 210 IG = 1,NG
+C     
+C     NODAL BALANCE CONSTRAINTS (NODE L)
+C     
+        AMAT1(1+(IG-1)*2) = -6.*TD(IG)
+        AMAT1(2+(IG-1)*2) = -0.4*TD(IG)
+        
+        BRHS1(IG) = ( - TL(IG) - AL(IG)*FL(IG) + SXT(IG)
+     &    + FS*( (1.0 - BETAT(IXY,IZ))*
+     &    XHIP(IXY,IZ,IG)+ BETATLAM(IXY,IZ,IG) )
+     &    + SSCAT(IG)                 )*WID2
+C     
+C     SECOND MOMENT CONSTRAINTS (NODE L)
+C     
+        DO 215 IGG=1,NG
+         IF(IGG.EQ.IG) THEN
+          SIGSCATK=0.0
+         ELSE
+          IGGP=IGG
+          IF(IGG.GT.IG) IGGP=IGG-1
+          SIGSCATK=SIGDSN(IXY,IZ,IG,IGGP)
+         ENDIF
+         
+         AMAT1(IG*2*NG+IGG) =
+     &     35.0*TF(IGG)*( (1.0 - BETAT(IXY,IZ))*
+     &     XHIP(IXY,IZ,IG)+ BETATLAM(IXY,IZ,IG) )
+     &     +35.0*SIGSCATK
+         AMAT1(IG*2*NG+NG+IGG) =
+     &     - TF(IGG)*( (1.0 - BETAT(IXY,IZ))*
+     &     XHIP(IXY,IZ,IG)+ BETATLAM(IXY,IZ,IG) )
+     &     - SIGSCATK
+ 215    CONTINUE
+        AMAT1(IG*(2*NG+1)) = AMAT1(IG*(2*NG+1))
+     &    - 35.*AL(IG)
+        AMAT1(IG*(2*NG+1)+NG) = AMAT1(IG*(2*NG+1)+NG)
+     &    + 140.*WIDI2*TD(IG) + AL(IG)
+        
+        BRHS1(NG+IG) = 35.*PL2(IG)
+ 210   CONTINUE
+       
+       IF (NG.EQ.2) THEN
+C.............2 GROUPS SOLVER
+        CALL DIRECT4 (AMAT1,BRHS1,XOUT1,NDIM1)
+       ELSE
+C.............4 GROUPS SOLVER
+        CALL DIRECT8B (AMAT1,BRHS1,XOUT1,NDIM1)
+       ENDIF
+      ENDIF
+      
+      
+      DO 310 IG = 1,NG
+C     
+C     NODAL BALANCE CONSTRAINTS (NODE L+1)
+C     
+       AMAT2(1+(IG-1)*2) = -6.*TDP(IG)
+       AMAT2(2+(IG-1)*2) = -0.4*TDP(IG)
+       BRHS2(IG) = ( - TLP(IG) - ALP(IG)*FLP(IG) + SXTP(IG)
+     &   + FSP*( (1.0 - BETAT(IXYP,IZP))*
+     &   XHIP(IXYP,IZP,IG)+ BETATLAM(IXYP,IZP,IG) )
+     &   + SSCATP(IG)                 )*WID2P
+C     
+C     SECOND MOMENT CONSTRAINTS (NODE L+1)
+C     
+       DO 315 IGG=1,NG
+        IF(IGG.EQ.IG) THEN
+         SIGSCATK=0.0
+        ELSE
+         IGGP=IGG
+         IF(IGG.GT.IG) IGGP=IGG-1
+         SIGSCATK=SIGDSN(IXYP,IZP,IG,IGGP)
+        ENDIF
+        
+        AMAT2(IG*2*NG+IGG) =
+     &    35.0*TFP(IGG)*( (1.0 - BETAT(IXYP,IZP))*
+     &    XHIP(IXYP,IZP,IG)+ BETATLAM(IXYP,IZP,IG) )
+     &    +35.0*SIGSCATK
+        AMAT2(IG*2*NG+NG+IGG) =
+     &    - TFP(IGG)*( (1.0 - BETAT(IXYP,IZP))*
+     &    XHIP(IXYP,IZP,IG)+ BETATLAM(IXYP,IZP,IG) )
+     &    - SIGSCATK
+ 315   CONTINUE
+       AMAT2(IG*(2*NG+1)) = AMAT2(IG*(2*NG+1))
+     &   - 35.*ALP(IG)
+       AMAT2(IG*(2*NG+1)+NG) = AMAT2(IG*(2*NG+1)+NG)
+     &   + 140.*WIDI2P*TDP(IG) + ALP(IG)
+       
+       BRHS2(NG+IG) = 35.*PLP2(IG)
+       
+ 310  CONTINUE
+      
+      IF (NG.EQ.2) THEN
+       CALL DIRECT4 (AMAT2,BRHS2,XOUT2,NDIM1)
+      ELSE
+       CALL DIRECT8B (AMAT2,BRHS2,XOUT2,NDIM1)
+      ENDIF
+      
+      DO 316 IND=1,NDIM1
+       PC(IND) = XOUT2(IND)
+ 316  CONTINUE
+      
+      
+      
+      DO 400 IG=1,NG
+C     
+C     FIRST MOMENT CONSTRAINTS
+C     
+       DO 401 IGG=1,NG
+        IF(IGG.EQ.IG) THEN
+         SIGSCATK=0.0
+        ELSE
+         IGGP=IGG
+         IF(IGG.GT.IG) IGGP=IGG-1
+         SIGSCATK=SIGDSN(IXY,IZ,IG,IGGP)
+        ENDIF
+        
+        AMAT3(IGG+2*NG*(IG-1)) = 10.*TF(IGG)*
+     &    ( (1.0 - BETAT(IXY,IZ))*XHIP(IXY,IZ,IG)
+     &    + BETATLAM(IXY,IZ,IG) )
+     &    + 10.*SIGSCATK
+        AMAT3(IGG+NG*(2*IG-1)) = - TF(IGG)*
+     &    ((1.0 - BETAT(IXY,IZ)) * XHIP(IXY,IZ,IG)
+     &    + BETATLAM(IXY,IZ,IG))
+     &    - SIGSCATK
+        IF(IGG.EQ.IG) THEN
+         SIGSCATK=0.0
+        ELSE
+         IGGP=IGG
+         IF(IGG.GT.IG) IGGP=IGG-1
+         SIGSCATK=SIGDSN(IXYP,IZP,IG,IGGP)
+        ENDIF
+        
+        
+        AMAT3(IGG+2*NG*(IG-1)+2*NG*NG) = 10.*TFP(IGG)*
+     &    ((1.0 - BETAT(IXYP,IZP))*XHIP(IXYP,IZP,IG)
+     &    + BETATLAM(IXYP,IZP,IG)) + 10.*SIGSCATK
+        AMAT3(IGG+NG*(2*IG-1)+2*NG*NG) = - TFP(IGG)*
+     &    ( (1.0 - BETAT(IXYP,IZP))*XHIP(IXYP,IZP,IG)+
+     &    BETATLAM(IXYP,IZP,IG) ) - SIGSCATK
+ 401   CONTINUE
+       AMAT3(2*NG*(IG-1)+IG) = AMAT3(2*NG*(IG-1)+IG) - 10.*AL(IG)
+       AMAT3(2*NG*(IG-1)+IG+2*NG*NG) =
+     &   AMAT3(2*NG*(IG-1)+IG+2*NG*NG) - 10.*ALP(IG)
+       AMAT3(NG*(2*IG-1)+IG) = AMAT3(NG*(2*IG-1)+IG)
+     &   + 60.*WIDI2*TD(IG) + AL(IG)
+       AMAT3(NG*(2*IG-1)+IG+2*NG*NG) =
+     &   AMAT3(NG*(2*IG-1)+IG+2*NG*NG) + 60.*WIDI2P*TDP(IG) + ALP(IG)
+       
+       BRHS3(IG) = 10.*PL1(IG)
+       BRHS3(NG+IG) = 10.*PLP1(IG)
+       
+C     
+C     CONTINUITY OF NET CURRENTS
+C     
+       AMAT3(4*(NG*NG+IG-1)+1) = -TD(IG)*WIDI
+       AMAT3(4*(NG*NG+IG-1)+3) =  TDP(IG)*WIDIP
+       AMAT3(4*(NG*NG+IG-1)+2) = -0.5*TD(IG)*WIDI
+       AMAT3(4*(NG*NG+IG-1)+4) =  0.5*TDP(IG)*WIDIP
+       A1(IG) = -3.*TD(IG)*WIDI
+       A3(IG) = -3.*TDP(IG)*WIDIP
+       A2(IG) = -0.2*TD(IG)*WIDI
+       A4(IG) = -0.2*TDP(IG)*WIDIP
+       BRHS3(2*NG+IG)   = -A1(IG)*XOUT1(IG) - A2(IG)*XOUT1(IG+NG)
+     #   -A3(IG)*XOUT2(IG) - A4(IG)*XOUT2(IG+NG)
+C     
+C     DISCONTINUITY OF SURFACE-AVERAGED FLUX CONSTRAINTS
+C     
+       AMAT3(4*NG*(NG+1)+2*(IG-1)+1) = 0.5*ADF(IG)
+       AMAT3(4*NG*(NG+1)+2*(IG-1)+2) = 0.5*ADFP(IG)
+       A1(IG) = 0.5*ADF(IG)
+       A2(IG) = -0.5*ADFP(IG)
+       BRHS3(3*NG+IG)   = -ADF(IG)*FL(IG)+ADFP(IG)*FLP(IG)
+     #   -A1(IG)*XOUT1(IG) - A2(IG)*XOUT2(IG)
+       
+ 400  CONTINUE
+      
+      IF (NG.EQ.2) THEN
+       CALL DIRECT8 (AMAT3,BRHS3,XOUT3,NDIM2)
+      ELSE
+       CALL DIRECT16 (AMAT3,BRHS3,XOUT3,NDIM2)
+      ENDIF
+      DO 415 IG=1,NG
+       EXC(1,IG) = XOUT3(IG)
+       EXC(2,IG) = XOUT1(IG)
+       EXC(3,IG) = XOUT3(NG+IG)
+       EXC(4,IG) = XOUT1(NG+IG)
+ 415  CONTINUE
+      
+C     
+C     CALCULATES THE NEM CURRENT USING THE EXPANSION COEFFICIENTS
+C     OF THE FLUX AND ... FICK'S LAW
+C     
+      
+      DO 500 IG = 1,NG
+       JNEM(IG) = -TD(IG)*WIDI*
+     &   (EXC(1,IG)+3.*EXC(2,IG)+0.5*EXC(3,IG)+0.2*EXC(4,IG))
+ 500  CONTINUE
+      
+      RETURN
+      END

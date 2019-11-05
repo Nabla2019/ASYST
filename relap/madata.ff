@@ -1,0 +1,222 @@
+*mlist
+       subroutine madata (temidx,indx,idxo,cols,probid,ssflag,errsw,
+     & idxh,dtime,dtdt,cltave,block,irupt,iplas)
+!  Computes thermal conductivity and volumetric heat capacity for
+!  each mesh interval using the average of the temperatures of the
+!  mesh points bounding the interval.
+!
+!  Cognizant engineer: rjw.
+!
+$if def,iua
+       use uncdata
+$endif
+       implicit none
+!
+       integer temidx,indx,idxo,cols,probid,errsw,idxh,irupt,iplas
+       real dtime,dtdt,cltave,block
+       logical ssflag
+!
+!  subroutine arguments.
+!  temidx  index of temperatures.
+!  cols    no. of mesh points in x-direction  (columns).
+!  probid  problem id no.
+!  ssflag  true => no heat capacities to be calculated.
+!  errsw   errsw switch  (0 => no error,  1 => error).
+!  dtdt   = clad heatup rate (k/s) (calc. in heatup)
+!  cltave = ave clad temperature (k)
+!  block  = percent channel blockage
+!  irupt  = 1 if rupture has occurred for this fuel rod, 0 otherwise
+!  iplas  = 1 if plastic strain & blockage is to be calculated
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'gapvar.h'
+       include 'htscr.h'
+       include 'htsrcm.h'
+       include 'mtbls.h'
+       include 'ufiles.h'
+!
+!  filndx(9) index of material property data - main program must arrange
+!  data in the following order.
+!         ia (filndx(9)) = no. of materials
+!         ia(filndx(9)+1) = offset of data for matrl 1
+!         ia(filndx(9)+2) = offset of data for matrl 2, etc.
+! matidx  index of data for matrl n  (thermal cond,  vol heat cap)
+!  ia(matidx) = ksw (0 => tabular thcon data,
+!         1 => functional relation for data)
+!         ia(matidx+1) = cfcnsw (0 => tabular rhocp data,
+!         1 => functional relation for data)
+!  if ksw = 1 coefficient data follows and
+!         ia(matidx+2) = number of functional descriptions (nkfcn)
+!         fa(matidx+3)    = low limit of validity range for fcn 1
+!         fa(matidx+4)    = high limit of validity range for fcn 1
+!         fa(matidx+5)    = coefficient ao
+!         fa(matidx+6)    = coefficient a1, etc. thru a5, c   where
+!         k(t)=ao+a1*(t-c)+a2*(t-c)**2+a3*(t-c)**3+a4*(t-c)**4+a5/(t-c)
+!         fa(matidx+12)   = low  limit of validity for fcn 2 if
+!         nkfcn > 1, ect.
+!  if ksw = 0 tabular data follows and
+!         ia(matidx+2) = length of table (no. of data pairs)
+!         fa(matidx+3) = t1
+!         fa(matidx+4) = t2, etc
+!         fa(matidx+length+3)=k1
+!         a table length of 1 => the property is a constant and
+!         fa(matidx+3)=k
+!         volumetric heat cap data follows conductivity data
+!         if cfcnsw=1 coefficient data follows in the same order
+!         as for k(t) and has the same functional form as k(t)
+!         if cfcnsw=0 tabular data follows and
+!         ia(matidx+n)= +-length (negative value => use temp fa
+!         for k table, pos length => indep table for rhocp
+!     subroutine variables
+! thcon   value of thermal conductivity returned
+! rhocp   value of volumetric heat capacity returned
+! mtrl    material no. for which properties are requested
+! tempn   current value of temperature
+!
+       integer csw,colbdy,i,icol,index,indgas(7),jsnum,kfcn,kidx,ksw,l,
+     & length,lim,loc,matidx,midx,mtrl,mtrlo,nkfcn,tidx
+       real coeff,molgas(7),rhocp,t,thcon,tlbnd,tclad,tfuel,tubnd,
+     & value
+       logical ktable, ssheat
+       integer :: locjh=0
+       character typd(2)*20
+!
+       data typd/'thermal conductivity','vol.heat capacity'/
+!
+       ssheat = ssflag .or. ishft(iroute,-6).eq.1
+       colbdy = cols - 1
+       kidx = indx
+       midx = idxo
+       tidx = temidx
+       block=0.0
+       mtrlo = 0
+       do 105 icol = 1,colbdy
+         mtrl = htcmp(midx+1)
+         hte(kidx) = 0.5*(httmp(tidx) + httmp(tidx+1))
+         if (mtrlo .ne. mtrl) then
+           mtrlo = mtrl
+           ktable = .false.
+         endif
+         matidx = mtbptr(filndx(9)+mtrl) + filndx(9)
+         ksw = mtbl(matidx)
+         csw = mtbl(matidx+1)
+         matidx = matidx + 2
+         l = 1
+         assign 121 to jsnum
+         if(ksw - 1) 101,117,100
+!  Gap conductance model with gas mole fractions.
+  100    length = mtbl(matidx)
+         index = matidx + 1
+         kfcn = index + length - 1
+         lim = 1
+         do i = index,kfcn
+           indgas(lim) = mtbl(i)
+           molgas(lim) = mtblr(i+length)
+           lim = lim + 1
+         enddo
+         call gasthc (value,length,indgas,molgas,hte(kidx))
+         matidx = matidx + length + length + 1
+         if (pgas .le. 0.0) go to 120
+         hte(kidx+htscrp) = 0.5*(httmp(tidx+1) + httmp(temidx+colbdy))
+!  Fuel and clad surface temperatures in gap.
+!  Gap is assumed to be one interval.
+         tfuel  = httmp(tidx)
+         tclad  = httmp(tidx+1)
+         call gapcon (indx,htscrp,idxo,idxh,icol,length,indgas,molgas,
+     &   value,dtdt,cltave,block,irupt,iplas,tfuel,tclad)
+$if def,iua
+         if (uncmode) call appwtgap (thcon,hte(kidx))
+$endif
+         go to 120
+!  Data in tabular form, get table length and previous table index.
+  101    length = mtbl(matidx)
+!  Check table length.
+  110    if (length .le. 1) then
+           value = mtblr(matidx+1)
+           matidx = matidx + 2
+           go to 120
+         endif
+         loc = locjh
+         ktable = .true.
+         if (loc.lt.1 .or. loc.gt.length) loc = 1
+!  Test if tempn in table.
+         if (hte(kidx).ge.mtblr(matidx+1) .and. hte(kidx).le.mtblr(
+     &   matidx+length)) go to 112
+  107    write (output,128) hte(kidx),htcmp(midx),probid,typd(l)
+  128  format ('0******** temperature',1p,e14.6,' for material',i4,' in
+     *heat structure',i8,' is out of range for ',a,' table.')
+         errsw = 1
+         return
+!  Test position within table.
+  112    index = matidx + loc
+         if (hte(kidx) .ge. mtblr(index)) go to  114
+!  tempn less than preceeding value.
+         index = index - 1
+         do i = 2,loc
+           if (hte(kidx) .ge. mtblr(index)) go to 116
+           index = index - 1
+         enddo
+!  tempn > or = to preceeding value.
+  114    lim = length - 1
+         do i = loc,lim
+           if (hte(kidx) .lt. mtblr(index+1)) go to 116
+           index = index + 1
+         enddo
+!  Argument at last value in table.
+         index = index - 1
+!  Position in table located.
+  116    loc = index - matidx
+         locjh = loc
+!  Use two-point lagragian interpolation (linear).
+         coeff = (hte(kidx) - mtblr(index))/(mtblr(index+1) -
+     &   mtblr(index))
+         index = index + length
+         value = mtblr(index) + coeff*(mtblr(index + 1) - mtblr(index))
+         matidx = matidx + 2*length + 1
+         go to 120
+!  Functional dependence for property.
+  117    nkfcn = mtbl(matidx)
+         index = matidx
+         kfcn = 0
+  118    tlbnd = mtblr(index+1)
+         tubnd = mtblr(index+2)
+         if (hte(kidx).lt.tlbnd .or. hte(kidx).gt.tubnd) then
+           kfcn = kfcn + 1
+           index = index + 9
+           if (kfcn .lt. nkfcn) go to 118
+           go to 107
+         endif
+         t = hte(kidx) - mtblr(index+9)
+         value = (((mtblr(index+7)*t + mtblr(index+6))*t +
+     &   mtblr(index+5))*t + mtblr(index+4))*t + mtblr(index+3) +
+     &   mtblr(index+8)/t
+         matidx = matidx + 9*nkfcn + 1
+  120    go to jsnum, (121,125)
+  121    thcon = value
+         if (ssheat) go to 104
+         assign 125 to jsnum
+         l = 2
+         if (csw .eq. 1) go to 117
+!  Heat capacity data in tabular form, get table length.
+         length = mtbl(matidx)
+!  Test for independent heat capacity table.
+         if (length .gt. 0) go to 110
+!  Rhocp uses temperature table for thcon.
+         length = abs(length)
+         if (.not.ktable) call fabend
+         index = matidx + loc
+!  Check table length.
+         value = mtblr(index) + (mtblr(index+1) - mtblr(index))*coeff
+  125    rhocp = value
+         go to 109
+!  Minimum rhocp for steady state.
+  104    rhocp = 2.0*thcon*dtime*htsrwt(midx)/
+     &   (htrvwt(midx) + htlvwt(midx))
+  109    htvhc(kidx) = rhocp
+         httc(kidx)  = thcon
+         tidx = tidx + 1
+         midx = midx + htgskp
+         kidx = kidx + htscrp
+  105  continue
+       end

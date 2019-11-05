@@ -1,0 +1,212 @@
+*mlist
+       subroutine eprij(vgj,c0,alpg,alpf,upchan,i,output,kk,velgjt,
+     & velfjt,diamjt)
+c
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: rar,wlw,kec (jmp).
+c
+      implicit none
+c
+c************************** prologue ***********************************
+c
+c    title   eprij - calcs vgj and c0 using epri correlation
+c
+c    author  j. m. putney (cerl)
+c
+c    purpose
+c
+c     this subroutine calculates the drift velocity and distribution
+c     coefficient using the epri drift flux correlation. the
+c     subroutine is called by fidisj for all vertical flows in rod
+c     bundles and high up and down flows in pipes (bubbly and slug
+c     flow regimes). only one iteration is used when evaluating the
+c     correlation; ie c0 and vgj are calculated using the current
+c     phase velocities. the drift velocity is calculated relative to
+c     an upwards directed channel.
+c
+c    documentation
+c
+c     the definition of the epri correlation is taken from
+c
+c       chexal, b. and lellouche, g., 1986, a full-range drift-flux
+c       correlation for vertical flows (revision 1). epri np-3989-sr.
+c
+c    argument list
+c
+c     vgj    = drift velocity
+c     c0     = distribution coefficient
+c     alpg   = vapour volume fraction
+c     alpf   = liquid volume fraction
+c     upchan = true if channel is directed upwards
+c     i      = junction index in junction block arrays
+c     output = unit number for error/warning messages
+c     kk     = donor volume index in volume block arrays
+c     velgjt = physical junction vapor velocity
+c     velfjt = physical junction liquid velocity
+c     diamjt = physical junction diamter
+c
+c    direct outputs
+c
+c     vgj
+c     c0
+c
+c************************** common blocks etc **************************
+c
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'jundat.h'
+       include 'stcom.h'
+       include 'voldat.h'
+c
+c************************** declarations *******************************
+c
+      integer output,i,kk,matrl
+       real rfg
+      real d1,d2,velg0,velf0,alpg,reynog,reynof,reyno,a1,
+     *b1,rhorat,xk0,xr,c1,xln,xld,xl,c0,c7,c8,c4,c5,c6,c2,arg,c3,
+     *vgj,alpf,velgjt,velfjt,diamjt
+      real c9,c10,b2
+      logical upchan
+      logical ccflow
+cjmk-1
+c
+      real denom, fract, jccfl, jsubfs, jsubgs
+c
+cjmk-1
+c
+c************************** data ***************************************
+c
+      data d1     /0.0381e0/
+      data d2     /0.09144e0/
+c
+c************************** execution **********************************
+c
+c
+c=======================================================================
+c set estimated phase velocities relative to up-channel and calculate  =
+c corresponding reynold's numbers                                      =
+c=======================================================================
+c
+      ccflow = .false.
+      if(upchan) then
+        velg0 = velgjt
+        velf0 = velfjt
+      else
+        velg0 = - velgjt
+        velf0 = - velfjt
+      endif
+      reynog = rhogj(i)*alpg*velg0*diamjt/viscg(kk)
+      reynof = rhofj(i)*alpf*velf0*diamjt/viscf(kk)
+      if(reynog.gt.reynof.or.reynog.lt.0.0e0) then
+         reyno = reynog
+      else
+        reyno = reynof
+      endif
+      arg = max(-170.0,min(170.0,-reyno/6.0e4))
+      a1 = 1.0e0/( 1.0e0 + exp(arg) )
+      b1 = min(0.8e0,a1)
+      rhorat = rhogj(i)/rhofj(i)
+c
+c=======================================================================
+c distribution coefficient                                             =
+c=======================================================================
+c
+      xk0 = b1 + (1.0e0 - b1)*rhorat**0.25e0
+      xr = ( 1.0e0 + 1.57e0*rhorat )/(1.0e0 - b1)
+      matrl = volmat(kk)
+      c1 = 4.0e0*pcrit*pcrit/(p(kk)*(pcrit-p(kk)))
+      c1 = abs(c1)
+      if(c1*alpg.lt.170.0e0) then
+        xln = 1.0e0 -  exp(-c1*alpg)
+      else
+        xln = 1.0e0
+      endif
+      if(c1.lt.170.e0) then
+        xld = 1.0e0 -  exp(-c1)
+      else
+        xld = 1.0e0
+      endif
+      xl = xln/xld
+      c0 = xl/( xk0 + (1.0e0 - xk0)*alpg**xr )
+c
+c=======================================================================
+c drift velocity                                                       =
+c=======================================================================
+c
+      c7 = (d2/diamjt)**0.6e0
+      if(c7.ge.1.0e0) then
+        c4 = 1.0e0
+      else
+        c8 = c7/(1.0e0 - c7)
+        c4 = 1.0e0/(1.0e0 -  exp(-c8))
+      endif
+      c5 =  sqrt(150.0e0*rhorat)
+      if(c5.ge.1.0e0) then
+        c2 = 1.0e0
+      else
+        c6 = c5/(1.0e0 - c5)
+        c2 = 1.0e0/(1.0e0 -  exp(-c6))
+      endif
+      if(reynog.ge.0.0e0) then
+        c9 = ( 1.e0 - alpg ) ** b1
+      else
+        c9 = min( 0.7e0 , ( 1.e0 - alpg ) ** 0.65e0  )
+      endif
+c
+c upflow
+c
+      if(velf0.ge.0.0e0.and.velg0.ge.0.0e0) then
+        c3 = max( 0.5e0 , 2.0e0* exp(- abs(reynof)/6.0e4) )
+c
+c downflow
+c
+      elseif(velf0.le.0.0e0.and.velg0.le.0.0e0) then
+         c10 = 2.0e0*( exp( ( abs(reynof)/3.5e5)**0.40 ) )
+     &       - 1.75e0*( abs(reynof))**0.03e0
+     &       * exp(-( abs(reynof)/5.0e4)*(d1/diamjt)**2.0e0)
+     &       +  (d1/diamjt)**0.25e0 * ( abs(reynof))**0.001e0
+         b2 = 1.0e0 / ( 1.0e0 + 0.05e0 * abs( reynof)/3.5e5 ) ** 0.40e0
+         c3 = 2.0e0 * ( c10 / 2.0e0 ) ** b2
+c
+c countercurrent flow
+c (use downflow value of vgj - this is a reasonable approach as a
+c ccfl is imposed in fidisj)
+c
+      else
+        ccflow = .true.
+         c10 = 2.0e0*( exp( ( abs(reynof)/3.5e5)**0.40 ) )
+     &       - 1.75e0*( abs(reynof))**0.03e0
+     &       * exp(-( abs(reynof)/5.0e4)*(d1/diamjt)**2.0e0)
+     &       +  (d1/diamjt)**0.25e0 * ( abs(reynof))**0.001e0
+         b2 = 1.0e0 / ( 1.0e0 + 0.05e0 * abs( reynof)/3.5e5 ) ** 0.40e0
+         c3 = 2.0e0 * ( c10 / 2.0e0 ) ** b2
+cjmk-2
+c
+c    - the c3 parameter should be ramped between its value at the onset
+c      of flooding (jsubf = 0) and the CCFL line.
+c
+         rfg = max(1.0e-05,(rhofj(i)-rhogj(i)))
+         denom = sqrt(gravcn*rfg*diamjt)
+         jsubgs = voidgj(i) * velg0 * sqrt(rhogj(i)) / denom
+         jsubgs = max(0.0,min(0.55,jsubgs))
+         jccfl = (0.775 - sqrt(jsubgs))**2
+         jsubfs = voidfj(i) * abs(velf0) * sqrt(rhofj(i)) / denom
+         fract = min(1.0,(jsubfs/jccfl))
+c
+         c3 = c3*fract + 2.0*(1.0 - fract)
+c
+cjmk-2
+      endif
+c
+c all flows
+c
+       rfg = max( (rhofj(i) - rhogj(i)), 1.0e-05 )
+       vgj = 1.41e0*( rfg*sigma(kk)*gravcn/
+     &               (rhofj(i)*rhofj(i)) )**0.25e0
+     &    * c2 * c3 * c4 * c9
+c
+      return
+      end

@@ -1,0 +1,514 @@
+*mlist
+       subroutine rtmdj
+c  Process time dependent junction input data.
+c
+c  Cognizant engineer: rjw.
+c
+*in32 init
+*in32end
+       use cmpdat
+       use jundat
+       use voldat
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'cons.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'rcompc.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer l3a(9),l3b(10),l3c(9),l3d(10),init(6),pckcod(2)
+       real xinit(6)
+       equivalence (init(1),xinit(1))
+       character labl*64,labl1(2)*8,labl2(2)*8,labl3(2)*8,chwrd*8
+       logical tfail,ovl
+       integer lens
+       parameter(lens=21)
+       integer i,i3,ie,ii,ij,ink,inp10,iv,k,k1,k2,ks,l,lcntgs,
+     & n3,n4,nc,nc1,nj1,nj1o,nnv,nv1,nv1o
+$if -def,mmfld,1
+       integer kk
+       real blnk,conv,fr,ft,ft2,xlbsec
+c
+c  Data statements.
+       data l3a/2*0,2*3,0,1,0,0,1/
+       data l3b/2*0,0,4,0,1,2*0,-1,0/
+       data l3c/2*0,4,20000,0,1,2,2*1/
+       data l3d/2*0,0,4,0,1,1,1,1,1/
+       data ft/0.3048/, ft2/9.290304e-2/, xlbsec/0.45359237/
+       data labl1/'velocity','flow'/, labl2/'(ft/sec)','(lb/sec)'/,
+     & labl3/'(m/sec)','(kg/sec)'/
+c
+       chwrd = ' '
+       read (chwrd,'(a8)') blnk
+c  Get component number.
+       ovl = .false.
+       i = ncmps(filndx(3)) + filndx(3)
+       nc = cmpnum(i)
+c  Extend component block.
+       filsiz(3) = filsiz(3) + lens
+       if (lcntgs(filid(3),1) .ge. filsiz(3)) go to 10
+   15  write (output,2001) nc
+ 2001  format ('0******** Insufficient storage to process component',i4,
+     & '.')
+   12  l3c(1) = nc*10000
+       l3c(2) = l3c(1) + 9999
+       filsiz(1) = inp10(fa(filndx(1)),l3c(1),l3c(2))
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+  204  filsiz(3) = filsiz(3) - lens + 4
+       cmplen(i) = 4
+       cmptyp(i) = 0
+       call ftbsft (filid(3),filsiz(3),1,filndx(3))
+       ncmps(filndx(3)) = ncmps(filndx(3)) + 4
+       fail = .true.
+       go to 1000
+   10  call ftbsft (filid(3),filsiz(3),1,filndx(3))
+       i = ncmps(filndx(3)) + filndx(3)
+       cmplen(i) = lens
+       nvc(i) = 0
+       njc(i) = 1
+       cmpopt(i) = 0
+       nctble(i) = 0
+       nctblt(i) = 0
+       nctbtn(i) = 0
+       nctbtx(i) = 0
+c  Check if replacement or flag modification is possible.
+       ii = filndx(3)
+       if (cmpsrc) go to 401
+       nnv = ncomp - 1
+       if (nnv .eq. 0) go to 407
+       nv1 = 0
+       nj1 = 0
+       tfail = .false.
+       do 402 k = 1,nnv
+         nv1o = nvc(ii)
+         nj1o = njc(ii)
+         nc1 = cmplen(ii)
+         if (cmpnum(ii) - nc) 403,404,405
+  405    tfail = .true.
+  403    nv1 = nv1 + nv1o
+         nj1 = nj1 + nj1o
+         ii = ii + nc1
+  402  continue
+       if ( tfail )  go to  410
+  407  cmpsrc = .true.
+       go to 401
+  404  ncomp = nnv
+       if (cmptyp(ii) .ne. cmptyp(i)) go to 406
+       ovl = cmpflg
+       go to 14
+  410  nv1o = 0
+       nj1o = 0
+       nc1 = 0
+  406  if (.not.cmpflg) go to 14
+  409  write (output,2035) nc
+ 2035  format ('0******** Illegal use of component flag change option in
+     & component',i4,'.')
+       write (output,2005) nc
+ 2005  format ('0******** Data for component',i4,' cannot be processed.'
+     &)
+       go to 12
+c  Extend volume and junction blocks for this component.
+  401  if (cmpflg) go to 409
+   14  if (cmpsrc) nv1o = 0
+       k2 = -nv1o
+       k = filsiz(4) + k2*ivskp
+       k1 = max(filsiz(4),k)
+       if (k1 .gt. lcntgs(filid(4),1)) go to 15
+       call ftbsft (filid(4),k1,2,filndx(4))
+       if (cmpsrc) nv1 = nvols(filndx(4))
+       iv = nv1*ivskp + filndx(4)
+       k1 = (nvols(filndx(4)) - nv1 - nv1o)*ivskp
+       if (k1 .ne. 0) then
+         n3 = iv + nv1o*ivskp
+         n4 = iv
+         ink = n3 - n4
+         if (ink .ne. 0) then
+           if (ink .lt. 0) k1 = -k1
+           call ftbmov (fa(n3+1),fa(n4+1),k1)
+         endif
+       endif
+  411  nvols(filndx(4)) = nvols(filndx(4)) + k2
+       if (associated(cmphld(nc)%volp)) deallocate (cmphld(nc)%volp)
+       if (associated(cmphld(nc)%junp)) deallocate (cmphld(nc)%junp)
+       allocate (cmphld(nc)%junp(1))
+   16  filsiz(4) = k
+c  Get junction block.
+       if (cmpsrc) nj1o = 0
+       k2 = 1 - nj1o
+       k = filsiz(5) + k2*ijskp
+       k1 = max(filsiz(5),k)
+       if (k1 .gt. lcntgs(filid(5),1)) go to 15
+       call ftbsft (filid(5),k,2,filndx(5))
+       if (cmpsrc) nj1 = njuns(filndx(5))
+       ij = nj1*ijskp + filndx(5)
+       k1 = (njuns(filndx(5)) - nj1 - nj1o)*ijskp
+       if (k1 .eq. 0) go to 421
+       n3 = ij + nj1o*ijskp
+       n4 = ij + ijskp
+       if (n3 - n4) 422,421,423
+  422  k1 = -k1
+  423  call ftbmov (fa(n3+1),fa(n4+1),k1)
+  421  njuns(filndx(5)) = njuns(filndx(5)) + k2
+   19  filsiz(5) = k
+       if (.not.ovl) then
+         call setndf (fa(ij+1),ijskp)
+         jc(ij) = 128
+         jcex(ij) = 0
+         ijflg(ij) = 0
+         athrot(ij) = 1.0
+       endif
+       call ftbsft (filid(5),filsiz(5),2,filndx(5))
+       call ftbsft (filid(4),filsiz(4),2,filndx(4))
+       iv = nv1*ivskp + filndx(4)
+       ij = nj1*ijskp + filndx(5)
+c  Write output header for component.
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2101) nc, cmpnam(i),cmpalf(cmptyp(i))
+ 2101  format ('0====================================================='
+     & '==================',/,
+     & 22x,'Input data for component',i4,',',2a9,', having
+     & 0 volumes and  1 junction')
+c  Process junction.
+       fjunf(ij) = 0.0
+       fjunfb(ij) = 0.0
+       fjunfc(ij) = 0.0
+       fjunr(ij) = 0.0
+       fjunrb(ij) = 0.0
+       fjunrc(ij) = 0.0
+       fr = 1.0
+       if (.not.uniti) fr = ft2
+       l3a(1) = nc*10000 + 101
+       if (cmpflg) go to 200
+       l3a(6) = 1
+       call inp2 (fa(filndx(1)),init,l3a)
+       if (l3a(6) .le. 0) then
+         write (output,2002)
+ 2002  format ('0******** Junction geometry set to default conditions fo
+     &r continued checking.')
+         ij1(ij) = 0
+         ij2(ij) = 0
+         ajun(ij) = 0.0
+         fail = .true.
+         go to 30
+       endif
+       tfail = .false.
+       if (init(1) .le. 0) then
+         init(1) = 0
+         tfail = .true.
+       endif
+       if (init(2) .le. 0) then
+         init(2) = 0
+         tfail = .true.
+       endif
+       if (tfail) then
+         write (output,2006)
+ 2006  format ('0******** Volume pointers less than or equal to 0, set t
+     &o 0 for further checking.')
+         fail = .true.
+       endif
+       ij1(ij) = init(1)
+       ij2(ij) = init(2)
+       if (xinit(3) .lt. 0.0) then
+         write (output,2003)
+ 2003  format ('0******** Junction area less than 0.0, set to 0.0 for co
+     &ntinued checking.')
+         xinit(3) = 0.0
+         fail = .true.
+       endif
+       ajun(ij) = xinit(3)*fr
+       diamj(ij) = 2.0*sqrt(ajun(ij)/pi)
+c  Process card to aid hydrodynamic noding diagram.
+   30  l3d(1) = l3a(1) + 12
+       l3d(6) = 1
+       call inp2 (fa(filndx(1)),xinit,l3d)
+       tfail = .true.
+       if (l3d(6) .lt. 0) then
+         fail = .true.
+       elseif (l3d(6) .gt. 0) then
+         if (l3d(6) .eq. 4) then
+           tfail = .false.
+         else
+           fail = .true.
+           write (output,"('0******** Less than four quantities were ent
+     &ered on Card',i8,', all quantities set to zero.')") l3d(1)
+         endif
+       endif
+       if (tfail) then
+         guinval(ij:ij+1) = 0.0
+         guinang(ij:ij+1) = 0.0
+       else
+         guinval(ij) = xinit(1)
+         guinval(ij+1) = xinit(3)
+         guinang(ij) = xinit(2)
+         guinang(ij+1) = xinit(4)
+         if (.not.uniti) guinval(ij:ij+1) = guinval(ij:ij+1)*ft
+         tfail = any(guinval(ij:ij+1).lt.0.0) .or.
+     &   any(abs(guinang(ij:ij+1)).gt.360.0)
+         if (tfail) then
+           fail = .true.
+           write (output,"('0******** One or more quantities on Card',
+     & i8,' are negative.')") l3d(1)
+         endif
+       endif
+c  Edit junction geometry data.
+       l3c(1) = nc*1000000
+       junno(ij) = l3c(1)
+       cmphld(nc)%junp(1)%junno = l3c(1)
+       if (iand(ihlppr(2),ishft(1,22)) .ne. 0) then
+         write (output,
+     & "('0  jun.no. from vol.   to vol.',5x,'junction area')")
+         if (.not.unito) then
+           write (output,"(35x,'(ft2)')")
+           xinit(2) = ajun(ij)/ft2
+           write (output,2120) l3c(1),ij1(ij),ij2(ij),xinit(2)
+         else
+           write (output,"(35x,'(m2)')")
+           write (output,2120) l3c(1),ij1(ij),ij2(ij),ajun(ij)
+ 2120  format (3i10,1p,e17.6)
+         endif
+         if (any(guinval(ij:ij+1).ne.0.0)) then
+           write (output,"('0  Jun.no.  Noding diagram modification:  fr
+     &om value',7x,'from angle',7x,'to value',9x,'to angle')")
+           xinit(2:3) = guinval(ij:ij+1)
+           if (.not.unito) xinit(2:3) = xinit(2:3)/ft
+           write (output,"(i10,27x,4es17.6)") l3c(1),xinit(2),
+     &     guinang(ij),xinit(3),guinang(ij+1)
+         endif
+       endif
+c  Process table type.
+  200  l3b(1) = l3a(1) + 99
+       l3c(1) = l3b(1) + 1
+       l3c(2) = -l3c(1) - 98
+       l3b(6) = 1
+       labl = ' '
+       labl(1:4) = 'time'
+       labl(17:21) = '(sec)'
+       i3 = 0
+       ncttrp(i) = 0
+       ncttrx(i) = 0
+       nctalf(i) = blnk
+       nctdpv(i) = 0
+       nctpc(i) = 0
+       nctpc(i+1) = 0
+       conv = 1.0
+       call inp2 (fa(filndx(1)),init,l3b)
+       if (l3b(6)) 141,142,143
+  141  write (output,2026)
+ 2026  format ('0******** Control for junction flow table set to 0 for c
+     &ontinued checking.')
+       l3b(6) = 1
+       go to 154
+  143  i3 = init(1)
+       if (i3.ge.0 .and. i3.le.1) go to 142
+       write (output,2027)
+ 2027  format ('0******** Control for junction initial conditions incorr
+     &ect, set to 0 for continued checking.')
+  154  fail = .true.
+       i3 = 0
+c  Process trip number.
+  142  if (l3b(6) .lt. 2) go to 146
+       if (init(2).ge.0 .and. init(2).le.2000) go to 147
+       write (output,2060)
+ 2060  format ('0******** Table trip number is out of range, set to zero
+     &.')
+       fail = .true.
+       go to 40
+  147  ncttrp(i) = init(2)
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2061) init(2)
+ 2061  format ('0Table trip number is',i4,'.')
+   40  if (l3b(6) .lt. 3) go to 146
+       if (l3b(6) .eq. 3) init(4) = 0
+       nctalf(i) = xinit(3)
+       if (init(4) .le. 1000000000) go to 42
+       write (output,2008) l3b(1)
+ 2008  format ('0******** Parameter value in word 4 of card',i8,' is out
+     & of range.')
+       nctalf(i) = blnk
+       tfail = .true.
+       init(4) = 0
+   42  nctdpv(i) = init(4)
+       write (chwrd,'(a8)') xinit(3)
+       if (chwrd .eq. 'mflowj') then
+         write (output,2010)
+ 2010  format ('0******** Variable code mflowj not allowed.')
+         fail = .true.
+       endif
+       call scnreq (l3b(1),chwrd,init(4),-1,pckcod,conv,labl,
+     & tfail)
+       if (.not.tfail) go to 146
+       write (output,2007)
+ 2007  format ('0******** Independent variable in table assumed to be ti
+     &me.')
+       nctalf(i) = blnk
+       fail = .true.
+c  Process table.
+  146  fr = 1.0
+       if (i3 .gt. 0) go to 144
+       if (.not.uniti) fr = ft
+       go to 145
+  144  if (.not.uniti) fr = xlbsec
+       cmpopt(i) = 1
+  145  ks = filsiz(3) + 20000
+       if (lcntgs(filid(3),1) .lt. ks) go to 15
+       call ftbsft (filid(3),ks,1,l)
+       filndx(3) = l
+       ii = ii - i
+       i = ncmps(l) + l
+       l3c(6) = 1
+       call inp2 (fa(filndx(1)),cmptbl(i),l3c)
+       if (l3c(6) .le. 0) go to 57
+       if (mod(l3c(6),4) .eq. 0) go to 56
+       write (output,2052)
+ 2052  format ('0******** Number of entries for time dependent junction
+     &table is not a multiple of 4.')
+   57  l3c(6) = 4
+       cmptbl(i) = 0.0
+       cmptbl(i+1) = 0.0
+       cmptbl(i+2) = 0.0
+$if def,mmfld,1
+       cmptbl(i+3) = 0.0
+       write (output,2004)
+ 2004  format ('0******** Default table being entered.')
+       fail = .true.
+   56  ie = i + l3c(6) - 1
+       xinit(2) = cmptbl(i)
+       init(3) = 0
+$if -def,mmfld,1
+       kk = i
+       do 54 k = i,ie,4
+         if (cmptbl(k) .lt. xinit(2)) init(3) = 1
+         xinit(2) = cmptbl(k)
+$if -def,mmfld,4
+         cmptbl(kk) = cmptbl(k)
+         cmptbl(kk+1) = cmptbl(k+1)
+         cmptbl(kk+2) = cmptbl(k+2)
+         kk = kk + 3
+   54  continue
+       if (init(3) .ne. 0) then
+         write (output,2023)
+ 2023  format ('0******** Independent variable not in ascending order in
+     & table.')
+         fail = .true.
+       endif
+$if -def,mmfld,2
+       l3c(6) = (l3c(6)/4)*3
+       ie = i + l3c(6) - 1
+       cmplen(i) = l3c(6) + lens
+       cmptyp(i) = 9
+$if -def,mmfld,1
+       nctble(i) = 3
+$if def,mmfld,1
+       nctble(i) = 4
+       nctblt(i) = i3
+       nctbtn(i) = l3c(6)
+       nctbtx(i) = 1
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+$if -def,mmfld
+       write (output,2200) labl(1:16),labl1(i3+1),labl1(i3+1)
+ 2200  format ('0Tabular data'/
+     & 5x,a17,'liquid ',a8,2x,'vapor ',a8)
+       if (unito) go to 121
+       write (output,2102) labl(17:32),labl2(i3+1),labl2(i3+1),
+     & labl(33:48),labl(49:64)
+ 2102  format (5x,a17,a10,7x,a10/5x,a17/5x,a17)
+       go to 125
+  121  write (output,2103) labl(17:32),labl3(i3+1),labl3(i3+1),
+     & labl(33:48),labl(49:64)
+ 2103  format (5x,a17,a10,7x,a10/5x,a17/5x,a17)
+$endif
+$if def,mmfld
+       write (output,2200) labl(1:16),labl1(i3+1),labl1(i3+1),
+     & labl1(i3+1)
+ 2200  format ('0Tabular data'/
+     & 5x,a17,'liquid ',a8,2x,'vapor ',a8,3x,'metal ',a8)
+       if (unito) go to 121
+       write (output,2102) labl(17:32),labl2(i3+1),labl2(i3+1),
+     & labl2(i3+1),labl(33:48),labl(49:64)
+ 2102  format (5x,a17,a10,7x,a10,7x,a10/5x,a17/5x,a17)
+       go to 125
+  121  write (output,2103) labl(17:32),labl3(i3+1),labl3(i3+1),
+     & labl3(i3+1),labl(33:48),labl(49:64)
+ 2103  format (5x,a17,a10,7x,a10,7x,a10/5x,a17/5x,a17)
+$endif
+  125  continue
+       endif
+       tfail = uniti .eqv. unito
+       if (tfail) then
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &    write (output,2104) (cmptbl(k),k=i,ie)
+       endif
+$if -def,mmfld,1
+ 2104  format (1p,3g17.6)
+$if def,mmfld,1
+ 2104  format (1p,4g17.6)
+       if (uniti) go to 61
+       if (conv .gt. 0.0) conv = 1.0/conv
+$if -def,mmfld,1
+       do 130 k = i,ie,3
+$if def,mmfld,1
+       do 130 k = i,ie,4
+         if (conv .ge. 0.0) then
+           cmptbl(k) = cmptbl(k)*conv
+         else
+   43      cmptbl(k) = cmptbl(k)/1.8 - conv
+         endif
+         cmptbl(k+1) = cmptbl(k+1)*fr
+         cmptbl(k+2) = cmptbl(k+2)*fr
+$if def,mmfld,1
+         cmptbl(k+3) = cmptbl(k+3)*fr
+  130  continue
+   61  if (tfail) go to 60
+       if (.not.unito) go to 62
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2104) (cmptbl(k),k=i,ie)
+        go to 60
+$if -def,mmfld,1
+   62  do 63 k = i,ie,3
+$if def,mmfld,1
+   62  do 63 k = i,ie,4
+         if (conv .ge. 0.0) then
+           xinit(1) = cmptbl(k)*conv
+         else
+           xinit(1) = (cmptbl(k) + conv)*1.8
+         endif
+         xinit(2) = cmptbl(k+1)/fr
+         xinit(3) = cmptbl(k+2)/fr
+$if -def,mmfld,1
+         write (output,2104) (xinit(l),l=1,3)
+$if def,mmfld,3
+         xinit(4) = cmptbl(k+3)/fr
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2104) (xinit(l),l=1,4)
+   63  continue
+c  Insert new component in proper place in component block if necessary.
+   60  l3c(6) = l3c(6) + lens
+       if (cmpsrc .or. nc1.eq.0) go to 431
+       k2 = l3c(6) - nc1
+       if (k2 .le. 0) go to 438
+       k1 = filsiz(3) + k2 + l3c(6)
+       if (ks .ge. k1) go to 438
+       call ftbsft (filid(3),k1,1,filndx(3))
+       i = ncmps(filndx(3)) + filndx(3)
+  438  ii = i + ii
+       n3 = ii + nc1
+       n4 = ii + l3c(6)
+       k1 = i + l3c(6) - n3
+       if (k2) 433,432,434
+  434  k1 = -k1
+  433  call ftbmov (fa(n3+1),fa(n4+1),k1)
+       i = i + k2
+  432  call ftbmov (fa(i+1),fa(ii+1),l3c(6))
+       ncmps(filndx(3)) = ncmps(filndx(3)) + k2
+       filsiz(3) = filsiz(3) + k2 - lens
+       go to 430
+  431  ncmps(filndx(3)) = ncmps(filndx(3)) + l3c(6)
+       filsiz(3) = filsiz(3) + l3c(6) - lens
+  430  call ftbsft (filid(3),filsiz(3),1,filndx(3))
+ 1000  return
+       end

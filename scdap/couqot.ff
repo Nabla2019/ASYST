@@ -1,0 +1,131 @@
+*mlist
+*if def,selap
+       subroutine couqot (tmp,area,ih,ir5vec,qcoupl,qwgcou,gamcou,
+     & tsink,htctot,genz,porave,pdbtot,vole,powdb,powrat,ix,bg,bv,
+     & ielem,jelem,elemij)
+c
+c  Calculates the rate of heat transfer from nodes from the top surface
+c  of couple finite element mesh to the relap5 control volumes that the
+c  nodes interface.
+c
+c  Cognizant engineer: ewc.
+c
+c  This is a COUPLE ROUTINE
+*in32 ih
+*in32 ir5vec
+*in32 ix
+*in32 ielem
+*in32 jelem
+*in32 elemij
+*in32end
+c  This subroutine is called by subroutine couple.
+c
+c      tmp(i) = surface temperature of node i (k).
+c      area(n) = surface area of n-th node in convective set (m**2).
+c      ir5vec(n) = relap5 offset for n-th sequenced node in convection
+c                  set.
+c      qcoupl(n) = heat transfer rate from n-th sequenced node in
+c                  convection set to fluid in relap5 control volume (w).
+c      qwgcou(n) = heat transfer to vapor (w).
+c      gamcou(n) = volumetric vapor generation rate (kg/m**3.s).
+c      tsink(n) = sink temperature used for couple mesh to fluid
+c                 heat transfer calculation (k).
+c      htctot(n) = sum of concective and radiative heat transfer coef-
+c                  ficients at node n (w/m**2.k)
+c      powdb(n)  = power density of debris in element n
+c      pdbtot    = total power in debris bed
+c      porave = porosity of debris.
+c      ix(5,n) = material number of n-th element.
+c      bg(i) = power density at node i (W/m**3).
+c      bv(i) = volume for which power density bg(i) is applied (m**3).
+c      ielem(n)=value of i coordinate for lower left corner of
+c               element n.
+c      jelem(n)=value of j coordinate for lower left corner of
+c               element n.
+c      elemij((maxj-1)*i+j)=element whose lower left corner is located
+c                           in i-j space at i,j coordinates.
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'cons.h'
+       include 'voldat.h'
+       include 'ufiles.h'
+       include 'iparm.h'
+       include 'cmptim.h'
+       include 'scddat.h'
+       include 'hardpn.h'
+c
+c  Local variables.
+       integer i,ih(*),ir5vec(*),l,n,ndebug,nseq,ix(5,*)
+       integer ielem(*),jelem(*),elemij(*),nnd,nn
+       real area(*),gamcou(*),htctot(*),qcoupl(*),qwgcou(*),sigsb,
+     & tmp(*),tsink(*),genz(4,*),pdbtot,vole(4,*),powdb(*),porave,fac
+       real powrat(*),bg(*),bv(*),pdbnod,tflux
+c
+       data sigsb / 5.668e-8/
+c
+       if (npp .eq. 0) then
+         fac = 2.0*pi
+       else
+         fac = 1.0
+       endif
+       pdbtot = 0.0
+c  Calculate total debris power based on power at nodes.
+       pdbnod = 0.0
+       do n = 1,numnp
+         pdbnod =pdbnod + bg(n)*bv(n)
+       enddo
+       pdbnod = fac*pdbnod
+       pdbtot = pdbnod
+       thkcer(15) = thkcer(15) + pdbtot*dt
+c  If debris is porous, then heat transfer from debris to fluid is
+c  dominated by heat transfer in pores and surface heat transfer
+c  correlations are not valid.
+       nseq = 0
+       if (ncev .eq. 0) return
+       ndebug = 0
+c  thkcer(12)=total heat transfer by convection from material in
+c  COUPLE mesh to fluid modeled by RELAP5 (W).
+       thkcer(12) = 0.0
+c  thkcer(10)=rate of heat transfer off top surface of debris (W).
+       thkcer(10) = 0.0
+       do n = 1,ncev
+         i = ih(n)
+         if (i .eq. 0) cycle
+         nseq = n
+         if (ir5vec(nseq) .lt. 0) cycle
+         l = ir5vec(nseq) + filndx(4)
+         qcoupl(nseq) = fac*area(n)*htctot(nseq)*(tmp(i) - tsink(nseq))
+         thkcer(12) = thkcer(12) + qcoupl(nseq)
+         thkcer(16) = thkcer(16) + qcoupl(nseq)*dt
+c   If node is on top surface of debris bed, then add convective heat
+c   transfer to term that accumulates this total heat transfer.
+         nnd=0
+         do nn = 1,numel
+           if (ix(1,nn) .eq. i) then
+             if (ix(5,nn) .eq. 1) nnd = 1
+           endif
+           if (ix(2,nn) .eq. i) then
+             if (ix(5,nn) .eq. 1) nnd = 1
+           endif
+           if (ix(3,nn) .eq. i) then
+             if (ix(5,nn) .eq. 1) nnd = 1
+           endif
+           if (ix(4,nn) .eq. i) then
+             if (ix(5,nn) .eq. 1)nnd = 1
+           endif
+         enddo
+         if (nnd.ge.1) thkcer(10) = thkcer(10) + qcoupl(nseq)
+         if (voidf(l) .gt. 0.0001) then
+           gamcou(nseq) = qcoupl(nseq)*recipv(l)/sathg(l)
+         else
+           qwgcou(nseq) = qcoupl(nseq)
+         endif
+         if (help) write (12,"('couqot01',i10,6es13.5)")
+     &   volno(l),voidg(l),tempf(l),tempg(l),qcoupl(nseq),qwgcou(nseq),
+     &   gamcou(nseq)
+       enddo
+       return
+       end
+*endif

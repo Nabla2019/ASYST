@@ -1,0 +1,467 @@
+*mlist
+*if def,selap
+       subroutine debfpr (     ix, ihsave, idsdeb, ifpvol,
+     *             igavol,   imme, nidtop,  ielem,  jelem,
+     *     elemij, tz, delt, vole, spideb, spidmx,
+     *                afp,    bfp,    tfp,    xfp, cnstop,
+     *             neltop, nspdeb,   ncev,  numel,   maxj,
+     *             ncevr5, iptfpv, iptgav,   evol,      z,
+     *             bubnum, afsoil,    npp)
+c
+c        calculate release and inventory of fission products - aerosols
+c        for each element of stack of elements in debris bed.
+c        top of stack identified as element that has debris bed passing
+c        thru element.
+c        also provide storage for gas release models via the couple
+c        data base (a array).
+c
+c        subroutine debfpr called from subroutine couple.  subroutine
+c        debfpr is driver for subroutine gasrl that computes the aerosol
+c        release models (document: scdap/relap5 code extensions for
+c        modeling vapor source rates in savannah river plant reactors,
+c        d.l.hagrman, 1989).  sr debfpr provides the coupling between
+c        the debris bed elements and the release calculated for each
+c        element by sr gasrl.
+c
+c        k.r.katsma, october 1989
+c        modified to include srs vapor source subcode (included in
+c        subroutine gasrl) developed by don hagrman - july 1990.
+c
+c  Cognizant engineer: ewc.
+c
+c This is a COUPLE ROUTINE
+*in32 ix
+*in32 ihsave
+*in32 idsdeb
+*in32 ifpvol
+*in32 igavol
+*in32 imme
+*in32 nidtop
+*in32 ielem
+*in32 jelem
+*in32 elemij
+*in32end
+c
+         implicit none
+c
+c          tz       = temperature at corner nodes of each element
+c          ix       = array of node numbers for each element (1-4),
+c                     and if debris node (5)
+c          vole     = volume associated with each node of element
+c          ihsave   = array of convective nodes adjacent to elements
+c          nidtop   = array of elements where top of debris bed is
+c                     located
+c          idsdeb   = array defining which species are being tracked
+c          imme     = array secifying if element is empty, partially
+c                     full, or full of debris (0,1,2)
+c          ielem    = value of ith coordinate for lower left node of
+c                     element
+c          jelem    = value of jth coordinate for lower left node of
+c                     element
+c          elemij   = array of element numbers associated with lower
+c                     left coordinates
+c          ifpvol   = array of offsets to obtain relap5 volumes for
+c                     debris bed condensible aerosols (fpsrc)
+c          igavol   = array of offsets to obtain relap5 volumes for
+c                     debris bed noncondensible aerosols (gaman)
+c          neltop   = number of elements through which top of debris
+c                     bed passes (number of stacks)
+c          nspdeb   = number of fission product aerosols to be tracked
+c          numel    = number of elements in debris bed
+c          maxj     = maximun number of nodes in j direction
+c          bubnum   = number concentration of bubble sizes
+c          spideb   = two dimensional array containing the mass of each
+c                     species of each element in debris bed
+c          afp      = two dimensional array containing mass of each
+c                     specie released from each element during the
+c                     present time step - coupling between gasrl
+c                     routine and debfpr routine, storage for gasrl
+c                     routine
+c          bfp      = three dimensional array containing mass of each
+c                     specie in each of 20 buddle sizes for each
+c                     element - storage for gasrl routine
+c          tfp      = two dimensional array for total mass of each
+c                     specie for each element in  debris bed -
+c                     storage for gasrl routine
+c          xfp      = output mass of n th species, vapor or non-
+c                     condensible gas released from the volume element
+c                     during the time increment (subroutine gasrl)
+c                     storage for gasrl routine
+c          cnstop   = rayleigh number at top of pool of liquefied
+c                     debris with fission products
+c          evol(n)  = volume per radian of element n (m**3)
+c          z(j)     = height of node j (m)
+c          afsoil   = atomic fractions of soil for each element
+c          npp      = geometric code: 0 = r,z; 1 = x,y
+c
+       integer ix(5,*), ihsave(*), idsdeb(*), ifpvol(*), igavol(*),
+     *         imme(*), nidtop(*), ielem(*), jelem(*), elemij(*),
+     *         neltop, nspdeb, ncev, numel, maxj, ncevr5,
+     *         iptfpv, iptgav
+c
+       real  tz(*), delt, vole(4,*), spideb(numel,*), xfp(nspdeb,*),
+     *       afp(numel,*), bfp(numel,nspdeb,*), tfp(numel,*),
+     *       cnstop(*), evol(*), z(*), bubnum(numel,*), afsoil(*)
+      real spidmx(numel,*)
+*call fast
+*call comctl
+*call fpfast
+*call statec
+*call voldat
+*call ufiles
+*call cons
+c
+       external  gasrl, fpspix
+c
+c ******   local variables
+       integer l, n, icor, jcor, kcor, lcor, ksp, isp, i1, j1,
+     *         idyn, idynb, nb, nl, noe, jj, idxsp, kk,
+     *         i, ne, jk, ifp, iga, nk, nln, i34, ispvk,
+     *         jbub, jp1, npp, ntp
+c
+       real  sizes, sizel, topa, surfa, alydst, viscl, rhol, vconv,
+     *       nu, zustnl, dnoncl, dconcl, dnoncs, dconcs, an,
+     *       cns, tsum, tave, vsum, deltz, volne, afs,
+     *       delz, elemdz, soiden, pres, zmin, zmax
+c
+c      reserve storage for mass in each bubble size of each species.
+c      bubms1(j,k) = mass in k-th bubble size for species j (kg).
+c      storage for up to 22 species for routines gasrl-rl
+c
+       real  bubms1(22,15), afploc(22), tfploc(22), anloc(22)
+       integer idsloc(22)
+c
+       character*4   chaidx(19), sp
+       character*8   chwrd
+       save
+c
+       data chaidx / 'I2  ', 'CsI ', 'CsOH', 'Te  ', 'HI  ', 'HTe ',
+     *       'Cd  ', 'Ag  ', 'UO2 ', 'Sn  ', 'Fe  ', 'Ru  ', 'Ba  ',
+     *       'Sb  ', 'Cs  ', 'I   ', 'Zn  ', 'Xe  ', 'Kr  '/
+c
+c      the following data are set for future use with the gasrl
+c      subroutine.  some of these data may be computed in various
+c      scdap subroutines
+       data  soiden / 2170.0/
+       data  sizes/0.0/,   sizel/0.0/,   topa/0.0/,  surfa/0.0/,
+     *      alydst/0.0/,   viscl/0.0/,   rhol/0.0/,  vconv/0.0/,
+     *          nu/0.0/,  zustnl/0.0/, dnoncl/0.0/, dconcl/0.0/,
+     *      dnoncs/0.0/,  dconcs/0.0/,     an/0.0/
+c
+c      calculate release of fission products - aerosols from top element
+c      of debris bed to relap5 volumes, and change of inventory of
+c      species in stack.
+c
+c      loop over the stack of elements containing debris.  number of
+c      stacks given by 'neltop', and the top element of each stack is
+c      stored in array 'nidtop'.
+c
+       if (neltop .eq. 0) return
+c
+       do 1000 l = 1,neltop
+       n     = nidtop(l)
+c      calculate nusselt number using rayleigh number of pool.
+       if (cnstop(n) .ge. 1.0) then
+          cns = 0.909*cnstop(n)**0.233
+       else
+          cns = 1.0
+       endif
+c      calculate area exposed to fluid.
+       icor  = ix(1,n)
+       jcor  = ix(2,n)
+       kcor  = ix(3,n)
+       lcor  = ix(4,n)
+       zmax  = max(z(icor),z(jcor),z(kcor),z(lcor))
+       zmin  = min(z(icor),z(jcor),z(kcor),z(lcor))
+       deltz = zmax - zmin
+       topa  = evol(n)/deltz
+       if (npp .eq. 0) topa = twopi*topa
+c
+c      check that element contains debris
+c
+       if ( (ix(5,n).ne.1) .or. (imme(n).lt.1) ) go to 1000
+c
+c      obtain coordinates (i,j) of lower left node of this top element
+c
+       i1  = ielem(n)
+       j1  = jelem(n)
+c
+c      get offset for relap5 volume for (fpsrc) fission product source
+c      term and (gaman) noncondensible source term
+c
+       iga = 0
+       if (filid(34) .eq. 0.0) go to 110
+       do 100 i = 1,ncevr5
+       if(igavol(i) .eq. 0) go to 100
+          if (ihsave(i) .eq. ix(4,n)) then
+          ifp = ifpvol(i)
+          iga = igavol(i)
+          go to 110
+          endif
+  100  continue
+  110  continue
+c
+c      set the relap5 volume associated with stack for gas release
+c      model.  note:  if the relap5 volume is not present (iga=0),
+c      use atmospheric pressure so that the pressure passed to
+c      subroutine gasrl in not undefined.
+c
+       if (iga .ne. 0) then
+          pres = p(iga + filndx(4))
+       else
+          pres = 1.013e+05
+       endif
+c
+c      loop over the elements in this stack, top-down, that contain debr
+c
+c        elemdz is integrated length along stack for head term
+c        noe is number of elements in stack
+       elemdz = 0.0
+       noe = 0
+       do 300  jj =  j1,1,-1
+c
+c      working on top element
+       if (jj .eq. j1) then
+          ne  = n
+c
+c      working on lower element, find element number
+       else
+          idyn = (maxj-1)*i1 + jj
+          ne   = elemij(idyn)
+          if (imme(ne) .lt. 1) go to 300
+       endif
+c
+c      get corners of nth  debris element
+       icor  = ix(1,ne)
+       jcor  = ix(2,ne)
+       kcor  = ix(3,ne)
+       lcor  = ix(4,ne)
+c
+c      if debris is soil (afs > 0.1 for isv project), add the
+c      element(s) hydrostatic head(s) (rho*g*h) for each element
+c      in stack to the relap5 volume pressure.
+c
+c      set soil atomic fraction for use in subroutine rl
+       afs   = afsoil(ne)
+       if (afs .lt. 0.1) go to 150
+       zmax  = max(z(icor),z(jcor),z(kcor),z(lcor))
+       zmin  = min(z(icor),z(jcor),z(kcor),z(lcor))
+       delz  = zmax - zmin
+       if (ne .eq. n) then
+          elemdz = delz
+       else
+          elemdz = elemdz + delz
+       endif
+       pres = pres + soiden*9.80665*elemdz
+  150  continue
+c
+c
+c      evol(n) applies to 1 radian. it is multiplied by twopi to
+c      obtain actual volume of material for element ne
+c      calculate diameter of sphere equivalent to volume of element ne.
+c
+       sizes = (12.*evol(ne))**0.333333333
+       sizel = sizes
+c
+c      initialize arrays for call to sr gasrl
+       do 220 kk = 1,nspdeb
+       idsloc(kk) = idsdeb(kk)
+       afploc(kk) = 0.0
+       tfploc(kk) = spideb(ne,kk)
+          do 210 jbub = 1,15
+          bubms1(kk,jbub) = bfp(ne,kk,jbub)
+  210     continue
+  220  continue
+c
+       do 230 jbub = 1,15
+       anloc(jbub) = bubnum(ne,jbub)
+  230  continue
+c
+c      set average temperature for element
+       tsum  = tz(icor)*vole(1,ne) + tz(jcor)*vole(2,ne)
+     *       + tz(kcor)*vole(3,ne) + tz(lcor)*vole(4,ne)
+       vsum  = vole(1,ne) + vole(2,ne) + vole(3,ne) + vole(4,ne)
+       tave  = tsum/vsum
+c
+c      set the volume for the debris element (volne) and the
+c      convection velocity (vconv)
+       if (npp .eq. 0) then
+          volne = twopi * evol(ne)
+       else
+          volne = evol(ne)
+       endif
+       vconv = 0.0
+c
+c
+c      call subroutine 'gasrl' that will loop over the input number
+c      of species tracked (nspdeb) and compute the release of vapors
+c      for each of the species.
+c
+c
+       call gasrl(tave, delt, afploc, bubms1, tfploc, xfp,
+     #    sizes, sizel, topa, volne, vconv, p(iga+filndx(4)),
+     #    cns, anloc, afs, nspdeb, idsloc)
+c
+c
+c      store the number concentratioin of bubble sizes as computed
+c      in sr gasrl
+       do 240 jbub = 1,15
+       bubnum(ne,jbub) = anloc(jbub)
+  240  continue
+c
+c      update the mass of each specie residing in each bubble size
+c      as computed by sr gasrl.  ntp is element above current element.
+c
+       jp1 = jj+1
+       if (jp1 .gt. j1) go to 260
+       idyn = (maxj-1)*i1+jp1
+       ntp = elemij(idyn)
+       do 250 kk = 1,nspdeb
+       do 250 jbub = 1,15
+       bfp(ntp,kk,jbub) = bfp(ntp,kk,jbub) + xfp(kk,jbub)
+       bfp(ne,kk,jbub) = bubms1(kk,jbub)
+  250  continue
+  260  continue
+c
+c      store the mass of each specie leaving the element.
+       do 280 kk = 1,nspdeb
+       afp(ne,kk) = afploc(kk)
+  280  continue
+c
+c      count the number of elements in the debris bed stack
+       noe = noe + 1
+  300  continue
+c
+c      calculate release of fission product-aerosols from top elements
+c      in volumes of stack to adjacent relap5 volume
+c
+c      working on element nidtop(n), top element of stack in 1000 loop
+c
+c      first do release of condensible aerosol vapors to relap5
+c      volume, providing relap5 is tracking the particular aerosol.
+c      calculating the fission product source term (fpsrc)
+c
+c
+       if (filid(34) .eq. 0.0) go to 410
+       if(iga.eq.0)go to 410
+       i34 = filndx(34)
+       ispvk = fpspvk(i34)
+       do 400 kk = 1,nspdeb
+       idxsp = idsdeb(kk)
+       sp    = chaidx(idxsp)
+c
+c      idxsp = integer index of specie, sp = character set for specie
+c      if noncondensible (Xe or Kr) vapor, add to relap5 gas field
+c      through (gaman) term
+c
+c      check if noncondensible (Xe or Kr)
+       if (idxsp.eq.18 .or. idxsp.eq.19) go to 350
+c
+c      add the condensible specie to the relap5 fission product source
+c      term, providing that relap5 tracks this specie
+c      compare with relap5 species
+c
+       call fpspix (sp, ksp)
+       if (ksp .ne. 0) then
+c
+c         relap5 tracks this specie
+c         get the right offset to store in fission product source
+c         ifp set in 100 loop above for volume offset, ksp controls
+c         specie offset.  fission product source units = kg/s
+c
+          isp = ifp + i34 + (ksp-1)*ispvk
+          fpsrc(isp) = fpsrc(isp) + afp(n,kk)/delt
+       endif
+       go to 400
+c
+  350  continue
+c
+c      add non-condensible aerosol to fluid vapor term
+c      gaman(nl+i) = gaman(nl+i) + afp(n,kk)/(vol*dt)
+c      where i corresponds to offset for He, Kr, Xe, etc.
+c      offset (iga) set in 100 loop above.
+c      units of gaman are kg/(m3-s)
+c
+       nl = filndx(4) + iga
+c
+c      match up with relap5 nocondensible specie
+c
+       do 375 nk = 1,noncn
+       nln = nl + nk - 1
+       write (chwrd,'(a8)') nctype(nk)
+       if (chwrd .ne. 'krypton') go to 360
+       if (idxsp .ne. 19) go to 375
+       gaman(nln) = gaman(nln) + afp(n,kk)/(v(nl)*delt)
+       go to 400
+c
+  360  if (chwrd .ne. 'xenon') go to 375
+       if (idxsp .ne. 18) go to 375
+       gaman(nln) = gaman(nln) + afp(n,kk)/(v(nl)*delt)
+       go to 400
+  375  continue
+c
+  400  continue
+  410  continue
+c
+c
+c      now do summation of all species for all the elements to the stack
+c
+c      n  = top element number in stack
+c      i1 = lower left handl i coordinate
+c      j1 = lower left hand  j coordinate
+c
+       do 500 jj = j1,1,-1
+c
+       if (jj .eq. j1) then
+c      working on top element in stack
+          ne    = n
+          idynb = (maxj-1)*i1 + (jj-1)
+          nb    = elemij(idynb)
+          if (ix(5,nb) .ne. 1) nb = 0
+          go to 440
+c
+       elseif (jj.lt.j1 .and. jj.gt.1) then
+c      working on interior element in stack
+          idyn  = (maxj-1)*i1 + jj
+          ne    = elemij(idyn)
+          idynb = (maxj-1)*i1 + (jj-1)
+          nb    = elemij(idynb)
+          if (ix(5,nb).ne.1) nb = 0
+          if (ix(5,ne).ne.1 .or. imme(ne).lt.1) go to 500
+          go to 440
+c
+       else
+c      working on bottom element in stack
+          nb     = 0
+          idyn  = (maxj-1)*i1 + jj
+          ne    = elemij(idyn)
+          if (ix(5,ne).ne.1 .or. imme(ne).lt.1) go to 500
+       endif
+c
+  440  continue
+c
+c      do mass balance for each specie for each element.
+c      model assumption is that species can diffuse or migrate
+c      in positive upward direction only.
+c
+       do 450 jk = 1,nspdeb
+c
+c      loss of specie from element to element above or to relap5
+c      volume
+       spideb(ne,jk) = spideb(ne,jk) - afp(ne,jk)
+       if (spideb(ne,jk) .lt. 0.0) spideb(ne,jk) = 0.0
+c
+c      gain for element from debris element below
+       if (nb .ne. 0) then
+         if (spideb(nb,jk) .gt. 0.0) spideb(ne,jk) =
+     #          spideb(ne,jk) + min(afp(nb,jk),spideb(nb,jk))
+          if (spideb(ne,jk) .lt. 0.0) spideb(ne,jk) = 0.0
+       endif
+        spidmx(ne,jk) = max (spidmx(ne,jk), spideb(ne,jk))
+  450  continue
+  500  continue
+c     now do next stack
+ 1000 continue
+      return
+      end
+*endif

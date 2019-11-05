@@ -1,0 +1,191 @@
+*mlist
+       subroutine strip
+cvmqversion_stripf_latest
+!  Writes the stripf file by copying user selected information from the
+!  restart-plot file.
+!
+!  Cognizant engineer: rjw.
+!
+*in32 ird
+*in32 ibuf
+*in32end
+       use scrtch
+!
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+!
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'maxmem.h'
+       include 'ufiles.h'
+!
+       real(kr), allocatable :: pltvals(:)
+!       real(4), allocatable :: pltval4(:)
+!       integer*1, allocatable :: pltval1(:)
+       integer(8) ibufn(l_)
+       integer ibuf(l_)
+       integer, allocatable :: ipos(:)
+       character(8), allocatable :: ibufa(:)
+       integer ird(3)
+       integer(8) xrd(3)
+       equivalence (xrd(1),ird(1))
+       equivalence (ibufn(1),ibuf(1),fa(1))
+       integer i,inx,inx1,inx4,l,lx,lz,nerr
+       integer iwrd,lcntgs
+       integer(8) ia8(lfsiz)
+       real(4) ha(2,lfsiz)
+       integer(1) ia1(8,lfsiz)
+       equivalence (ia8(1),ha(1,1),ia1(1,1),fa(1))
+       real ftbnid
+       character chwrd*8
+       logical hit,hit1,hit2
+       external ftbnid,lcntgs
+!
+!  Get space for position indicators and plot record.
+       allocate (ipos(nstrip),pltvals(nstrip+2))
+       chwrd = 'plotrec'
+       read (chwrd,'(a8)') pltvals(1)
+!
+       filid(1) = ftbnid(1)
+       filsiz(1) = 3
+       call ftbrsv (filid(1),filsiz(1),-1,inx)
+
+!  Read plotinf record.
+       read (rstplt,end=74,err=62) lx,iwrd
+       read (rstplt,end=74,err=62) xrd(:)
+       write (chwrd,'(a8)') xrd(1)
+       if (chwrd .ne. 'plotinf') go to 204
+   20  if (lx .ne. 3) go to 205
+       filsiz(1) = lcntgs(filid(1),1)
+       call ftbsft (filid(1),filsiz(1),2,inx)
+$if def,fourbyt,2
+       inx4 = inx
+       inx1 = inx
+       lz = ird(2) - 1
+       if (allocated(ibufa)) deallocate (ibufa)
+       allocate (ibufa(ird(2)))
+!  Read plotalf and plotnum records.
+       read (rstplt,end=74,err=62) lx,iwrd
+       read (rstplt,end=74,err=62) ibufa(1:ird(2))
+       if (lx .ne. ird(2)) go to 102
+       write (chwrd,'(a8)') ibufa(1)
+       if (chwrd .ne. 'plotalf') go to 202
+       read (rstplt,end=74,err=62) lx,iwrd
+       read (rstplt,end=74,err=62) ibufn(1:ird(2))
+       if (lx .ne. ird(2)) go to 102
+       write (chwrd,'(a8)') ibufn(1)
+       if (chwrd .ne. 'plotnum') go to 202
+!  Set pointers by scanning plotalf-plotnum records.
+       do i = 1,nstrip
+         ipos(i) = 0
+         do l = 1,lz
+           if (ibufa(l+1).eq.plin(i)%a .and. ibuf(l+1).eq.plin(i)%n)
+     &     then
+             plin(i)%l = ior(plin(i)%l,ishft(1,24))
+             ipos(i) = l
+             exit
+           endif
+         enddo
+       enddo
+   10  continue
+       read (rstplt,end=12,err=10) lx,iwrd
+$if def,fourbyt
+       if (iwrd .eq. 1) then
+         read (rstplt,end=12,err=10) ia1(8,inx1:inx1+lx-1)
+       elseif (iwrd .eq. 4) then
+         read (rstplt,end=12,err=10) ha(2,inx4:inx4+lx-1)
+       else
+         read (rstplt,end=12,err=10) ia8(inx:inx+lx-1)
+       endif
+$endif
+$if -def,fourbyt
+       read (rstplt,end=12,err=10) ia8(inx:inx+lx-1)
+$endif
+       write (chwrd,'(a8)',err=10) ia8(inx)
+       if (chwrd .eq. 'plotinf') then
+         write (chwrd,'(a8)') ia8(inx+1)
+         read (chwrd,'(a8)') xrd(2)
+         write (chwrd,'(a8)') ia8(inx+2)
+         read (chwrd,'(a8)') xrd(3)
+         go to 20
+       endif
+       if (chwrd .ne. 'plotrec') go to 10
+       if (ird(3) .ne. 0) then
+         if (lx .ne. ird(3)) go to 102
+         call unsqoz (ia8(inx+1),ia8(inx+1),lz)
+       else
+         if (lx .ne. ird(2)) go to 102
+       endif
+       pltvals(2) = fa(inx+1)
+       do i = 1,nstrip
+         if (ipos(i) .eq. 0) then
+           pltvals(i+2) = 0.0
+         else
+           pltvals(i+2) = fa(inx+ipos(i))
+         endif
+       enddo
+       if (iand(print,15) .ne. 0) then
+         if (print .eq. 1) then
+           write (stripf,"(a10,5x,100es15.6)",iostat=nerr) pltvals(:)
+         elseif (print .eq. 4) then
+           write (stripf,"(es15.6,00(',',es15.6))",iostat=nerr) 
+     & pltvals(2:)
+         endif
+         if (nerr .ne. 0) go to 101
+       else
+         write (stripf) pltvals(:)
+       endif
+       go to 10
+!  End of rstplt file reached.
+   12  continue
+       close (unit=stripf)
+       hit1 = .false.
+       hit2 = .false.
+       do i = 1,nstrip
+         hit = iand(plin(i)%l,ishft(1,24)) .ne. 0
+         hit1 = hit1 .or. hit
+         hit2 = hit2 .or. .not.hit
+       enddo
+       if (.not.hit1) then
+         write (output,"('0$$$$$$$$ None of the strip request variables 
+     &were found on the rstplt file.')")
+       else
+         if (hit2) then
+           write (output,"('0The following strip request variables were 
+     &not found on the rstplt file.'/
+     & ' req.num.    variable code    parameter')")
+           do i = 1,nstrip
+             if (iand(plin(i)%l,ishft(1,24)) .ne. 0) cycle
+             l = iand(plin(i)%l,not(ishft(1,24)))
+             write (output,"(i9,4x,a10,i16)") l,plin(i)%a,plin(i)%n
+           enddo
+         endif
+       endif
+       write (output,"('0Successful end of strip processing.')")
+       write (tty,"('Successful end of strip processing.')")
+       go to 1000
+!
+  101  write (output,"('0******** Write error on stripf file.')")
+       go to 201
+  102  write (output,"('0******** A plotalf, plotnum, or plotrec record 
+     &on rstplt has the wrong length.')")
+       go to 201
+   62  write (output,"('0******** Parity error on file rstplt reading pl
+     &otalf or plotnum record.')")
+       go to 201
+   74  write (output,"('0******** Eof on file rstplt before reading plot
+     &alf or plotnum record.')")
+       go to 201
+  202  write (output,"('0******** Record label should be plotalf or plot
+     &num butis not.')")
+       go to 201
+  204  write (output,"('0******** Plotinf record not read when it should
+     & have been read.')")
+       go to 201
+  205  write (output,"('0******** Plotinf record is wrong length.')")
+  201  fail = .true.
+!
+ 1000  if (allocated(ibufa)) deallocate (ibufa,pltvals,ipos)
+       return
+       end

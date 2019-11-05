@@ -1,0 +1,105 @@
+*mlist
+       subroutine pvmrcv
+c
+c  Manages data i/o for processes coupled through PVM.
+c
+c  Cognizant engineer:
+c
+*if def,pvmcoupl
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'ufiles.h'
+       include 'r5pvmcp.h'
+       include 'pvmvr5.h'
+c  Local variables.
+       integer msgtag,idx,msgs,msgr,j,i,bufid,offs
+       integer msgs1,msgr1
+       real*8 grab
+       real dmd1,dmd2,fq
+!
+       idx = filndx(31)
+       msgs = nr5ccp(idx)
+       msgr = nr5ccp(idx+1)
+       offs = nr5ccp(idx+2)
+       idx1 = idx + offs
+c
+c   Receive and store incoming data.
+c
+c   For Relap to Relap msgr and msgs should be consistant
+c   with msgs and msgr on the other process
+c
+c   If timeho = -1.0, this is the first time through coding
+c   If chdprc - 1, this is a RELAP to RELAP coupling
+c
+c   For RELAP to RELAP coupling, this is dummy coding, both
+c   input models need the similar coupling input
+c
+       if(chdprc .eq. 1 .and. timeho .eq. -1.0) then
+          call pvmfxrecv(chdtid,0,bufid)
+          call pvmffreebuf(bufid,info)
+          call pvmfinitsend(0,info)
+          call pvmfpack(3,0,1,1,info)
+          call pvmfsend(chdtid,0,info)
+c
+          call pvmfxrecv(chdtid,1,bufid)
+          call pvmfunpack(3,msgs1,1,1,info)
+          call pvmfunpack(3,msgr1,1,1,info)
+          call pvmffreebuf(bufid,info)
+          call pvmfinitsend(1,info)
+          call pvmfpack(3,0,1,1,info)
+          call pvmfsend(chdtid,1,info)
+          if (msgs1 .gt. 0) then
+             do i = 1,msgs1
+                call pvmfxrecv(chdtid,2,bufid)
+                call pvmffreebuf(bufid,info)
+                call pvmfinitsend(1,info)
+                call pvmfpack(3,0,1,1,info)
+                call pvmfsend(chdtid,2,info)
+             enddo
+c
+c    Initialize variable used in modifying tmdpvol and tmdpjun
+             do  i = 1,msgs1
+                j = idx1 + (msgr1 + i - 1)*10
+                recvar(i) = fa(filndx(nr5cin(j)) + nr5cin(j+1))
+             enddo
+          endif
+          if (msgr1 .gt. 0) then
+             do i=1,msgr1
+                j = i + msgs1
+                call pvmfxrecv(chdtid,3,bufid)
+                call pvmffreebuf(bufid,info)
+                call pvmfinitsend(1,info)
+                call pvmfpack(3,0,1,1,info)
+                call pvmfsend(chdtid,3,info)
+             enddo
+          endif
+       endif
+c
+c  Test to see if it is time to receive data from coupled code
+       fq = fr5cfq(idx)
+       if (fq .eq. 0.0) fq = dthy
+       dmd1 = mod(timehy,1.000001*fq)
+       dmd2 = mod(timehy+dthy,1.000001*fq)
+       if( (dmd2 .le. dmd1 .or. dmd1 .eq. 0.0)
+     & .and. msgr .ne. 0) then
+c
+c  Receive data for msgr variables
+          if(msgr .gt. 0) then
+             do i = 1,msgr
+                j = idx1 + (msgs + i - 1)*10
+                msgtag = nr5cmt(j)
+                call pvmfxrecv(chdtid,msgtag,info)
+                if (pvmerr .lt. 0) return
+                call pvmfunpack(6,grab,1,1,info)
+                recvar(i) = grab
+                call pvmfinitsend(1,info)
+                call pvmfpack(3,0,1,1,info)
+                call pvmfsend(chdtid,msgtag,info)
+             enddo
+          endif
+       endif
+*endif
+       return
+       end

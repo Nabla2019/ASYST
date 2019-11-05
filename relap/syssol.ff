@@ -1,0 +1,228 @@
+*mlist
+       subroutine syssol (isol,ilsw)
+c
+c  Solves system of equations using sparse matrix subroutines.
+c
+c  Cognizant engineer: rjw.
+c
+       use lpdatc
+$if def,ma28,2
+       use ma28mod, only: idispc,irncp,icncp,minirn,minicn,numnz,
+     & num,large,rmin,big,themax
+       implicit none
+       integer isol
+       logical ilsw
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'jundat.h'
+!
+       interface 
+!
+       subroutine ma28ad (n,nz,a,licn,irn,lirn,icn,u,ikeep,iw,w,iflag)
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer n,nz,licn,lirn,iflag
+       real(kr) a(:),u,w(:)
+       integer icn(:),ikeep(:,:),irn(:),iw(:,:)
+       end subroutine ma28ad
+!
+       subroutine ma28bd (n,nz,a,licn,ivect,jvect,icn,ikeep,iw,w,
+     & iflag)
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer iflag,licn,n,nz
+       real(kr) a(:),w(:)
+       integer icn(:),ikeep(:,:),ivect(:),iw(:,:),jvect(:) 
+       end subroutine ma28bd
+!
+       subroutine ma28cd  (n,a,licn,icn,ikeep,rhs,w,mtype)
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer licn,mtype,n
+       real(kr) a(:),rhs(:),w(:)
+       integer icn(:),ikeep(:,:)
+       end subroutine ma28cd
+!
+       subroutine pminvd (a,ind,iw,n,np,g,ux,ia)
+$if def,in32,1
+       implicit none
+       integer n,np,ia
+       real a(:),g,ux
+       integer ind(:,:),iw(:,:)
+       end subroutine pminvd
+!
+       subroutine pminvf (a,irn,ip,n,np,agro)
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer n,np
+       real(kr) a(:),agro
+       integer irn(:),ip(:,:)
+       end subroutine pminvf
+!
+       subroutine pminvr (a,irn,ip,n,np,aws,name)
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer n,np
+       real(kr) a(:),aws(:)
+       integer irn(:),ip(:,:)
+       external name
+       end subroutine pminvr
+!
+       subroutine pminvx (a,irn,ip,n,np,aws,avect,mtype)
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer mtype,n,np
+       integer irn(:),ip(:,:)
+       real(kr) a(:),aws(:),avect(:)
+       end subroutine pminvx
+!
+       end interface
+!
+       include 'scrtch.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       real resid,w(1)
+       equivalence (w(1),fa(1))
+       integer i,ii,ix2,j,k,m,matrxi,n
+       integer lcn,ln,lnz,lrn
+       logical rept
+       external pset
+c
+       matrxi = matrix
+       if (matrix .eq. 3) then
+         matrxi = 1
+$if def,ma28,1
+         if (.not.chngno(33)) matrix = 1
+$if -def,ma28,1
+         matrix = 1
+       endif
+$if def,ma28,1
+       if (.not.chngno(33)) then
+c  Set up calls to sparse matrix subroutines.
+         if (ilsw) then
+           do
+             if (lpdat(issys)%sflag(matrxi)) then
+               do i = 1,lpdat(issys)%nnz(matrxi)
+                 irnx(i,1) = lpr(issys,matrxi)%irnr(i)
+               enddo
+               do i = 1,lpdat(issys)%nvrp(matrxi)
+                 maipx(i,1) = lpr(issys,matrxi)%ipr(i)
+               enddo
+               ix2 = lpr(issys,matrxi)%ipr(lpdat(issys)%nvrp(matrix))
+               call pminvd (coefp,irnx,maipx,lpdat(issys)%nvr(matrxi),
+     &         lpdat(issys)%nvrp(matrxi),gerr,
+     &         0.25,lpdat(issys)%nnz2(matrxi))
+               if (gerr .ge. 0.0) then
+                 do j = 1,5
+                   do i = 1,lpdat(issys)%nvrp(matrxi)
+                     lpr(issys,matrxi)%ip(i,j) = maipx(i,j)
+                   enddo
+                 enddo
+                 do i = 1,lpdat(issys)%nnz2(matrxi)
+                   lpr(issys,matrxi)%irn(i) = irnx(i,1)
+                 enddo
+                 lpdat(issys)%sflag(matrxi) = .false.
+                 write (output,"('0Number of elements in sparse matrix',
+     & i2,': original =', i5,', factored =',i5,5x,'roundoff error =',
+     & 1p,e17.6,5x,'ncount =',i7)") matrix,ix2,
+     &           lpr(issys,matrxi)%ip(lpdat(issys)%nvrp(matrxi),1),
+     &           gerr,ncount
+                 lpdat(issys)%gerrs(matrxi) = 8.0*gerr
+                 coefpx => coefp
+                 mtype = 1
+               else
+                 if (help .ge. 0) help = 1
+                 mtype = 0
+               endif
+c
+             else
+               call pminvr (coefx,lpr(issys,matrxi)%irn,
+     &         lpr(issys,matrxi)%ip,lpdat(issys)%nvr(matrxi),
+     &         lpdat(issys)%nvrp(matrxi),ma28w,pset)
+               call pminvf (coefx,lpr(issys,matrxi)%irn,
+     &         lpr(issys,matrxi)%ip,lpdat(issys)%nvr(matrxi),
+     &         lpdat(issys)%nvrp(matrxi),gerr)
+               rept = .false.
+               if (gerr .lt. 0.0) then
+                 lpdat(issys)%sflag(matrxi) = .true.
+                 rept = .true.
+               else
+                 if (gerr .ge. lpdat(issys)%gerrs(matrxi)) then
+                   lpdat(issys)%sflag(matrxi) = .true.
+                   if (gerr .gt. 8.0*lpdat(issys)%gerrs(matrxi))
+     &             rept = .true.
+                 endif
+               endif
+               if (rept) cycle
+               coefpx => coefx
+               mtype = 1
+             endif
+             exit
+           enddo
+         endif
+         if (mtype .ne. 0) then
+           n = 2
+           call pminvx (coefpx,lpr(issys,matrxi)%irn,
+     &     lpr(issys,matrxi)%ip,lpdat(issys)%nvr(matrxi),
+     &     lpdat(issys)%nvrp(matrxi),ma28w,sourcp,n)
+         endif
+$if def,ma28
+       else
+         idispc = ma28idisp(:,issys,matrix)
+         if (ilsw) then
+           lrn = lpdat(issys)%lirn(matrxi)
+           lcn = lpdat(issys)%llicn(matrix)
+           lnz = lpdat(issys)%nnz(matrxi)
+           ln = lpdat(issys)%nvr(matrxi)
+           do
+             do i = 1,ln
+               do j = lpr(issys,matrxi)%ipr(i),
+     &         lpr(issys,matrxi)%ipr(i+1)-1
+                 ma28irn(j) = i
+               enddo
+             enddo
+             if (lpdat(issys)%mflag(matrix)) then
+               ma28p(issys,matrix)%icn(1:lnz) =
+     &         lpr(issys,matrxi)%irnr(1:lnz)
+               call ma28ad (ln,lnz,coefp,lcn,ma28irn,
+     &         lrn,ma28p(issys,matrix)%icn,0.1,
+     &         ma28p(issys,matrix)%ikeep,ma28iw,ma28w,m)
+               lpdat(issys)%mflag(matrix) = .false.
+               ma28idisp(:,issys,matrix) = idispc
+cc     write (12,"(a,i5,3i3,9i6/5x,4es13.5)") 'ma28a',ncount,issys,
+cc   & matrix,m,idispc,irncp,icncp,minirn,minicn,numnz,num,large,
+cc   & rmin,big,themax,ma28w(1)
+               if (m .ne. 0) stop 'syssol-1'
+             else
+               ma28jvect(1:lnz) = lpr(issys,matrxi)%irnr(1:lnz)
+               ma28as(1:lnz) = coefp(1:lnz)
+               call ma28bd (ln,lnz,coefp,lcn,ma28irn,
+     &         ma28jvect,ma28p(issys,matrix)%icn,
+     &         ma28p(issys,matrix)%ikeep,ma28iw,ma28w,m)
+cc     write (12,"(a,i5,3i3,9i6/5x,4es13.5)") 'ma28b',ncount,issys,
+cc   & matrix,m,idispc,irncp,icncp,minirn,minicn,numnz,num,large,
+cc   & rmin,big,themax,ma28w(1)
+               if (m .ne. 0) then
+                 lpdat(issys)%mflag(matrix) = .true.
+                 coefp(1:lnz) = ma28as(1:lnz) 
+                 cycle
+               endif
+             endif 
+             exit
+           enddo
+         endif
+         call ma28cd (ln,coefp,lcn,ma28p(issys,matrix)%icn,
+     &   ma28p(issys,matrix)%ikeep,sourcp,ma28w,1)
+       endif
+$endif
+c
+c  Debug printout.
+$if def,dbgprnt
+       if (help.eq.0 .or. iand(ihlppr(2),ishft(1,3)).eq.0) return
+       call helphd ('syssol',8)
+       write (output,"('0Solution array '/1x,122('=')/
+     & 8x,'sourcp(i), sourcp(i+1), sourcp(i+2), etc.'/1x,122('='))")
+       write (output,"(6x,5es20.12)")
+     & (sourcp(k),k=1,lpdat(issys)%nvr(matrxi))
+       write (output,"('0Singularity parameter (if gerr .lt. 0.0, the ma
+     &trix solution is singular)'/1x,'gerr =',1p,g13.5)") gerr
+$endif
+       return
+       end

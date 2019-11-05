@@ -1,0 +1,228 @@
+       module ma28mod
+!
+       implicit none
+       integer, parameter, private :: kr=selected_real_kind(12,200)
+       integer :: lp=0,mp=0
+       logical :: grow=.true.,lblock=.true.
+!
+! lp,mp  Used by the subroutine as the unit numbers for its warning
+!        and diagnostic messages. Default value for both is 6 (for
+!        line printer output). The user can either reset them to a
+!        different stream number or suppress the output by setting
+!        them to zero. While lp directs the output of error diagnostics
+!        from the principal subroutines and internally called
+!        subroutines, mp controls only the output of a message which
+!        warns the user that he has input two or more non-zeros a(i),
+!        . . ,a(k) with the same row and column indices. The action
+!        taken in this case is to proceed using a numerical value of
+!        a(i)+...+a(k). In the absence of other errors, iflag will
+!        equal -14 on exit.
+! grow  If it is left at its default value of .true., then on return
+!       from ma28ad or ma28bd, w(1) will give an estimate (an upper
+!       bound) of the increase in size of elements encountered during
+!       the decomposition. If the matrix is well scaled, then a high
+!       value for w(1), relative to the largest entry in the input
+!       matrix, indicates that the lu decomposition may be inaccurate
+!       and the user should be wary of his results and perhaps increase
+!       u for subsequent runs. We would like to emphasise that this
+!       value only relates to the accuracy of our lu decomposition and
+!       gives no indication as to the singularity of the matrix or the
+!       accuracy of the solution. This upper bound can be a significant
+!       overestimate particularly if the matrix is badly scaled. If an
+!       accurate value for the growth is required, lbig (q.v.) should
+!       be set to .true.
+! lblock  Controls an option of first preordering the matrix to block
+!         lower triangular form (using Harwell subroutine mc23a). The
+!         preordering is performed if lblock is equal to its default
+!         value of .true. If lblock is set to .false., the option is
+!         not invoked and the space allocated to ikeep can be reduced
+!         to 4*n+1.
+!
+       real(kr) :: eps=1.0e-4_kr,rmin,resid
+       integer icncp,irank,irncp,minicn,minirn
+       logical :: abort1=.true.,abort2=.true.
+!
+! eps,rmin  If, on entry to ma28bd, eps is less than one, then rmin will
+!           give the smallest ratio of the pivot to the largest element
+!           in the corresponding row of the upper triangular factor thus
+!           monitoring the stability of successive factorizations. If
+!           rmin becomes very large and w(1) from ma28bd is also very
+!           large, it may be advisable to perform a new decomposition
+!           using ma28ad.
+! eps  It is used to test for small pivots. Its default value is 1.0d-4.
+!      If the user sets eps to any value greater than 1.0, then no check
+!      is made on the size of the pivots. Although the absence of such
+!      a check would fail to warn the user of bad instability, its
+!      absence will enable ma30bd to run slightly faster. An a
+!      posteriori check on the stability of the factorization can be
+!      obtained from mc24ad.
+! rmin  Gives the user some information about the stability of the
+!       decomposition. At each stage of the lu decomposition the
+!       magnitude of the pivot apiv is compared with the largest
+!       off-diagonal entry currently in its row (row of u), rowmax say.
+!       If the ratio min (apiv/rowmax) where the minimum is taken over
+!       all the rows, is less than eps then rmin is set to this minimum
+!       value and iflag is returned with the value +i where i is the
+!       row in which this minimum occurs. If the user sets eps greater
+!       than one, then this test is not performed. In this case, and
+!       when there are no small pivots rmin will be set equal to eps.
+! resid  In the case of singular or rectangular matrices, its final
+!        value will be equal to the maximum residual for the unsatisfied
+!        equations; otherwise its value will be set to zero.
+! irncp,icncp  Monitor the adequacy of "elbow room" in irn and a/icn
+!              respectively. If either is quite large (say greater than
+!              n/10), it will probably pay to increase the size of the
+!              corresponding array for subsequent runs. If either is
+!              very low or zero then one can perhaps save storage by
+!              reducing the size of the corresponding array.
+!              irncp is the number of compresses on irn. icncp is the
+!              number of compresses on a/icn.
+! minirn,minicn  In the event of a successful return (iflag ge 0 or
+!                iflag=-14) give the minimum size of irn and a/icn
+!                respectively which would enable a successful run on an
+!                identical matrix. On an exit with iflag equal to -5,
+!                minicn gives the minimum value of icn for success on
+!                subsequent runs on an identical matrix. In the event of
+!                failure with iflag= -6, -4, -3, -2, or -1, then minicn
+!                and minirn give the minimum value of licn and lirn
+!                respectively which would be required for a successful
+!                decomposition up to the point at which the failure
+!                occurred.
+! minirn  After a successful call to ma30ad, indicates the minimum
+!         length to which irn can be reduced while still permitting a
+!         successful decomposition of the same matrix. If, however, the
+!         user were to decrease the length of irn to that size, the
+!         number of compresses (irncp) may be very high and quite
+!         costly. If lirn is not large enough to begin the decomposition
+!         on a diagonal block, minirn will be equal to the value
+!         required to continue the decomposition and iflag will be set
+!         to -3 or -6. a value of lirn slightly greater than this (say
+!         about n/2) will usually provide enough space to complete the
+!         decomposition on that block. In the event of any other
+!         failure, minirn gives the minimum size of irn required for a
+!         successful decomposition up to that point.
+! minicn  After a successful call to ma30ad, indicates the minimum size
+!         of licn required to enable a successful decomposition. In the
+!         event of failure with iflag= -5, minicn will, if abort3 is
+!         left set to .false., indicate the minimum length that would be
+!         sufficient to prevent this error in a subsequent run on an
+!         identical matrix. Again the user may prefer to use a value of
+!         icn slightly greater than minicn for subsequent runs to avoid
+!         too many conpresses (icncp). In the event of failure with
+!         iflag equal to any negative value except -4, minicn will give
+!         the minimum length to which licn could be reduced to enable a
+!         successful decomposition to the point at which failure
+!         occurred. Notice that on a successful entry, idispc(2) gives
+!         the amount of space in a/icn required for the decomposition
+!         while minicn will usually be slightly greater because of the
+!         need for "elbow room". If the user is very unsure how large
+!         to make licn, the variable minicn can be used to provide that
+!         information. a preliminary run should be performed with
+!         abort3 left set to .false. and licn about 3/2 times as big as
+!         the number of non-zeros in the original matrix. Unless the
+!         initial problem is very sparse (when the run will be
+!         successful) or fills in extremely badly (giving an error
+!         return with iflag equal to -4), an error return with iflag
+!         equal to -5 should result and minicn will give the amount of
+!         space required for a successful decomposition.
+! irank  Gives an upper bound on the rank of the matrix. On an exit with
+!        iflag equal to 0, this will be equal to n.
+! abort1  Default value .true.. If abort1 is set to .false., then ma28ad
+!         will decompose structurally singular matrices (including
+!         rectangular ones).
+! abort2  Default value .true.. If abort2 is set to .false., then ma28ad
+!         will decompose numerically singular matrices.
+!
+       integer idispc(2)
+!
+! idispc  on output from ma28a/ad, the indices of the diagonal blocks of
+!         the factors lie in positions idispc(1) to idispc(2) of a/icn.
+!         This array must be preserved between a call to ma28ad and
+!         subsequent calls to ma28bd, ma28cd or ma28id.
+!
+       real(kr) :: big=0.0,cgce=0.5_kr,dres,dxmax,errmax,themax,
+     & tol=0.0_kr
+       integer :: ndrop,maxit=16,noiter,nsrch=32768,istart=0
+       logical :: lbig=.false.
+!
+! big  If lbig has been set to .true., big will hold the largest entry
+!      encountered during the factorization by ma28ad or ma28bd.
+! cgce  It is used by ma28id to check the convergence rate. If the
+!       ratio of successive corrections is not less than cgce then we
+!       terminate since the convergence rate is adjudged too slow.
+! dres  On exit from ma28id, if maxit is positive, dres will be set to
+!       the largest component of the residual.
+! dxmax  On exit from ma28id, dxmax will be set to the largest component
+!        of the solution.
+! errmax  On exit from ma28id, if maxit is positive, errmax will be set
+!         to the largest component in the estimate of the error.
+! themax  On exit from ma28ad, it will hold the largest entry of the
+!         original matrix.
+! tol  If it is set to a positive value, then any non-zero whose modulus
+!      is less than tol will be dropped from the factorization. The
+!      factorization will then require less storage but will be
+!      inaccurate. After a run of ma28ad with tol positive it is not
+!      possible to use ma28bd and the user is recommended to use ma28id
+!      to obtain the solution. The default value for tol is 0.0.
+! ndrop  If tol has been set positive, on exit from ma28ad, ndrop will
+!        hold the number of entries dropped from the data structure.
+! maxit  It is the maximum number of iterations performed by ma28id. It
+!        has a default value of 16.
+! noiter  It is set by ma28id to the number of refinement iterations
+!         actually used.
+! nsrch  If nsrch is set to a value less than n, then a different pivot
+!        option will be employed by ma28ad. This may result in different
+!        fill-in and execution time for ma28ad. If nsrch is less than
+!        or equal to n, the workspace array iw can be reduced in length.
+!        The default value for nsrch is 32768.
+! istart  If istart is set to a value other than zero, then the user
+!         must supply an estimate of the solution to ma28id. The default
+!         value for istart is zero.
+! lbig  If lbig is set to .true., the value of the largest element
+!       encountered in the factorization by ma28ad or ma28bd is returned
+!       in big. Setting lbig to .true. will increase the time for ma28ad
+!       marginally and that for ma28b/bd by about 20%. The default value
+!       for lbig is .false.
+!
+       real(kr) big1,tol1
+       integer ndrop1,nsrch1
+       logical lbig1
+!
+       logical :: abort3=.false.,aborta,abortb
+       integer nlp
+!
+!  abort3  Variable not referenced by ma28ad. Default value is .false..
+!          If abort3 is .true. then the subroutine will exit immediately
+!          when the available space in a/icn is filled up by the
+!          previously decomposed, active, and undecomposed parts of the
+!          matrix.
+!  aborta,abortb  Variables used to communicate values of abort1 and
+!                 abort2 to ma30ad.
+!  nlp,mlp Integer  Unit number for messages from ma30ad and mc23ad
+!          resp. Set by ma28ad to value of lp.
+!
+       integer micn,micncp,mirank,mirn,mirncp
+!
+!  mirncp,micncp,mirank,mirn,micn  Variables used to communicate
+!        between ma30fd and ma28fd values of above named variables with
+!        somewhat similar names.
+!
+       logical :: abort=.false.
+       integer large,mlp,num,numnz
+!
+!  abort  Used to communicate value of abort1.
+!  large  Size of largest diagonal block.
+!  num    Number of diagonal blocks.
+!  numnz  Structural rank of matrix.
+!
+       integer ianpiv,iavpiv,kountl,lnpiv(10),lpiv(10),manpiv,mapiv
+!
+       real(kr) mresid
+!
+!  mresid  Used in place of resid in some subroutines.
+!
+       real(kr) meps,mrmin
+!
+!  meps,mrmin  Used by subroutine ma28bd to communicate with ma28fd and
+!  ma30gd.
+       end module ma28mod

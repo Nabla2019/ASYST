@@ -1,0 +1,123 @@
+*mlist
+       subroutine cournt (icoran,dtx)
+*in32 jecf
+*in32end
+c  Compute minimum Courant limit.
+c  This is essentially the Courant coding from the original dtstep.
+c
+c  Cognizant engineer: gam
+c
+       use statcc
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'statec.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       real dtxmin,dtnm(5),dtx,factor
+       integer isave,icoran,j,jecf(5),k,m,nd
+c
+c  j is the index to the statictics storage (statc.h)
+       j = 1
+c
+c  Set up storage for 5 bins for minimum Courant dt.
+       do k = 1,5
+         dtnm(k) = 1.0e75
+         jecf(k) = j
+       enddo
+c  isave is a dummy index.
+       isave = 1
+c  k is the index to the volume data storage (voldat.h).
+       k = filndx(4)
+       do m = 1,nvols(k)
+         if (iand(vctrl(k),1) .eq. 0) then
+c  Then only do non time-dependent volumes.
+           dtxmin = 1.0e75
+           factor = max(voidf(k),voidg(k))
+           do nd = 0,2
+             if (iand(imap(k+nd),16384) .ne. 0) then
+c  Then only do active directions for each volume.
+c  Here dtx is the recipical of the Courant time step without the dx.
+$if def,mmfld,1
+               if (nonmf .eq. 0) then
+                 dtx = max(abs(voidf(k)*velf(k+nd)),
+     &           abs(voidg(k)*velg(k+nd)))/factor
+$if def,mmfld,4
+               else
+                 dtx = max(abs(voidf(k)*velf(k)),abs(voidg(k)*velg(k)),
+     &           abs(voidm(k)*velmt(k)))/max(voidf(k),voidg(k),voidm(k))
+               endif
+               if (dtx .ge. 1.0e-78) then
+c  Here dtx is the Courant limit.
+                 dtx = dl(k+nd)/dtx
+                 dtxmin = min(dtxmin,dtx)
+               endif
+             endif
+           enddo
+           if (dtxmin .lt. dtnm(isave)) then
+             jecf(isave) = j
+             dtnm(isave) = dtxmin
+           endif
+           isave = isave + 1
+           if (isave .gt. 5) isave = 1
+         endif
+         j = j + 1
+         k = k + ivskp
+       enddo
+c
+c  Sort the five bins that contain the min Courant dt in increasing
+c  order. Keep track of corresponding pointer to stat block for each
+c  vol in jec.
+c
+       do j = 1,4
+         dtn = dtnm(j)
+         isave = j
+         m =j + 1
+         do k = m,5
+           if (dtnm(k) .lt. dtn) then
+             dtn = dtnm(k)
+             isave = k
+           endif
+         enddo
+         if (isave .ne. j) then
+           dtnm(isave) = dtnm(j)
+           dtnm(j) = dtn
+           m = jecf(isave)
+           jecf(isave) = jecf(j)
+           jecf(j) = m
+         endif
+       enddo
+c
+c  Set dtn to minimum Courant limit so it is in the plot file.
+       dtn = dtnm(1)
+       if (dtn .ne. 1.0e75) then
+c  Increment number of times this volume had smallest Courant dt.
+         statv(jecf(1))%stscl2 = statv(jecf(1))%stscl2 + 1
+c  Set dtx to second smallest Courant limit for next time step.
+         dtx = dtnm(icoran)
+c  Factor is used to increase Courant limit for ss or nearly implicit.
+         factor = 20.0
+         if (ishft(iroute,-6) .eq. 1) factor = 40.0
+c  640 is 512 + 128.
+         if (iand(print,640).ne.0) dtx = factor*dtx
+       else
+         dtx = dtn
+       endif
+c
+       if (iand(print,512) .eq. 0) then
+         if (dt .gt. dtx) then
+c  Increment number of times dt was reduced by Courant limit in this
+c  major print interval.
+           statv(jecf(icoran))%strcl2 = statv(jecf(icoran))%strcl2 + 1
+         endif
+       else
+c  For on-line selection of time integration, increment number of times
+c  semi-implicit scheme was used in this major print interval.
+         if (dt .le. dtn)
+     &   statv(jecf(icoran))%strcl2 = statv(jecf(icoran))%strcl2 + 1
+       endif
+       return
+       end

@@ -1,0 +1,394 @@
+       subroutine pminvd (a,ind,iw,n,np,g,ux,ia)
+       use pminve
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer n,np,ia
+       real(kr) a(:),g,ux
+       integer ind(:,:),iw(:,:)
+       include 'efiless.h'
+       include 'efilesd.h'
+!
+       interface
+!
+       subroutine pminv1 (a,ind,ip,n,np,res,is)
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer n,np
+       real(kr) a(:),res(:,:)
+       integer ind(:),ip(:,:),is
+       end subroutine pminv1
+!
+       subroutine pminv4 (tab,indx,n)
+       integer n
+       integer tab(:),indx(:)
+       end subroutine pminv4
+!
+       end interface
+!
+!  Local variables.
+       real(kr) :: a1,a2,amax,au,eps,u,ww(n+1,4)
+       integer i,i0,i1,i2,ig,ik(2),ic(2),icost,il,ip,ipos,ir,j,j1,jc(2),
+     & jcol,jcost,ji,jj,jl,jp(2),jpos,jr,jro,k,k1,k2,ka,kcost,ki,kk,kl,
+     & klast,km,ko,kp,l,l3,lm,m,n1,nz
+       character errmsg*43
+       character rowcol(2)*6
+       data rowcol/'row','column'/
+c  eps is the relative accuracy of floating-point computation.
+       data eps/1.0e-12/
+       data errmsg/'0******** Error return from pminvd because '/
+c
+c  Matrix elements are held in a(k),k=1,2....,ka.
+c  On entry ind(k,1) holds the row number of the element held in
+c  a(k). In the main body of the subroutine ind(k,1),ind(k,2) hold the
+c  address of the next element in the row/column if there is one and
+c  for the last element in the row/column hold (ia+ the row/column
+c  number). These numbers are negated if they point to elements that
+c  have been in a pivotal column/row. Finally ind(k,1) is reset to the
+c  row number of the element held in a(k).
+c     on entry and on exit iw(i,1) contains the address of the first
+c element of column i and iw(n+1,1) contains the address of the first
+c unused element in a.  on exit iw(i,2) holds the column numbers in
+c pivotal order. after a successful entry iw(n+1,2)=n+1 and iw(n+1,3)=0;
+c after an unsuccessful entry iw(n+1,2)=0.  in the main body of the
+c subroutine iw(i,1),iw(i,2) hold the address of the first element of
+c the i th row/column and are negated if the first element has been
+c in a pivotal column/row.
+c     iw(i,3),iw(i,4) hold the logs to base 2 of the row/column
+c scaling factors used.
+c     iw(i,5),iw(i,6) hold the position in the ordering by number of
+c non-zeros of the last row/column to have less than i non-zero
+c elements or zero if none have less than i non-zero elements.
+c on exit iw(i,5) holds the position of the i th row in the pivotal
+c ordering.
+c     iw(i,7),iw(i,8) hold the number of non-zeros in the i th row/
+c column.
+c     iw(i,9),iw(i,10) hold the position of the i th row/column
+c in the ordering by number of non-zeros.
+c     iw(i,11),iw(i,12) hold row/column numbers in pivotal order for
+c i<ip and in order of increasing numbers of non-zeros otherwise.
+c     iw(i,13) holds the exponent of the maximal element in the i th
+c column of the scaled version of the original matrix.
+c
+       ka = iw(n+1,1) - 1
+       u = min(1.0,max(ux,eps))
+       n1 = n + 1
+c  Find scaling factors.
+       do i = 1,n1
+         iw(i,2) = i
+       enddo
+       j1 = 3
+c      j = 2*(ka/2) + 3
+cc     allocate (ww(n,4))
+c      call pminv1 (a,ind(:,1),iw,n,np,ww,i)
+cc     deallocate (ww)
+       l = 1
+c      ir = abs(i)
+c      if (i.lt.0) l = 2
+c      if (i .ne. 0) go to 560
+c      j1 = 5
+       do i = 1,n1
+         iw(i,2) = iw(i,1)
+         iw(i,11) = i
+         iw(i,12) = i
+         iw(i,13) = 0
+         do j = j1,9
+           iw(i,j) = 0
+         enddo
+       enddo
+c  Scale the matrix, set row and column links, find first elements
+c  of the rows, count the number of non-zeros in the rows and columns
+c  and find exponents of maximal column elements.
+       ig = 0
+       do j = 1,n
+c  Temporarily we use iw(i,9) to hold the address of the last non-
+c  zero encountered in the i th row.
+         k1 = iw(j,2)
+         k2 = iw(j+1,2) - 1
+         iw(j,8) = k2 - k1 + 1
+         il = 0
+         amax = 0.0
+         do k = k1,k2
+           i = ind(k,1)
+           if (i .le. il) go to 520
+           il = i
+           a(k) = a(k)*scale(real(radix(a(1)),8),iw(i,3) + iw(j,4) - 1)
+           amax = max(amax,abs(a(k)))
+           ind(k,1) = i + ia
+           ind(k,2) = k + 1
+           kl = iw(i,9)
+           if (kl .le. 0) iw(i,1) = k
+           if (kl .gt. 0) ind(kl,1) = k
+           iw(i,9) = k
+           iw(i,7) = iw(i,7) + 1
+         enddo
+         ind(k2,2) = ia + j
+         iw(j,13) = exponent(amax) - 1
+       enddo
+c
+c  Set up those vectors in iw associated with ordering by numbers
+c  of non-zeros.
+      do 130 l=1,2
+      call pminv4 (iw(:,l+6),iw(:,l+10),n)
+c  Check for null row or column.
+      ir=iw(1,l+10)
+      if(iw(ir,l+6).le.0)go to 560
+      do 110 i=1,n
+      j=iw(i,l+10)
+      iw(j,l+8)=i
+      nz=iw(j,l+6)
+  110 if(nz.ne.n)iw(nz+1,l+4)=i
+      j=0
+      do 130 i=1,n
+      if(iw(i,4+l).eq.0)iw(i,l+4)=j
+  130 j=iw(i,l+4)
+c
+c  Now perform the main elimination.
+      do 298 ip=1,n
+c  Find the pivot. We do this by searching a row/column. The
+c  next row/column to be used is jc(l)=iw(ik(l),l+10).
+      ik(1)=ip
+      ik(2)=ip
+c  jcost is the cost of the cheapest pivot so far found.
+      jcost=n*n
+  135 do 140 l=1,2
+      jc(l)=iw(ik(l),l+10)
+  140 ic(l)=iw(jc(l),l+6)
+c  icost is the minimal possible cost of a pivot not so far found.
+      icost=(ic(1)-1)*(ic(2)-1)
+      if(jcost.le.icost)go to 160
+      l=1
+      if(ic(1).gt.ic(2))l=2
+      ir=jc(l)
+c  Find the maximal element in row/column under consideration.
+      amax=0.0
+      k=iw(ir,l)
+      go to 143
+  142 k=ind(-k,l)
+  143 if(k.lt.0)go to 142
+      kk=k
+      go to 145
+  144 amax=max(amax,abs(a(kk)))
+      kk=ind(kk,l)
+  145 if(kk.le.ia)go to 144
+      if(amax.eq.0.0)go to 560
+      au=amax*u
+      l3=3-l
+      ik(l)=ik(l)+1
+c  Now consider the elements in the row/column in turn.
+  146 if(abs(a(k)).lt.au)go to 150
+      kk=k
+  147 kk=ind(kk,l3)
+      if(kk.le.ia)go to 147
+      kcost=(ic(l)-1)*(iw(kk-ia,9-l)-1)
+      if(kcost.ge.jcost)go to 150
+      jcost=kcost
+      kp=k
+      jp(l)=ir
+      jp(l3)=kk-ia
+      if(jcost.le.icost)go to 160
+  150 k=ind(k,l)
+      if(ia-k)135,146,146
+c
+c  Rearrange the links so that the pivotal row and column are in
+c  correct pivotal sequence.
+  160 do 188 l=1,2
+c  "Move" the pivotal column first and then the pivotal row.
+      ik(3-l)=jp(3-l)
+      k=abs(iw(ik(3-l),3-l))
+c  k points to an element in the pivotal column/row.
+c  km points to its predessor in its row/column.
+c  kl points to the last element that has been pivotal in its
+c  row/column.
+  165 ko=k
+  170 ko=abs(ind(ko,l))
+      if(ko.le.ia)go to 170
+      ik(l)=ko-ia
+      kl=ko
+      ko=iw(ko-ia,l)
+      if(iw(ik(l),l+6).le.0)go to 174
+c  On the removal of the element a(ik(1),ik(2)) the following
+c  instructions are used to update the numbers of elements in the
+c  corresponding row and column and make consequent changes to the
+c  ordering by number of non-zeros.
+      do 171 lm=1,2
+      ir=ik(lm)
+      nz=iw(ir,lm+6)-1
+      iw(ir,lm+6)=nz
+      jpos=iw(nz+1,lm+4)+1
+      ipos=iw(ir,lm+8)
+      if(ipos.eq.jpos)go to 171
+      jr=iw(jpos,lm+10)
+      jj=iw(ipos,lm+10)
+      iw(ipos,lm+10)=iw(jpos,lm+10)
+      iw(jpos,lm+10)=jj
+      jj=iw(ir,lm+8)
+      iw(ir,lm+8)=iw(jr,lm+8)
+      iw(jr,lm+8)=jj
+  171 iw(nz+1,lm+4)=jpos
+      go to 174
+  172 kl=-ko
+      ko=ind(kl,l)
+  174 if(ko.lt.0)go to 172
+      km=kl
+      go to 178
+  176 km=ko
+      ko=ind(ko,l)
+  178 if(ko.ne.k)go to 176
+      if(kl.eq.km)go to 182
+      ind(km,l)=ind(k,l)
+      if(kl.le.ia)go to 183
+      ind(k,l)=iw(ik(l),l)
+  180 iw(ik(l),l)=-k
+      go to 186
+  182 if(km-ia)184,184,180
+  183 ind(k,l)=ind(kl,l)
+  184 ind(kl,l)=-k
+  186 k=abs(ind(k,3-l))
+      if(k.le.ia)go to 165
+  188 continue
+c
+c  Overwrite the elements of the pivotal column by multipliers
+c  and perform the elimination.
+      k=ind(kp,2)
+      go to 295
+  190 m=k
+  193 m=ind(m,1)
+      if(m.le.ia)go to 193
+      l=m-ia
+$if def,cray,3
+      if (a(k) .ne. a(kp)) go to 7700
+      a(k) = 1.0
+      go to 7750
+ 7700 a(k)=a(k)/a(kp)
+ 7750 ki=kp
+      kl=k
+      go to 280
+  195 m=kl
+  200 m=ind(m,2)
+      if(m.le.ia)go to 200
+      jl=m-ia
+      if(ji-jl)210,275,270
+c
+c  Create a new non-zero in position (l,ji).
+  210 ka=ka+1
+      if(ka.gt.ia)go to 580
+      a(ka)=0.0
+      ik(1)=l
+      ik(2)=ji
+      ind(ka,1)=ind(klast,1)
+      ind(klast,1)=ka
+c  The order of the column links does not matter so we put the
+c  new element as the second in its column.
+      ind(ka,2)=ind(ki,2)
+      ind(ki,2)=ka
+c  On the addition of the element a(ik(1),ik(2)) the following
+c  instructions are used to update iw.
+      do 250 lm=1,2
+      ir=ik(lm)
+      nz=iw(ir,lm+6)
+      iw(ir,lm+6)=nz+1
+      jpos=iw(nz+1,lm+4)
+      jr=iw(jpos,lm+10)
+      if(ir.eq.jr)go to 250
+      ipos=iw(ir,lm+8)
+      jj=iw(ipos,lm+10)
+      iw(ipos,lm+10)=iw(jpos,lm+10)
+      iw(jpos,lm+10)=jj
+      jj=iw(ir,lm+8)
+      iw(ir,lm+8)=iw(jr,lm+8)
+      iw(jr,lm+8)=jj
+  250 iw(nz+1,lm+4)=jpos-1
+      kl=ka
+      go to 275
+  265 m=ki
+  267 m=ind(m,2)
+      if(m.le.ia)go to 267
+      ji=m-ia
+  270 klast=kl
+      kl=ind(kl,1)
+      if(ia-kl)210,195,195
+  275 a(kl)=a(kl)-a(k)*a(ki)
+       ig = max(ig,exponent(a(kl)) - 1 - iw(ji,13))
+  280 ki=ind(ki,1)
+      if(ki.le.ia)go to 265
+      k=ind(k,2)
+  295 if(k.le.ia)go to 190
+  298 continue
+c
+c  Scan by rows replacing row links by row numbers.
+      do 310 i=1,n
+      k=abs(iw(i,1))
+  300 kk=ind(k,1)
+      ind(k,1)=i
+      k=abs(kk)
+      if(k.le.ia)go to 300
+  310 continue
+c
+c  Scan by columns replacing column links by ordering numbers.
+      j=1
+      do 330 i=1,n
+      k=abs(iw(iw(i,12),2))
+      iw(iw(i,12),1)=j
+  320 kk=ind(k,2)
+      ind(k,2)=j
+      j=j+1
+      k=abs(kk)
+      if(k.le.ia)go to 320
+  330 continue
+      iw(n+1,1)=j
+c
+c Reorder.
+      ka=j-1
+      do 360 i=1,ka
+      if(i.eq.ind(i,2))go to 360
+      a1=a(i)
+      i1=ind(i,1)
+      j=i
+  350 k=ind(j,2)
+      ind(j,2)=j
+      a2=a(k)
+      i2=ind(k,1)
+      a(k)=a1
+      ind(k,1)=i1
+      a1=a2
+      i1=i2
+      j=k
+      if(k.ne.i)go to 350
+  360 continue
+c
+c  Set remaining vectors in preparation for factor and operate.
+       do i = 1,n1
+         iw(i,2) = iw(i,12)
+         iw(i,5) = iw(i,9)
+       enddo
+c
+c  Restore the matrix to its unequilibrated state.
+       do j = 1,n
+         jcol = iw(j,2)
+         k1 = iw(jcol,1)
+         k2 = iw(iw(j+1,2),1) - 1
+         i0 = iw(jcol,4)
+         do k = k1,k2
+           jro = ind(k,1)
+           a(k) = a(k)*scale(real(radix(a(1)),8),i0 + iw(jro,3) - 1)
+           if (iw(jro,5) .eq. j) i0 = -iw(jro,3)
+         enddo
+       enddo
+       iw(n+1,3) = 0
+       g = eps*scale(real(radix(eps),8),ig - 1)
+       return
+c
+c  The following instructions implement the failure exits.
+  520  write (output,530) errmsg,k
+  530  format (a,'the element held in a(',i5,') is out of order.')
+  500  iw(n1,2) = 0
+       g = -1.0
+       return
+  560  write (output,570) errmsg,rowcol(l),ir
+  570  format (a,'the matrix is singular.',2x,a6,i4,' is dependent on th
+     *e rest.')
+       go to 500
+  580  write (output,590) errmsg,ip
+  590  format (a,'ia is too small, space ran out when eliminating on piv
+     *ot',i5)
+       go to 500
+       end

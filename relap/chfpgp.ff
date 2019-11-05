@@ -1,0 +1,130 @@
+*mlist
+      subroutine chfpgp(p,w,xi,yta,d,tr,hfg,fg,kg,out)
+       implicit none
+c
+c     pgp correlation for critical heat flux ratio calculation
+c         power form
+c
+c  pgp(out)         critical heat flux
+c                   pgp/q is the critical power ratio, where q is the
+c                   local heat flux in the point of predicted CHF
+c  p    [MPa]       pressure
+c  w    [kg/s/m**2] mass flux
+c  xi               inlet quality
+c  yta  [m]         distance from channel inlet to the point of
+c                   predicted CHF multiplied by the factor of the axial
+c                   heat flux shape
+c  d    [m]         equivalent diameter of a subchannel or a tube (d)
+c  tr               factor of the radial heat flux distribution
+c                   tr=1. for a tube
+c  hfg  [MJ/kg]     latent heat of vaporization
+c  fg               rod bundle factor - it is recommended to use fg=1
+c                   if you lack experimental rod bundle data base;
+c                   fg=1 for tube and annulus
+c  kg               key which identifies geometry form
+c    kg = 41   tube
+c    kg = 42   internally heated annulus
+c    kg = 43   rod bundle - isolated subchannel model
+c    kg = 44   rod bundle - isolated subchannel model + fg function
+c
+c
+      real  p,w,xi,yta,d,tr,hfg,fg,out
+      real  dtr,k1,k2,pr,fgg,f1,f2,f4,fp,f3,fq4,f
+      real  a,amin,b,bmax,eps,fa,famin,fb,fbmax,fn,fs,fx
+      real  xn,xs,h1,h2,x13,z
+      integer kg,kh,l
+      data eps/1.e-3/
+c
+      f(z) = z - fq4 * (1. / (1. + 1.8 / (h1 - h2 * z))) *
+     &       (30.0 + fgg * z) / (f4 + fgg * z) /
+     &       (1. + 0.001/(0.006 + x13 * z**3))
+c
+      pr = p/22.115
+      if (kg .eq. 41) then
+         k1 = 70.9
+         k2 = 0.15
+         fp = 0.17 + pr + 1.82 * pr**2 + 17.7 * pr**12
+      else
+         k2 = 0.04
+         fp = 0.2 + pr + 1.2 * pr**2 + 14.4 * pr**11
+         if ( kg .eq. 42 ) then
+            k1 = 102.1
+         elseif (kg .eq. 43 ) then
+            k1 = 109.8
+         elseif (kg .eq. 44 ) then
+            k1 = 109.8
+            fg = (1. + 5.e-5*w) * fg
+         endif
+      endif
+      dtr = d*tr
+      fgg = yta / dtr
+      f1 = w**(0.126 + 0.22*pr)
+      f2 = 1.9 + 8. * pr**10 - pr - xi
+      f3 = 1. + 40. / (30. + fgg)
+      f4 = 430. + 10. / (0.016 + pr**1.8)
+      h1 = 1.6 + 4. * pr - xi
+      h2 = 4. * fgg / (w *hfg)
+      x13 = h2**3
+      fq4 = k1 / (fp * dtr**k2) * (f2 * f1) / (fgg * f3) * fg
+      kh   = 2
+      amin = 0.
+      bmax = h1 / h2 * 0.9999
+      a    = amin
+      b    = bmax
+      fa   = f(a)
+      fb   = f(b)
+      if ( fb .le. 0.) then
+          out = b
+          return
+      elseif ( fa .ge. 0.) then
+          out = a
+          return
+      endif
+      famin = fa
+      fbmax = fb
+      fx = fa
+      z  = a
+   10 continue
+      do 20 l = 1,kh
+          fs = fx
+          xs = z
+          z  = (a*fb-b*fa)/(fb-fa)
+          fx = f(z)
+          if (abs(z-xs).lt.max(eps*z,1.e-7) .or. fx.eq.0.) goto 40
+          if ( fx*fb .lt. 0.) then
+              a  = z
+              fa = fx
+          else
+              b  = z
+              fb = fx
+          endif
+   20 continue
+   30 continue
+      xn = z
+      fn = fx
+      z  = (xs*fn-xn*fs)/(fn-fs)
+      if ( z .ge. amin .and. z .le. bmax ) then
+          fx = f(z)
+          if (abs(z-xn).lt.max(eps*z,10.e-6) .or. fx.eq.0.) goto 40
+          xs = xn
+          fs = fn
+          goto 30
+      else
+          kh = 2*kh
+          if ( fn .gt. 0.) then
+              b  = xn
+              fb = fn
+              a  = amin
+              fa = famin
+          else
+              a  = xn
+              fa = fn
+              b  = bmax
+              fb = fbmax
+          endif
+          goto 10
+      endif
+   40 continue
+      out  = z
+      return
+      end

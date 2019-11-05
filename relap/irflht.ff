@@ -1,0 +1,262 @@
+*mlist
+       subroutine irflht
+c
+c
+c  This subroutine checks reflood input and sets up reflood indices.
+c
+c  cognizant engineer:  hxc.
+c
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'flood.h'
+       include 'htrflb.h'
+       include 'htsrcm.h'
+       include 'rflhtc.h'
+       include 'ufiles.h'
+c
+       integer i,idxo,iend,if,ifrst,iout1,irf,
+     & irflg,ito,j,jj,jm,jm2,k,lcntgs,lcontg,lsiz,m,
+     & ndel,nfmax(7),nrleft,nsiz,num1
+       real ftbnid
+       logical rstflg
+       external ftbdel,ftbmov,ftbnid,ftbrsv,ftbsft,itrscn,lcntgs,lcontg
+c
+       data nfmax/2,4,8,16,32,64,128/
+c
+       onrefl = 0
+       rstflg=.false.
+       nsiz = lcontg(1)
+       if (filid(32) .eq. 0.0) then
+         filid(32) = ftbnid(1)
+         call ftbrsv(filid(32),nsiz,-1,filndx(32))
+         lsiz = 1
+         irflg = filndx(32)
+         nrflht(irflg) = 0
+       else
+         rstflg=.true.
+c  Shift the origin of the reflood file and increase its size
+c  to all available space and delete the old file from disk.
+         lsiz = lcntgs(filid(32),1)
+         call ftbsft(filid(32),lsiz,2,filndx(32))
+c
+c--loop over reflood sets and delete all sets having
+c--a negative or zero strgeo.  strgeo was set to zero or
+c--negative in subroutine rhtcmp if a str-geom set was
+c--deleted or overlayed, respectively.
+c--first, though, remove filndx(32) from indices.  but not
+c--present value of filndx(32), rather the value added to indices
+c--in subroutine tran.  number not available but can be calculated
+c-loop 10 sets all inxrfl to indices relative to the start of
+c--the reflood dynamic file.
+         if=filndx(32)
+c m=value first indix should be minus value it is now
+c therefore m=bias put on index in subroutine tran
+         m = ia(if+2) - (nrflht(if)*nhtga+1)
+         do 10 i = 1 , nrflht(if)
+         inxrfl(if) =  inxrfl(if) - m
+         if = if + nhtga
+   10       continue
+         irf=filndx(32)
+         ndel=0
+         do 100 i=1, nrflht(irf)
+         if(strgeo(irf).le.0) then
+c--squeeze out noding info block, mesh interval block
+c--temperature block, and surface temp block.
+c--inxrfl(irf) points to 1st word to be removed
+c--inxrfl(irf+nhtga) points to one past last word to be removed
+c--assuming we are not on last reflood set (if we are there is
+c--no valid inxrfl(irf+nhtga)
+         if(i+1 .le. nrflht(filndx(32))) then
+           iend = filsiz(32) + filndx(32) - 1
+           ifrst = inxrfl (irf+nhtga) + filndx(32)
+           ito = inxrfl(irf) + filndx(32)
+           num1 = iend - ifrst + 1
+           iout1 = ifrst - ito
+c-iend=index to last word in file
+c-ifrst=index+1 of last word to be removed
+c-ito=index of first word to be removed
+c-iout1=number of words to remove
+c-num1=number of words between block removed on end of file
+c-/ftbmov slides all words down to fill block being deleted/
+c-/if this is last block on file dont move words just reset/
+c-/file size/
+           call ftbmov( fa(ifrst), fa(ito), num1)
+           filsiz(32) = filsiz(32) - iout1
+         else
+           filsiz(32) = inxrfl(irf) - 1
+         endif
+c
+c--now squeeze out block of nhtga words, the reflood set block
+c
+            iend = filsiz(32) + filndx(32) - 1
+            ifrst= irf + nhtga + 1
+            ito  = irf + 1
+            num1 = iend - ifrst + 1
+         call ftbmov( fa(ifrst), fa(ito), num1)
+            filsiz(32) = filsiz(32) - nhtga
+            ndel=ndel+1
+c
+c--update all pointers for sets above set just deleted
+c
+                   if = filndx(32)
+                 m = nrflht(if) - 1
+              do 20 j = 1 , m
+              inxrfl(if) = inxrfl(if) - nhtga
+              if(j .ge. i)  inxrfl(if) = inxrfl(if) - iout1
+              if = if + nhtga
+   20         continue
+         else
+c--ifstrgeo was positive then increase irf,go to next set
+              irf=irf+nhtga
+         endif
+  100   continue
+c--------------------end of loop do delete blocks----------------------
+c   //reset current number of reflood sets in files//
+         nrflht(filndx(32))= nrflht(filndx(32))-ndel
+         lsiz = filsiz(32)
+         irflg = filndx(32) + nrflht(filndx(32))*nhtga
+         nrleft = nrflht(filndx(32))
+         if(nrleft.eq.0) rstflg=.false.
+c-lsiz=current size of file
+c-irflg=index to next set block if one is added
+c-nrleft=number of sets left on file after deletes.  if none
+c left then reset rstflg so can do normal processing from here on
+c
+       endif
+c
+c    heat structure loop
+c    check if relood input is present
+       i = filndx(8)
+       do 151 m = 1,nhtstr(i)
+         j = ihtptr(i) + filndx(8)
+         k = htnusr(j)
+      if(k.le.0) go to 150
+         if (htrflg(j) .le. 0) go to 150
+         jm = htstno(j)/1000
+c     if reflood set exits for this structure geometry; skip to
+c  end of loop(151).
+       if(rstflg) then
+         if = filndx(32)
+        do 25 jj = 1, nrflht(if)
+         if(strgeo(if) .eq. jm) then
+            lhtrfl(if) = i - filndx(8)
+            go to 150
+         endif
+         if = if + nhtga
+   25 continue
+       endif
+      if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &write(output,2001) jm
+ 2001  format ('0',10x,'Reflood input data for heat structure-geometry',
+     & i10)
+       nrflht(filndx(32)) = nrflht(filndx(32)) + 1
+      lsiz=lsiz+nhtga
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2002) htrflg(j)
+ 2002  format (' Reflood trip number ',i10)
+       if (iand(htopt(j),512) .eq. 0) go to 124
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2004)
+ 2004 format(' Reflood heat transfer applied to right boundary')
+       if (htbntr(j+1).eq.2 .or. htbntr(j+1).eq.3) go to 125
+      go to 126
+  124 continue
+      if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &write(output,2003)
+ 2003 format(' Reflood heat transfer applied to left boundary')
+       if (htbntr(j).ne.2 .and. htbntr(j).ne.3) go to 126
+  125 fail=.true.
+      write(output,2009)
+ 2009  format ('0******** Boundary condition type for reflood calculatio
+     &n cannot be 1000 or 1xxx.')
+  126  continue
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2005) htnaxl(j)
+ 2005  format (' Maximum number of fine intervals in a heat structure ',
+     & i10)
+      do 130 jm=1,7
+         if (htnaxl(j) .eq. nfmax(jm)) go to 134
+  130 continue
+      fail=.true.
+      write(output,2006)
+ 2006  format ('0******** Maximum number of fine intervals must be one o
+     &f (2,4,8,16,32,64,128).')
+      go to 150
+  134 if(nsiz.ge.lsiz) go to 136
+      write(output,2007)
+ 2007  format ('0******** Insufficient space to complete reflood initial
+     &ization.')
+      fail=.true.
+      go to 150
+  136 continue
+c--if this is restart and sets already exist on the file
+c--then expand file to make room for set block.  and update
+c--pointers in all previous sets.
+         if(rstflg) then
+c
+           iend = filsiz(32) + filndx(32) - 1
+           ifrst= inxrfl(filndx(32)) + filndx(32)
+           ito = ifrst + nhtga
+           num1= iend - ifrst + 1
+         call ftbmov( fa(ifrst), fa(ito), -num1)
+           filsiz(32) = filsiz(32) + nhtga
+c
+c--update inxrfl pointers for first reflood set
+           if=filndx(32)
+           inxrfl(if) = inxrfl(if)+nhtga
+         endif
+           lhtrfl(irflg) = i - filndx(8)
+           htrfpt(j) = irflg - filndx(32)
+           strgeo(irflg) = htstno(j)/1000
+c
+c    set the maximum number of axial mesh points for storage
+      jm=max(min( 4,(k+1)/2),min(3,k))
+      jm2=max(0,k-jm)
+       meshy = htnaxl(j)*jm + max(2,htnaxl(j)/2)*jm2 + 1 - 2*k
+      jm=min(k,10)
+         jm2 = min(8,htnaxl(j))*jm + 1 + 2*(k - jm)
+       iglrfl(irflg) = min(max(meshy,jm2),501)
+       iglrfl(irflg+1) = 0
+         fines(irflg) = float(2*k + 1)
+         tchfqf(irflg) = 500.
+         trewet(irflg) = 710.
+         zqbot(irflg) = 0.
+         zqtop(irflg) = 0.
+c  These last 2 are set in majout.
+      irflg=irflg+nhtga
+  150    i = i + 1
+  151  continue
+       if (nrflht(filndx(32)) .eq. 0) go to 205
+c
+c    set up reflood indices
+  192  i = filndx(32)
+           lsiz = 1 + nrflht(filndx(32))*nhtga
+       do 200 m = 1,nrflht(i)
+         inxrfl(i) = lsiz
+         j = ihtptr(lhtrfl(i)+filndx(8)) + filndx(8)
+         if (htrflg(j) .lt. 3) go to 195
+         idxo = (htstno(j)/1000)*1000 + 10000000
+         call itrscn (idxo,htrflg(j),htrflg(j+1))
+  195    lsiz = lsiz + htnusr(j)
+         inxrfl(i+1) = lsiz
+         lsiz = lsiz + nhtma*(iglrfl(i) - 1)
+         inxrfl(i+2) = lsiz
+         lsiz = lsiz + iglrfl(i)*(htnmpt(j)*2 + 1)
+         inxrfl(i+3) = lsiz
+         lsiz = lsiz + htnusr(j)*4 + 2
+         i = i + nhtga
+  200 continue
+      if(nsiz.ge.lsiz) go to 220
+      write(output,2007)
+      fail=.true.
+  205  call ftbdel (filid(32))
+       filid(32) = 0.0
+       filsiz(32) = 0
+       filndx(32) = 0
+       return
+  220  filsiz(32) = lsiz
+       call ftbsft (filid(32),filsiz(32),2,filndx(32))
+       return
+       end

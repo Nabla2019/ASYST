@@ -1,0 +1,190 @@
+*mlist
+*if def,selap
+      subroutine bxsolv(i,j,dtm)
+c
+c  Solves the nodal heat balances generated in subroutine baxial.
+c
+c  Cognizant engineer: ewc (ljo fpg).
+c
+c******************************************************************
+c
+c     bxsolv              1-April-96
+c
+c     the BWR canister/control blade modules were developed at ORNL
+c     by L.J.Ott under the auspices of the NRC sponsored Boiling
+c     Water Reactor Severe Accident Technologies programs.
+c
+c     for information or assistance, call
+c                 L.J.Ott (fts)-624-0324 or (615)-574-0324
+c                 F.P.Griffin (fts)-626-4684 or (615)-576-4684
+c
+c******************************************************************
+c
+c
+      implicit none
+c
+       real a111,bnbl,dtm,sumliq,tbki,tbko,tnew(10)
+       integer i,j,k,l
+c
+*call scddat
+*call axtrns
+*call bcs
+*call blinit
+*call blkage
+*call cboilx
+*call cr2
+c
+c-**-bwr models for determination of temperatures
+c
+      do 10 k=1,2
+c
+         tbki=tsinki(i)
+         tbko=tsinko(i)
+c
+c----check for interstitial blockage
+c
+         if(iblkcb(i,k,j).eq.2)then
+            a111=boxl(k,j)/(sblkss(k,j)+1.0/hwboxi(i))
+            bnbl=-bbl(nbl(i,k,j),k,j)/tblko(i,k,j,nbl(i,k,j))
+            abl(nbl(i,k,j),2,k,j)=-abl(nbl(i,k,j),1,k,j)-bnbl-a111
+            bbl(nbl(i,k,j),k,j)=bbl(nbl(i,k,j),k,j)-a111*tbki
+            if(k.eq.1)then
+               bbl(1,k,j)=bbl(1,k,j)-qcb1
+               bbl(2,k,j)=bbl(2,k,j)-qcb2
+               bbl(3,k,j)=bbl(3,k,j)-qcb3
+            end if
+            if(nbl(i,k,j).eq.4)then
+               bbl(4,k,j)=bbl(4,k,j)-qbox(k)
+            else if(nbl(i,k,j).eq.5)then
+               bbl(5,k,j)=bbl(5,k,j)-qbox(k)
+            else if(nbl(i,k,j).eq.6)then
+               bbl(6,k,j)=bbl(6,k,j)-qbox(k)
+            else
+               stop 'bxsolv-1'
+            endif
+c
+            call tridig(abl,bbl,tnew,nbl(i,k,j),k,j)
+c
+            do 500 l=1,nbl(i,k,j)
+  500          tblk(i,k,j,l)=tnew(l)
+            l=nbl(i,k,j)
+            tblk(i,k,j,l+1)=tblk(i,k,j,l)
+            tblk(i,k,j,l+2)=tblk(i,k,j,l)
+            if(k.eq.1)then
+               tcb1(i,j)=tblk(i,k,j,1)
+               tcb2(i,j)=tblk(i,k,j,2)
+               tcb3(i,j)=tblk(i,k,j,3)
+            endif
+            tbox(i,k,j)=tblk(i,k,j,5)
+c
+            call bkmelt(i,k,j,dtm)
+c
+            go to 10
+         end if
+c
+c----canister temperature(s)
+c
+         if(scn(i,k,j).ne.0.0)then
+            tbox(i,k,j)=(ax(k)*tboxo(i,k,j)+qbox(k)+ai1(k)*tbki+
+     *                   ao1(k)*tbko)/(ai1(k)+ao1(k)+ax(k))
+         else
+            tbox(i,k,j)=tmelbx
+         end if
+         if(k.eq.2)then
+            tblk(i,k,j,1)=tbox(i,k,j)
+            tblk(i,k,j,2)=tbox(i,k,j)
+            tblk(i,k,j,3)=tbox(i,k,j)
+            tblk(i,k,j,4)=tbox(i,k,j)
+         endif
+         tblk(i,k,j,5)=tbox(i,k,j)
+         tblk(i,k,j,6)=tbox(i,k,j)
+         if(tbox(i,k,j).gt.min(teutec,tmelcb,tmlszr))then
+            if(twzcan(k).gt.0.0)then
+               call bmelt(1,i,k,j)
+            end if
+         else
+            sumliq=wzcan(i,k,j,3)+wzcan(i,k,j,5)
+            do 620 l=1,11
+               sumliq=sumliq+wsscan(i,k,j,l,1)
+  620       continue
+            if(k.eq.2)then
+               do 630 l=1,11
+                  sumliq=sumliq+wsscno(i,j,l,1)
+  630          continue
+            endif
+            if(sumliq.gt.0.0)then
+               call bmelt(2,i,k,j)
+            end if
+         end if
+c
+c----control blade temperature(s)
+c
+         if(k.eq.2)go to 10
+         if(scb(i,j).eq.0.0)go to 10
+         if(icb(i,3,j).eq.1)then
+            if(icb(i,2,j).ge.1)then
+               if(icb(i,1,j).eq.1)then
+                  tcb2(i,j)=((-c5*tcb3o(i,j)-qcb3-c6*tbko)/(c3+c5+c6)-
+     1                      c4*tcb2o(i,j)/c3-(c1/c3)*(c2/(c1+c2))*
+     2                      tcb1o(i,j)-(c1/c3)*(qcb1/(c1+c2)+qcb2/c1))/
+     3                      ((c1/c3)*(c1/(c1+c2)-(c1+c4+c3)/c1)+
+     4                      c3/(c3+c5+c6))
+                  tcb3(i,j)=(c5*tcb3o(i,j)+c3*tcb2(i,j)+qcb3+c6*tbko)/
+     1                      (c3+c5+c6)
+                  tcb1(i,j)=(c2*tcb1o(i,j)+c1*tcb2(i,j)+qcb1)/(c1+c2)
+               else
+                  tcb2(i,j)=((c3+c5+c6)*(c4*tcb2o(i,j)+qcb2)+
+     1                      c3*(c5*tcb3o(i,j)+qcb3+c6*tbko))/
+     2                      (c3*c5+c3*c4+c4*c5+c3*c6+c4*c6)
+                  tcb3(i,j)=(c5*tcb3o(i,j)+qcb3+c3*tcb2(i,j)+c6*tbko)/
+     1                      (c3+c5+c6)
+                  tcb1(i,j)=tcb2(i,j)
+               end if
+            else
+               tcb3(i,j)=(c5*tcb3o(i,j)+qcb3+c6*tbko)/(c5+c6)
+               tcb2(i,j)=tmelcb
+               tcb1(i,j)=tmelcb
+            end if
+         else
+            if(icb(i,2,j).ge.1)then
+               if(icb(i,1,j).eq.1)then
+                  tcb2(i,j)=((c1+c2)*(c4*tcb2o(i,j)+qcb2+qcb3+c7*tbko)+
+     1                      c1*c2*tcb1o(i,j)+c1*qcb1)/
+     2                      (c1*c4+c1*c2+c2*c4+c1*c7+c2*c7)
+                  tcb1(i,j)=(c1*tcb2(i,j)+c2*tcb1o(i,j)+qcb1)/(c1+c2)
+                  tcb3(i,j)=tcb2(i,j)
+               else
+                  tcb2(i,j)=(c4*tcb2o(i,j)+qcb2+qcb3+c7*tbko)/(c4+c7)
+                  tcb3(i,j)=tcb2(i,j)
+                  tcb1(i,j)=tcb2(i,j)
+               end if
+            else
+               tcb3(i,j)=tmelss
+               tcb2(i,j)=tmelcb
+               tcb1(i,j)=tmelcb
+            end if
+         end if
+         tblk(i,k,j,1)=tcb1(i,j)
+         tblk(i,k,j,2)=tcb2(i,j)
+         tblk(i,k,j,3)=tcb3(i,j)
+         tblk(i,k,j,4)=tcb3(i,j)
+         if(tcb3(i,j).gt.tmelcb.and.icb(i,3,j).eq.1)then
+            call bmltcb(1,i,k,j,1)
+         else if(tcb3(i,j).le.tmelcb.and.icb(i,3,j).eq.1)then
+            if((wsscbb(i,j,1,1)).gt.0.0)then
+               call bmltcb(2,i,k,j,0)
+            end if
+         end if
+         if(tcb2(i,j).gt.tmelcb.and.icb(i,2,j).ge.1)then
+            call bmltcb(1,i,k,j,2)
+         else if(tcb2(i,j).le.tmelcb.and.icb(i,3,j).eq.0)then
+            if((wsscbb(i,j,1,1)).gt.0.0)then
+               call bmltcb(2,i,k,j,0)
+            end if
+         end if
+c
+   10 continue
+c
+      return
+      end
+*endif

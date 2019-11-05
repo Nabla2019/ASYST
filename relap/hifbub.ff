@@ -1,0 +1,94 @@
+*mlist
+       subroutine hifbub (hifcc,alp,rdiam,rey,surfa,vfgbub,i)
+c
+c  hifbub computes liquid hif for bubbly flow.
+c
+c  Cognizant engineer: rjw.
+c
+c  These local variables had their names changed (4/12/95 gam)
+c  hifc => hifcc
+c
+c *** Revised lines in HIFBUB to make it correspond completely to
+c     Unal's original correlation published in Ref. 1, with the
+c     modification published in Ref. 1a.
+c     The old version is documented in Ref. 2.
+c
+c *** Ref 1 = H.C. Unal, Maximum Bubble Diameter, Maximum Bubble-Growth
+c             Time and Bubble-Growth Rate During the Subcooled Nucleate
+c             Flow Boiling of Water up to 17.7 MN/m2, "Int.  J. Heat
+c             Mass Transfer," vol.19, pp 643-649, 1975.
+c
+c *** Ref 1a= R.A. Riemke, Modification to Unal's Subcooled Flow Boiling
+c             Bubble Model, "Nuclear Technology," vol.102, pp 416-417,
+c             1993.
+c
+c *** Ref 2 = R.A. Dimenna et al., "RELAP5/MOD2 Models and
+c             Correlations" NUREG/CR-5194(August 1988).
+c
+       implicit none
+c
+       real alp,hifcc,rdiam,rey,surfa,vfgbub
+       integer i
+       include 'contrl.h'
+       include 'fast.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'voldat.h'
+c
+       integer ix
+       real chif,hifsub,phi,term,xintrp
+c
+       ix = vctrls(i)
+       if (dtsf(ix) .ge. -1.0) then
+c
+c Subcooled:  Modified Unal.
+c
+         chif = 0.075
+         if (alp .lt. 0.25) then
+           phi = 1.0
+           if (avelf(ix) .gt. 0.61) phi = (avelf(ix)*1.639344)**0.47
+           if (p(i) .le. 1.1272e6) then
+             chif = 1.80*phi*(65.0 - 5.69e-5*(p(i) - 1.0e5))
+           else
+             chif = 1.80*phi*2.5e9/p(i)**1.418
+           endif
+           chif = exp(-45.0*alp)*chif + 0.075
+         endif
+         hifcc = chif*hfg(ix)*rhog(i)*rhof(i)*alp/max(1.0e-7,rhof(i) -
+     &   rhog(i))
+         if ( chngno(58)) then
+           if (dtsf(ix) .ge. 0.0 ) return
+         else
+           if (dtsf(ix) .ge. 1.0 ) return
+         endif
+         hifsub = hifcc
+       endif
+c
+c Super-heated: mod Lee-Ryley HTC.
+c
+       if (chngno(61)) then
+         chif = 2.0+0.74*sqrt(rey)
+         hifcc = chif*thconf(i)*rdiam*surfa
+       else
+         term = 1.0e0/alp
+         chif = max(2.0+0.74*sqrt(rey),-3.81972*
+     &   min(dtsf(ix),-1.0)*rhocpf(ix)*rhfg(ix)
+     &   *vfgbub/rhog(i))
+         hifcc = (chif*thconf(i)*rdiam+0.400*avelf(ix)*
+     &   rhocpf(ix)*min(0.001,alp)*term)*surfa
+     &   *min(0.25,alp)*term
+       endif
+c
+       if (dtsf(ix) .le. -1.0) return
+c
+c  Interpolate between Unal for subcooled liquid and max( Lee-Riley,
+c  Plesset-Zwick) for superheated liquid based on a one degree window
+c  on each side of saturation.
+       if(chngno(58)) then
+         xintrp = (dtsf(ix) + 1.0)
+       else
+         xintrp = (dtsf(ix) + 1.0)*0.5
+       endif
+       xintrp = xintrp*xintrp*(3.0 - 2.0*xintrp)
+       hifcc = exp(xintrp*log(hifsub) + (1.0 - xintrp)*log(hifcc))
+       end

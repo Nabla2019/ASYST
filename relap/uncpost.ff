@@ -1,0 +1,713 @@
+*mlist
+       subroutine uncpost
+$if def,iua
+!  Perform post processing for uncertainty analysis.
+!
+!  Cognizant engineer: rjw.
+!
+!mpfu       use contrl
+!mpfu       use graphmod   --> use scigraph and dflib/ifqwin
+!mpfu       use plotmd2mod --> subroutine
+!mpfu       use scnreqmod  --> subroutine
+!mpfu       use scrtch
+       use SciGraphDemo
+       use uncdata
+       use usrvarc
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'ufilef.h'
+       include 'ufiles.h'
+!
+       type adatapt
+         real(4), pointer :: d(:,:)
+         type (adatapt), pointer :: next
+       end type adatapt
+       type (adatapt), pointer :: first,crnt,runval(:)
+c       integer, allocatable :: ibufn(:)
+       integer, allocatable :: itp(:),result(:)
+       logical, allocatable :: ex(:)
+c       character*8, allocatable :: ibufa(:)
+!
+       integer i,iopt(2),ip(10),ipr,ips,iq,iz(2),j,k,l,
+     & len,li,lx,m,ml,n,mp,nn(2),numb,pckcod(2)
+       integer ird,jf,iost,uncwilksnr,iorderr,ir,is
+       integer(8) nupostvr
+       real(kr), pointer :: pckcodp,pckcodv(:)
+       real*4, allocatable :: pdata(:,:,:)
+       real conv(2),conv2(2),convx
+       real(kr) betar,gamar,betacr
+       logical frstm(2),error
+       character crstrc*24,ihldc*72,labl*64,lablt*25,lablx*25,
+     & lably*25(2),lablz*20(10)
+       character chwrd*8
+       character filepp*256
+       character filemat*256
+       character filename*256
+       character*9 ak,al
+!deb
+       character*10, allocatable :: run(:)
+       data crstrc/'restart-plot file'/
+!  Plot variables.
+       real*4 mxoutbx(2)
+!rs34 variables
+       integer filsz4,inx,inx1,inx2,inx4,iwrd,lcontg,lcntgs,le,ler
+       integer(1) ia1(8,lfsiz)
+       integer(8) ia8(lfsiz)
+       real(4) ha(2,lfsiz)
+       real ftbnid
+       equivalence (ia8(1),ha(1,1),ia1(1,1),fa(1))
+!
+       ipr = 5
+       ips = 6
+!  Temporarily set uniti and unito to true.
+       uniti = .true.
+       unito = .true.
+       nupostvr = nusrvar
+       if (nupostvr .gt. 20) then
+         nupostvr = 20
+         write (tty,"('Number of variables limited to 20 due to plot lim
+     &itations. This run will process first 20 of requested variables.'/
+     &'Submit multiple post processing runs as needed to process all des
+     &ired variables.')")
+         write (output,"('$$$$$$$$ Number of variables limited to 20 due
+     & to plot limitations. This run will process first 20 of requested 
+     &variables.'/'Submit multiple post processing runs as needed to pro
+     &cess all desired variables.')")
+       endif
+       allocate (itp(0:nupostvr))
+       jf = len_trim(filsch(ips))
+!      write (12,"('jf read',i2)") jf
+       jf = jf - 8
+!      write (12,"('jf changed',i2)") jf
+       filepp = ' '
+       filepp(1:jf) = filsch(ips)(1:jf)
+!  Get space for output buffer and position indicators.
+       allocate (ex(0:krun))
+!  Check restart plot files existence. 
+       do mp = 0,krun
+         write (filepp(jf+1:jf+6),"(i4.4,'.r')") irunno(mp)
+         inquire (file=filepp,exist=ex(mp))
+       enddo
+       if (any(.not.ex(:))) then
+         mp = count(.not.ex(:))
+         allocate (result(mp))
+         result = pack(irunno(:),.not.ex(:))
+         write (output,"('0******** The following',i4,' files were not f
+     &ound:'/(12i6))") mp,result(:)
+         write (output,"('0******** Process run is being terminated due 
+     &to errors.')")
+         stop
+       endif
+       do mp = 0,krun
+         write (filepp(jf+1:jf+6),"(i4.4,'.r')") irunno(mp)
+!  Logic for selecting the files and determining the proper name.
+         open (unit=rstplt,file=filepp,status='old',
+     &   form='unformatted',iostat=len)
+         if (len .ne. 0) then
+           fail = .true.
+           write (tty,"('Open failure number',i8,' on file ',a,', perhap
+     &s file is not available.')") len,trim(filepp)
+           write (output,"('0******** Open failure number',i8,' on file 
+     &', a,' perhaps file is not available.')") len,trim(filepp)
+           return
+         endif
+         numb = 0
+ctest         filid(1) = ftbnid(1)
+         if (mp .eq. 0) then
+         filid(1) = ftbnid(1)
+           nullify (first)
+       if (lcontg(1) .lt. 10) go to 100
+       filsiz(1) = 10
+       call ftbrsv (filid(1),filsiz(1),-1,inx)
+         endif
+ctest       if (lcontg(1) .lt. 10) go to 100
+ctest       filsiz(1) = 10
+ctest       call ftbrsv (filid(1),filsiz(1),-1,inx)
+       read (rstplt,end=27,err=28) lx,iwrd
+       read (rstplt,end=27,err=28) (ia8(inx+i-1),i=1,10)
+       if (lx .ne. 10) go to 39
+       write (ihldc(1:24),'(3a8)') (ia8(inx+i-1),i=4,6)
+       if (ihldc(1:24) .ne. crstrc) then
+c      inquire (iolength=i) ihldc,iq
+c      read (rstplt,end=27,err=28) ihldc,iq
+c      if (lx .ne. i) go to 39
+c      if (ihldc(25:48) .ne. crstrc) then
+         write (output,"('0******** Label in first record of restart inp
+     &ut file is incorrect.')")
+         go to 201
+       endif
+       read (rstplt,end=74,err=62) lx,iwrd
+       read (rstplt,end=74,err=62) ia8(inx:inx+lx-1)
+       write (chwrd,'(a8)') ia8(inx)
+       if (chwrd .ne. 'plotinf') go to 204
+   20  if (lx .ne. 3) go to 205
+       ler = ia(inx+2)
+       le = ia(inx+1)
+       li = le - 1
+       j = le + 1
+       filsiz(1) = lcntgs(filid(1),1)
+       call ftbsft (filid(1),filsiz(1),2,inx)
+$if def,fourbyt,2
+       inx4 = inx
+       inx1 = inx
+       inx2 = inx + j
+!  Read plotalf and plotnum records.
+       read (rstplt,end=74,err=62) lx,iwrd
+       read (rstplt,end=74,err=62) ia8(inx:inx+lx-1)
+       if (lx .ne. le) go to 102
+       write (chwrd,'(a8)') ia8(inx)
+       if (chwrd .ne. 'plotalf') go to 202
+       read (rstplt,end=74,err=62) lx,iwrd
+       read (rstplt,end=74,err=62) ia8(inx2:inx2+lx-1)
+       if (lx .ne. le) go to 102
+       write (chwrd,'(a8)') ia8(inx2)
+       if (chwrd .ne. 'plotnum') go to 202
+*---------------------------------------------------
+c not needed, included in read statement + lx has other meaning in rs3.x
+c           if (lx .lt. 0) go to 62
+c           if (lx .gt. 0) go to 74
+*---------------------------------------------------
+!  Set pointers by scanning plotalf-plotnum records.
+           itp(0) = 1
+           do k = 1,nupostvr
+             itp(k) = 0
+             do l = 1,li
+*-------
+* next is added
+               write (chwrd,'(a8)') ia8(inx+l)
+               if (chwrd.eq.usrvar(k)%ntabla .and.
+     &         ia(inx2+l).eq.usrvar(k)%ntabl) then
+*-------
+                 itp(k) = l
+                 exit
+               endif
+             enddo
+           enddo
+           do
+*---------------------------------------------------
+c             read (rstplt,iostat=n) recordid
+             read (rstplt,iostat=n) lx,iwrd
+*---------------------------------------------------
+             if (n .gt. 0) cycle
+             if (n .lt. 0) exit 
+c             if (recordid%rectyp.eq.'plotinf' .and. recordid%nn.eq.0)
+c     &       then
+c               if (recordid%noitm*recordid%itmsiz .ne. 4) call fabend
+c               read (rstplt,iostat=n) ird
+c               if (n .ne. 0) call fabend
+c               cycle lp1
+c             elseif (recordid%rectyp .ne. 'plotrec') then
+c               read (rstplt,iostat=n) ird
+c               cycle lp2
+c             else
+c               inquire (iolength=n) pltval(:)
+c               if (recordid%nn.ne.0 .or.
+c     &         recordid%noitm*recordid%itmsiz.ne.2*n) call fabend
+c!deb               read (rstplt,iostat=n) pltvals(1:5)
+c               read (rstplt,iostat=n) pltvals(:)
+c               if (n .gt. 0) cycle lp2
+c               if (n .lt. 0) exit lp1
+$if def,fourbyt
+         if (iwrd .eq. 4) then
+           read (rstplt,iostat=n) ha(2,inx4:inx4+lx-1)
+         elseif (iwrd .eq. 1) then
+           read (rstplt,iostat=n) ia1(8,inx1:inx1+lx-1)
+         else
+           read (rstplt,iostat=n) ia8(inx:inx+lx-1)
+         endif
+         if (n .gt. 0) cycle
+         if (n .lt. 0) exit
+$endif
+$if -def,fourbyt
+       read (rstplt,iostat=n) (ia8(inx:inx+lx-1)
+       if (n .gt. 0) cycle
+       if (n .lt. 0) exit
+$endif
+       write (chwrd,'(a8)',iostat=n) ia8(inx)
+       if (n .gt. 0) cycle
+       if (chwrd .eq. 'plotinf') go to 20
+       if (chwrd .ne. 'plotrec') cycle
+       if (ler .ne. 0) then
+         if (lx .ne. ler) go to 102
+         call unsqoz (ia8(inx+1),ia8(inx+1),li)
+       else
+         if (lx .ne. le) go to 102
+       endif
+!  Move requested plot variables from plot record in restart-plot file
+!  to list ordered storage. Data in each record is ordered by time
+!  followed by requested plot variables. Variables are duplicated in
+!  this file if duplicated in the plot requests. 
+             if (mp .eq. 0) then
+               if (numb .eq. 0) then
+                 allocate (first)
+                 allocate (first%d(0:krun,0:nupostvr))
+                 crnt => first
+               else
+                 allocate (crnt%next)
+                 crnt => crnt%next
+                 allocate (crnt%d(0:krun,0:nupostvr))
+               endif
+             else
+               if (numb .eq. 0) then
+                 crnt => first
+               else
+                 crnt => crnt%next
+               endif
+             endif
+             do k = 0,nupostvr
+               if (itp(k) .eq. 0) then
+                 crnt%d(mp,k) = 1.235711131719
+               else
+c                 crnt%d(mp,k) = pltval(itp(k))
+                 crnt%d(mp,k) = fa(inx+itp(k))
+               endif
+             enddo
+             if (mp.gt.0 .and. crnt%d(0,0).ne.0.0) then
+               if (abs((crnt%d(0,0) - crnt%d(mp,0))/crnt%d(0,0)) .gt. 
+     &         1.0e-5) then
+                 fail = .true.
+                 write (output,"('0******** Base run time value,',
+     & es13.5,', does not match run number,',i4,', time value,',es13.5)"
+     &)           crnt%d(0,0),mp,crnt%d(mp,0)
+               endif
+             endif
+             numb = numb + 1
+           enddo
+c         enddo 
+!  End of rstplt file reached.
+         close (rstplt)
+       enddo
+!  Setup array to allow access to run information through an index.
+       allocate (runval(numb))
+       crnt => first
+       do i = 1,numb
+         runval(i)%d => crnt%d
+         crnt => crnt%next
+       enddo
+!UNCpost
+!  Write matrices for each variable.
+       do i = 1,nupostvr
+         filemat = ' '
+         filemat(1:jf) = filsch(ips)(1:jf)
+         k = len_trim(usrvar(i)%ntabla)
+         write (ak,"(i9)") usrvar(i)%ntabl
+         al = adjustl(ak)
+         k = k + len_trim(al)
+         if (itp(i) .eq. 0.) then
+!  Variable not found
+           write (output,"('0****** Variable ',a8,' ',i9,' was not found
+     & in rstplt files, corresponding data file *.mruns cannot be genera
+     &ted.')") usrvar(i)%ntabla,usrvar(i)%ntabl
+           cycle
+         endif
+         write (filemat(jf+1:jf+k+6),"(a,a,'.mruns')") 
+     &   trim(usrvar(i)%ntabla),trim(al)
+         open (unit=stripf,file=filemat,status='new',form='formatted',
+     &   iostat=len)
+         if (len .ne. 0) then
+           fail = .true.
+           write (output,"('0******** Open error number',i8,' on file ',
+     &a,', perhaps file already exists.')") len,trim(filemat)
+           write (tty,"('******** Open error number',i8,' on file ',a,
+     &', perhaps file already exists.')") len,trim(filemat)
+         endif
+         write (stripf,"(' ',a9,5x,i9)") usrvar(i)%ntabla,
+     &   usrvar(i)%ntabl
+!deb, b         write (stripf,"('  Time         Base value')")
+         if (allocated(run)) deallocate(run)
+!mpf         allocate (run(numb))
+!mpf         do j = 1,numb
+         allocate (run(krun))
+         do j = 1,krun
+           write (run(j),"(a,i4.4)") "run",j
+         enddo
+         write (stripf,"(a8,10000(','a8))") "Time","Base Case",(run(j),j
+     &=1,krun)
+!deb, e
+         do j = 1,numb
+!deb           write (stripf,"(10000es13.5)") runval(j)%d(0,0),
+           write (stripf,"(es13.5,10000(',',es13.5))") runval(j)%d(0,0),
+     &     runval(j)%d(:,i)
+         enddo
+         close (stripf)
+       enddo
+       do i = 1,numb
+         do j = 1,nupostvr
+           call qsortdep (runval(i)%d(1:krun,j),1,krun)
+         enddo
+       enddo
+!  Write matrices for each variable.
+       do i = 1,nupostvr
+       filemat = ' '
+       filemat(1:jf) = filsch(ips)(1:jf)
+         k = len_trim(usrvar(i)%ntabla)
+         write (ak,"(i9)") usrvar(i)%ntabl
+         al = adjustl(ak)
+         k = k + len_trim(al)
+         write (filemat(jf+1:jf+k+2),"(a,a,'.m')") 
+     &   trim(usrvar(i)%ntabla),trim(al)
+         if (itp(i) .eq. 0.) then
+!  Variable not found
+           write (output,"('0****** Variable ',a8,' ',i9,' was not found
+     & in rstplt files, corresponding data file *.m cannot be generated.
+     &')") usrvar(i)%ntabla,usrvar(i)%ntabl
+           cycle
+         endif
+         open (unit=stripf,file=filemat,status='new',form='formatted',
+     & iostat=len)
+         if (len .ne. 0) then
+           fail = .true.
+           write (tty,"('Open error number',i8,' on file ',a,', perhaps 
+     &file already exists.')") len,trim(filemat)
+         endif
+         write (stripf,"(' ',a9,5x,i9)") usrvar(i)%ntabla,
+     &   usrvar(i)%ntabl
+!deb, b
+         if (allocated(run)) deallocate(run)
+         allocate (run(numb))
+         do j = 1,numb
+           write (run(j),"(a,i4.4)") "rank",j
+         enddo
+         write (stripf,"(a8,10000(','a8))") "Time","Base Case",(run(j),j
+     &=1,krun)
+!deb, e         write (stripf,"('  Time         Base value')")
+         do j = 1,numb
+!deb           write (stripf,"(10000es13.5)") runval(j)%d(0,0),
+           write (stripf,"(es13.5,10000(',',es13.5))") runval(j)%d(0,0),
+     &     runval(j)%d(:,i)
+         enddo
+         close (stripf)
+       enddo
+!  Read Wilks' information from setup rstplt file.
+       open (unit=rstplt,file=filsch(ipr),status='old',
+     & form='unformatted',iostat=len)
+       if (len .ne. 0) then
+         fail = .true.
+         write (tty,"('Open failure number',i8,' on file ',a,', perhaps 
+     &file is not available.')") len,trim(filsch(ipr))
+         write (output,"('0******** Open failure number',i8,' on file ',
+     &   a,', perhaps file is not available.')") len,trim(filsch(ipr))
+         return
+       endif
+       read (rstplt,iostat=iost) filename
+!       write (12,"('rstplt read =',a)") filename
+!       write (12,"('filschf(5) =',a)") filsch(ipr)
+!       write (12,"('filschf(6) =',a)") filsch(ips)
+       if (trim(filename) .ne. trim(filsch(ipr))) then
+         fail = .true.
+         write (output,"('0******** Restart plot file read, ',a,', does 
+     &not match with information written during the setup.')")
+     &   filename
+       else
+         read (rstplt,iostat=iost) betar,gamar,iorderr,betacr
+         read (rstplt,iostat=iost) uncwilksnr,unctrun
+         write (output,"('0Post processing performed for confidence leve
+     &l ',es11.3,', percentile ',es11.3,', and order of Wilks'' applicat
+     &ion ',i4,'.')") betar,gamar,iorderr
+         write (output,"('0Number calculated from Wilks'' formula is ,
+     &',i4,', total number of calculations performed is ,',i4,'.')")
+     &   uncwilksnr,unctrun
+         write (output,"('0Number of calculations for post processing is
+     & ',i4,'.')") krun
+       endif
+!  Set upper (is) and lower (ir) ranks, according to Wilks' order.
+       ir = iorderr
+       is = krun - iorderr + 1
+       if (is .le. ir) then
+         write (tty,"('Number of runs for post processing and order of W
+     &ilks'' formula application lead too inconsistency. Ranks for bound
+     &aries set to default.')")
+         write (output,"('0******** Number of runs for post processing a
+     &nd order of Wilks'' formula application lead too inconsistency. Ra
+     &nks for boundaries set to default.')")
+         ir = krun
+         is = 1
+       endif
+!
+!$if def,rjw
+       if ( .not.fail) then
+!  Start of loop for each plot request.
+$if def,plots,1
+         call plotquit
+         do i = 1,nupostvr
+!  Process plot request only if all variables in request are available.
+        lablt = '?'; lablx = '?'; lably = '?'; lablz= '?'
+!  Get number of variables on each axis.
+           ml = 4
+           nn(1) = 3
+           nn(2) = 1
+           iz(1) = 0; iz(2) = nn(1)
+           iopt = 0
+           mxoutbx(:) = 0.0_4
+           do j = 1,numb
+             mxoutbx(1) = max(mxoutbx(1),abs(runval(j)%d(0,i)),
+     &       abs(runval(j)%d(ir,i)),abs(runval(j)%d(is,i)))
+             mxoutbx(2) = max(mxoutbx(2),
+     &       runval(j)%d(is,i) - runval(j)%d(ir,i))
+           enddo
+           frstm(:) = .true.
+           if (itp(i) .eq. 0.) then
+             write (output,"('0****** Variable ',a8,' ',i9,' was not fou
+     &nd in rstplt files, corresponding plot cannot be generated.')")
+     & usrvar(i)%ntabla,usrvar(i)%ntabl
+             cycle
+           endif
+!mpf           call scnreq (iand(usrvar(i)%ntabno,z'ffff'),
+!mpf     &     usrvar(i)%ntabla,usrvar(i)%ntabl,-2,pckcod,
+!mpf     &     convx,labl,error)
+c     &     pckcodp,pckcodv,convx,labl,error)
+           iq = 1
+           do m = 1,ml
+             if (m .eq. ml) iq = 2
+!  Get reordering information to be able to move data for a request into
+!  order by axis being used. Get labels and conversion factors for each
+!  axis.  Accumulate overall maximums for each axis.
+             iz(iq) = iz(iq) + 1
+             ip(iz(iq)) = m
+             lablx = ' '
+             j = index(labl,'(')
+             if (j .ne. 0) then
+               l = index(labl(j+1:64),')')
+               if (l .ne. 0) lablx = labl(j:j+l)
+!               lablz(iz(iq)) = labl(1:j-1)
+             else
+               l = index(labl,' ')
+               if (usrvar(i)%ntabl .ne. 0) then
+                 l = index(labl(l+1:32),' ') + l
+!                 lablz(iz(iq)) = labl(1:l)
+               endif
+             endif
+!  Use labels and conversion factors for an axis from the first
+!  variable using that axis. 
+             if (frstm(iq)) then
+               frstm(iq) = .false.
+               conv(iq) = convx
+               lably(iq) = lablx
+               iopt(iq) = 0
+             endif
+           enddo
+           lablx = 'time (s)'
+           lablz(1) = 'Base case <'
+           write (lablz(2),"('Lwr.lim. Rank ',i4,' <')") ir
+           write (lablz(3),"('Upr.lim. Rank ',i4,' <')") is
+           write (lablz(4),"('Limits difference >')")
+           write (lablt,"(a,1x,i9)") trim(usrvar(i)%ntabla),
+     &     (usrvar(i)%ntabl)
+!  Move variables for this plot request from array adata to array
+!  pdata in order of pairs of time, dependent variable, for each
+!  variable to be plotted in order of axis used, and for time.
+           allocate (pdata(2,numb,ml))
+!  Move time variable.
+           do j = 1,ml
+             do n = 1,numb
+               pdata(1,n,j) = runval(n)%d(0,0) 
+             enddo
+           enddo
+!  Move dependent variables, putting them in proper order and applying
+!  conversion factor from British to SI is needed.
+           if (unito) then
+             do n = 1,numb
+               pdata(2,n,1) = runval(n)%d(0,i)
+               pdata(2,n,2) = runval(n)%d(ir,i)
+               pdata(2,n,3) = runval(n)%d(is,i)
+               pdata(2,n,4) = runval(n)%d(is,i) - runval(n)%d(ir,i)
+             enddo
+             conv2(:) = mxoutbx(:)
+           else
+             do iq = 1,2
+               if (nn(iq) .eq. 0) cycle
+               if (conv(iq) .gt. 0.0) then
+                 do n = 1,numb
+                   pdata(2,n,1) = runval(n)%d(0,i)
+                   pdata(2,n,2) = runval(n)%d(ir,i)
+                   pdata(2,n,3) = runval(n)%d(is,i)
+                 enddo
+                 conv2(iq) = mxoutbx(iq)*conv(iq)
+               else
+                 do n = 1,numb
+                   pdata(2,n,1) = 1.8*(runval(n)%d(0,i) + conv(iq))
+                   pdata(2,n,2) = 1.8*(runval(n)%d(ir,i) + conv(iq))
+                   pdata(2,n,3) = 1.8*(runval(n)%d(is,i) + conv(iq))
+                 enddo
+                 conv2(iq) = 1.8*(mxoutbx(iq) + conv(iq))
+               endif
+             enddo
+           endif
+!  Determine whether further conversion factors of 10**3 or 10**(-3) are
+!  needed to obtain convenient range for axis notation.
+           j = 0
+           do iq = 1,2
+             if (nn(iq) .eq. 0) cycle
+             conv(iq) = 1.0
+             if (conv2(iq) .eq. 0.0) conv2(iq) = 1.0
+             do
+               if (conv2(iq) .ge. 1.0e4) then
+                 conv2(iq) = conv2(iq)*1.0e-3
+                 conv(iq) = conv(iq)*1.0e-3
+               elseif (conv2(iq) .lt. 1.0e-3) then
+                 conv2(iq) = conv2(iq)*1.0e3
+                 conv(iq) = conv(iq)*1.0e3
+               else
+                 exit
+               endif
+             enddo
+!  If powers of 10**3 or 10**(-3) are appropriate, apply conversion
+!  factor and notation to axis label.
+             if (conv(iq) .ne. 1.0) then
+               do l = 1,nn(iq)
+                 j = j + 1
+                 pdata(2,:,ip(j)) = pdata(2,:,ip(j))*conv(iq)
+               enddo
+               write (chwrd,"(a,es7.1)") '*',conv(iq)
+               li = verify(lably(iq),' ',.true.)
+               lably(iq)(li+1:li+8) = chwrd
+             else
+               j = j + nn(iq)
+             endif
+           enddo
+!  Check for negative values to be plotted on a log axis; if found, 
+!  switch to linear axis.
+           j = 0
+           do iq = 1,2
+             if (iopt(iq) .ne. 0) then
+               do l = 1,nn(iq)
+                 j = j + 1
+                 if (minval(pdata(2,:,j)) .le. 0.0) then
+                   iopt(iq) = 0
+                   write (output,"('0$$$$$$$$ For ',a,' variable ',a,
+     & ' contains zero or negative values, requested log scaling changed
+     & to linear scaling.')") trim(lablt),trim(lablz(ip(j)))
+                 endif
+               enddo
+             else
+               j = j + nn(iq)
+             endif
+           enddo
+!  Draw the graph.
+           if (nn(1) .eq. 0) then
+             nn(1) = nn(2)
+             lably(1) = lably(2)
+           endif
+           k = i
+$if def,plots,2
+           call plotmd2 (k,numb,pdata,ml,nn(1),iopt,lablt,lablx,
+     &lably,lablz)
+           deallocate (pdata)
+         enddo
+$if def,plots,3
+         write (output,"('0','Successful end of plot processing.')")
+         write (tty,"('$$$$$$$$ ','Successful end of plot processing.'
+     &)")
+       endif
+       if (fail) then
+         write (output,"('0******** Errors encountered during post proce
+     &ssing of uncertainty data.')")
+         write (tty,"('Errors encountered during post processing of unce
+     &rtainty data.')")
+       else
+         write (output,"('0Post processing of uncertainty completed succ
+     &esfully.')")
+         write (tty,"('Post processing of uncertainty completed succesfu
+     &lly.')")
+       endif
+       go to 1000
+!
+   39  write (output,"('0******** Wrong length on first record of restar
+     &t file.')")
+       go to 201
+   27  write (output,"('0******** Eof encountered on first read of resta
+     &rt input file, no file available.')")
+       go to 201
+   28  write (output,"('0******** Parity error on first record.')")
+       go to 201
+cdbg  100  write (output,"('0******** Insufficient space for writing strip f
+cdbg     &ile.')")
+  100  write (output,"('0******** Insufficient space for writing strip f
+     &ile.',i10)") mp
+       go to 201
+  101  write (output,"('0******** Write error on stripf file.')")
+       go to 201
+  102  write (output,"('0******** A plotalf, plotnum, or plotrec record 
+     &on rstplt has the wrong length.')")
+       go to 201
+   62  write (output,"('0******** Parity error on file rstplt reading pl
+     &otalf or plotnum record.')")
+       go to 201
+   74  write (output,"('0******** Eof on file rstplt before reading plot
+     &alf or plotnum record.')")
+       go to 201
+  202  write (output,"('0******** Record label should be plotalf or plot
+     &num but is not.')")
+       go to 201
+  204  write (output,"('0******** Plotinf record not read when it should
+     & have been read.')")
+       go to 201
+  205  write (output,"('0******** Plotinf record is wrong length.')")
+  201  fail = .true.
+ 1000  return 
+!
+       contains
+!
+       recursive subroutine qsortdep (dep,m1,m2)
+!  Sorts an array, dep(m1:m2), of type real(4) using the quicksort
+!  algorithm.
+!
+       implicit none
+       integer m1,m2
+       real(4) dep(:)
+!
+       real(4) dumt
+       integer i1,i2
+       logical mswap
+!
+!  Swap value at middle of array with value of first element of array.
+       mswap = m2 - m1 .ge. 3
+       i1 = (m1 + m2)/2
+       if (mswap) then
+         dumt = dep(i1)
+         dep(i1) = dep(m1)
+         dep(m1) = dumt
+       endif
+!  Initialize left and right pointers.
+       i1 = m1 + 1
+       i2 = m2
+!  Move data such that data less than value now in first element is to
+!  the left and data greater than that value is to the right.
+       outer: do
+!  Move left pointer to the right.
+         do
+           if (i1 .gt. i2) exit outer
+           if (dep(i1) .gt. dep(m1)) exit
+           if (dep(i1) .eq. dep(m1)) then
+             if (i1 .gt. m1) exit
+           endif
+           i1 = i1 + 1
+         enddo
+!  Move right pointer to the left.
+         do
+           if (i2 .lt. i1) exit outer
+           if (dep(i2) .lt. dep(m1)) exit
+           if (dep(i2) .eq. dep(m1)) then
+             if (i2 .lt. m1) exit
+           endif
+           i2 = i2 - 1
+         enddo
+         dumt = dep(i2)
+         dep(i2) = dep(i1)
+         dep(i1) = dumt
+       enddo outer
+!  Move data in first element to divide the left and right regions.
+       dumt = dep(i2)
+       dep(i2) = dep(m1)
+       dep(m1) = dumt
+!  Set up and call for recursive sorts of the two regions if necessary.
+       i2 = i2 - 1
+       if (i2 .gt. m1) call qsortdep (dep,m1,i2)
+       if (m2 .gt. i1) call qsortdep (dep,i1,m2)
+       return
+       end subroutine qsortdep
+$endif
+       end

@@ -1,0 +1,218 @@
+*mlist
+*if def,selap
+       subroutine debadd (tsatlp, deltb, voldb1, l, eqnch, nswslp)
+c
+c  Calculates the temperature of the debris falling into the lower
+c  vessel region during the time step. It also calculates this debris.
+c
+c  Cognizant engineer: ewc.
+c
+c This is a COUPLE ROUTINE
+c
+c      argument list definition:
+c      tsatlp = saturation temperature of water in lower vessel region
+c               (k)  input .
+c      deltb = scdap time step (s)  input .
+c      voldb1 = volume of debris that slumped during time step.  this
+c               volume excludes embedded porosity (m**3)  output.
+c      l      = index of lower vessel volume.
+c      eqnch  = energy to boil all water in lower vessel vol. (j).
+c
+       implicit none
+       include 'contrl.h'
+       include 'fast.h'
+       include 'voldat.h'
+       include 'scddat.h'
+       include 'cpmdat.h'
+       include 'slumpv.h'
+       include 'ufiles.h'
+       include 'bconds.h'
+       include 'miscon.h'
+c
+c  Local variables.
+       integer ictype,l,n,nkk,j,nswslp,nptbrk
+       real aden,afraco,afracu,afracz,afru,afrz,delt,deltb,entloc,eqnch,
+     & tsatlp,sden,timfrc,voldb1,wox1,wsso,wtot,wtot1,wzr1,wzuo,wslptt,
+     & vdbrek,vdmin,eqnmax,excsen,fracbk
+       integer ndbg
+       real zuden
+       external zuden
+       external aden,atomfr,mixent,sden
+c   vdbrek = void fraction threshold; values less than this result in
+c            slumping molten material not completely breaking up.
+c   vdmin = minimum void fraction liquid for some break up.
+c   values for vdbrek and vdmin are also defined for slumping from
+c   system calculations in subroutine tcoupl.
+       data vdbrek / 0.20/, vdmin / 0.01/
+c
+       ndbg = 0
+        if(timehy.ge.6865.0.and.timehy.le.6870.0)ndbg=1
+        if(timehy.ge.6885.0.and.timehy.le.7000.0)ndbg=1
+          if(ndbg.eq.1)then
+          write(output,9005)timehy
+9005      format(' DEBADD entered; timehy=',e10.4)
+          end if
+       nslump(mcp) = 0
+       nkk = 1
+c
+       voldb1 = 0.0
+       wuoslp = 0.0
+       wurslp = 0.0
+       wzrslp = 0.0
+       wzoslp = 0.0
+       wbcslp = 0.0
+       wssslp = 0.0
+       wagslp = 0.0
+       powslp = 0.0
+       entloc = 0.0
+       enrslp = 0.0
+       timfrc = 0.0
+       do n = 1,nsqslp
+         if (timehy .gt. timsle(n)) cycle
+c      if (ncount.gt.1028) write (12,"('debaddc0',3i6,3es13.5)")
+c    & ncount,nsqslp,n,timehy,timsls(n),timsle(n)
+         delt = timsle(n) - timsls(n)
+         if (delt .lt. 1.e-10) cycle
+         timfrc = dt/delt
+         wuoslp = wuoslp + timfrc*wuoseq(n)
+         wurslp = wurslp + timfrc*wurseq(n)
+         wzrslp = wzrslp + timfrc*wzrseq(n)
+         wzoslp = wzoslp + timfrc*wzoseq(n)
+         wbcslp = wbcslp + timfrc*wbcseq(n)
+         wssslp = wssslp + timfrc*wssseq(n)
+         wagslp = wagslp + timfrc*wagseq(n)
+         powslp = powslp + timfrc*powseq(n)
+         entloc = entloc + timfrc*enthdb(n)
+c      if (ncount.gt.1028) write (12,"('debaddc1',2i6,5es13.5)")
+c    & ncount,n,wzrslp,wzrseq(n),dt,delt,timfrc
+       enddo
+c  Add to slumping material that material slumping through embedded
+c  flow channels in reflector at periphery of core.
+       do j = 1,ncomp
+         if (npldrn(j) .ne. 0) then
+cljs add
+         nslump(mcp) = 1
+           wslptt=(mduslp(j)+mdzslp(j)+mdmslp(j)+mdaslp(j)+mdsslp(j))*dt
+           if (wslptt .ge. 1.e-3) then
+             wuoslp = wuoslp + mduslp(j)*dt
+             wzoslp = wzoslp + mdzslp(j)*dt
+             wzrslp = wzrslp + mdmslp(j)*dt
+             wagslp = wagslp + mdaslp(j)*dt
+             wssslp = wssslp + mdsslp(j)*dt
+             entloc = entloc + entslp(j)*mdtslp(j)*dt
+             powslp = powslp + qdpslp(j)*mdtslp(j)*dt
+             tmpslp(mcp,nkk) = timslp(j)
+               if(ndbg.eq.1)then
+               write(output,9011)nslump(mcp),wuoslp,mcp
+9011           format(' DEBADD, nslump=',i5,' wuoslp=',e10.4,
+     &         ' mcp=',i5)
+               end if
+c      if (ncount.gt.1028) write (12,"('debaddc2',2i6,5es13.5)")
+c    & ncount,j,wzrslp,mdmslp(j),dt
+           endif
+         endif
+       enddo
+       enrslp = entloc
+       wtot = wuoslp + wurslp + wzrslp + wzoslp + wbcslp + wssslp +
+     & wagslp
+       if (wtot .lt. (timfrc*1.e-6)) go to 880
+       if (timfrc .lt. 1.e-10) go to 880
+       if (wtot .lt. 1.e-6) go to 880
+       nslump(mcp) = 1
+       nptbrk = 0
+       if (nobrok(mcp) .eq. 1) then
+         nstslp(mcp) = 1
+         eqnch  = 0.0
+         go to 250
+       endif
+       eqnmax = v(l)*hyarf(l)*(sathg(l) - sathf(l))
+c  Case of nobrok(mcp) .ne. 1  (breakup).
+c  Model gradual reduction in quenching as void fraction of liquid
+c  decreses below vdbrek.
+       if (voidf(l) .lt. vdbrek) then
+         if (voidf(l) .lt. vdmin) then
+           eqnch = 0.0
+           nptbrk = 1
+         else
+           fracbk = (voidf(l) - vdmin)/(vdbrek - vdmin)
+           eqnch = fracbk*enrslp
+           nptbrk = 1
+           excsen = 0.0
+           if (eqnch .gt. eqnmax) then
+             excsen = eqnch - eqnmax
+             eqnch = eqnmax
+           endif
+           enrslp = (1. - fracbk)*enrslp + excsen
+         endif
+       else
+c  Voidf .gt. vdbrek; 100% breakup.
+         eqnch = enrslp
+       endif
+       if (nptbrk .eq. 0) then
+c
+c  Quenching has occurred.
+         tmpslp(mcp,nkk) = tsatlp
+         nstslp(mcp) = 0
+         eqnch = min(eqnch,enrslp)
+       else
+         nstslp(mcp) = 1
+       endif
+c
+  250  if (nstslp(mcp) .ne. 0) then
+         if (nswslp .ne. 1) then
+           wtot1 = wuoslp + wzrslp + wzoslp + wssslp + wagslp + wbcslp
+           if (wtot1 .ge. 1.e-6) then
+             wzuo = 0.0
+             wsso = 0.0
+             afru = 1.0
+             afrz = 0.0
+             call mixent (enrslp,wuoslp,wzrslp,wzoslp,wagslp,wssslp,
+     &       wsso,wzuo,afru,afrz,wbcslp,tsatlp,tmpslp(mcp,nkk))
+           endif
+         endif
+       endif
+c
+c  Calculate porosity and debris radius.
+       if (nstslp(mcp) .eq. 1) then
+         porslp(mcp,nkk) = 0.001    
+         radslp(mcp,nkk) = 1.e-3      
+       else
+         porslp(mcp,nkk) = 0.5
+         radslp(mcp,nkk) = 10.e-3
+       endif
+c
+c  Calculate zero porosity volume of mixture.
+       wtot1 = wuoslp + wzrslp + wzoslp
+c      if (ncount.gt.1028) write (12,"('debaddb1',i6,7es13.5)") ncount,
+c    & voldb1,wuoslp,wzrslp,wzoslp,wagslp,wbcslp,wssslp
+       if (wtot1 .ge. 1.e-6) then
+         wzr1 = 0.7*wzoslp + wzrslp
+         wox1 = 0.3*wzoslp
+         call atomfr (wuoslp,wzr1,wox1,afracu,afracz,afraco)
+         voldb1 = voldb1 + wtot1/zuden(afracu,afracz,tmpslp(mcp,nkk))
+c      if (ncount.gt.1028) write (12,"('debaddb2',i6,6es13.5)") ncount,
+c    & voldb1,afracu,afracz,tmpslp(mcp,nkk)
+       endif
+       if (wagslp .gt. 1.e-6) then
+         ictype = 1
+         voldb1 = voldb1 + wagslp/aden(ictype,tmpslp(mcp,nkk))
+c      if (ncount.gt.1028) write (12,"('debaddb3',i6,6es13.5)") ncount,
+c    & voldb1,tmpslp(mcp,nkk)
+       endif
+       if (wbcslp .gt. 1.e-6) then
+         ictype = 2
+         voldb1 = voldb1 + wbcslp/aden(ictype,tmpslp(mcp,nkk))
+c      if (ncount.gt.1028) write (12,"('debaddb4',i6,6es13.5)") ncount,
+c    & voldb1,tmpslp(mcp,nkk)
+       endif
+       if (wssslp .gt. 1.e-6)then
+         voldb1 = voldb1 + wssslp/sden(tmpslp(mcp,nkk))
+c      if (ncount.gt.1028) write (12,"('debaddb5',i6,6es13.5)") ncount,
+c    & voldb1,tmpslp(mcp,nkk)
+       endif
+c
+c  Modify volume to take embedded porosity into account.
+c***   voldb1 = voldb1 / (1.0 - porslp(mcp,nkk))
+  880  return
+       end
+*endif

@@ -1,0 +1,154 @@
+       subroutine ma30bd (n,icn,a,licn,lenr,lenrl,idisp,ip,iq,w,iw,
+     & iflag)
+!  Performs the lu decomposition of the diagonal blocks of a new matrix
+!  paq of the same sparsity pattern, using information from a previous
+!  call to ma30ad. The entries of the input matrix must already be in
+!  their final positions in the lu decomposition structure. This routine
+!  executes about five times faster than ma30ad.
+!
+       use ma28mod
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer iflag,licn,n
+       real(kr) a(:),w(:)
+       integer icn(:),idisp(:),ip(:),iq(:),iw(:),lenr(:),lenrl(:)
+!
+! n      Set to the order of the matrix.
+! icn    Length licn. It should be unchanged since the last call to
+!        ma30ad. It is not altered by ma30bd.
+! a      Length licn. The user must set entries idisp(1) to idisp(2) to
+!        contain the entries in the diagonal blocks of the matrix paq
+!        whose column numbers are held in icn, using corresponding
+!        positions. Note that some zeros may need to be held explicitly.
+!        On output entries idisp(1) to idisp(2) of array a contain the
+!        lu decomposition of the diagonal blocks of paq. Entries a(1) to
+!        a(idisp(1)-1) are neither required nor altered by ma30bd.
+! licn   Set by the user to the length of arrays a and icn. It is not
+!        altered by ma30bd.
+! lenr,lenrl  Arrays of length n. They should be unchanged since the
+!             last call to ma30ad. They are not altered by ma30bd.
+! idisp  Length 2. It should be unchanged since the last call to ma30ad.
+!        It is not altered by ma30bd.
+! ip,iq  Length n. They should be unchanged since the last call to
+!        ma30ad. They are not altered by ma30bd.
+! w      Length n. Used as workspace by ma30bd.
+! iw     Length n. Used as workspace by ma30bd.
+! iflag  On output from ma30bd, iflag has the value zero if the
+!        factorization was successful, has the value i if pivot i was
+!        very small, and has the value -i if an unexpected singularity
+!        was detected at stage i of the decomposition.
+!
+       real(kr) au,rowmax
+       integer i,ifin,ilend,ipivj,ising,j,jay,jayjay,jfin,jj,pivpos
+       logical stab
+!
+       stab = eps.le.1.0_kr
+       rmin = eps
+       ising = 0
+       iflag = 0
+       w(1:n) = 0.0_kr
+!  Set up pointers to the beginning of the rows.
+       iw(1) = idisp(1)
+       do i=2,n
+         iw(i) = iw(i-1) + lenr(i-1)
+       enddo
+!
+!  Start of main loop.
+!  At step i, row i of a is transformed to row i of l/u by adding
+!  appropriate multiples of rows 1 to i-1.
+!  Using row-gauss elimination.
+       do i=1,n
+!  istart is beginning of row i of a and row i of l.
+         istart = iw(i)
+!  ifin is end of row i of a and row i of u.
+         ifin = istart + lenr(i) - 1
+!  ilend is end of row i of l.
+         ilend = istart + lenrl(i) - 1
+         if (istart.gt.ilend) go to 90
+!  Load row i of a into vector w.
+         do jj=istart,ifin
+           j = icn(jj)
+           w(j) = a(jj)
+         enddo
+!
+!  Add multiples of appropriate rows of i to i-1 to row i.
+         do jj=istart,ilend
+           j = icn(jj)
+!  ipivj is position of pivot in row j.
+           ipivj = iw(j) + lenrl(j)
+!  Form multiplier au.
+           au = -w(j)/a(ipivj)
+           if (lbig) big = max(abs(au),big)
+           w(j) = au
+!  au * row j (u part) is added to row i.
+           ipivj = ipivj + 1
+           jfin = iw(j) + lenr(j) - 1
+           if (ipivj.gt.jfin) cycle
+!  Innermost loop.
+           if (.not.lbig) then
+             do jayjay=ipivj,jfin
+               jay = icn(jayjay)
+               w(jay) = w(jay) + au*a(jayjay)
+             enddo
+             cycle
+           endif
+           do jayjay=ipivj,jfin
+             jay = icn(jayjay)
+             w(jay) = w(jay) + au*a(jayjay)
+             big = max(abs(w(jay)),big)
+           enddo
+         enddo
+!
+!  Reload w back into a (now l/u)
+         do jj=istart,ifin
+           j = icn(jj)
+           a(jj) = w(j)
+           w(j) = 0.0_kr
+         enddo
+!  We now perform the stability checks.
+   90    pivpos = ilend + 1
+         if (iq(i).gt.0) go to 140
+!  Matrix had singularity at this point in ma30a/ad.
+!  Is it the first such pivot in current block ?
+         if (ising.eq.0) ising = i
+!  Does current matrix have a singularity in the same place ?
+         if (pivpos.gt.ifin) go to 100
+         if (a(pivpos).ne.0.0_kr) go to 170
+!  It does -- so set ising if it is not the end of the current block.
+!  Check to see that appropriate part of l/u is zero or null.
+  100    if (istart.gt.ifin) go to 120
+         do jj=istart,ifin
+           if (icn(jj).lt.ising) cycle
+           if (a(jj).ne.0.0_kr) go to 170
+         enddo
+  120    if (pivpos.le.ifin) a(pivpos) = 1.0_kr
+         if (ip(i).gt.0 .and. i.ne.n) cycle
+!  End of current block -- reset zero pivots and ising.
+         do j=ising,i
+           if ((lenr(j)-lenrl(j)).eq.0) cycle
+           jj = iw(j) + lenrl(j)
+           a(jj) = 0.0_kr
+         enddo
+         ising = 0
+         cycle
+!  Matrix had non-zero pivot in ma30a/ad at this stage.
+  140    if (pivpos.gt.ifin) go to 170
+         if (a(pivpos).eq.0.0_kr) go to 170
+         if (.not.stab) cycle
+         rowmax = 0.0_kr
+         do jj=pivpos,ifin
+           rowmax = max(rowmax,abs(a(jj)))
+         enddo
+         if (abs(a(pivpos))/rowmax.ge.rmin) cycle
+         iflag = i
+         rmin = abs(a(pivpos))/rowmax
+!  End of main loop.
+       enddo
+       return
+!  Error return.
+  170  if (lp.ne.0) write (lp,
+     & "(' Error return from ma30bd, singularity detected in row',i8)")
+     &  i
+       iflag = -i
+       return
+       end

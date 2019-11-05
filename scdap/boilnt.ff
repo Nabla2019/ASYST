@@ -1,0 +1,180 @@
+*mlist
+*if def,selap
+      subroutine boilnt(j)
+c
+c
+c  boilnt initializes variables for the ORNL BWR canister/control
+c  blade models.
+c
+c  Cognizant engineer: ewc (ljo fpg).
+c
+c******************************************************************
+c
+c     boilnt              1-jan-92
+c
+c     the BWR canister/control blade modules were developed at ORNL
+c     by L.J.Ott under the auspices of the NRC sponsored Boiling
+c     Water Reactor Severe Accident Technologies programs.
+c
+c     for information or assistance, call
+c                 L.J.Ott (fts)-624-0324 or (615)-574-0324
+c                 F.P.Griffin (fts)-626-4684 or (615)-576-4684
+c
+c******************************************************************
+c
+      implicit none
+c
+      real            cmprft, csabxz, dm2   , dm3   , dm4   , dm5   ,
+     *                dm6   , dt1   , dz    , wzrci , wzrcrx
+c
+      integer         i     , j     , k
+c
+c-----common blocks
+c
+c
+*call scddat
+*call axtrns
+*call blinit
+*call cboilx
+*call cr2
+c
+c
+c-------------------------- variable initializations ------------------
+c
+c
+c-----set-up node heights
+c
+      do 10 i=1,ndz(j)
+         if(i.eq.1)then
+            zxxxxx(i,j)=hdz(i,j)*0.5
+         else
+            zxxxxx(i,j)=zxxxxx(i-1,j)+(hdz(i-1,j)+hdz(i,j))*0.5
+         end if
+   10    continue
+c
+c-----for the interstitial (control blade)  side
+c     set up cell-- areas (used in melt relocation/blockage
+c     calculations in subroutine RELOC)
+c
+c     canister cells and control blade cells
+c
+      do 20 i=1,2
+         csasso(j)=cbl(j)*thksso(j)
+   20    cellca(i,j)=boxl(i,j)*drrcan(j)
+      thkcb(j)=diab4c(j)+2.0*(thkgap(j)+thkssi(j)+thksso(j))
+      celcba(1,j)=xboxcb(j)*boxl(1,j)
+      celcba(2,j)=(thkcb(j)/2.0+xboxcb(j))*boxl(2,j)
+c
+c-----set-up cross-sectional areas for structual energy balances
+c
+c     canister
+c
+      do 30 i=1,2
+   30    csabox(i,j)=boxl(i,j)*xbox(j)
+c
+c-----change box ,blade ,clad ,shroud zr dimensions to cms
+c
+      cmprft=30.48
+      xbox(j)=xbox(j)*cmprft
+      xboxzi(j)=xboxzi(j)*cmprft
+      xboxzo(j)=xboxzo(j)*cmprft
+      xcbss2(j)=thkssi(j)*cmprft
+      xcbss3(j)=thksso(j)*cmprft
+      xcbdo(j)=xcbdo(j)*cmprft
+c
+c----initialize emissivities
+c
+      do 50 i=1,ndax
+            do 40 k=1,2
+               emisvo(i,k,j)=0.5
+   40          emisbo(i,k,j)=0.15
+            emiscb(i,j)=0.2
+   50       continue
+      boxt(j)=xbox(j)/30.48/2.0
+c
+c-----all space parameter variables (scn,scb)
+c     have been initialized to 1.0 in block data:
+c     when a space parameter =1.0, the structure is available
+c                            =0.0, the structure is gone
+c                                  (relocated or never there)
+c
+c     adjust space parameters via user input arrays
+c
+      do 52 i=1,ndax
+            scb(i,j)=scb(i,j)*iscb(i,j)
+            scn(i,1,j)=scn(i,1,j)*iscn(i,j)
+            scn(i,2,j)=scn(i,2,j)*iscn(i,j)
+            iblkcb(i,1,j)=iblkcb(i,1,j)*iscb(i,j)
+            iblkcb(i,2,j)=iblkcb(i,2,j)*iscn(i,j)
+            iblkc(i,1,j)=iblkc(i,1,j)*iscn(i,j)
+            iblkc(i,2,j)=iblkc(i,2,j)*iscn(i,j)
+   52       continue
+c
+c-----initialize core temperatures, oxidation thicknesses,markers,etc.
+c
+c     initialize control blade variables for zone j
+c
+         call cblade(1,j,dt1,dm2,dm3,dm4,dm5,dm6,0)
+c
+         do 90 i=1, ndz(j)
+            dz=hdz(i,j)
+c
+c     oxidation thicknesses
+c
+            do 60 k=1,2
+               if(scn(i,k,j).ne.0.0)then
+                     xboxi (i,k,j)=xboxzi(j)
+                     xboxo (i,k,j)=xboxzo(j)
+               end if
+   60          continue
+            if(scb(i,j).ne.0.0)then
+                  xcb3oo(i,j)=xcbdo(j)
+                  xcb3io(i,j)=xcbdo(j)
+                  xcb2oo(i,j)=xcbdo(j)
+                  xcb2io(i,j)=xcbdo(j)
+            end if
+c
+c     initialize canister zirconium arrays
+c
+            do 70 k=1,2
+               if(scn(i,k,j).ne.0.0)then
+                  csabxz=boxl(k,j)*(xboxi(i,k,j)+xboxo(i,k,j))/cmprft
+                  wzrci=csabox(k,j)*rhocld*dz
+                  wzrcrx=csabxz*rhocld*dz
+                  wzcani(i,k,j)=wzrci
+                  wzcan(i,k,j,1)=wzrci-wzrcrx
+                  wzcan(i,k,j,2)=wzrcrx*123.219/91.22
+                  sumzci(j)=sumzci(j)+wzcani(i,k,j)
+               end if
+   70          continue
+c
+c     compute initial c.b.steel and b4c inventory
+c
+            if(scb(i,j).ne.0.0)then
+               sumssi(j)=sumssi(j)+wsscbi(i,j,1)+wsscbi(i,j,2)
+               smb4ci(j)=smb4ci(j)+wb4c(i,j)
+            end if
+c
+c     initialize structural temperatures
+c
+            do 80 k=1,2
+               twscan(i,k,j)=tmelbx
+               twscbb(i,k,j)=tmelcb
+               tboxo(i,k,j)=tcani(i)
+   80          tbox(i,k,j)=tboxo(i,k,j)
+            tcb1(i,j)=tcbi(i)
+            tcb1o(i,j)=tcb1(i,j)
+            tcb2 (i,j)=tcb1(i,j)
+            tcb2o(i,j)=tcb1(i,j)
+            tcb3 (i,j)=tcb1(i,j)
+            tcb3o(i,j)=tcb1(i,j)
+   90    continue
+c
+c----initialize tbxmx
+c
+      do 100 i=1,ndz(j)
+            do 100 k=1,2
+  100          tbxmx(i,k,j)=tboxo(i,k,j)
+      return
+      end
+*endif

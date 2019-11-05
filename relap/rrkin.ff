@@ -1,0 +1,1340 @@
+*mlist
+       subroutine rrkin
+!  Processes reactor kinetics input data.
+!
+!  Cognizant engineer: rjw.
+!
+*in32 idin
+*in32 iscr
+*in32end
+!
+$if def,rk3d,2
+       use rk3dcode, only:rrk3d
+       use rkinc
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'rkinc.h'
+       include 'rknatb.h'
+       include 'rrkinc.h'
+       include 'k3all.h'
+       include 'k3point.h'
+       include 'ufiles.h'
+!
+!  Local variables.
+$if def,rk3d,2
+       integer, allocatable :: mradchk(:,:,:),nodes(:),volnos(:)
+       integer l3l(9),ik,isss,nk
+       real scr(350),fi(6),lmda(6),gam(11),glam(11),agam(2),alam(2)
+       real tconv(5),bgam(69),blam(69)
+       integer iscr(350),l3a(8),l3b(15),l3c(9),l3d(9),l3g(13),l3j(14),
+     & l3k(9)
+       logical tfail,tfail2,tfail3,tfail4
+       equivalence (scr(1),iscr(1))
+       real powhi(l_),durtim(l_),durun(l_)
+       equivalence (powhi(1),fa(1)),(durtim(1),fa(2)),(durun(1),fa(3))
+       equivalence (sum,isum)
+       character type(3)*8,typ2(8)*8,typd(3)*8,istyps(3)*8,tunit(5)*4,
+     & chwrd*8
+       integer i,icc,ii,inp10,inp9,isfdes,isum,j,jb,je,k,kl,l,lcntgs,
+     & lcontg,ll,lxaa,m,n3,n4,na,nd,ngm,noff
+       real fid,ftbnid,gf,sum,suma,sumk
+       equivalence (sum,isum)
+!
+!  data statements.
+       data type/'no-gamma','gamma','gamma-ac'/
+       data typ2/'separabl','table3','table4','table3a','table4a',
+     & 'ramona','hwr','gen'/
+       data typd/'ans73','ans79-1','ans79-3'/
+       data istyps/'u-235','u-238','pu-239'/
+       data tunit/'sec','min','hr','day','wk'/
+       data tconv/1.0,60.0,3600.0,86400.0,604800.0/
+       data fi/0.038,0.213,0.188,0.407,0.128,0.026/
+       data lmda/0.0127,0.0317,0.115,0.311,1.40,3.87/
+       data gam/0.00299,0.00825,0.01550,0.01935,0.01165,0.00645,0.00231,
+     & 0.00164,0.00085,0.00043,0.00057/
+       data glam/1.772,0.5774,0.06743,6.214e-3,4.739e-4,4.810e-5,
+     & 5.344e-6,5.726e-7,1.036e-7,2.959e-8,7.585e-10/
+       data bgam/  6.5057e-01, 5.1264e-01, 2.4384e-01, 1.3850e-01,
+     & 5.5440e-02, 2.2225e-02, 3.3088e-03, 9.3015e-04, 8.0943e-04,
+     & 1.9567e-04, 3.2535e-05, 7.5595e-06, 2.5232e-06, 4.9948e-07,
+     & 1.8531e-07, 2.6608e-08, 2.2398e-09, 8.1641e-12, 8.7797e-11,
+     & 2.5131e-14, 3.2176e-16, 4.5038e-17, 7.4791e-17,
+     & 1.2311,     1.1486,     7.0701e-01, 2.5209e-01, 7.1870e-02,
+     & 2.8291e-02, 6.8382e-03, 1.2322e-03, 6.8409e-04, 1.6975e-04,
+     & 2.4182e-05, 6.6356e-06, 1.0075e-06, 4.9894e-07, 1.6352e-07,
+     & 2.3355e-08, 2.8094e-09, 3.6236e-11, 6.4577e-11, 4.4963e-14,
+     & 3.6654e-16, 5.6293e-17, 7.1602e-17,
+     & 2.0830e-01, 3.8530e-01, 2.2130e-01, 9.4600e-02, 3.5310e-02,
+     & 2.2920e-02, 3.9460e-03, 1.3170e-03, 7.0520e-04, 1.4320e-04,
+     & 1.7650e-05, 7.3470e-06, 1.7470e-06, 5.4810e-07, 1.6710e-07,
+     & 2.1120e-08, 2.9960e-09, 5.1070e-11, 5.7030e-11, 4.1380e-14,
+     & 1.0880e-15, 2.4540e-17, 7.5570e-17/
+       data blam/  2.2138e+01, 5.1587e-01, 1.9594e-01, 1.0314e-01,
+     & 3.3656e-02, 1.1681e-02, 3.5870e-03, 1.3930e-03, 6.2630e-04,
+     & 1.8906e-04, 5.4988e-05, 2.0958e-05, 1.0010e-05, 2.5438e-06,
+     & 6.6361e-07, 1.2290e-07, 2.7213e-08, 4.3714e-09, 7.5780e-10,
+     & 2.4786e-10, 2.2384e-13, 2.4600e-14, 1.5699e-14,
+     & 3.2881,     9.3805e-01, 3.7073e-01, 1.1118e-01, 3.6143e-02,
+     & 1.3272e-02, 5.0133e-03, 1.3655e-03, 5.5158e-04, 1.7873e-04,
+     & 4.9032e-05, 1.7058e-05, 7.0465e-06, 2.3190e-06, 6.4480e-07,
+     & 1.2649e-07, 2.5548e-08, 8.4782e-09, 7.5130e-10, 2.4188e-10,
+     & 2.2739e-13, 9.0536e-14, 5.6098e-15,
+     & 1.0020e+01, 6.4330e-01, 2.1860e-01, 1.0040e-01, 3.7280e-02,
+     & 1.4350e-02, 4.5490e-03, 1.3280e-03, 5.3560e-04, 1.7300e-04,
+     & 4.8810e-05, 2.0060e-05, 8.3190e-06, 2.3580e-06, 6.4500e-07,
+     & 1.2780e-07, 2.4660e-08, 9.3780e-09, 7.4500e-10, 2.4260e-10,
+     & 2.2100e-13, 2.6400e-14, 1.3800e-14/
+       data agam/0.474,0.419/
+       data alam/4.91e-4,3.41e-6/
+       data l3a/30000000,0,0,2,0,1,-1,-1/
+       data l3b/30000001,0,4,9,0,1,-1,1,1,1,1,1,1,1,-1/
+       data l3c/30000101,-30000199,0,100,0,1,2,1,1/
+       data l3d/30000011,-30000020,0,20,0,1,2,0,0/
+       data l3g/30000401,-30000499,0,0,0,1,3,1,1,-1,3*1/
+       data l3j/30000002,0,0,8,0,1,-1,4*1,3*0/
+       data l3k/30000301,0,0,4,0,1,2,1,1/
+$if def,rk3d,1
+       data l3l/30000100,30000199,7,700,0,1,2,2*0/
+       data noff/30/
+!
+!  Read type of kinetics.
+       call inplnk (l3a(1),ix,n3,n4,fa(filndx(1)))
+       if (n4 .le. 0) then
+         if (n4 .lt. 0) write (output,2047)
+ 2047  format ('0******** Card 30000000 is incorrect.')
+         if (ix.eq.-1 .or. ix.gt.30099999) then
+           go to 1000
+         else
+           go to 11
+         endif
+       endif
+       l3a(6) = 1
+       call inp2 (fa(filndx(1)),iscr,l3a)
+       if (l3a(6) .lt. 0) go to 11
+       write (chwrd,'(a8)') scr(1)
+       if (chwrd .eq. 'delete') then
+         if (filid(21) .eq. 0.0) then
+           write (output,2042)
+ 2042  format ('0******** Command to delete reactor kinetics but either
+     &new problem or no reactor kinetics present in old problem.')
+           fail = .true.
+           return
+         else
+           call ftbdel (filid(21))
+           filid(21) = 0
+           filndx(21) = 1
+           filsiz(21) = 0
+           iextra = ior(iextra,4)
+           go to 1000
+         endif
+       elseif (chwrd .eq. 'point') then
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2080)
+ 2080  format ('1',20x,'Space independent reactor kinetics data')
+$if def,rk3d,6
+         pt3dflag = .false.
+       elseif (chwrd .eq. 'nodal') then
+         if (filid(21) .eq. 0.0) filid(21) = ftbnid(1)
+         call rrkinsp
+         go to 1000
+ 2101  format ('1',24x,'nodal reactor kinetics data')
+       else
+         write (output,2002)
+ 2002  format ('0******** Card 30000000 does not indicate point kinetics
+     &, no other kinetics now available.')
+         go to 11
+       endif
+!  Check type of feedback.
+       rknumi = 0
+       fberr = .false.
+       if (l3a(6) .eq. 1) then
+           chwrd = typ2(1)
+       else
+         write (chwrd,'(a8)') scr(2)
+       endif
+         jb = 1
+         je = 5
+       do 91 j = jb,je
+         if (chwrd .eq. typ2(j)) go to 92
+   91  continue
+       write (output,2061)
+ 2061  format ('0******** Incorrect feedback control word, feedback inpu
+     &t cannot be checked.')
+       filsiz(1) = inp10(fa(filndx(1)),30000501,30099999)
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+       fail = .true.
+       fberr = .true.
+       go to 90
+   92  if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2201) chwrd
+ 2201  format ('0Feedback type: ',a)
+         if (j .ge. 2) then
+           if (j.eq.2 .or. j.eq.4) then
+             jb = 3
+           else
+             jb = 4
+           endif
+           if (j .lt. 4) then
+             je = 0
+           else
+             je = 1
+           endif
+           rknumi = ior(ior(ishft(je,9),ishft(jb,2)),32)
+         endif
+   90  if (filid(21) .eq. 0.0) then
+         filid(21) = ftbnid(1)
+       else
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2050)
+ 2050  format ('0Reactor kinetics being replaced by new data.')
+         call ftbdel (filid(21))
+         call fmvlwr
+       endif
+       l = lcontg(1)
+       if (l .lt. 1854) go to 218
+       call ftbrsv (filid(21),l,-1,lx)
+       iextra = ior(iextra,4)
+!  Get space, process card 30000001.
+       l3b(6) = 1
+       call inp2 (fa(filndx(1)),scr,l3b)
+       if (l3b(6) .le. 0) then
+         write (output,2004)
+ 2004  format ('0******** Default reactor kinetic data entered.')
+         fail = .true.
+         read (type(3),'(a8)') scr(1)
+         scr(2) = 1.0
+         scr(3) = 0.0
+         scr(4) = 100.0
+       endif
+       write (chwrd,'(a8)') scr(1)
+       do 31 j = 1,3
+         if (chwrd .eq. type(j)) go to 27
+   31  continue
+       write (output,2013) l3b(1)
+ 2013  format ('0******** Word 1 of Card',i9,' does not contain recogniz
+     &able option.')
+       fail = .true.
+       j = 3
+   27  if (scr(2) .le. 0.0) then
+         write (output,2005)
+ 2005  format ('0******** Reactor power is less than or equal to zero, s
+     &et to 1.0 watt.')
+         fail = .true.
+         scr(2) = 1.0
+       endif
+         if (scr(3) .gt. 0.0) then
+           write (output,2006)
+ 2006  format ('0******** Initial reactivity entered is greater than zer
+     &o, set to zero.')
+           fail = .true.
+           scr(3) = 0.0
+         endif
+         if (scr(4) .le. 0.0) then
+           write (output,2007)
+ 2007  format ('0******** Delayed neutron fraction over generation time
+     &entered is less than or equal to zero, set to 100 sec-1.')
+           fail = .true.
+           scr(4) = 100.0
+         endif
+       if( l3b(6) .lt. 5 ) then
+         scr(5) = 1.0
+       else
+         if (j .lt. 2) then
+           if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &     write (output,2048) type(j)
+         endif
+ 2048  format ('0$$$$$$$$ Word 5 of card 30000001 not needed with ',a8,
+     & ' option, not considered an error.')
+         if (scr(5) .le. 0.0) then
+           fail = .true.
+           write (output,2008)
+ 2008  format ('0******** Gamma decay multiplier entered is less than or
+     & equal to zero, set to 1.0.')
+           scr(5) = 1.0
+         endif
+       endif
+       if (l3b(6) .lt. 6) then
+          scr(6) = 1.0
+       else
+         if (j.lt.3 .and. scr(6).ne.1.0) then
+          if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &    write (output,2049) type(j)
+         endif
+ 2049  format ('0$$$$$$$$ Word 6 of card 30000001 not needed with ',a8,
+     &  ' option, not considered an error.')
+         if (scr(6) .le. 0.0) then
+           fail = .true.
+           write (output,2009)
+ 2009  format ('0******** U-239 production factor entered is less than o
+     &r equal to zero, set to 1.0.')
+           scr(6) = 1.0
+         endif
+       endif
+       if (l3b(6) .lt. 7) then
+         scr(7) = 0.0
+       else
+         if (scr(7) .lt. 0.0) then
+           rknumi = ior(rknumi,16384)
+           scr(7) = -scr(7)
+         endif
+         if (scr(7) .gt. 3.0) then
+           scr(7) = 0.0
+           fail = .true.
+           write (output,2026)
+ 2026  format ('0******** The ratio of fissions to initial fissile atom
+     &is incorrect, zero entered.')
+         endif
+       endif
+       rkpsi(lx) = scr(7)
+       rkntbx = 0.0
+       rkilk = 1
+       rkntbx = (rkntbl(2,2) - rkntbl(2,1))/(rkntbl(1,2) - rkntbl(1,1))
+       ii = 0
+       if (l3b(6) .lt. 8) then
+         scr(8) = 52
+         ii = 5
+       else
+         if (scr(8) .lt. 0.0) then
+           scr(8) = 52
+           ii = 5
+           fail = .true.
+           write (output,2027)
+ 2027  format ('0******** Reactor operating period is incorrect, default
+     & value entered.')
+         endif
+       endif
+       if (l3b(6) .lt. 9) then
+         if (l3b(6) .ge. 8) then
+           scr(8) = 52
+           fail = .true.
+           write (output,2028)
+ 2028  format ('0******** Units for reactor operating period not entered
+     &, but must be entered if reactor operating period is entered.')
+         endif
+         ii = 5
+       else
+         if (ii .eq. 0) then
+           write (chwrd,'(a8)') scr(9)
+           do 72 ii = 1,5
+             if (chwrd .eq. tunit(ii)) go to 73
+   72      continue
+           scr(8) = 52
+           ii = 5
+           fail = .true.
+           write (output,2029)
+ 2029  format ('0******** Units for reactor operating period are not cor
+     &rect, default reactor operating period is entered.')
+         endif
+       endif
+   73  rkcapt(lx) = scr(8)*tconv(ii)
+       if (rkcapt(lx) .gt. 1.2614e8) then
+         rkcapt(lx) = 1.2614e8
+         fail = .true.
+         write (output,2030)
+ 2030  format ('0******** Reactor operating time is greater than limit i
+     &n ANS-79 standard, set to limit.')
+       endif
+       rkpow(lx) = scr(2)
+       rkfu38(lx) = scr(6)
+       if (j .ne. 3) rkfu38(lx) = 0.0
+       rkdt(lx) = 1.0e10
+         rkrn(lx) = scr(3)
+         rkbol(lx) = scr(4)
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2020) (scr(i),i=2,4)
+ 2020  format ('0Initial power =',1p,g14.6,' watts',5x,'initial reactivi
+     &ty =',g13.5/'0Delayed neutron fraction over generation time =',
+     & g14.6,' sec-1.')
+       if (scr(7) .eq. 0.0) then
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2035)
+ 2035  format ('0$$$$$$$$ Neutron absorption (G) factor is not included
+     &in decay heat calculations.')
+       else
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2031) scr(7),scr(8),tunit(ii)
+ 2031  format ('0Ratio of fissions to initial fissile atom is',f8.5/
+     & ' Reactor operating period is',1p,g14.6,1x,a3)
+         if (iand(rknumi,16384) .eq. 0) then
+           scr(7) = 1.0e4
+         else
+           scr(7) = 0.0
+         endif
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2036) scr(7)
+ 2036  format (' Use of Gmax table starts at shutdown time =',1p,e10.2,
+     & ' s.')
+       endif
+!  Read fission product decay information card.
+       l3j(6) = 1
+       call inp2 (fa(filndx(1)),rdin,l3j)
+       if (l3j(6) .lt. 0) then
+         write (output,2083)
+ 2083  format ('0******** Ans73 assumed because of bad input.')
+       else
+         if (l3j(6) .eq. 0) then
+           idin(1) = 1
+           rdin(2) = 200.0
+           go to 80
+         endif
+         if (j .eq. 1) then
+           write (output,2087)
+ 2087  format ('0******** Card 30000002 should not be entered if no-gamm
+     &a is specified.')
+           fail = .true.
+           go to 51
+         endif
+         write (chwrd,'(a8)') rdin(1)
+         do 57 i = 1,3
+           if (chwrd .eq. typd(i)) go to 59
+   57    continue
+         write (output,2082)
+ 2082  format ('0******** Illegal fission product type, ans73 assumed.')
+       endif
+       i = 1
+       fail = .true.
+   59  idin(1) = i
+       if (i.eq.1 .and. rkpsi(lx).ne.0) then
+         rkpsi(lx) = 0.0
+         fail = .true.
+         write (output,2033)
+ 2033  format ('0******** Neutron absorption correction factor should no
+     &t be used with ans73 option, ratio of fissions to initial fissile
+     &atom set to zero.')
+       endif
+       if (l3j(6) .eq. 1) then
+         rdin(2) = 200.0
+       else
+         if (rdin(2) .lt. 0.0) then
+           write (output,2098)
+ 2098  format ('0******** Quantity defining mev/fission is negative, def
+     &ault value used.')
+           fail =  .true.
+           rdin(2) = 200.0
+         elseif (rdin(2) .eq. 0.0) then
+           rdin(2) = 200.0
+         endif
+       endif
+   80  if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2097) typd(idin(1)),rdin(2)
+ 2097  format ('0Fission product decay type is ',a7/
+     & '0Total energy released per fission is',1p,g13.6,' mev.')
+       if (idin(1) .eq. 3) then
+         if (l3j(6) .lt. 5) then
+           write (output,2084)
+ 2084  format ('0******** Correct number of power fractions not entered
+     &as needed for ans79-3 option, default values being used.')
+           rdin(3) = 0.97
+           rdin(4) = 0.03
+           rdin(5) = 0.00
+           fail = .true.
+         endif
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2096) (rdin(k+2),k=1,3)
+ 2096  format ('0Power fractions for ans79-3 option, u-235 =',1p,g13.5,
+     & 5x,'u238 =',g13.5,5x,'pu-239 =',g13.5)
+         sum = 0.0
+         tfail = .false.
+         do 68 k = 1,3
+           tfail = tfail .or. rdin(k+2) .lt. 0.0
+           sum = sum + rdin(k+2)
+   68    continue
+         if (tfail) then
+           write (output,2085)
+ 2085  format ('0******** One or more power fractions needed for ans79-3
+     & option is negative.')
+           fail = .true.
+         else
+           if (abs(sum - 1.0) .gt. 0.00001) then
+             write (output,2086)
+ 2086  format ('0******** Power fractions needed for ans79-3 do not add
+     &up to 1.0')
+             fail = .true.
+           endif
+         endif
+       endif
+!
+   51  ngm = 0
+       na = 0
+!  Get delayed neutron fractions and decay constants.
+       l3c(1) = 30000101
+       l3c(2) = -l3c(1) - 98
+       l3c(6) = 1
+       n3 = 51
+       call inp2 (fa(filndx(1)),scr(n3),l3c)
+       if (l3c(6)) 22,23,24
+   22  fail = .true.
+   23  if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2010)
+ 2010  format ('0Delayed neutron yield and decay default data being used
+     &.')
+       n4 = n3
+       do 25 i = 1,6
+         scr(n4) = fi(i)
+         scr(n4+1) = lmda(i)
+         n4 = n4 + 2
+   25  continue
+       l3c(6) = 12
+       go to 26
+   24  if (mod(l3c(6),2) .ne. 0) then
+         write (output,2011)
+ 2011  format ('0******** Amount of delayed neutron yield and decay data
+     & is not a multiple of 2, last item is being dropped.')
+         fail = .true.
+         l3c(6) = l3c(6) - 1
+       endif
+   26  n4 = n3 + l3c(6) - 1
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2012) (scr(i),i=n3,n4)
+ 2012  format ('0Delayed neutron yield and decay data'/
+     & 6x,'yield fraction   decay constant',13x,'yield fraction   decay
+     &constant'/23x,'(sec-1)',37x,'(sec-1)',1p/(2g17.5,10x,2g17.5))
+       tfail = .false.
+       sum = 0.0
+       do 37 i = n3,n4,2
+         tfail = tfail .or. scr(i).le.0.0 .or. scr(i+1).le.0.0
+         sum = sum + scr(i)
+   37  continue
+       if (tfail) then
+         write (output,2076)
+ 2076  format ('0******** Some delayed neutron data are negative.')
+         fail = .true.
+       endif
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2075) sum
+ 2075  format ('0Sum of delayed neutron fractions is',g15.7)
+       if (abs(sum-1.0) .ge. 0.000001) then
+         write (output,2077)
+ 2077  format ('0******** Sum of delayed neutron fractions is not 1.0.')
+         fail = .true.
+       endif
+       sumk = 0.0
+       suma = 0.0
+       nd = l3c(6)/2
+         n3 = n3 + l3c(6)
+!  Get gamma yield and decay constants if requested.
+       tfail4 = .false.
+       if (j .eq. 1) go to 35
+       l3c(1) = l3c(1) + 100
+       l3c(2) = -l3c(1) - 98
+       l3c(6) = 1
+       call inp2 (fa(filndx(1)),scr(n3),l3c)
+       if (l3c(6)) 42,43,44
+   42  fail = .true.
+   43  if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2014)
+ 2014  format ('0Gamma decay yield and decay default data being used.')
+       n4 = n3
+       if (idin(1) .le. 1) then
+         do 45 i = 1,11
+           scr(n4) = gam(i)*200.0
+           scr(n4+1) = glam(i)
+           n4 = n4 + 2
+   45    continue
+         l3c(6) = 22
+         go to 98
+       endif
+       k = 23
+       if (idin(1) .eq. 3) then
+         k = 69
+         idin(6) = 23
+         idin(7) = 23
+         idin(8) = 23
+       endif
+       l3c(6) = 2*k
+       do 97 i = 1,k
+         scr(n4) = bgam(i)/blam(i)
+         scr(n4+1) = blam(i)
+         n4 = n4 + 2
+   97  continue
+       if (idin(1) .eq. 3) go to 113
+       go to 98
+   44  if (mod(l3c(6),2) .ne. 0) then
+         write (output,2015)
+ 2015  format ('0******** Amount of gamma decay yield and decay data is
+     &not a multiple of 2, last item is being dropped.')
+         fail = .true.
+         l3c(6) = l3c(6) - 1
+       endif
+       m = l3c(6)/2
+       if  (idin(1) .ne. 3) go to 98
+       if (l3j(6) .eq. 8) go to 99
+       write (output,2088)
+ 2088  format ('0******** Insufficient number of words entered on card 3
+     &0000002 when ans79-3 option selected, default numbers supplied.')
+  114  fail = .true.
+       idin(8) = m/3
+       idin(6) = max(0,m - 2*idin(8))
+       idin(7) = m - idin(6) - idin(8)
+       go to 113
+   99  tfail = .false.
+       isum = 0
+       do 111 i = 1,3
+         tfail = tfail .or. idin(i+5) .le. 0
+         isum = isum + idin(i+5)
+  111  continue
+       if (tfail) then
+         write (output,2089)
+ 2089  format ('0******** One of the number of groups/isotope is negativ
+     &e or zero.')
+         go to 139
+       endif
+       if (isum .eq. m) go to 113
+       write (output,2090)
+ 2090  format ('0******** Sum of number of groups/isotope do not add up
+     &to number of groups entered.')
+  139  write (output,2091)
+ 2091  format ('0******** Default number of groups/isotope being used.')
+       go to 114
+  113  write (output,2092) (idin(i+5),i=1,3)
+ 2092  format ('0Number of groups/isotope, u235 =',i5,5x,
+     & 'u238 =',i5,5x,'pu-239 =',i5)
+   98  n4 = n3 + l3c(6) - 1
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2016) scr(5)
+ 2016  format ('0Gamma decay yield and decay data',20x,'gamma decay fact
+     &or is',1p,g13.5/6x,'yield quantity   decay constant',13x,'yield qu
+     &antity   decay constant'/23x,'(sec-1)',37x,'(sec-1)')
+       if (idin(1) .ne. 3) then
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2093) (scr(i),i=n3,n4)
+ 2093  format (1p,(2g17.5,10x,2g17.5))
+         go to 116
+       endif
+       n4 = n3 - 1
+       do 117 m = 1,3
+         ll = n4 + 1
+         n4 = n4 + 2*idin(m+5)
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+         write (output,2094) istyps(m)
+ 2094  format (' Isotope ',a8)
+         write (output,2093) (scr(i),i=ll,n4)
+         endif
+  117  continue
+  116  tfail = .false.
+       if (idin(1) .ne. 3) then
+         do 33 i = n3,n4,2
+           tfail = tfail .or. scr(i).le.0.0 .or. scr(i+1).le.0.0
+           scr(i) = scr(i)*scr(5)
+           sumk = sumk + scr(i)
+   33    continue
+         go to 161
+       endif
+       ll = n3 - 2
+       do 162 m = 1,3
+         kl = ll + 2
+         ll = ll + idin(m+5)*2
+         do 163 i = kl,ll,2
+           tfail = tfail .or. scr(i).le.0.0 .or. scr(i+1).le.0.0
+           scr(i) = scr(i)*scr(5)
+           sumk = sumk + scr(i)*rdin(m+2)
+  163    continue
+  162  continue
+  161  if (tfail) then
+         write (output,2078)
+ 2078  format ('0******** Some gamma decay data are negative.')
+         tfail4 = .true.
+         fail = .true.
+       endif
+       ngm = l3c(6)/2
+       n3 = n3 + l3c(6)
+!  Get actinide yield and decay data if requested.
+       if (j .ne. 2) then
+         l3k(1) = 30000301
+         l3k(3) = 0
+         l3k(4) = 4
+         l3k(6) = 1
+         call inp2 (fa(filndx(1)),scr(n3),l3k)
+         if (l3k(6) .lt. 0) then
+           fail = .true.
+           l3k(6) = 0
+         endif
+         if (l3k(6) .gt. 0) then
+           if (l3k(6) .ne. 4) then
+             write (output,2018)
+ 2018  format ('0******** Amount of actinide yield and decay data on car
+     &d 300000301 is not 4 words.')
+             fail = .true.
+             l3k(6) = 0
+           endif
+         endif
+         if (l3k(6) .eq. 0) then
+           if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &     write (output,2017)
+ 2017  format ('0Actinide yield and decay default data being used.')
+           n4 = n3
+           do 55 i = 1,2
+             scr(n4) = agam(i)
+             scr(n4+1) = alam(i)
+             n4 = n4 + 2
+   55      continue
+         endif
+         n4 = n3 + 3
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2019) rkfu38(lx),(scr(i),i=n3,n4)
+ 2019  format ('0Actinide energy yield and decay data',20x,'u239 product
+     &ion factor is',1p,g13.5/6x,'yield quantity   decay constant',13x,
+     &'yield quantity   decay constant'/23x,'(sec-1)',37x,'(sec-1)'/
+     & (2g17.5,10x,2g17.5))
+         tfail = .false.
+         do 38 i = n3,n4,2
+           tfail = tfail .or. scr(i).le.0.0 .or. scr(i+1).le.0.0
+   38    continue
+         scr(n3) = scr(n3)*rkfu38(lx)
+         suma = scr(n3) + scr(n3+2)*rkfu38(lx)
+         scr(n3+2) = scr(n3+2)*scr(n3+3)
+         if (tfail) then
+           write (output,2079)
+ 2079  format ('0******** Some actinide decay data are negative.')
+           fail = .true.
+         endif
+         na = 2
+         n3 = n3 + 4
+       endif
+   35  ngm = na + ngm
+       na = ngm + nd + 1
+!  Move yield and decay data to its correct position following dependent
+!  variables.
+         lxp = lx + 9
+         k = n3 - 1
+         do 36 i = 51,k,2
+           rkfi(lxp) = scr(i)
+           rklmda(lxp) = scr(i+1)
+           lxp = lxp + 9
+   36    continue
+         lxp = lxp + noff
+         filsiz(21) = lxp - lx
+         rkopt(lx) = ior(rknumi,66)
+         rknum(lx) = na
+         rknumd(lx) = nd
+         rkoffd(lx) = nd*9 - 1
+         rkoffa(lx) = na*9 - 1
+       sum = sumk + suma
+       rkqval(lx) = rdin(2) - sum
+       sum = sum/rdin(2)
+       if (iand(rkopt(lx),16384) .eq. 0) then
+         gf = 1.0 + 3.24e-6*rkpsi(lx)*rkcapt(lx)**0.4
+       else
+         gf = 1.020
+       endif
+       sumk = sumk*gf
+       rkdepv(lx) = rkpow(lx)/(rkqval(lx) + sumk + suma)
+       rkpowk(lx) = sumk*rkdepv(lx)
+       rkpowa(lx) = suma*rkdepv(lx)
+       rkpowg(lx) = rkpowk(lx) + rkpowa(lx)
+       rkpowf(lx) = rkpow(lx) - rkpowg(lx)
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2021) 1.0 - sum,sum
+ 2021  format ('0For infinite operation time, fraction of power due to f
+     &ission =',f8.5,', due to gamma decay =',f8.5,'.')
+       if (rkpsi(lx) .ne. 0.0) then
+         sum = rkpowg(lx)/rkpow(lx)
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2032) 1.0 - sum,sum
+ 2032  format (' Neutron absorption corrected values are:',23x,f8.5,
+     & 22x,f8.5)
+       endif
+       if (rkqval(lx) .lt. 0.0) then
+         write (output,2022)
+ 2022  format ('0******** Fission fraction negative, error in yield fact
+     &ors or multipliers.')
+         rkpowf(lx) = rkpow(lx)
+         tfail4 = .true.
+       endif
+!  Set initial conditions in dependent variables.
+         rkdepv(lx) = rkpowf(lx)/rkqval(lx)
+         rkslob(lx) = -scr(3)*rkdepv(lx)
+         n4 = lxp - (noff + 1)
+         n3 = lx + 9
+         do 61 i = n3,n4,9
+           rkdepv(i) = rkdepv(lx)
+   61    continue
+         if (rkfu38(lx) .ne. 0.0) rkdepv(n4-8) = rkfu38(lx)*rkdepv(lx)/
+     &   rklmda(n4-8)
+!  Process previous power history data.
+       call ftbsft (filid(21),filsiz(21),3,lx)
+       fid = ftbnid(1)
+       l3g(4) = lcontg(1)
+       m = 3
+       if (idin(1) .eq. 3) m = 6
+       l3g(6) = 1
+       l3g(7) = m
+       call ftbrsv (fid,l3g(4),-1,ld)
+       call inp2 (fa(filndx(1)),powhi(ld),l3g)
+       if (l3g(6) .eq. 0) then
+         rkpsi(lx) = rkpsi(lx)*rkcapt(lx)**0.4
+         rkcapt(lx) = 0.0
+       else
+         tfail = .false.
+         if (l3g(6) .lt. 0) then
+           tfail = .true.
+           write (output,2057)
+ 2057  format ('0******** Infinite operating time used because of above
+     &error.')
+         elseif (mod(l3g(6),m) .ne. 0) then
+           tfail = .true.
+           write (output,2051) m
+ 2051  format ('0******** Number of words on cards 30000401-30000499 is
+     &not a multiple of',i2,'.')
+         endif
+         if (tfail) then
+           fail = .true.
+           l3g(6) = 0
+           l3g(2) = -l3g(2)
+           filsiz(1) = inp10(fa(filndx(1)),l3g(1),l3g(2))
+         else
+           lde = ld + l3g(6) - 1
+           if (idin(1) .ne. 3) then
+             if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &       write (output,2052) (powhi(i),i=ld,lde)
+ 2052  format ('0Previous power history data'/'     power (watts)    dur
+     &ation',1p/(2g17.6,' ',a10))
+           else
+             if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &       write (output,2095) (powhi(i),i=ld,lde)
+ 2095  format ('0Previous power history data'/'     power (watts)    dur
+     &ation',19x,'u-235 fraction   u-238 fraction   pu-239 fraction',
+     & 1p/(2g17.6,' ',a10,3g17.6))
+           endif
+           lxd = ld
+           tfail = .false.
+           tfail2 = .false.
+           tfail3 = .false.
+           do 145 i = ld,lde,m
+             write (chwrd,'(a8)') durun(i)
+             do 146 j = 1,5
+               if (chwrd .eq. tunit(j)) go to 147
+  146        continue
+             tfail3 = .true.
+             j = 1
+  147        tfail = powhi(i) .lt. 0.0 .or. tfail
+             powhi(lxd) = powhi(i)
+             tfail2 = durtim(i).lt.0.0 .or. tfail2
+             durtim(lxd) = durtim(i)*tconv(j)
+             if (m .ne. 3) then
+               durtim(lxd+1) = durtim(i+2)
+               durtim(lxd+2) = durtim(i+3)
+               durtim(lxd+3) = durtim(i+4)
+             endif
+             lxd = lxd + m - 1
+  145      continue
+           if (tfail) write (output,2053)
+ 2053  format ('0******** Negative power in power history data.')
+           if (tfail2) write (output,2054)
+ 2054  format ('0******** Negative or zero time duration in power histor
+     &y data.')
+           if (tfail3) write (output,2055)
+ 2055  format ('0******** Illegal units in power history data.')
+       tfail = tfail .or. tfail2 .or. tfail3 .or. tfail4
+           if (ngm .eq. 0) then
+             write (output,2081)
+ 2081  format ('0******** Power history cannot be entered if no gamma de
+     &cay is specified.')
+             tfail = .true.
+           endif
+           fail = fail .or. tfail
+           if (.not.tfail) then
+             lde = lxd - ld
+             call ftbsft (fid,lde,3,ld)
+!  Compute decay initial conditions from power history.
+               lde = lxd - 1
+               lxa = lx + rkoffa(lx)
+               lxd = lx + 10 + rkoffd(lx)
+               lxl = lxa
+               if (rkfu38(lx) .ne. 0.0) lxl = lxl - 9
+               do 150 i = lxd,lxa,9
+                 rkdepv(i) = 0.0
+  150          continue
+             icc = 7*ngm
+             if (icc .gt. lcontg(1)) then
+               write (output,2056)
+ 2056  format ('0******** Insufficient space to compute initial fission
+     &product decay conditions from power history.')
+               fail = .true.
+             else
+               call ftbrsv (-fid,icc,-1,ix)
+                 call rrkinh
+               call ftbdel (-fid)
+                 if (idin(1) .eq. 3) then
+                   kl = lxd
+                   do 137 m = 1,3
+                     do 138 i = 1,idin(m+5)
+                       rkfi(kl) = rkfi(kl)*rdin(m+2)
+                       kl = kl + 9
+  138                continue
+  137              continue
+                 endif
+                 if (rkfu38(lx) .ne. 0.0) then
+                   i = lxd + ngm*9
+                   rkpowa(lx) = rkfi(i-18)*rkdepv(i-18) +
+     &             rkfi(i-9)*rkdepv(i-9)
+                   lxaa = lxa - 18
+                 else
+                   rkpowa(lx) = 0.0
+                   lxaa = lxa
+                 endif
+                 rkpowk(lx) = 0.0
+                 do 153 i = lxd,lxaa,9
+                   rkpowk(lx) = rkpowk(lx) + rkfi(i)*rkdepv(i)
+  153            continue
+                 if (iand(rkopt(lx),16384) .eq. 0) then
+                   gf = 1.0 + 3.24e-6*rkpsi(lx)
+                 else
+                   gf = 1.020
+                 endif
+                 rkpowk(lx) = rkpowk(lx)*gf
+                 rkpowg(lx) = rkpowk(lx) + rkpowa(lx)
+               rkpow(lx) = max(rkpow(lx),rkpowg(lx))
+               rkpowf(lx) = rkpow(lx) - rkpowg(lx)
+               if (rkpowf(lx) .le. 0.0) rkpowf(lx) = 1.0e-12*rkpow(lx)
+                 rkdepv(lx) = rkpowf(lx)/rkqval(lx)
+                 lxd = lxd - 9
+                 do 154 i = n3,lxd,9
+                   rkdepv(i) = rkdepv(lx)
+  154            continue
+                 rkslob(lx) = -scr(3)*rkdepv(lx)
+               sum = rkpowg(lx)/rkpow(lx)
+               scr(1) = 1.0 - sum
+               if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &         write (output,2058) scr(1),sum
+ 2058  format ('0At end of power history, fraction of power due to fissi
+     &on =',f8.5,', due to gamma/actinide decay =',f8.5,'.')
+             endif
+           endif
+         endif
+       endif
+       call ftbdel (fid)
+!
+       if (idin(1).eq.3 .and. l3g(6).eq.0) then
+           ll = lx + 1 + rkoffd(lx)
+           do 134 m = 1,3
+             kl = ll + 9
+             ll = ll + idin(m+5)*9
+             do 135 i = kl,ll,9
+               rkfi(i) = rkfi(i)*rdin(m+2)
+  135        continue
+  134      continue
+       endif
+       l = lcntgs(filid(21),1)
+       call ftbsft (filid(21),l,3,lx)
+!  Process reactivity curve numbers.
+         rknsc(lx) = 0
+         rksptr(lx) = 0
+         if (l .lt. filsiz(21) + 40) then
+           write (output,2023)
+ 2023  format ('0******** Insufficient space to process reactivity table
+     & numbers, cards 30000011-30000020.')
+           filsiz(1) = inp10(fa(filndx(1)),30000011,30000020)
+           go to 63
+         endif
+         l3d(6) = 1
+         call inp2 (fa(filndx(1)),iscr,l3d)
+         if (l3d(6)) 63,64,65
+   63    fail = .true.
+         l3d(6) = 0
+         go to 64
+   65    i = lxp
+         tfail = .false.
+         do 66 k = 1,l3d(6)
+           rknscr(i) = iscr(k)
+           rknscr(i+1) = 0
+           if (rknscr(i).le.0 .or. rknscr(i).ge.20000) then
+             tfail = .true.
+             rknscr(i) = 0
+           endif
+           i = i + 2
+   66    continue
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2025) (iscr(k),k=1,l3d(6))
+ 2025  format ('0Reactivity or control (+10000) variables'/(20i6))
+         fail = fail .or. tfail
+         if (tfail) write (output,2024)
+ 2024  format ('0******** One or more reactivity table or control variab
+     &le numbers are out of range.')
+   64    rknsc(lx) = l3d(6)
+         rksptr(lx) = lxp - lx
+         l3d(6) = 2*l3d(6)
+         lxp = lxp + l3d(6)
+         filsiz(21) = filsiz(21) + l3d(6)
+!  Branch to proper feedback data processing subroutine depending on
+!  kinetics type.
+         call rrkinp
+       go to 1000
+!
+   11  write (output,2001)
+ 2001  format ('0******** Card 30000000 is missing or incorrect, remaini
+     &ng reactor kinetics data, cards 30000001-30099999 cannot be checke
+     &d.')
+       go to 14
+  218  write (output,2003)
+ 2003  format ('0******** Insufficient space to process reactor kinetics
+     & data, cards 30000001-39999999,310000000-329999999')
+   14  filsiz(1) = inp10(fa(filndx(1)),30000001,39999999)
+       filsiz(1) = inp10(fa(filndx(1)),310000000,329999999)
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+       fail = .true.
+       if (filid(21) .ne. 0) then
+         if (isfdes(filid(21)) .ne. 0) call ftbdel (filid(21))
+         filid(21) = 0.0
+       endif
+!
+ 1000  filsiz(1) = inp9(fa(filndx(1)))
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+       call fmvlwr
+       return
+!
+$if def,rk3d
+!
+       contains
+!
+       subroutine rrkinsp
+!  Processes input data for reactor space kinetics.
+!
+       pt3dflag = .true.
+!  Calling space dependent reactor kinetics input processing.
+       call rrk3d
+       write (12,"('rk3d configuration: 0=not defined, 1=reflector, 2=a
+     &ctive.'/)")
+       do j = 1,mny
+         write (12,"(20i5)") mradconf(:,j)
+         write (output,"(20i5)") mradconf(:,j)
+         write (output,"(20i5)") mny
+       enddo  
+!  Generate table to convert from rk3d three index nodal identification
+!  to rk3d one index nodal identification.
+       nmplane = 0
+       nnonzs = count(mradconf.ne.0)
+       write (output,"(20i5)") nnonzs
+       allocate (itrns(mnx,mny))
+       do j = 1,mny
+         do i = 1,mnx
+           if (mradconf(i,j) .eq. 0) then
+             itrns(i,j) = 0 
+           else
+             nmplane = nmplane + 1
+             itrns(i,j) = nmplane
+           endif
+         enddo
+       enddo
+       if (nmplane .ne. nnonzs) call fabend
+       write (12,"('rk3d configuration: Node number of active nodes.'/)
+     &")
+       do j = 1,mny
+         write (12,"(20i5)") itrns(:,j)
+       enddo  
+!
+!  Process data relating rk3d nodes to Relap5 volumes.
+       do ll = 0,1
+         nk = 0
+         isss = 1
+         do  
+           l3l(1) = 30000000 + 100*isss
+           call inplnk (l3l(1),ix,n3,n4,fa(filndx(1)))
+           if (n4 .lt. 0) then
+             write (output,"('0******** Processing of rk3d nodes to a R
+     &elap5 volumes is being skipped due to error in Line',i9,'.')")
+     &       l3l(1)
+             fail = .true.
+           else
+             l3l(2) = l3l(1) + 99
+             if (n4.gt.0 .or. (ix.gt.0 .and. ix.le.l3l(2))) then
+               l3l(2) = -l3l(2)
+               l3l(6) = ll
+               call inp2 (fa(filndx(1)),iscr,l3l)
+               if (l3l(6) .lt. 0) then
+                 write (output,"('0******** Processing of rk3d nodes to
+     & a Relap5 volumes is being skipped due to error noted above.')")
+                 fail = .true.
+               elseif (l3l(6) .eq. 0) then
+               else
+                 nk = nk + 1
+                 if (mod(l3l(6)-1,6) .ne. 0) then
+                   write (output,"('******** Number of items on lines,',
+     &i9,' through',i9,' is not 1 plus a multiple of 6.')") l3l(1:2)
+                   fail = .true.
+                 else
+                   if (ll .ne. 0) then
+                     rk3(nk)%volno = iscr(1)
+                     ik = l3l(6) - 1
+                     allocate (rk3(nk)%ijk((ik)))
+                     do ii = 1,ik
+                       rk3(nk)%ijk(ii) = iscr(ii+1)
+                     enddo
+                   endif
+                 endif
+               endif
+             endif
+           endif   
+           isss = isss + 1
+           if (isss .ge. 1000) exit 
+         enddo  
+         if (ll .ne. 0) exit
+         allocate (rk3(nk))
+       enddo
+!
+       write (output,"('0Relationship of rk3d nodes to Relap5 volumes')
+     &")  
+       do i = 1,size(rk3)
+         write (output,"('0',i10,3(5x,6i5)/(11x,3(5x,6i5)))") 
+     &   rk3(i)%volno, rk3(i)%ijk(:)
+       enddo
+!  Determine rk3d nodes included in each Relap5 volume.
+       allocate (nodes(mny*mnx*mnz),volnos(size(rk3)),
+     & mradchk(mnx,mny,mnz))
+!  Make a copy of volume numbers from user input list of volume numbers
+!  and sort the copy into increasing numbers.
+       volnos(:) = rk3(:)%volno
+       call qsortdep (volnos(:),1,size(volnos))
+!  Eliminate duplicate instances of volume numbes in sorted copy of 
+!  volume numbes..
+       ll = 1
+       do i = 2,size(rk3)
+         if (volnos(ll) .eq. volnos(i)) cycle
+         ll = ll + 1
+         volnos(ll) = volnos(i)
+       enddo
+       allocate (rk3o(ll))
+!  Process user input to determine the rk3d nodes coinciding with
+!  Relap5 volumes, issuing error messages if a rk3d node is applied to
+!  multiple Relap5 volumes.
+       mradchk(:,:,:) = 0
+       do i = 1,ll
+         rk3o(i)%volno = volnos(i)
+         m = 0
+         do j = 1,size(rk3)
+c      write (12,"('rrkin01',i5,i10,5x,i5,i10)") i,volnos(i),j,
+c    & rk3(j)%volno
+           if (rk3(j)%volno .eq. volnos(i)) then
+             do k = 1,size(rk3(j)%ijk),6
+               do ix = rk3(j)%ijk(k+4),rk3(j)%ijk(k+5)
+                 do ik = rk3(j)%ijk(k+2),rk3(j)%ijk(k+3)
+                   do ii = rk3(j)%ijk(k),rk3(j)%ijk(k+1)
+                     if (mradconf(ii,ik) .ne. 0) then
+                       if (mradchk(ii,ik,ix) .ne. 0) then
+                         fail = .true.
+                         write (output,"('0******** rk3d node('i3,','i3
+     & ,','i3') is being assigned more than once.')") ii,ik,ix
+                       else  
+                         mradchk(ii,ik,ix) = 1
+                         m = m + 1
+                         nodes(m) = itrns(ii,ik) + (ix - 1)*nmplane
+                       endif
+                     endif
+c      write (12,"('rrkin02',10i5)") i,j,m,k,ix,ik,ii,itrns(ii,ik),
+c    & nodes(m),mradconf(ii,ik)
+                   enddo
+                 enddo
+               enddo
+             enddo
+           endif
+         enddo
+         allocate (rk3o(i)%node3(m),rk3o(i)%node2p(m),
+     &   rk3o(i)%node2e(m))
+         do j = 1,m
+           rk3o(i)%node3(j) = nodes(j)
+           ii = (nodes(j) - 1)/nmplane
+           rk3o(i)%node2e(j) = ii + 1
+           rk3o(i)%node2p(j) = nodes(j) - ii*nmplane
+         enddo
+       enddo
+       write (output,"('0Assignment of rk3d nodes to Relap5 volumes.')"
+     &)
+       do j = 1,size(rk3o)
+         write (output,"(i10,3x,20i5/(13x,20i5a))")
+     &   rk3o(j)%volno,rk3o(j)%node3(:)
+       enddo
+       do j = 1,size(rk3o)
+         write (output,"(i10,3x,8(i6,i4)/(13x,8(i6,i4)))")
+     &   rk3o(j)%volno,(rk3o(j)%node2p(ii),rk3o(j)%node2e(ii),
+     &   ii=1,size(rk3o(j)%node2e))
+       enddo
+       deallocate (nodes,volnos,mradchk)
+!
+!  Process data relating rk3d nodes to Relap5 heat structures.
+       do ll = 0,1
+         nk = 0
+         isss = 1
+         do  
+           l3l(1) = 30100000 + 100*isss
+           call inplnk (l3l(1),ix,n3,n4,fa(filndx(1)))
+c      write (12,"('rrkin00',2i10)") l3l(1),n4
+           if (n4 .lt. 0) then
+             write (output,"('0******** Processing of rk3d nodes to a R
+     &elap5 volumes is being skipped due to error in Line',i9,'.')")
+     &       l3l(1)
+             fail = .true.
+           else
+             l3l(2) = l3l(1) + 99
+             if (n4.gt.0 .or. (ix.gt.0 .and. ix.le.l3l(2))) then
+               l3l(2) = -l3l(2)
+               l3l(6) = ll
+               call inp2 (fa(filndx(1)),iscr,l3l)
+               if (l3l(6) .lt. 0) then
+                 write (output,"('0******** Processing of rk3d nodes to
+     & a Relap5 volumes is being skipped due to error noted above.')")
+                 fail = .true.
+               elseif (l3l(6) .eq. 0) then
+               else
+                 nk = nk + 1
+                 if (mod(l3l(6)-1,6) .ne. 0) then
+                   write (output,"('******** Number of items on lines,',
+     &i9,' through',i9,' is not 1 plus a multiple of 6.')") l3l(1:2)
+                   fail = .true.
+                 else
+                   if (ll .ne. 0) then
+                     rk4(nk)%htsno = iscr(1)
+                     ik = l3l(6) - 1
+                     allocate (rk4(nk)%ijk((ik)))
+                     do ii = 1,ik
+                       rk4(nk)%ijk(ii) = iscr(ii+1)
+                     enddo
+                   endif
+                 endif
+               endif
+             endif
+           endif   
+           isss = isss + 1
+           if (isss .ge. 1000) exit 
+         enddo  
+         if (ll .ne. 0) exit
+         allocate (rk4(nk))
+       enddo
+!
+       write (output,"('0Relationship of rk3d nodes to Relap5 heat stru
+     &ctures')")  
+       do i = 1,size(rk4)
+         write (output,"('0',i10,3(5x,6i5)/(11x,3(5x,6i5)))") 
+     &   rk4(i)%htsno,rk4(i)%ijk(:)
+       enddo
+!  Determine rk3d nodes included in each Relap5 heat structure.
+       allocate (nodes(mny*mnx*mnz),volnos(size(rk4)),
+     & mradchk(mnx,mny,mnz))
+!  Make a copy of heat structure numbers from user input list of heat
+!  structure numbers and sort the copy into increasing numbers.
+       volnos(:) = rk4(:)%htsno
+       call qsortdep (volnos(:),1,size(volnos))
+       write (12,"('rrkink1',i5/(2i10))") size(volnos),
+     & (rk4(i)%htsno,volnos(i),i=1,size(volnos))
+!  Eliminate duplicate instances of heat structure numbers in sorted
+!  copy of heat structure numbes.
+       ll = 1
+       do i = 2,size(rk4)
+         if (volnos(ll) .eq. volnos(i)) cycle
+         ll = ll + 1
+         volnos(ll) = volnos(i)
+       enddo
+       write (12,"('rrkink2',i5/(i10))") ll,volnos(1:ll)
+       allocate (rk4o(ll))
+!  Process user input to determine the rk3d nodes coinciding with
+!  Relap5 heat structures, issuing error messages if a rk3d node is
+!  applied to multiple Relap5 heat structures..
+       mradchk(:,:,:) = 0
+       do i = 1,ll
+         rk4o(i)%htsno = volnos(i)
+         m = 0
+         do j = 1,size(rk4)
+c      write (12,"('rrkin41',i5,i10,5x,i5,i10)") i,volnos(i),j,
+c    & rk4(j)%htsno
+           if (rk4(j)%htsno .eq. volnos(i)) then
+             do k = 1,size(rk4(j)%ijk),6
+               do ix = rk4(j)%ijk(k+4),rk4(j)%ijk(k+5)
+                 do ik = rk4(j)%ijk(k+2),rk4(j)%ijk(k+3)
+                   do ii = rk4(j)%ijk(k),rk4(j)%ijk(k+1)
+                     if (mradconf(ii,ik) .ne. 0) then
+                       if (mradchk(ii,ik,ix) .ne. 0) then
+                         fail = .true.
+                         write (output,"('0******** rk3d node('i3,','i3
+     & ,','i3') is being assigned more than once.')") ii,ik,ix
+                       else  
+                         mradchk(ii,ik,ix) = 1
+                         m = m + 1
+                         nodes(m) = itrns(ii,ik) + (ix - 1)*nmplane
+                       endif
+                     endif
+c      write (12,"('rrkin42',10i5)") i,j,m,k,ix,ik,ii,itrns(ii,ik),
+c    & nodes(m),mradconf(ii,ik)
+                   enddo
+                 enddo
+               enddo
+             enddo
+           endif
+         enddo
+         allocate (rk4o(i)%node3(m),rk4o(i)%node2p(m),
+     &   rk4o(i)%node2e(m))
+         do j = 1,m
+           rk4o(i)%node3(j) = nodes(j)
+           ii = (nodes(j) - 1)/nmplane
+           rk4o(i)%node2e(j) = ii + 1
+           rk4o(i)%node2p(j) = nodes(j) - ii*nmplane
+         enddo
+       enddo
+       write (output,"('0Assignment of rk3d nodes to Relap5 heat struct
+     &ures.')")
+       do j = 1,size(rk4o)
+         write (output,"(i10,3x,20i5/(13x,20i5a))")
+     &   rk4o(j)%htsno,rk4o(j)%node3(:)
+       enddo
+       do j = 1,size(rk4o)
+         write (output,"(i10,3x,8(i6,i4)/(13x,8(i6,i4)))")
+     &   rk4o(j)%htsno,(rk4o(j)%node2p(ii),rk4o(j)%node2e(ii),
+     &   ii=1,size(rk4o(j)%node2e))
+       enddo
+       deallocate (nodes,volnos,mradchk)
+       end subroutine rrkinsp
+!
+       recursive subroutine qsortdep (dep,m1,m2)
+!  Sorts an array, dep(m1:m2), of type depens using the quicksort
+!  algorithm.
+!
+       implicit none
+       integer m1,m2
+       integer dep(*)
+!
+       integer dumt,i1,i2
+       logical mswap
+!
+!  Swap value at middle of array with value of first element of array.
+       mswap = m2 - m1 .ge. 3
+       i1 = (m1 + m2)/2
+       if (mswap) then
+         dumt = dep(i1)
+         dep(i1) = dep(m1)
+         dep(m1) = dumt
+       endif
+!  Initialize left and right pointers.
+       i1 = m1 + 1
+       i2 = m2
+!  Move data such that data less than value now in first element is to
+!  the left and data greater than that value is to the right.
+       outer: do
+!  Move left pointer to the right.
+         do
+           if (i1 .gt. i2) exit outer
+           if (dep(i1) .gt. dep(m1)) exit
+           i1 = i1 + 1
+         enddo
+!  Move right pointer to the left.
+         do
+           if (i2 .lt. i1) exit outer
+           if (dep(i2) .lt. dep(m1)) exit
+           i2 = i2 - 1
+         enddo
+         dumt = dep(i2)
+         dep(i2) = dep(i1)
+         dep(i1) = dumt
+       enddo outer
+!  Move data in first element to divide the left and right regions.
+       dumt = dep(i2)
+       dep(i2) = dep(m1)
+       dep(m1) = dumt
+!  Set up and call for recursive sorts of the two regions if necessary.
+       i2 = i2 - 1
+       if (i2 .gt. m1) call qsortdep (dep,m1,i2)
+       if (m2 .gt. i1) call qsortdep (dep,i1,m2)
+       return
+       end subroutine qsortdep
+$endif
+!
+       end subroutine rrkin

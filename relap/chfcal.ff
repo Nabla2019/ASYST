@@ -1,0 +1,185 @@
+*mlist
+       subroutine chfcal
+c
+c
+c  Subroutine calculates the critical heat flux.
+c  It call chftab for the 1986 AECL-UO Critical Heat Flux Lookup Table
+c  Installed by Rex Shumway, November 1996.
+c
+c  Cognizant engineer: ras
+c
+$if def,iua
+       use uncdata
+$endif
+       implicit none
+       include 'cons.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'flood.h'
+       include 'htrcom.h'
+       include 'stcblk.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+       real pm,gab,qfluxm,x,hfgm
+c
+       real zuber,glow,ghigh,difcc
+c
+       data glow,ghigh/100.,200./
+c
+       if (help .ne. 0) then
+         if( iand(ihlppr(1),ishft(1,3)).ne.0 ) then
+           if( iand(vctrlx(iv),1).ne.0 ) then
+             write (output,403)
+           endif
+         endif
+  403 format(1x,'In chfcal')
+         if( iand(ihlppr(1),ishft(1,4)).ne.0 ) then
+           if( iand(vctrlx(iv),1).ne.0 ) then
+             write (output,405) ncount,volno(iv),timehy
+  405        format ('  CHF debug printout, ncount, volno',
+     &       ', time ',2i11,1pe12.5)
+           endif
+         endif
+       endif
+c
+       zuber = 0.0
+c  SRL correlation for HWR NPR.
+       if (htopta .eq. 51) then
+         call chfsrl
+       elseif (htopta .eq. 2) then
+c  ORNL ANS  model
+c  Implement gambill correlation and smoothing to groneveld
+c  (iteration required for tw-weatherhead and chf-gambill).
+c
+         call chforn
+       elseif (onrefl .eq. 1 .and. pgopta .eq. 0) then
+c
+c
+c  If the mass flux is less than glow set CHF to Zuber
+c  If it is between glow and ghigh or greater than ghigh the table must
+c   be called.
+         if (gabs .lt. ghigh) then
+c          DETERMINE ZUBER CHF (AS IN RELAP5/MOD2)
+c
+c
+           zuber=0.13*hfgp*sqrt(rhog(iv)*sqrt(gravcn*sigma(iv)
+     &     *(rhof(iv)-rhog(iv))))
+           zuber=zuber*max(voidf(iv),0.04)
+           if (gabs .le. glow) then
+             chf = zuber
+             chfmul = 1.0
+           else
+             call chftab
+             difcc = 1.0/(ghigh - glow)
+             chf=(gabs-glow)*chf*difcc + (ghigh - gabs)*zuber*difcc
+           endif
+         else
+           call chftab
+           zuber = 0.
+         endif
+         if (help .ne. 0) then
+           if( iand(ihlppr(1),ishft(1,3)).ne.0 ) then
+             if( iand(vctrlx(iv),1).ne.0 ) then
+               write (output,543) zuber,chf,gabs,glow,ghigh
+  543          format (10x,' zuber,chf,gabs,glow,ghigh =',5g13.3)
+             endif
+           endif
+         endif
+c
+       elseif ( pgopta .gt. 0 ) then
+         if ( pgflag .lt. 1 ) then
+           if ( pgopta .eq. 11 .or.
+     &          pgopta .eq. 21 .or.
+     &          pgopta .eq. 31 ) then
+             pgopta = 41
+             pgflag = 1
+           elseif ( pgopta .eq. 12 .or.
+     &              pgopta .eq. 22 .or.
+     &              pgopta .eq. 32 ) then
+             pgopta = 42
+             pgflag = 1
+           elseif ( pgopta .eq. 13 .or.
+     &              pgopta .eq. 23 .or.
+     &              pgopta .eq. 33 ) then
+             pgopta = 43
+             pgflag = 1
+           elseif ( pgopta .eq. 14 .or.
+     &              pgopta .eq. 15 .or.
+     &              pgopta .eq. 24 .or.
+     &              pgopta .eq. 34 ) then
+             pgopta = 44
+             pgflag = 1
+           endif
+         endif
+         pm  = p(iv)*1.e-6
+         hfgm = hfgp*1.e-6
+         x = min(1.,max(-0.5,qualep))
+         gab = max(100.,gabs)
+         if ( pgopta .gt. 40 .or. qfluxo .lt. 0.) then
+crex       chf = 1.e+6 * pgp(pm,gab,gridz,htlen,htdiam,axpf,
+crex &                       hfgm,gridk,pgopta)
+          call chfpgp(pm,gab,gridz,htlen,htdiam,axpf,hfgm,gridk,pgopta
+     &            ,chf)
+           chf = 1.e+6 * chf
+c If on the previous time step, this slab was in condensation the flux
+c could be negative. This is the reason for always calling chfpgp
+c since it does not need qfluxo as do chfpg and chfpgf.
+           if ( qfluxo .gt. 0. ) then
+             chfmul = chf/qfluxo
+           else
+             chfmul = 0.
+           endif
+         elseif ( pgopta .gt. 30 ) then
+crex       chfmul = pgg(pm,gab,gridz,x,htlen,htdiam,axpf,
+crex &                  hfgm,gridk,pgopta)
+           call chfpgg(pm,gab,gridz,x,htlen,htdiam,axpf,
+     &              hfgm,gridk,pgopta,chfmul)
+           chf = chfmul * qfluxo
+         elseif ( pgopta .gt. 20 ) then
+           qfluxm = max(qfluxo,qffo) * 1.e-6
+crex       chfmul = pgf(pm,gab,gridz,qfluxm,htlen,htdiam,axpf,
+crex &                  hfgm,gridk,pgopta)
+           call chfpgf(pm,gab,gridz,qfluxm,htlen,htdiam,axpf,hfgm,
+     &              gridk,pgopta,chfmul)
+           chf = chfmul * qfluxo
+         else
+           qfluxm = max(qfluxo,qffo) * 1.e-6
+crex       chfmul = pg(pm,gab,gridz,x,qfluxm,htdiam,axpf,
+crex &                 hfgm,gridk,pgopta)
+           call chfpg(pm,gab,gridz,x,qfluxm,htdiam,axpf,
+     &                 htlen,hfgm,gridk,pgopta,chfmul)
+           chf = chfmul * qfluxo
+         endif
+c  If the mass flux is less than 100 interpolate CHF to Zuber
+         if (gabs .lt. 100.0) then
+c          DETERMINE ZUBER CHF (AS IN RELAP5/MOD2)
+c
+c
+           zuber=0.13*hfgp*sqrt(rhog(iv)*sqrt(gravcn*sigma(iv)
+     &     *(rhof(iv)-rhog(iv))))
+           zuber=zuber*max(voidf(iv),0.04)
+           chf = (gabs*chf + (100.0 - gabs)*zuber)*0.01
+           if ( qfluxo .gt. 0. ) then
+             chfmul = chf/qfluxo
+           endif
+         endif
+         if (help .ne. 0) then
+           write (output,544) p(iv),gab,x,gridz,htlen,htdiam,axpf
+  544  format (10x,'p,g,x,gridz(xin),htlen(yta),htdiam(dt),axpf(tr) ='
+     & ,7g13.6)
+           write (output,404) chf,chfmul,zuber,qfluxo,hfgp,gridk,pgopta
+  404  format(3x,' chf = ',g13.3,5x,'chfmul= ',f6.3,4x,'zuber= ',
+     & g13.3,2x,'qfluxo,hfgp,gridk,pgopta = ',3g13.6,i13)
+         endif
+c  nrir-mk mod block 2 ends
+       elseif (htopta .gt. 33 .and. htopta .lt. 50) then
+         call chfkut
+       else
+         call chftab
+       endif
+$if def,iua
+       if (uncmode) call appwtchf (chf,ghigh)
+$endif
+       return
+       end

@@ -1,0 +1,166 @@
+*mlist
+       subroutine dittus
+c
+c
+c  Dittus-boelter forced convection heat transfer correlation.
+c
+c  Cognizant engineer: ras.
+c
+       implicit none
+       include 'contrl.h'
+       include 'fast.h'
+       include 'htrcom.h'
+       include 'mxnfcd.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       real flux,cohdm,gr,hlam,hnat,hturb,ray,hcross,pr4
+       real vergrv,hmcad,fract
+       logical horiz
+       real econdf(mxnfld)
+       data econdf / 0.00e0, 0.00e0, 0.00e0, 3.03e6, 0.00e0, 0.00e0,
+     &               0.00e0, 0.00e0, 2.83e6, 0.83e6, 0.00e0, 0.00e0,
+     &               0.00e0, 0.00e0 /
+c
+       if (help.ne.0 .and. iand(ihlppr(1),ishft(1,5)).ne.0) then
+         if (iand(vctrlx(iv),1) .ne. 0) write (output,50) tf,thcons,
+     &   viscs,cps
+   50  format (5x,'dittus - tf',12x,'thcons',8x,'viscs',9x,'cps'/
+     & 12x,1p,4e14.6)
+       endif
+c
+c  pr=prandle no, rey=reynolds no.
+       gr = 0.0
+       hlam = 0.0
+       hnat = 0.0
+       pr = cps*viscs/thcons
+       pr4 = pr**0.4
+       if (mode.lt.2 .and. mode.gt.-1) then
+         flux = gabs
+       elseif (mode .lt. 9) then
+         if (mode .eq. -9) then
+           flux = ggasa
+         else
+           flux = gliqa
+         endif
+       else
+         flux = ggasa + gliqa*rhog(iv)/rhof(iv)
+       endif
+       rey = flux*htdiam/viscs
+       cohdm = thcons/htdiam
+       if (htopta.eq.2 .and. mode.eq.2) then
+         call petukv
+         hturb = htcoef
+       else
+         hturb = 0.023*cohdm*pr4*rey**0.8
+         if (htopta .eq. 10 .or. htopta .eq. 11) then
+c  Inyatov pitch/diameter multiplier.
+           hturb = hturb*pitdia
+           if (htopta .eq. 11) then
+c  Shah cross bundle flow htc.
+             hcross = 0.21*(thcons/drod)*pr4*(gcross*drod/viscs)**.62
+             hturb = sqrt(hturb**2 + hcross**2)
+           endif
+         endif
+         if (htopta .eq. 34) then
+c  ESDU cross bundle flow htc.
+           hcross = 0.211*(thcons/drod)*(pr**0.34)*
+     &     (gcrosf*drod/viscs)**.651
+           hturb = sqrt(hturb**2 + hcross**2)
+         endif
+       endif
+c  Bypass natural and laminar to save CPU time.
+       if (rey .lt. 1.e6) then
+         if (htopta .eq. 2) then
+c  Advanced Neutron Reactor October 1989 MPR, Rectangular Chan
+           hlam = 7.63*cohdm
+         else
+           hlam = 4.36*cohdm
+         endif
+         beta = max(beta,1.0e-5)
+         if (abs(delgrv).lt.1.e-6 .or. htopta.eq.30) then
+           horiz = .true.
+         else
+           horiz = .false.
+         endif
+         if (horiz) then
+           gr = gravcn*beta*abs(tw - tf)*rhos**2*htlenc**3/viscs**2
+           ray = gr*pr
+           if (htopta .eq. 34) then
+c  Churchhill-Chu from Incropera & DeWitt page 509 horizontal cylinders;
+c  eq. 934.
+c  0.1666667 = 1/6
+c  0.5625 = 9/16; 0.296296= 8/27
+             hnat=(.387*ray**0.1666667)/(1.+(0.559/pr)**.5625)**0.296296
+             hnat = (thcons/htlenc)*(0.6 + hnat)**2
+           else
+c  McAdams Energy Downflow.
+c  Needs to consider delta temp.
+             hnat = 0.27*(thcons/htlenc)*(ray)**0.25
+c  Above from Incropera & DeWitt p 506 for horizontal bodies; eq.9-32.
+           endif
+         elseif (htopta .ne. 2) then
+           gr = gravcn*beta*abs(tw - tf)*rhos**2*htlenc**3/viscs**2
+           ray = gr*pr
+c  Churchhill-Chu from Incropera & DeWitt page 501 vertical bodies;
+c  eq. 926.
+           hnat = 0.387*ray**0.1666667
+           hnat = hnat/(1.0 + (0.492/pr)**0.5625)**0.296296
+           hnat = (0.825 + hnat)**2
+           hnat = thcons*hnat/htlenc
+c  Check to see if we need to interpolate between horizontal and vertica
+           vergrv = dl(iv)*gravcn
+           if (abs(delgrv) .lt. vergrv) then
+             hmcad = 0.27*(thcons/htlenc)*(ray)**0.25
+             fract = abs(delgrv/vergrv)
+             hnat  = hnat*fract + hmcad*(1.0 - fract)
+           endif
+         else
+           gr = gravcn*beta*abs(tw - tf)*rhos**2*ptans(iv)**3/viscs**2
+           ray = gr*pr
+c  Incropera & DeWitt page 514, eq. 939 by Elenbaas; S=ptans cancels out
+c  for ORNL ANS reactor, vertical parallel plates
+           hnat = ray/(24.*htlenc)
+           hnat = thcons*hnat
+         endif
+       endif
+       htcoef = max(hlam,hturb,hnat)
+       qfluxo=htcoef*(tw - tf)
+       if (mode .ne. 9) then
+         if (voidg(iv).le.0.9 .or. alpf10.lt.0.0) then
+           htcf = htcoef
+           htcg = 0.0
+           qffo = qfluxo
+           qfgo =0.0
+         else
+           htcf = htcoef*alpf10
+           htcg = htcoef*alpg10
+           qfgo = htcg*(tw - tempg(iv))
+           qffo = htcf*(tw - tempf(iv))
+           qfluxo = qfgo + qffo
+         endif
+       else
+         htcf = 0.0
+         htcg = htcoef
+         qffo = 0.0
+         qfgo = qfluxo
+       endif
+       gamw = 0.0
+       htzht = htcoef
+       htzhff = htcf
+       htzhft = 0.0
+       htzhgg = htcg
+       htzhgt = 0.0
+       htzhgp = 0.0
+       htqot = qfluxo
+       htqof = qffo
+       htqog = qfgo
+       htgamf = 0.0
+       htgamg = 0.0
+       if (help.ne.0 .and. iand(ihlppr(1),ishft(1,5)).ne.0) then
+         if (iand(vctrlx(iv),1) .ne. 0) write (output,100) htcoef,
+     &   qfluxo,mode,hlam,hnat,hturb,rey,pr,gr
+  100  format (9x,'htcoef',7x,'qfluxo',2x,'mode',9x,'hlam',9x,'hnat',
+     & 8x,'hturb',10x,'rey',11x,'pr',11x,'gr'/2x,2es13.5,i6,6es13.5)
+       endif
+       return
+       end

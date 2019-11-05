@@ -1,0 +1,199 @@
+*mlist
+       subroutine rrupt
+c
+c  rrupt reads creep rupture model input.
+c
+c  called by rnewp.
+c
+c  Cognizant engineer: ewc.
+c
+*in32 iv
+*in32end
+c
+      implicit none
+      external inp2
+*call scntl
+*call cpmdat
+*call comctl
+*call contrl
+*call fast
+*call ufiles
+*call rupt
+*call coupl
+c
+      character*8 rep(nrlhmx)
+      integer i, j
+      integer ix,n3,n4
+      real prcon
+      real xv(11)
+      integer iv(11), l3(9), l4(6+nrlcmx), l5(10)
+      equivalence (iv(1),xv(1))
+      data l3 / 21000000, 0, 0, 3, 0, 1, 0, 0, 1/
+      data l4 / 0, 0, 1, nrlcmx, 0, 1, nrlcmx*0 /
+      data l5 / 0, 0, 0,  4, 0, 1, 0, 0, 1, 1 /
+      data prcon / 6894.7572 /
+c
+      if (.not.scntrl(7)) then
+        timrcl = timehy
+        nrlc = 0
+        imat = 1
+        ncnvol = 0
+        pext = 100000.0
+        nrlh = 0
+        do 50 i=1,nrlcmx
+   50   nel(i) = 0
+        do 60 i=1,nrlhmx
+   60   nhs(i) = 0
+      end if
+      do 70 i=1,nrlcmx
+   70 rep(i)=' '
+c read control card for creep rupture
+      if(scntrl(4)) then
+        l3(6) = 0
+        call inplnk (l3(1),ix,n3,n4,fa(filndx(1)))
+        if(n4.gt.0)then
+          l3(6)=1
+          call inp2 (fa(filndx(1)), xv, l3)
+          if(l3(6).gt.0)then
+            imat = iv(1)
+            if(l3(6).ge.2)ncnvol=iv(2)
+            if(ncnvol.eq.0 .and. l3(6).ge.2)then
+              pext = xv(3)
+              if (.not. uniti) pext = prcon * pext
+            endif
+          else
+            fail = .true.
+          endif
+        endif
+c read couple elements for creep rupture calculations.
+        if((scntrl(7) .and. nrlc.gt.0) .or. l3(6).gt.0)then
+c read in nrlcmx possible locations
+          do 200 j=1,nrlcmx
+c read nrlcmx mesh points at each location
+            l4(1) = 21000000+j
+c if new there must be at least one entry
+            if((.not.scntrl(7) .and. j.eq.1) )then
+              l4(3) = 1
+            else
+              l4(3) = 0
+            endif
+            l4(6) = 1
+            rep(j) = '        '
+            call inp2 (fa(filndx(1)), xv, l4)
+            if (l4(6) .gt. 0) then
+              dcrepc(j) = 0.0
+              if (.not.scntrl(7)) then
+                nrlc = nrlc + 1
+                rep(j) = '        '
+              else
+                if (iv(1) .le. 0) then
+                  if (nel(j) .gt. 0) then
+                    nel(j) = 0
+                    nrlc = nrlc - 1
+                  end if
+                  go to 200
+                else
+                  if (nel(j) .gt. 0) then
+                    rep(j) = 'Replaced'
+                  else
+                    nrlc = nrlc +1
+                    rep(j) = '   Added'
+                  end if
+                end if
+              end if
+              do 180 i=1,l4(6)
+  180         nelem(i,j) = iv(i)
+              nel(j) = l4(6)
+            else
+              if (.not.scntrl(7) .and. j.eq.1) then
+                write(output)9000
+ 9000 format(' ********* Must specify at least one ',
+     #    'creep rupture location.')
+                fail = .true.
+              endif
+            endif
+  200     continue
+        endif
+        if (nrlc .gt. 0) then
+          write (output,230) nrlc
+  230 format (/'Creep rupture calculations will be done for the',
+     1          ' following', i2, ' COUPLE wall locations:'/)
+          do 300 j=1,nrlc
+            if (nel(j) .gt. 0) then
+              write (output,250) rep(j), j,  (nelem(i,j),i=1,nel(j))
+  250 format (5x,a8,' location',i3,' at COUPLE mesh points',11i4)
+            end if
+  300     continue
+          write (output,350) imat
+  350     format (/5x,'COUPLE wall material index =', i2 )
+          if (ncnvol .le. 0) then
+            write (output,360) pext
+  360 format (5x,'Constant outside pressure = ',1p,e12.5, ' pa.')
+          else
+            write (output,370) ncnvol
+  370 format (5x,'Containment volume =', i10)
+          end if
+        end if
+      endif
+c read creep rupture input for heat structures if present.
+      do 700 i=1,nrlhmx
+        l5(6) = 1
+        l5(1) = 21000100 + i
+        call inp2 (fa(filndx(1)), xv, l5)
+        rep(i) = '        '
+        if (l5(6) .gt. 0) then
+          imaths(i) = imat
+          dcreph(i) = 0.0
+          if (newrst) then
+            if (iv(1) .le. 0) go to 700
+            nrlh = nrlh + 1
+          else
+            if (iv(1) .le. 0) then
+              if (nhs(i) .gt. 0) then
+                nhs(i) = 0
+                nrlh = nrlh - 1
+              end if
+              go to 700
+            else
+              if (nhs(i) .gt. 0) then
+                rep(i) = 'replaced'
+              else
+                nrlh = nrlh +1
+                rep(i) = '   added'
+              end if
+            end if
+          end if
+          nhs(i) = iv(1)
+          imaths(i) = iv(2)
+          prihs(i) = 0.0
+          if (l5(6) .ge. 3)  then
+            prihs(i) = xv(3)
+            if (.not. uniti) prihs(i) = prcon * prihs(i)
+          end if
+          prohs(i) = 0.0
+          if (l5(6) .ge. 4)  then
+            prohs(i) = xv(4)
+            if (.not. uniti) prohs(i) = prcon * prohs(i)
+          end if
+        else if (l5(6) .lt. 0) then
+          fail = .true.
+        end if
+  700 continue
+c
+      if (nrlh .gt. 0) then
+        write (output,730) nrlh
+  730   format ('0  creep rupture calculations will be done for the',
+     1         ' following', i3, ' heat structures:'  /
+     2         '    (if <= 0, pressure is that of adjacent volume.)'/)
+        do 800 i=1,nrlhmx
+        if (nhs(i) .gt. 0) then
+          write (output,750) rep(i), i, nhs(i),
+     #                        imaths(i), prihs(i), prohs(i)
+  750     format (5x, a8, ' location',i3, ' is heat structure',i8,
+     #  '  material',i2,' inner pressure =',1pe9.2,
+     #                  ' outer pressure =',e9.2)
+        end if
+  800   continue
+      end if
+      return
+      end

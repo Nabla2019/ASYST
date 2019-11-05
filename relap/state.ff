@@ -1,0 +1,262 @@
+*mlist
+       subroutine state (check)
+c  Controls the evaluation of the equation of state for all components.
+c
+c  Cognizant engineer: rjw.
+c
+       use invtbl
+       use lpdatc
+       use voldat
+       implicit none
+       integer check
+       include 'fast.h'
+       include 'cmpdac.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'tsctlc.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       real deleng,demass,errmav,errmsq,errmxl,scaler,syserr,
+     & sysesq,sysmsq,sysnum,sysvol,sysvsq
+       integer i,i1,ir,ix,m,nn,nx
+c
+       if (lvaccm(lpdat(issys)%llvect) .ne. 0) call stacc (check)
+       if (lvrvol(lpdat(issys)%llvect) .ne. 0) call statep (check)
+       if (check.eq.0 .or. lpdat(issys)%lsuces.eq.2) go to 1600
+c  Mass error check.
+       errmxl = -1.0
+       safe1 = 0.0
+       nn = 0
+       lpdat(issys)%systms = 0.0
+       lpdat(issys)%systmu = 0.0
+       lpdat(issys)%sysebt = 0.0
+       syserr = 0.0
+       sysesq = 0.0
+       sysvol = 0.0
+       sysvsq = 0.0
+       sysmsq = 0.0
+       sysnum = 0.0
+       ix = ixvff
+       i = lpdat(issys)%liv
+       do m = 1,lpdat(issys)%livn
+         ir = vctrln(i)
+         demass = rho(i) - rhom(i)
+         errm(ix) = abs(demass)/rho(i)
+         if (iand(vctrlx(i),2048) .ne. 0) errm(ix) = 0.01*errm(ix)
+         nx = 0
+         if (errm(ix) .ge. errhi) nx = 512
+         vctrl(i) = ior(vctrl(i),nx)
+         if (errm(ix) .gt. errmxl) then
+           nn = i
+           errmxl = errm(ix)
+         endif
+         lpdat(issys)%systms = lpdat(issys)%systms + tmassv(i)
+         lpdat(issys)%systmu = lpdat(issys)%systmu + tiengv(i)
+         lpdat(issys)%sysebt = max(lpdat(issys)%sysebt,errm(ix))
+         sysvol = sysvol + v(i)
+         sysvsq = sysvsq + v(i)*v(i)
+         drho(ix) = v(i)*demass
+         syserr = syserr + drho(ix)
+         sysesq = sysesq + drho(ix)*drho(ix)
+         sysmsq = sysmsq + tmassv(i)*tmassv(i)
+         sysnum = sysnum + 1.0
+         i = i + ivskp
+         ix = ix + scskp
+       enddo
+       if (nn .ne. 0) vctrl(nn) = ior(vctrl(nn),4096)
+!  Do mass and energy balance of system using flow in or out of time
+!  dependent volumes.
+       if (lvtvol(lpdat(issys)%llvect) .ne. 0) then
+         i1 = lvtvol(lpdat(issys)%llvect)
+         do m = 1,lvptr(i1)
+           i1 = i1 + 1
+           i = lvptr(i1)
+           if (iand(vctrl(i),1) .ne. 0) then
+             sysnum = sysnum - 1.0
+             nn = invfnd(i)
+             do ix = 1,invcnt(i)
+$if def,mmfld,1
+               if (lnonmf(issys) .eq. 0) then
+                 demass = mflowj(invj(nn)%invvnx)*dt
+                 deleng = flenth(invj(nn)%invvnx)*dt
+$if def,mmfld,4
+               else
+                 demass = (mflowj(invj(nn)%invvnx) +
+     &           mmflwj(invj(nn)%invvnx))*dt
+               endif
+               if (iand(invj(nn)%invjun,4) .ne. 0) then
+                 demass = -demass
+                 deleng = -deleng
+               endif
+               lpdat(issys)%systmc = lpdat(issys)%systmc + demass
+               lpdat(issys)%systuc = lpdat(issys)%systuc + deleng
+               nn = nn + 1
+             enddo
+           endif
+         enddo
+       endif
+       if (lpdat(issys)%lnoncn.ne.0 .and.
+     & lvrvol(lpdat(issys)%llvect).ne.0) then
+         do nn = 1,lpdat(issys)%lnoncn
+           i1 = lvrvol(lpdat(issys)%llvect)
+           if (nn .eq. nonhy) then
+             do m = 1,lvptr(i1)
+               i1 = i1 + 1
+               i = lvptr(i1)
+               ix = i + nn
+               lpdat(issys)%systmc = lpdat(issys)%systmc -
+     &         8.0*gaman(ix-1)*vo(i)*dt
+             enddo
+           else
+             do m = 1,lvptr(i1)
+               i1 = i1 + 1
+               i = lvptr(i1)
+               ix = i + nn
+               lpdat(issys)%systmc = lpdat(issys)%systmc +
+     &         gaman(ix-1)*vo(i)*dt
+             enddo
+           endif
+         enddo
+       endif
+       lpdat(issys)%sysmer = lpdat(issys)%systmc - lpdat(issys)%systms
+       tmass = tmass + lpdat(issys)%systms
+       emass = emass + lpdat(issys)%sysmer
+cc
+c      write (output,"(a,i8,i3,2es20.12)") 'state00',ncount,issys,
+c    & tmass,lpdat(issys)%sysmer
+c      write (output,"(a,i8,i3,6es13.5)") 'state00',ncount,issys,
+c    & lpdat(issys)%systmc,lpdat(issys)%systms,lpdat(issys)%sysmer,
+c    & lpdat(issys)%systuc,lpdat(issys)%systmu,
+c    & lpdat(issys)%systuc - lpdat(issys)%systmu
+cc
+       tmassq = tmassq + sysmsq
+       emassx = emassx + syserr
+       emassq = emassq + sysesq
+       totvol = totvol + sysvol
+       totvsq = totvsq + sysvsq
+       totnum = totnum + sysnum
+       if (sysvol .gt. 0.0) then
+         syserr = syserr/lpdat(issys)%systms
+         sysesq = sqrt(sysesq/sysmsq)
+         scaler = sqrt(3.8416*sysnum/max(1.0, (sysnum - 1.0)))
+         safe1 = max(scaler*sysesq, abs(syserr))
+         if (max(errmxl,safe1).ge.errhi .and. lpdat(issys)%lpackr.eq.0)
+     &   lpdat(issys)%lsuces = 1
+c        if (lpdat(issys)%lpackr.eq.0) then
+c          if (errmxl .gt. 0.08) then
+c            lpdat(issys)%lsuces = 1
+c          else
+c            if (max(errmxl,safe1).ge.errhi .and. safe1.ge.errlo)
+c    &       lpdat(issys)%lsuces = 1
+c          endif
+c        endif
+       endif
+       errmax = max(errmax,errmxl)
+c
+c  Debug printout.
+ 1600  continue
+$if def,dbgprnt
+       if (help.ne.0 .and. iand(ihlppr(1),ishft(1,30)).ne.0) then
+         call helphd ('state',10)
+         write (output,
+     & "('0Volume mixture properties'/1x,132('=')/7x,
+     & 'volno',6x,'v',12x,'p',12x,'voidf',8x,'quals',8x,'vapgen',7x,
+     & 'quala',8x,'boron',8x,'sounde',7x,'rho'/18x,'vo',11x,'pps',
+     & 10x,'voidg',8x,'quale',8x,'vapgno',7x,'sigma',8x,'borono',7x,
+     & 'hsteam',7x,'satt'/1x,132('='))")
+         i = lpdat(issys)%liv
+         do m = 1,lpdat(issys)%livn
+           if (iand(vctrlx(i),1) .ne. 0)
+     &     write (output,2006) volno(i),v(i),p(i),voidf(i),quals(i),
+     &     vapgen(i),quala(i),boron(i),sounde(i),rho(i),vo(i),pps(i),
+     &     voidg(i),quale(i),vapgno(i),sigma(i),borono(i),hsteam(i),
+     &     satt(i)
+ 2006  format(6x,i10.9,1p,9g13.5/16x,9g13.5)
+           i = i + ivskp
+         enddo
+         write (output,
+     & "('0Volume phase properties'/1x,132('=')/7x,
+     & 'volno',6x,'rhof',9x,'uf',11x,'tempf',8x,'sathf',8x,
+     & 'betaff',7x,'kapaff',7x,'csubpf',7x,'viscf',8x,'thconf'/18x,
+     & 'rhog',9x,'ug',11x,'tempg',8x,'sathg',8x,'betagg',7x,'kapagg',
+     & 7x,'csubpg',7x,'viscg',8x,'thcong'/1x,132('='))")
+         ix = ixvff
+         i = lpdat(issys)%liv
+         do m = 1,lpdat(issys)%livn
+           if (iand(vctrl(i),33) .ne. 0) then
+             kapaff(ix) = 0.0
+             kapagg(ix) = 0.0
+           endif
+           if (iand(vctrlx(i),1) .ne. 0)
+     &     write (output,2006) volno(i),rhof(i),uf(i),tempf(i),
+     &     sathf(i),betaff(i),kapaff(ix),csubpf(i),viscf(i),thconf(i),
+     &     rhog(i),ug(i),tempg(i),sathg(i),betagg(i),kapagg(ix),
+     &     csubpg(i),viscg(i),thcong(i)
+           i = i + ivskp
+           ix = ix + scskp
+         enddo
+         write (output,
+     & "('0Derivatives & other terms'/1x,132('=')/7x,'volno',6x,
+     & 'drfdp',8x,'drfduf',7x,'drgdp',8x,'drgdug',7x,'drgdxa',7x,
+     & 'dtfdp',8x,'dtfduf',7x,'dtgdp',8x,'dtgdug'/18x,'dtgdxa',7x,
+     & 'dtdp',9x,'dtdug',8x,'dtdxa',8x,'tsatt',8x,'dotm',9x,'gammaw',7x,
+     & 'gammac'/1x,132('='))")
+         i = lpdat(issys)%liv
+         do m = 1,lpdat(issys)%livn
+           if (iand(vctrlx(i),1) .ne. 0)
+     &     write (output,2006) volno(i),drfdp(i),drfduf(i),drgdp(i),
+     &     drgdug(i),drgdxa(i),dtfdp(i),dtfduf(i),dtgdp(i),dtgdug(i),
+     &     dtgdxa(i),dtdp(i),dtdug(i),dtdxa(i),tsatt(i),dotm(i),
+     &     gammaw(i),gammac(i)
+           i = i + ivskp
+         enddo
+         if (check.ne.0 .and. lpdat(issys)%lsuces.ne.2) then
+           call helphd ('mass err',13)
+           write (output,
+     & "('0Volume properties'/1x,93('=')/7x,'volno',6x,
+     & 'v',12x,'rho',10x,'rhom',9x,'rhoex',8x,'drho/rho',5x,
+     & 'v*drho'/1x,93('='))")
+           demass = 0.0
+           ix = ixvff
+           i = lpdat(issys)%liv
+           do m = 1,lpdat(issys)%livn
+             ir = vctrln(i)
+             if (iand(vctrl(i),1) .eq. 0) then
+               demass = demass + drho(ix)
+               if (iand(vctrlx(i),1) .ne. 0)
+     &         write (output,"(6x,i10.9,1p,6g13.5)")
+     &         volno(i),v(i),rho(i),rhom(i),vol(ir)%hyrho,errm(ix),
+     &         drho(ix)
+             endif
+             ix = ix + scskp
+             i = i + ivskp
+           enddo
+           dtmass = dtmass + demass
+           errmav = 0.0
+           errmsq = 0.0
+           if (totvol .gt. 0.0) then
+             errmav = syserr*lpdat(issys)%systms/sysvol
+             errmsq = sysesq*sysmsq/sysvsq
+           endif
+           write (output,
+     & "(1x,93('-')/1x,'System mass error increment for this time step',
+     & 34('-'),1p,g13.5/1x,'Mass + flow in - flow out mass error increme
+     &nt',34('-'),g13.5/1x,'Mean mass error increment',55('-'),
+     &g13.5/1x,'Rms mass error increment',56('-'),g13.5/1x,'Mean mass er
+     &ror fraction',56('-'),g13.5/1x,'Rms mass error fraction',
+     &57('-'),g13.5/1x,'Max. system or overall global mass error toleran
+     &ce',30('-'),g13.5/1x,'Controlling errmxl',62('-'),g13.5)")
+     &     demass,lpdat(issys)%sysmer,errmav,errmsq,syserr,sysesq,
+     &     safe1,errmxl
+         endif
+       endif
+$endif
+       return
+       end

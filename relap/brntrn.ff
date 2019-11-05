@@ -1,0 +1,275 @@
+*mlist
+       subroutine brntrn
+!
+!  Computes the boron transport using second-order Godunov method.
+!
+!  Cognizant engineer:  kuo.
+!
+       use invtbl
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'stcom.h'
+       include 'tsctlc.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables
+       integer i,ix,iz,j,jcexfr,jcexto,jx,k,kx,kv,l,loop,lx,lv,
+     & mm,m,n,nadv,ncal
+       real bork,borl,btime,dtb,dtmod,flubor,omeca,phi,zeta
+       real velfb,velfjb
+c
+c  Set time integation variables.
+       if(iand(print,128) .eq. 0) then
+         nadv = 1
+         dtb = dt
+       else
+         nadv = int(dt/dtn)
+         dtmod = mod(dt,dtn)
+         if (dtmod .gt. 1.0e-6) nadv = nadv + 1
+         nadv = max(nadv,1)
+         dtb = dt/float(nadv)
+c         dtb = 0.5*dtb
+       endif
+c
+       ix = ixvff
+       i  = lpdat(issys)%liv
+       do m = 1, lpdat(issys)%livn
+         borona(ix) = borono(i)
+         boronb(ix) = borono(i)
+         i = i + ivskp
+         ix = ix + scskp
+       enddo
+c
+c  Perform time integration.
+       btime = 0.0
+       do ncal = 1,nadv
+         btime = btime + dtb
+c
+c  Loop over volume.
+c  Initialize the variables.
+         ix = ixvff
+         i = lpdat(issys)%liv
+         do m = 1,lpdat(issys)%livn
+           dbodxv(ix) = 0.0
+           ratio(ix)  = 1.0
+           cflno(ix)  = 0.0
+           if (iand(vctrl(i),1) .ne. 0) then
+             boronb(ix) = borono(i)+(boron(i)-borono(i))*btime/dt
+           endif
+           i = i + ivskp
+           ix = ix + scskp
+         enddo
+c
+c  Set up for loops over components and volumes.
+         n = lpdat(issys)%lic
+         ix =ixvff
+         i = lpdat(issys)%liv
+         iz = lpdat(issys)%livnn
+c  Loop over components.
+         do mm = 1,lpdat(issys)%licn
+c  Loop over volumes in components.
+           if (nvc(n) .ne. 0) then
+             do m = 1,nvc(n)
+               if (cmptyp(n).eq.2 .or. cmptyp(n).eq.4
+     &         .or. cmptyp(n).eq.8
+     &         .or. cmptyp(n).eq.14 .or. cmptyp(n).eq.15
+     &         .or. cmptyp(n) .eq. 16) then
+c  Zero the volume flag vctrlx pos.5,6.
+                 vctrlx(i) = iand(vctrlx(i),not(ishft(1,4)))
+                 vctrlx(i) = iand(vctrlx(i),not(ishft(1,5)))
+                 dbodxv(ix) = 0.0
+               endif
+               ix = ix +scskp
+               i = i + ivskp
+               iz = iz + 1
+             enddo
+           endif
+c
+           n = n + cmplen(n)
+         enddo
+c
+c  Loop over junction.
+c  Calculate d(boron)/dx at juction.
+         ix = ixjff
+         i = lpdat(issys)%lij
+         do m = 1,lpdat(issys)%lijn
+           if (iand(ishft(jcex(i),-22),1) .eq. 1) then
+             dbodxj(ix) = 0.0
+             kx = jcnx1(i)
+             lx = jcnx1(i+1)
+             k  = ij1nx(i)
+             l  = ij2nx(i)
+             if(iand(vctrl(k),1).eq.0 .and. iand(vctrl(l),1).eq.0) then
+               dbodxj(ix) = (borona(lx)-borona(kx))/(0.5*(dl(l)+dl(k)))
+             endif
+           endif
+c
+           i = i + ijskp
+           ix = ix + scskp
+         enddo
+c
+c  Loop over volume.
+c  Set the boron gradient in volume.
+c  Loop over volume in the system.
+c
+         ix = ixvff
+         i = lpdat(issys)%liv
+         do m = 1,lpdat(issys)%livn
+           dbodx1(ix) = 0.0
+           dbodx2(ix) = 0.0
+c
+c  First junction loop.
+           l = invfnd(i)
+c  Loop over junctions in the volume.
+           do loop = 1,invcnt(i)
+             j = invj(l)%invvnx
+             jx = jcnxs(j)
+             kv = ij1nx(j)
+             lv = ij2nx(j)
+             jcexfr = iand(ishft(jcex(j),-12),7)
+             jcexto = iand(ishft(jcex(j),-9), 7)
+c  From junction.
+             if (iand(invj(l)%invjun,4) .eq. 0) then
+               if (volno(i) .eq. volno(kv)) then
+                 if (jcexfr .eq. 0) dbodx1(ix) = dbodxj(jx)
+                 if (jcexfr .eq. 1) dbodx2(ix) = dbodxj(jx)
+               endif
+               if (volno(i) .eq. volno(lv)) then
+                 if (jcexto .eq. 0) dbodx1(ix) = dbodxj(jx)
+                 if (jcexto .eq. 1) dbodx2(ix) = dbodxj(jx)
+               endif
+c  To junction.
+             else
+               if (volno(i) .eq. volno(kv)) then
+                 if (jcexto .eq. 0) dbodx1(ix) = dbodxj(jx)
+                 if (jcexto .eq. 1) dbodx2(ix) = dbodxj(jx)
+               endif
+               if (volno(i) .eq. volno(lv)) then
+                 if (jcexfr .eq. 0) dbodx1(ix) = dbodxj(jx)
+                 if (jcexfr .eq. 1) dbodx2(ix) = dbodxj(jx)
+               endif
+             endif
+             l = l + 1
+           enddo
+           ix = ix + scskp
+           i = i + ivskp
+         enddo
+c
+c  Loop over junction.
+c  Calculate the new boron density.
+c
+         ix = ixjff
+         i  = lpdat(issys)%lij
+         do m = 1,lpdat(issys)%lijn
+           kx = jcnx1(i)
+           lx = jcnx1(i+1)
+           k  = ij1nx(i)
+           l  = ij2nx(i)
+           dbodxv(kx) = 0.0
+           dbodxv(lx) = 0.0
+           bork = borona(kx)
+           borl = borona(lx)
+           velfjb = velfjo(i) + (velfj(i)-velfjo(i))*(btime-0.5*dtb)/dt
+           if (iand(ishft(jcex(i),-22),1) .eq. 1) then
+c  vel > 0.0  flux from k volume.
+             if (velfjb .gt. 0.0) then
+             if (iand(ishft(vctrlx(k),-4),1) .eq. 1) then
+               velfb = velfjb
+               cflno(kx) = velfb*dtb/dl(k)
+               if ((cflno(kx).ge.1.0) .or. cflno(kx).le.-1.0) then
+                 dbodxv(kx) = 0.0
+               else
+                 cflno(kx) = min(1.0, max(-1.0,cflno(kx)))
+                 ratio(kx) = 0.0
+                 jcexfr = iand(ishft(jcex(i),-12),7)
+                 if (jcexfr .eq. 1) then
+                   if (abs(dbodx2(kx)) .ge. 1.0e-10)
+     &             ratio(kx) = dbodx1(kx)/dbodx2(kx)
+                 endif
+                 if (jcexfr .eq. 0) then
+                   if (abs(dbodx1(kx)) .ge. 1.0e-10)
+     &             ratio(kx) = dbodx2(kx)/dbodx1(kx)
+                 endif
+                 zeta = abs(1.0 - ratio(kx))/(1.0 + abs(ratio(kx)))
+                 omeca = min(abs(cflno(kx)), (1.0 - abs(cflno(kx))))
+                 phi = max(0.0, min(2.0*ratio(kx), 1.0),
+     &           min(ratio(kx), 2.0))
+                 dbodxv(kx) = (1.0 + omeca*zeta)*phi*dbodxj(ix)
+               endif
+               bork = borona(kx)+0.5*dl(k)*(1.0-cflno(kx))*dbodxv(kx)
+               bork = max(bork,0.0)
+             endif
+             endif
+c  vel < 0.0  flux from l volume.
+             if (velfjb .lt. 0.0) then
+               if (iand(ishft(vctrlx(l),-4),1) .eq. 1) then
+                 velfb = velfjb
+                 cflno(lx) = velfb*dtb/dl(l)
+                 if ((cflno(lx).ge.1.0) .or. cflno(lx).le.-1.0) then
+                   dbodxv(lx) = 0.0
+                 else
+                   cflno(lx) = min(1.0, max(-1.0,cflno(lx)))
+                   ratio(lx) = 0.0
+                   jcexto = iand(ishft(jcex(i),-9), 7)
+                   if (jcexto .eq. 0) then
+                     if (abs(dbodx1(lx)) .ge. 1.0e-10)
+     &               ratio(lx) = dbodx2(lx)/dbodx1(lx)
+                   endif
+                   if (jcexto .eq. 1) then
+                     if (abs(dbodx2(lx)) .ge. 1.0e-10)
+     &               ratio(lx) = dbodx1(lx)/dbodx2(lx)
+                   endif
+                   zeta = abs(1.0 - ratio(lx))/(1.0 + abs(ratio(lx)))
+                   omeca = min(abs(cflno(lx)), (1.0 - abs(cflno(lx))))
+                   phi = max(0.0, min(2.0*ratio(lx), 1.0),
+     &             min(ratio(lx), 2.0))
+                   dbodxv(lx) = (1.0 + omeca*zeta)*phi*dbodxj(ix)
+                 endif
+                 borl = borona(lx) - 0.5*dl(l)*(1.0 + cflno(lx))*
+     &           dbodxv(lx)
+                 borl = max(borl,0.0)
+               endif
+             endif
+           endif
+c
+           flubor = dtb*ajun(i)*0.5*vodfjr(i)*
+     &     (velfjb*(borl + bork) - abs(velfjb)*(borl - bork))
+           if (voidgj(i) .eq. 1.0) flubor = 0.0
+           if (iand(vctrl(k),1) .eq. 0)  boronb(kx) =
+     &     ((boronb(kx) + dtb*gamas(k))*v(k) - flubor)*recipv(k)
+           if (iand(vctrl(l),1) .eq. 0)  boronb(lx) =
+     &     ((boronb(lx) + dtb*gamas(l))*v(l) + flubor)*recipv(l)
+c
+           i = i + ijskp
+           ix = ix + scskp
+         enddo
+c
+         ix = ixvff
+         i = lpdat(issys)%liv
+         do m = 1,lpdat(issys)%livn
+           boronb(ix) = max(boronb(ix), 0.0)
+           if (voidf(i) .eq. 0.0) boronb(ix) = 0.0
+           borona(ix) = boronb(ix)
+           i = i + ivskp
+           ix = ix + scskp
+         enddo
+       enddo
+c
+       ix = ixvff
+       i = lpdat(issys)%liv
+       do m = 1,lpdat(issys)%livn
+         boron(i) = boronb(ix)
+         i = i + ivskp
+         ix = ix + scskp
+       enddo
+       return
+       end

@@ -1,0 +1,257 @@
+*mlist
+*if def,selap
+      subroutine ipower(nptim,npptim,ptim,pptim,timp,timpp)
+c
+c  ipower initializes the SCDAP power calculation.
+c
+c  Cognizant engineer: ewc.
+c
+*in32 idat
+*in32end
+      implicit none
+      real timp(50), ptim(50),pptim(50),timpp(50)
+      integer nptim,npptim
+*call fast
+*call comctl
+*call scddat
+*call scdout
+*call scdcom
+*call ufiles
+*call contrl
+*call scdpow
+*call nhtara
+*call ndxara
+c  Local variables.
+      logical imidl
+      integer i,idk,knt,indx,ipt,itype,j,k,kr,n,kflgpz
+      real atuo2,avgdro,cmev,ctime,curpow,del,delt,delt0,dktime,efp,
+     &fr,frsum,g,gnu,optime,pmax,pow,psidcy,qad,qdtot,qfpdi(23),
+     &tend,thden,time,time0,ttime,ttime0,p,z
+      real actdkp,gfunc,pol8,qdtfn
+      external actdkp,gfunc,pol8,qdtfn
+      data efp/181.33/, cmev /1.602e-13/,  thden /10970.0/
+      data avgdro /6.023e+26/,  atuo2 /267.042725/
+c initialize all input and working arrays
+      imidl  = .false.
+      kflgpz = 1
+      do 10 i=1,23
+   10   qfpdi(i) =0.0
+c check axial and radial power distribution shapes
+      if (paxtim(1,icomp).ne.0.0) then
+        nshapz(icomp)=nshapz(icomp)+1
+        do 20 k=nshapz(icomp),2,-1
+          paxtim(k,icomp)=paxtim(k-1,icomp)
+          do 20 kr=1,naz
+            paxpz((2*kr)-1,k,icomp)= paxpz((2*kr)-1,k-1,icomp)
+   20       paxpz((2*kr),k,icomp)=paxpz((2*kr),k-1,icomp)
+        paxtim(1,icomp) = 0.0
+        kflgpz = 2
+      endif
+c check normalization of axial power distribution
+      do 50 k=kflgpz,nshapz(icomp)
+        p=0.0
+        z=0.0
+        do 30 i=1,naz
+          p=p+paxpz((2*i)-1,k,icomp)*dzcond(i)
+   30     z=z+dzcond(i)
+        p=p/z
+        if(abs(p-1.0).gt.0.01 .and. p.ne.0.)then
+          write(output,130)k,paxtim(k,icomp)
+  130 format(/' Axial Power Profile',i2,' valid until',1p,
+     # g12.5,' s.'/t4,'node',3x,'Height',5x,'Input',2x,
+     # 'Normalized')
+          do 40 i=1,naz
+            write(output,140)i,zcond2(i,icomp),paxpz((2*i)-1,k,icomp),
+     &      paxpz((2*i)-1,k,icomp)/p
+            paxpz((2*i)-1,k,icomp)=paxpz((2*i)-1,k,icomp)/p
+   40     continue
+        endif
+   50   continue
+c Set axial power distrubution shape
+      kshapz(icomp) = 2
+      if (nshapz(icomp) .ge. maxpz) then
+        write (output,'(a,a)') '0******** error, maximum power',
+     &  ' distribution shapes exceeded, execution terminated.'
+        fail=.true.
+      endif
+c if non-fuel rod, reset values and return
+      if(idcomp(icomp).ne.0.and.idcomp(icomp).ne.6) return
+c Relap5 power option is used; return without calculations
+      if (nspowi .gt. 0) return
+c check to see if decay calculations are necessary
+      if (nptim .eq. 0) return
+c start decay heat calculations (ans-5.1-1978)
+c assumptions about input :
+c   1) timpp buts against timp
+c   2) there is a prior history
+c   3) power tables are wanted that cover timpp time period
+c   4) if timpp(1) is positive the power tables are to start from zero
+c   5) there are no negative time steps
+c initialize sums and set constants
+      dktime = 0.0
+      frsum  = 0.0
+      qdtot  = 0.0
+      gnu    = enrch(icomp) * fulden(icomp) * thden * avgdro / atuo2
+c determine the following constatns
+c   1) optime = prior operating time at power
+c   2) tend   = entry or point corresponding to timpp = 0.0
+c   3) pmax   = maximum power of prior operation history
+      tend = timp(nptim) - timpp(1)
+      if (tend .gt. timp(nptim)) tend = timp(nptim)
+      pmax   = 0.0
+      do  60  j = 1 , nptim
+        pmax = max( pmax , ptim( j ))
+   60   continue
+      do 70 j = nptim , 1 , -1
+        optime = timp(j)
+        if (ptim(j) .ge. pmax*0.01)  go to 80
+   70   continue
+   80 continue
+c determine actinide decay power
+      qad    = actdkp( pmax , optime , dktime , actnid )
+c find fission product neutron absorption correction factor for
+c decay time = 0.0
+      itype   = 1
+      psidcy = 1.
+      g      = gfunc( itype , psidcy , dktime , optime )
+c for time steps prior to start of transient, determine the initial
+c fission decay heat in 23 components, total decay power, and the
+c decay axial and radial peaking factors
+      i = 1
+      time0  = 0.0
+      delt0  = 1.0
+c begin time step loop, stop when beginning of transient is encountered
+   90 continue
+      if  ( i .le. nptim )   then
+c set power and time step size
+        if  ( timp(i) .le. tend )   then
+          delt = timp(i) - time0
+          pow = ptim( i )
+        else
+c (set imidl to true when tend is in middle of time step)
+          imidl  = .true.
+          delt = tend - time0
+          indx = nptim - 2
+          pow = pol8(ptim,timp,tend,nptim,indx)
+        endif
+        time = time0 + delt
+        ctime = time - tend
+        if ((time .gt. optime).and.(ctime.gt.tshtdn(icomp))) then
+c (correct actinide decay for after shutdown)
+          dktime = ctime - tshtdn(icomp)
+          qad    = actdkp( pmax , optime , dktime , actnid )
+        end if
+c break the time step into 10 exponential steps when there is
+c more than a factor of 50 increase in time step size
+        if (delt/delt0 .gt. 50.0)  then
+          delt0 = delt
+          del = delt**0.1
+          delt = del
+          n = 10
+        else
+          if (delt0 .lt. delt)  delt0 = delt
+          n = 1
+        end if
+        do 100 knt = 1 , n
+          if (knt .gt. 1) delt = del**knt - del**(knt-1)
+          time0 = time0 + delt
+          fr = (pow - qdtot)/efp
+          if (fr .lt.  0.0)  fr = 0.0
+          frsum  = frsum + fr * delt / cmev
+          qdtot   = qdtfn( delt  , qfpdi  , fr , g , qad )
+  100     continue
+        i      = i + 1
+        if ( timp(i-1) .ge. tend ) go to 110
+        go  to  90
+      endif
+c
+c       build the total power arrays to be used in the *nheat* subroutin
+c       assumptions about transient power tables:
+c   1)  the first decay heat value is taken from the end of the prior
+c       operating history.
+c   2)  the time step will not be broken down during this phase.
+c   3)  the end of time step power is used for decay heat calculations.
+c   4)  the prompt power will not be negative.
+c
+c       initialize the following indexes and time
+c       ipt    = last power time step encountered before start of
+c       transient
+c       i      = subscript for new total power arrays
+c       idk    = prompt power subscript
+  110 continue
+      ipt    = i - 1
+      if (imidl)    ipt = i - 2
+      i      = 1
+      idk    = 0
+      ttime0 = 0.0
+      imidl = .false.
+  120 continue
+      if  ( idk .lt. npptim )   then
+c continue looping until all the prior and current power history
+c is accounted for
+        if ((i .eq. 1) .or. imidl)   then
+c the time step for the first power time point is zero, and the
+c decay power is the result of the prior operating history
+          imidl = .false.
+          delt = 0.0
+          if  ( ipt .lt. nptim )   then
+            curpow = pow - qdtot
+            ttime = 0.0
+          else
+            idk = 1
+            curpow = pptim(idk)
+            ttime = timpp(idk)
+          end if
+          if (curpow .lt. 0.0) curpow = 0.0
+        else
+c the decay power for the remaining power time points is
+c calculated using the end of time step power
+          if (ipt .lt. nptim) then
+            ipt = ipt + 1
+            ttime = timp(ipt) - tend
+            if (ipt .eq. nptim) then
+              imidl = .true.
+              ttime = timpp(1) - abs(timpp(1))*1.0e-12
+            end if
+            delt = ttime - ttime0
+            ttime0 = ttime0 + delt
+            curpow = ptim(ipt) - qdtot
+          else
+            idk = idk + 1
+            ttime = timpp(idk)
+            delt = timpp(idk) - timpp(idk-1)
+            curpow = pptim(idk)
+          end if
+          dktime = ttime - tshtdn(icomp)
+          if (dktime .lt. 0.0)   dktime = 0.0
+          if (curpow .lt.  0.0)  curpow = 0.0
+          fr = curpow / efp
+          frsum  = frsum + fr * delt / cmev
+          psidcy = frsum / gnu
+          itype = 0
+          if (psidcy .gt. 3.0)         itype = 1
+          if (dktime .gt. 1.0e+04)     itype = 1
+          if (optime .gt. 1.2614e+08)  itype = 1
+          g      = gfunc( itype , psidcy , dktime , optime )
+          qad    = actdkp( pmax , optime , dktime , actnid )
+          qdtot  = qdtfn ( delt , qfpdi , fr , g , qad )
+        end if
+c fill output array with current time and powers
+        nparay(icomp) = i
+        taray( i,icomp )  = ttime
+        pparay( i,icomp ) = curpow
+        pdaray( i,1,icomp ) = qdtot - qad
+        pdaray( i,2,icomp ) = qad
+        i      = i + 1
+        go  to  120
+      endif
+      if (nparay(icomp) .gt. maxpp) then
+        write (output,'(''0'',3a)') ' error: maximum number of'
+     &       ,' transient power history points exceeded;'
+     &       ,' execution terminated.'
+        fail=.true.
+      end if
+      return
+  140 format(t5,i2,3(3x,f7.4))
+      end
+*endif

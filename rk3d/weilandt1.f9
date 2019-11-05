@@ -1,0 +1,220 @@
+      SUBROUTINE WEILANDT1(NOUTIT,EFFK,IRETRN,
+     &  FNSWT,FNPPOT,NCOLXY,NCOLZ,SW,SWPPOT,RESIDUAL)
+C     
+C     THIS SUBROUTINE IS APPLICABLE TO WEILANDT SHIFT WITH STATIONARY
+C     ACCELERATION AND CHECKS FOR CONVERGENCE FOR THE STEADY-STATE PROBLEM
+C     
+      include 'param.fcb'
+      include 'cntl.fcb'
+      include 'che.fcb'
+      include 'conv.fcb'
+      include 'cheby.fcb'
+      include 'flamdold.fcb'
+      include 'geom.fcb'
+      include 'nemcnt.fcb'
+      include 'nonfue.fcb'
+      include 'opti.fcb'
+      include 'power.fcb'
+      include 'restotp.fcb'
+      include 'varlen.fcb'
+      include 'array.fcb'
+      include 'xeopt.fcb'
+      include 'burn.fcb'
+      
+      DIMENSION
+     &  NCOLXY(NXYLMAX,*)                    ,NCOLZ(*)         ,
+     &  FNSWT(NXYL,*)                        ,FNPPOT(NXYL,*)   ,
+     &  SW(NXYL,NZ,*)                        ,SWPPOT(NXYL,NZ,*)      
+      CHARACTER*8 NNEW
+
+      REAL*8 FISDEL
+
+C     
+C     INITIALIZE PARAMETERS :
+C     
+      INEWCP=0
+      DIFKEF=0.0
+      GAMMAD=0.0
+      ERRATN=0.0
+      FLAMNEW = 0.D0
+C     
+C     IS WEILANDT SHIFT CYCLE PERMITTED OR ALREADY IN PROGRESS ? :
+C     
+      IF(NOUTIT .LE. 3) THEN
+       NORDCP=0
+       NEWCP=1
+      ELSEIF(NEWCP .EQ. 1) THEN
+C     
+C     INITIALIZE THE BEGINNING OF A WEILANDT SHIFT CYCLE :
+C     
+       INEWCP=1
+       NEWCP=0
+       NORDCP=0
+      ENDIF
+      NORDCP=NORDCP+1
+C     
+C     IMPOSE ITERATION-DEPENDENT UPPER BOUNDS ON THE WEILANDT SHIFT
+C     
+      IF(NOUTIT .GT. 15 .AND. NNEW .EQ. 'Y')  WSCALE=1.0
+      IF(NOUTIT .LE. 15 .AND. NNEW .EQ. 'Y')  WSCALE=0.8
+      IF(NOUTIT .LE. 10 .AND. NNEW .EQ. 'Y')  WSCALE=0.5
+      IF(NOUTIT .LE. 5  .AND. NNEW .EQ. 'Y')  WSCALE=0.0
+      IF(NOUTIT .GT. 10 .AND. NNEW .NE. 'Y')  WSCALE=1.0
+
+      WSCALEBAR=WSCALE
+C     
+C     CALCULATE FISSION SOURCE NORM AND RELATED QUANTITIES :
+C     
+C     ERRATN  = L-2 NORM OF THE OUTER ITERATIVE RESIDUAL (S(L)-S(L-1))
+C     FLAMNEW = MAXIMUM RELATIVE POINTWISE GROWTH OF S(L) (S(L)/S(L-1))
+C     GAMMAD  = INNER PRODUCT OF S(L) AND S(L-1) [S(L),S(L-1)]
+C     
+      DO 11 IZ=1,NZ
+       DO 1 IXY=1,NXYL
+        ICC = NCOLXY(IXY,NCOLZ(IZ))
+        IF(ICC .GT. NFUEXY) THEN
+         FISDEL=ABS((FNSWT(IXY,IZ))-(FNPPOT(IXY,IZ)))
+         FISDELN = FISDEL/FNSWT(IXY,IZ)
+         FLAMNEW = MAX(FLAMNEW,FISDELN)
+         ERRATN=ERRATN+FISDEL*FISDEL
+         GAMMAD=GAMMAD+ABS(FNSWT(IXY,IZ))*(FNPPOT(IXY,IZ))
+        ENDIF  
+ 1     CONTINUE 
+ 11   CONTINUE
+C     
+C     COMPUTE RESIDUAL AND NEW EIGENVALUE
+C     
+      CALL RESID(
+     &  A(LVOLUN),A(LBETATN),A(LBETATLAMN),
+     &  A(LFILAMDT1N),A(LSWN),A(LTNFN),A(LXHIPN),A(LSEFFN),
+     &  AINT(LLSEXTRN),AINT(LLSEXTZN),A(LSEXTN),A(LSCWN),
+     &  A(LFNSHIFTN),EIGEN,RESIDUAL )
+C     
+C     COMPUTE RESIDUAL RELATIVE REDUCTION
+C     
+      DIFFIS=(1.-WEILANDT)*SQRT(ERRATN/ABS(GAMMAD))
+      IF(INEWCP.EQ.1) DIFFISOLD=DIFFIS
+      IF(DIFFISOLD.GT.0.0) THEN
+       DIFRESID=SQRT(DIFFIS/DIFFISOLD)
+      ELSE  
+       DIFRESID=1.
+      ENDIF  
+C     
+C     COMPUTE FISSION SOURCE ERRORS :
+C     
+      DIFLAMNEW=ABS(FLAMNEW)
+C     
+C     ONE-TERM FIXED EXTRAPOLATION ACCELERATION :
+C     
+      IF(OMEGAEXT.NE.1.0.AND.NOUTIT.GE.3.AND.NORDCP.GT.1) THEN
+       DO 33 IZ=1,NZ
+        DO 3 IXY=1,NXYL
+         DO 2 IG=1,NG
+          SW(IXY,IZ,IG)=SWPPOT(IXY,IZ,IG)
+     &      +OMEGAEXT*(SW(IXY,IZ,IG)-SWPPOT(IXY,IZ,IG))
+ 2       CONTINUE
+         FNSWT(IXY,IZ)=FNPPOT(IXY,IZ)+
+     &     OMEGAEXT*(FNSWT(IXY,IZ)-FNPPOT(IXY,IZ))
+ 3      CONTINUE
+ 33    CONTINUE
+      ENDIF
+C     
+C------FOR FSP RESET BOTH ERROR IN K_EFF AND LAMBDA VALUES
+C     
+      IF (ITYPE.EQ.'FSP')THEN
+       DIFKEF = 0.00000000000
+       FLAMDA = 1.00000000000
+      ELSE
+C     
+C     COMPUTE NEW K-EFFECTIVE IN HOMOGENEOUS PROBLEMS :
+C     
+       EFFKO = EFFK
+       EFFK  = EIGEN
+C     
+C     PASSING THE NEW KEFF VALUE TO WRITE STATEMENT IN SUB. OUTPUT
+C     
+       EFFKOUT = EFFK
+       DIFKEF = ABS(EFFK-EFFKO)
+       FLAMDAOLD = FLAMDA
+       FLAMDA = EIGEN
+      ENDIF
+      
+      IF(NORDCP.GE.IUPOUTER.OR.DIFRESID.LE.EPREDRESID)THEN
+       NEWCP=1
+      ELSE
+       NEWCP=0
+      ENDIF
+      
+      IF(ANFDBK.EQ.'N'.AND.IMETHOD.EQ.1
+     *  .AND.IXE(IBU).NE.3.AND.ASRCH.EQ.'N') INEWCP=1
+C     
+C     CHECK CONVERGENCE :
+C     
+      IRETRN=1
+      IF(NOUTIT .GE. KITR) IRETRN=2
+C     
+C-----OUTPUT TO THE SCREEN EVERY OUTER ITERATION
+C     
+C !vmq      IF(CRTON.EQ.'Y') THEN
+C !vmq       IF(ITYPE.EQ.'EVP')THEN
+C !vmq        WRITE(*,86)EFFK
+C !vmq        WRITE(*,88)DIFKEF,EPSK
+C !vmq       ENDIF
+C !vmq       WRITE(*,87)DIFFIS,EPSOT
+C !vmq       WRITE(*,92)RESIDUAL,EPSRESID
+C !vmq       WRITE(*,89)DIFLAMNEW,EPSINF
+C !vmq       WRITE(*,91)DIFRESID,EPREDRESID
+C !vmq       WRITE(*,90)NORDCP
+C !vmq      ENDIF
+      
+      IF(ACONV.EQ.'Y') THEN
+       IF(    DIFFIS.LE.EPSOT
+     &   .AND. DIFKEF.LE.EPSK
+     &   .AND. INEWCP.EQ.1
+     &   .AND. INEM.EQ.0
+     &   .AND. DIFLAMNEW.LE.EPSINF
+     &   .AND. RESIDUAL.LE.EPSRESID)IRETRN=3
+      ELSE
+       IF(    DIFFIS.LE.EPSOT
+     &   .AND. DIFKEF.LE.EPSK
+     &   .AND. DIFLAMNEW.LE.EPSINF
+     &   .AND. RESIDUAL.LE.EPSRESID)IRETRN=3
+      ENDIF
+      
+      IF(IRETRN.EQ.3)WSCALEBAR=WSCALE
+      
+      IF(NPC.EQ.'Y')THEN
+       IF(ITYPE.EQ.'EVP')THEN
+        WRITE(55,300) DIFLAMNEW,DIFFIS,RESIDUAL,DIFKEF,NORDCP,EFFK
+       ELSEIF(ITYPE.EQ.'FSP')THEN
+        WRITE(55,399) DIFLAMNEW,DIFFIS,RESIDUAL,NORDCP,POWERFRAC
+       ENDIF
+       
+      ENDIF
+      
+ 86   FORMAT(T2,' K_EFF                              :  ',F11.7)
+ 87   FORMAT(T2,' L_2 OUTER ITER RESID CONV. CRITERIA: ',
+     &  2X,E12.5,2X,E12.5)
+ 88   FORMAT(T2,' K_EFF CONV. CRITERIA               : ',
+     &  2X,E12.5,2X,E12.5)
+ 89   FORMAT(T2,' L_INF OUTER ITER RESID CONV. CRITER: ',
+     &  2X,E12.5,2X,E12.5)
+ 90   FORMAT(T2,' WEILANDT SHIFT CYCLE               : ',4X,I2)
+ 91   FORMAT(T2,' L_2 RELATIVE RESID KICKOUT CRITERIA: ',
+     &  2X,E12.5,2X,E12.5)
+ 92   FORMAT(T2,' L_2 TRUE RESIDUAL CONV. CRITERIA   : ',
+     &  2X,E12.5,2X,E12.5)
+ 300  FORMAT(/6X,'L_INF OUTER ITERATIVE REL RESIDUAL =',E12.5,
+     &  /6X,'L_2 OUTER ITERATIVE REL RESIDUAL   =',E12.5,
+     &  /6X,'L_2 TRUE RELATIVE RESIDUAL         =',E12.5,
+     &  /6X,'EIGENVALUE ERROR                   =',E12.5,
+     &  /6X,'WEILANDT SHIFT CYCLE=',I3,
+     &  /6X,'EIGENVALUE=',E14.7/)
+ 399  FORMAT(/6X,'L_INF OUTER ITERATIVE REL RESIDUAL =',E12.5,
+     &  /6X,'L_2 OUTER ITERATIVE REL RESIDUAL   =',E12.5,
+     &  /6X,'L_2 TRUE RELATIVE RESIDUAL         =',E12.5,
+     &  /6X,'WEILANDT SHIFT CYCLE=',I3,
+     &  /6X,'POWER LEVEL=',E14.7/)
+      
+      RETURN
+      END

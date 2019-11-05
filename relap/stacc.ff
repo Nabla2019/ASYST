@@ -1,0 +1,337 @@
+*mlist
+       subroutine stacc (check)
+c  Advances the energy equation, evaluates the equation of state for an
+c  accumulator, and performs a backup of the accumulator variables on a
+c  time step failure.
+c
+c  Cognizant engineer: kec.
+c
+*in32 lprop
+*in32end
+c
+       use lpdatc
+       implicit none
+       integer check
+       include 'fast.h'
+       include 'cons.h'
+       include 'cmpdac.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  prop    array in which state properties are passed to and
+c          from steam table subroutines, values are in si units.
+c  prop( 1) = temperature
+c      ( 2) = pressure
+c      ( 3) = specific volume
+c      ( 4) = specific internal energy
+c      ( 5) = specific enthalpy
+c  quantities 1-5 are input and output to state routines
+c      ( 6) = single phase beta
+c      ( 7) = single phase kappa
+c      ( 8) = single phase csubp
+c      ( 9) = quality if two-phase
+c      (10) = saturation presure
+c      (11) = liquid specific volume
+c      (12) = vapor  specific volume
+c      (13) = liquid specific internal energy
+c      (14) = vapor  specific internal energy
+c      (15) = liquid specific enthalpy
+c      (16) = vapor  specific enthalpy
+c      (17) = liquid beta
+c      (18) = vapor  beta
+c      (19) = liquid kappa
+c      (20) = vapor  kappa
+c      (21) = liquid csubp
+c      (22) = vapor  csubp
+c      (23) = indexs
+c
+c  Type declaration statements for 'prop' arrays.
+c
+       real prop(36),tt,pres,vbar,ubar,hbar,beta,kapa,cp,qual,psat,
+     & vsubf,vsubg,usubf,usubg,hsubf,hsubg,betaf,betag,kapaf,kapag,cpf,
+     & cpg
+       equivalence (prop(1),tt),(prop(2),pres),(prop(3),vbar),
+     & (prop(4),ubar),(prop(5),hbar),(prop(6),beta),(prop(7),kapa),
+     & (prop(8),cp),(prop(9),qual),(prop(10),psat),(prop(11),vsubf),
+     & (prop(12),vsubg),(prop(13),usubf),(prop(14),usubg),
+     & (prop(15),hsubf),(prop(16),hsubg),(prop(17),betaf),
+     & (prop(18),betag),(prop(19),kapaf),(prop(20),kapag),
+     & (prop(21),cpf),(prop(22),cpg)
+c
+c  Type declaration statements for 'stacc' local variables.
+       integer ip, i1, m, nn, i, in, j
+       real cvno,dcvn,visno,trefn,thcna,thcnb,ratga,ran,toler,amasso,
+     & cvao,uao,dcva,ra,areaxv,delug,rhofm,dtf,dtg,psol,rhogm,dtemp,
+     & uliq,tliq,rholiq,pvaptf,usteam,psteam,ua1,uair,tair,xair,xmg,
+     & drhog,drhof,rhoerr,qsm,rtank,epsln,xn,geom
+c
+c  Type declaration statements for new statep iteration variables.
+       logical erx
+c
+c  Sutherlands formula = xxx*(t/tref)**1.5*(reft+tref)/(t+tref)
+c  reft = the reference temperature (273.13 k).
+c  xxx = viscosity or thermal conductivity.
+       data cvno/741.97641/, dcvn/0.11845/
+       data visno/1.381e-6/, trefn/102.7/, thcna/5.314e-4/,
+     & thcnb/0.6898/
+c  ratga = 18.016/28.014,  ran = 8314.3/28.014
+       data ratga/0.64310701/, ran/296.790890/
+       data toler/0.0005/
+       data epsln/1.0e-2/, xn/0.3333333333/
+c
+czf
+       prop(:) = 0.0
+czf end
+       areaxv = 0.0
+       delug = 0.0
+       psol = 0.0
+       rhoerr = 0.0
+       rhofm = 0.0
+       rhogm = 0.0
+c
+       i1 = lvaccm(lpdat(issys)%llvect)
+       do m = 1,lvptr(i1)
+         i1 = i1 + 1
+         nn = lvptr(i1)
+         i = nvco(nn) + filndx(4)
+c  Check if this is a reset calculation for a time step repeat.
+         if (check .eq. 0) then
+c  Reset the accumulator terms for a time step repeat.
+           cmpopt(nn) = ior(iand(cmpopt(nn),not(28)),iand(ishft
+     &     (cmpopt(nn),-3),28))
+           geom = iand(ishft(cmpopt(nn),-8),1)
+           if (geom .eq. 1) then
+             rtank = sqrt(atank(nn)/pi)
+             dvliq(nn) = (gasln(nn) - gaslno(nn))*(pi*gaslno(nn)*
+     &       (2*rtank-gaslno(nn)))
+           endif
+           gasln(nn) = gaslno(nn)
+           vdm(nn) = vdmo(nn)
+           rhon(nn) = rhono(nn)
+           tempg(i) = tvapo(nn)
+           vliq(nn) = vliqo(nn)
+           ttank(nn) = ttanko(nn)
+           qtank(nn) = qtanko(nn)
+           voidf(i) = 1.0 - voidg(i)
+         endif
+c  Check for inactive accumulator and return if active volume.
+         if (iand(cmpopt(nn),16) .ne. 0) then
+           vctrl(i) = iand(vctrl(i),not(32))
+         else
+           vctrl(i) = ior(vctrl(i),32)
+c
+c  Assure proper steam tables are used.
+           if (volmat(i) .ne. nfluid) call stcset (volmat(i))
+           cvao = 0.0
+           uao = 0.0
+           dcva = 0.0
+           ra = 0.0
+           ip = i
+           do in = 1,noncn
+             cvao = cvaox(in)*qualan(ip) + cvao
+             dcva = dcvax(in)*qualan(ip) + dcva
+             uao = uaox(in)*qualan(ip) + uao
+             ra = rax(in)*qualan(ip) + ra
+             ip = ip + 1
+           enddo
+c
+           j = njco(nn) + filndx(5)
+c  Net mass transfer rate for printout.
+           dotm(i) = ahgtf(nn)*recipv(i)
+           vapgen(i) = dotm(i)
+           amasso = vdmo(nn)*rhono(nn)
+           if (check .eq. 1) then
+c  Solve the mass and energy equations.
+             areaxv = ajun(j)*velfj(j)
+             delug = dt*(qtank(nn) - po(i)*areaxv)/amasso
+c  Get the new time nitrogen and liquid volumes.
+             vliq(nn) = vliqo(nn) - areaxv*dt
+             vdm(nn) = min(v(i),(v(i) - vliq(nn)))
+             if (vliq(nn) .lt. 0.0) then
+c  Energy balance when tank empties of liquid.
+               vliq(nn) = 0.0
+               dtf = min(dt,max(0.0,(vliqo(nn)/areaxv)))
+               dtg = max(0.0,(dt - dtf))
+               rhon(nn) = recipv(i)*rhono(nn)*(vdmo(nn) - areaxv*dtg)
+               delug = delug*amasso/(v(i)*rhon(nn))
+               ug(i) = ugo(i) + delug
+               rhofm = rhof(i)
+               uf(i) = ufo(i)
+               voidg(i) = 1.0
+               voidf(i) = 0.0
+               cmpopt(nn) = ior(cmpopt(nn),16)
+               vctrl(i) = iand(vctrl(i),not(32))
+             else
+c  Preserve nitrogen mass exactly.
+               rhon(nn) = amasso/vdm(nn)
+c  Compute the new time gas energy.
+               ug(i) = ugo(i) + delug
+c  Solve the liquid equations.
+               rhofm = rhof(i)
+               uf(i) = ufo(i) + (qwg(i) - qtank(nn))*dt/(vliq(nn)*rhofm)
+c  Compute the new time state.
+             endif
+             ua1 = ug(i) - cvao*tao - uao
+             if (ua1 .gt. 0.0) then
+               tempg(i) = tao + (sqrt(cvao**2 + 2.0*ua1*dcva) - cvao)/
+     &         dcva
+             else
+               tempg(i) = (ug(i) - uao)/cvao
+             endif
+             psol = p(i)
+             rhogm = psol/(ran*tempg(i))
+             rhom(i) = recipv(i)*(vdm(nn)*rhogm + vliq(nn)*rhofm)
+             p(i) = ran*rhon(nn)*tempg(i)
+           endif
+c  Compute the new time voidg.
+           voidg(i) = vdm(nn)*recipv(i)
+           voidf(i) = 1.0 - voidg(i)
+c  Get the gas property terms.
+           cvnit(nn)  = cvao + dcva*max(0.0,(tempg(i) - tao))
+           acpnit(nn) = ra + cvnit(nn)
+           dtemp = sqrt(tempg(i)**3)/(tempg(i) + trefn)
+           aviscn(nn) = visno*dtemp
+           thcnd(nn) = thcna*tempg(i)**thcnb
+c  Get the liquid properties (note--uf = constant).
+           ubar = uf(i)
+           pres = p(i)
+           if (nfluid .eq. 1) then
+             call sth2x6 (fa(ndxstd),prop,ip,erx)
+           elseif (nfluid .eq. 2) then
+             call std2x6 (fa(ndxstd),prop,ip,erx)
+           else
+             call  strpu1 (fa(ndxstd),prop,ip,erx)
+           endif
+           if (erx) go to 95
+           uliq = uf(i)
+           tliq = tt
+           rholiq = 1.0/vbar
+           qual = 0.5
+           if (nfluid .eq. 1) then
+             call sth2x1 (fa(ndxstd),prop,erx)
+           elseif (nfluid .eq. 2) then
+             call std2x1 (fa(ndxstd),prop,erx)
+           else
+             call  strtx (fa(ndxstd),prop,erx)
+           endif
+           if (erx) go to 95
+           ahgtf(nn) = hsubg
+           ahfgtf(nn) = hsubg - hsubf
+           avfgtf(nn) = vsubg - vsubf
+           claptf(nn) = ahfgtf(nn)/(tt*avfgtf(nn))
+           betav(nn) = kapag*claptf(nn) - betag
+           pvaptf = psat
+c  Get the saturated vapor and liquid properties at tempg.
+           tt = max(ttrip,tempg(i))
+           qual = 0.5
+           if (nfluid .eq. 1) then
+             call sth2x1 (fa(ndxstd),prop,erx)
+           elseif (nfluid .eq. 2) then
+             call std2x1 (fa(ndxstd),prop,erx)
+           else
+             call strtx (fa(ndxstd),prop,erx)
+           endif
+           if (erx) go to 95
+           acpgtg(nn) = cpg
+           acvgtg(nn) = cpg - tt*betag*vsubg*(betag/kapag)
+           ahfgtg(nn) = hsubg - hsubf
+           avgtg(nn) = vsubg
+           ahftg(nn) = hsubf
+           usteam = usubg
+           psteam = psat
+           quala(i) = avgtg(nn)*rhon(nn)
+           quala(i) = quala(i)/(1.0 + quala(i))
+           uair = ug(i)
+           tair = tempg(i)
+           xair = quala(i)
+           ug(i) = quala(i)*ug(i) + (1.0 - quala(i))*usteam
+           xmg = ratga * psteam/p(i)
+           dmgdt(nn) = (ratga*ahfgtg(nn)*vdm(nn) - xmg*ran*tempg(i)*
+     &     (vsubg-vsubf))/(ran*tempg(i)*tempg(i)*(vsubg-vsubf))
+           dpd(nn) = xmg/vdm(nn)
+           rho(i) = recipv(i)*(vdm(nn)*rhon(nn) + vliq(nn)*rhof(i))
+           pps(i) = pvaptf
+           ustm(i) = usubg
+           ug(i) = uair
+           tempg(i) = tair
+           quala(i) = 1.0
+           voidf(i) = max(0.0,min(vliq(nn)*recipv(i),1.0))
+           voidg(i) = 1.0 - voidf(i)
+           rhof(i)  = rholiq
+           rhog(i)  = rhon(nn)
+           quals(i) = (vdm(nn)*rhog(i))/(vdm(nn)*rhog(i) +
+     &     vliq(nn)*rhof(i))
+           qsm = min(1.0,max(0.0,(1.0 - quals(i))))
+           quals(i) = min(1.0,max(0.0,(1.0 - qsm)))
+           tempf(i) = tliq
+           if (check.ne.0 .and. lpdat(issys)%lsuces.ne.2) then
+             drhog = recipv(i)*vdm(nn)*(rhogm - rhon(nn))
+             drhof = recipv(i)*vliq(nn)*(rhofm - rhof(i))
+             rhoerr = drhog*drhog + drhof*drhof
+             if (rhoerr .ge. 0.001) then
+               lpdat(issys)%lsuces = 1
+               vctrl(i) = ior(vctrl(i),512)
+             endif
+           endif
+           tmassv(i) = rho(i)*v(i)
+           tiengv(i) = (voidf(i)*rhof(i)*uf(i) + voidg(i)*rhog(i)*
+     &     ug(i))*v(i)
+           go to 99
+c  State error trap.
+   95      vctrl(i) = ior(vctrl(i),256)
+           lpdat(issys)%lsuces = 2
+c  Diagnostic print.
+   99      continue
+$if def,dbgprnt
+           if (help.ne.0 .and. iand(ihlppr(1),29).ne.0 .and.
+     &     iand(vctrlx(i),1).ne.0) then
+             call helphd ('stacc',15)
+             write (output,9020) volno(i),junno(j),p(i),voidf(i),
+     &       voidg(i),quala(i)
+ 9020  format ('0Accumulator data',3x,'volno =',i10,' junno =',i10/
+     & 'p=',1p,g13.5,'  voidf=',g13.5,'  voidg=',g13.5,'  quala=',g13.5)
+             write (output,9030) cmpopt(nn),dialn(nn),lnelv(nn),
+     &       thick(nn),lnlen(nn),ttank(nn),ttanko(nn),thcnd(nn),
+     &       qtank(nn),vdm(nn),vdmo(nn),vliq(nn),vliqo(nn),rhon(nn),
+     &       rhono(nn),tvapo(nn),cvnit(nn),vtank(nn),betav(nn),dpd(nn),
+     &       dpddp(nn),ahfgtf(nn),ahfgtg(nn),avgtg(nn),avfgtf(nn),
+     &       ahftg(nn),ahgtf(nn),acpgtg(nn),acvgtg(nn),aviscn(nn),
+     &       acpnit(nn),atank(nn),diamtk(nn),qtanko(nn),dmgdt(nn),
+     &       claptf(nn)
+ 9030  format ('0accumulator terms, cmpopt=',z10/
+     & 2x,' dialn=',1p,g13.5,'  lnelv=',   g13.5,'  thick=',   g13.5,
+     & 2x,' lnlen=',   g13.5,'  ttank=',   g13.5,' ttanko=',   g13.5/
+     & 2x,' thcnd=',   g13.5,'  qtank=',   g13.5,'    vdm=',   g13.5,
+     & 2x,'  vdmo=',   g13.5,'   vliq=',   g13.5,'  vliqo=',   g13.5/
+     & 2x,'  rhon=',   g13.5,'  rhono=',   g13.5,'  tvapo=',   g13.5,
+     & 2x,' cvnit=',   g13.5,'  vtank=',   g13.5,'  betav=',   g13.5/
+     & 2x,'   dpd=',   g13.5,'  dpddp=',   g13.5,' ahfgtf=',   g13.5,
+     & 2x,'ahfgtg=',   g13.5,'  avgtg=',   g13.5,' avfgtf=',   g13.5/
+     & 2x,' ahftg=',   g13.5,'  ahgtf=',   g13.5,' acpgtg=',   g13.5,
+     & 2x,'acvgtg=',   g13.5,' aviscn=',   g13.5,' acpnit=',   g13.5/
+     & 2x,' atank=',   g13.5,' diamtk=',   g13.5,' qtanko=',   g13.5,
+     & 2x,' dmgdt=',   g13.5,' claptf=',   g13.5)
+             write (output, 9040) qwg(i),amasso,areaxv,delug,vapgen(i),
+     &       psol,tair,uair,usteam,psteam,xair,tliq,uliq,p(i),rhogm,
+     &       rhofm,rhoerr
+ 9040  format ('0terms computed for stacc'/
+     & 2x,'   qwg=',1p,g13.5,' amasso=',   g13.5,' areaxv=',   g13.5,
+     & 2x,' delug=',   g13.5,' vapgen=',   g13.5,'   psol=',   g13.5/
+     & 2x,'  tair=',   g13.5,'   uair=',   g13.5,' usteam=',   g13.5,
+     & 2x,'psteam=',   g13.5,'   xair=',   g13.5,'   tliq=',   g13.5/
+     & 2x,'  uliq=',   g13.5,'   p(i)=',   g13.5,'  rhogm=',   g13.5,
+     & 2x,' rhofm=',   g13.5,' rhoerr=',   g13.5)
+           endif
+$endif
+         endif
+       enddo
+       return
+       end

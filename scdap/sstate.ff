@@ -1,0 +1,111 @@
+*mlist
+*if def,selap
+      subroutine sstate (tcrshr,unuc)
+c
+c  sstate defines the component state based upon the separate
+c  descriptions given by individual component behavioral models.
+c
+c  Cognizant engineer: gab.
+c
+c     calling subroutines:  slabc
+c
+c     input variables                  description
+c        pparay         prompt or total power (w/m3)
+c        tcrshr         thickness of crust of solidified flow shroud
+c                         (zr) in axial zone. (m)
+c        timec          current time (s)
+c                         zone  (m)
+c
+c     output variables                 description
+c
+      implicit none
+c
+*call cons
+*call scddat
+*call intcom
+*call ndxara
+*call scdcom
+*call scdout
+*call contrl
+*call ufiles
+*call cpmdat
+*call oldcom
+      real tcrshr,unuc
+      dimension tcrshr(ndax),unuc(ndax)
+c  Local variables.
+      integer i,k,nflag,nmat
+      integer n,nmttot,nmtloc
+      integer iselct
+      integer ndbg
+      real dum1
+      real power,thick
+      iselct=2
+      ndbg=0
+      if(modidx(1).eq.1)iselct=1
+      select case(iselct)
+      case(1)
+        do i =1,naz
+c  update radmt3,which is inner radius of oxide layer.
+          radmt3(nmater2(i,icomp),i,icomp)=rnoxd((icomp-1)*ndax+i)
+          rdmatz(nmater2(i,icomp),i,icomp)=
+     &    radmt3(nmater2(i,icomp),i,icomp)
+c  check to see whether mesh entirely oxidized
+          do n=numelm2(i,icomp),1,-1
+            if(rnoxd((icomp-1)*ndax+i).lt.xcond3(n,i,icomp).and. 
+     &      mshmt3(n,i,icomp).eq.1)then
+            mshmt3(n,i,icomp)=5
+            end if
+          end do
+        end do
+      case(2)
+c     the following coding locates the materal interface locations
+c     and calculates the internal energy generation of the
+c     slab materials including crust, assuming only input
+c     gamma heating
+      do 50 i=1,naz
+        power = unuc(i)
+c     the following do loop sets the qmat to gamma heating for layers
+c     which are input other than a zircaloy liner
+c  this also starts nmat at the right value.
+        nflag = 0
+        do 40 k = 1,nmater2(i,icomp)
+          if(abs(radmt3(k,i,icomp)-rci2(i,icomp)).lt.e .and.
+     #       nflag.eq.0)then
+            nflag = 1
+            nmat = k
+          endif
+          if( nflag .eq.  0) then
+            thick = radmt3(k+1,i,icomp) - radmt3(k,i,icomp)
+            qmat3(k,i,icomp)=thick*slbwd(icomp)*power/afuel2(i,icomp)
+          endif
+   40   continue
+c  set the radius of zircaloy liner if one exists.
+        thick = rnoxd(ndax*(icomp-1)+i)-radmt3(nmat,i,icomp)
+        if ( abs( thick) .gt. e) then
+          nmat = nmat + 1
+          radmt3( nmat,i,icomp) = rnoxd(ndax*(icomp-1)+i)
+          qmat3(nmat-1,i,icomp)=thick*slbwd(icomp)*power/afuel2(i,icomp)
+          imatr3(nmat-1,i,icomp) = 1
+        endif
+c  set the radius of the oxide layer if one exists.
+        if( oxd2d(i,icomp) .gt. e) then
+          nmat = nmat + 1
+          radmt3( nmat,i,icomp) = rco2(i,icomp)
+          qmat3(nmat-1,i,icomp)=oxd2d(i,icomp)*slbwd(icomp)*power/
+     #                          afuel2(i,icomp)
+          imatr3(nmat-1,i,icomp) = 5
+        endif
+c  if the region has a crust, set the crust radius.
+        if( tcrshr(i) .gt. e) then
+          nmat = nmat + 1
+          radmt3(nmat,i,icomp) = rcrst2(i,icomp)
+          imatr3(nmat-1,i,icomp) = 3
+          qmat3(nmat-1,i,icomp)=tcrshr(i)*slbwd(icomp)*power/
+     #                            afuel2(i,icomp)
+        endif
+        nmater2(i,icomp) = nmat - 1
+   50 continue
+      end select
+      return
+      end
+*endif

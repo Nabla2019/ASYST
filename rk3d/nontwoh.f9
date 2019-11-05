@@ -1,0 +1,479 @@
+      SUBROUTINE NONTWOH
+     &  (IXY,IXYP,KL,ADF,ADFP,JNEM,IFLAG,
+     &  SW,XHIP,TCD,TNF,TXT,SIGDSN,BETAT,BETATLAM,
+     &  PC,SXT,SXTP,AMAT3,XOUT3,BRHS3,
+     &  EXC,EXCP,AL,ALP,TF,TFP,TD,TDP,FL,FLP,SWS,
+     $  AK,CSH0,SNH1,CSH2,IDIR)
+C   
+C     THIS SUBROUTINE SOLVES THE TWO-NODE PROBLEM AND
+C     RETURNS THE NEM CURRENT 'JNEM'.
+C     *** FOR HEXAGONAL GEOMETRY WITH CONFORMAL MAPPING ***
+C     
+C     WE HAVE TAKEN ADVANTAGE OF THE REDUCIBILITY
+C     OF THE MATRIX. FOR ONE 2-NODE PROBLEM, INVOLVING
+C     SAY NODE L AND L+1, THE EVEN EXPANSION COEFFICIENTS
+C     FOR THE FLUX OF NODE L+1 ARE THE SAME AS FOR THE ONES
+C     FOR THE 2-NODE PROBLEM INVOLVING NODE L+1 AND L+2.
+C     SO WE DON'T HAVE TO SOLVE FOR THEM TWICE!
+C     
+      include 'param.fcb'
+      include 'che.fcb'
+      include 'geom.fcb'
+      include 'xsec1.fcb'
+      include 'extsor.fcb'
+      include 'crhs.fcb'
+      include 'confmap.fcb'
+
+C.... VARIABLE DESCRIPTION
+C     
+C     SXT    : EXTERNAL SOURCE IN NODE L
+C     THE MATRIX OF THE 2-NODE PROBLEM CAN BE REDUCED
+C     SO THAT WE CAN SOLVE ACTUALLY 3 SYSTEMS, 2 SMALL
+C     FOR THE EVEN COEFFICIENTS OF EVERY NODE (L, L+1)
+C     AND A LARGER ONE FOR THE ODD COEFFICIENTS.
+C
+C     AMAT3 : COEFFICIENTS OF THE THIRD MATRIX
+C     EXC   : 4 EXPANSION COEFFICIENTS FOR EACH GROUP FOR NODE L
+C     AL    : TOTAL X-SEC FOR NODE L
+C     TFP   : FISSION X-SEC FOR NODE L+1
+C     TD    : DIFFUSION COEFFICIENT FOR NODE L
+C     FL    : FLUX
+C     ADF   : ASSEMBLY DISCONTINUITY FACTORS
+C     FS    : FISSION SOURCE (NODE L)
+C     
+C     
+
+C
+C     NOTE : IXY DENOTES NODE L AND IXYP DENOTES NODE L+1
+C
+      DIMENSION
+     &  SW(NXYL,NZ,NG)                       ,
+     &  XHIP(NXYL,NZ,NG)                     ,
+     &  TCD(NXYL,NZ,NG)                      ,
+     &  TNF(NXYL,NZ,NG)                      ,TXT(NXYL,NZ,NG)      ,
+     &  SIGDSN(NXYL,NZ,NG,*)                 ,
+     &  BETAT(NXYL,NZ)                       ,BETATLAM(NXYL,NZ,NG) ,
+     &  PC(NG*3),SWS(6,NXYL,NZ,NG),AK(NXYL,NZ,NG),CSH0(NXYL,NZ,NG),
+     $  SNH1(NXYL,NZ,NG),CSH2(NXYL,NZ,NG)
+      
+      DIMENSION SXT(NG),SXTP(NG), AMAT3(32*NG-32), XOUT3(4*NG),
+     $  BRHS3(4*NG), EXC(5,NG),EXCP(5,NG),
+     $  AL(NG),ALP(NG),TF(NG),TFP(NG),TD(NG),TDP(NG),
+     $  FL(NG),FLP(NG),ADF(NG),ADFP(NG)
+      
+      REAL*8 JNEM(NG),FSG(4),FSGP(4)
+      REAL*8 SINHU(4),COSHU(4),SINHUP(4),COSHUP(4)
+ 
+
+      U=CBASE/2.
+      DO IG=1,NG
+       JNEM(IG)=0.0
+       SINHU(IG) =SINH(AK(IXY,KL,IG)*U)
+       COSHU(IG) =COSH(AK(IXY,KL,IG)*U)
+       SINHUP(IG)=SINH(AK(IXYP,KL,IG)*U)
+       COSHUP(IG)=COSH(AK(IXYP,KL,IG)*U)
+       DO I=1,5
+        EXC(I,IG)=0.0
+        EXCP(I,IG)=0.0
+       ENDDO
+      ENDDO
+C
+C     ZERO-OUT ARRAYS
+C
+      DO 101 I = 1,4*NG
+       BRHS3(I)= 0.0
+       XOUT3(I)=0.0
+ 101  CONTINUE
+      DO 411 J = 1,32*NG-32
+       AMAT3(J) = 0.0
+ 411  CONTINUE
+ 
+      DO 200 IG=1,NG
+C
+C     NODE L
+C
+       AL(IG) = TXT(IXY,KL,IG)
+       TF(IG) = TNF(IXY,KL,IG)/FLAMDA
+       TD(IG) = TCD(IXY,KL,IG)
+       FL(IG) = SW(IXY,KL,IG)
+       SXT(IG)=0.0
+C
+C     NODE L+1
+C     
+       ALP(IG)= TXT(IXYP,KL,IG)
+       TFP(IG)= TNF(IXYP,KL,IG)/FLAMDA
+       TDP(IG)= TCD(IXYP,KL,IG)
+       FLP(IG)= SW(IXYP,KL,IG)
+       SXTP(IG)=0
+
+ 200  CONTINUE
+
+      DO 121 IG=1,NG
+       FSG(IG)=TF(IG)*( (1.0 - BETAT(IXY,KL))*
+     $   XHIP(IXY,KL,IG)+ BETATLAM(IXY,KL,IG) )
+       FSGP(IG)=TFP(IG)*( (1.0 - BETAT(IXYP,KL))*
+     $   XHIP(IXYP,KL,IG)+ BETATLAM(IXYP,KL,IG) )
+ 121  CONTINUE
+C
+C     DON'T HAVE TO SOLVE A, a0, AND a2 FOR NODE L AGAIN IF IFLAG=1
+C     
+C     ===================
+      IF(IFLAG.EQ.1)THEN
+C     ===================
+       DO 100 IG=1,NG
+        EXC(1,IG)=PC(IG)
+        EXC(3,IG)=PC(IG+NG)
+        EXC(5,IG)=PC(IG+2*NG)
+ 100   CONTINUE
+C     ===================
+      ELSE
+C     ===================
+C
+C     SOLVE a,a0, AND a2 FOR NODE L
+C       
+       DO 110 IG=1,NG
+C
+C     OTH MOMENT
+C     
+C     A: 1,3 for NG=2 and 1,3,5,7 for NG=4
+       I=(IG-1)*2+1
+        AMAT3(I)=-2*TD(IG)*AK(IXY,KL,IG)*SINHU(IG)*K0/CBASE
+C     a2: 2,4 for NG=2 and 2,4,6,8 for NG=4
+       I=(IG-1)*2+2
+        AMAT3(I)=-2*TD(IG)*K0*K1/W2DENOM
+C     RHS
+        ADUM=0.0
+        DO IGG=1,NG
+         IF(IG.NE.IGG) THEN
+          IGP=IGG
+          IF(IGG.GT.IG) IGP=IGG-1
+          ADUM=ADUM+(TF(IGG)*( (1.0 - BETAT(IXY,KL))*
+     $      XHIP(IXY,KL,IG)+ BETATLAM(IXY,KL,IG) )
+     $      +SIGDSN(IXY,KL,IG,IGP))*FL(IGG)
+         ENDIF
+        ENDDO
+        BRHS3(IG)=-(AL(IG)-FSG(IG))*FL(IG)*K0
+     $    +ADUM +QU0(IG)-LU0(IG)
+C     
+C     2ND MOMENT
+C     
+C     A: 5,10 for NG=2 and 9,18,27,36 for NG=4
+       I=IG*(2*NG+1)
+        AMAT3(I)=(1./(4*CBASE*K1*W2DENOM))*
+     $    ( SINHU(IG)*TD(IG)*(-16*K1**2/AK(IXY,KL,IG)
+     $   +8*K0**2*AK(IXY,KL,IG))
+     $    +CBASE*K1**2*TD(IG)*
+     $    (8*COSHU(IG)-2*CBASE*AK(IXY,KL,IG)*SINHU(IG)))
+     $    +(AL(IG)-FSG(IG))*CSH2(IXY,KL,IG)
+C     a2: 7,12 for NG=2 and 13,22,31,40 for NG=4 
+       I=(IG-1)*(2*NG+1)+(3*NG+1)
+        AMAT3(I)=1./(4*CBASE*K1*W2DENOM*W2DENOM) *
+     $    (8*TD(IG)*CBASE*(-K1**3*(CBASE**2/12.-(K0/K1)**2)
+     $    +K0**2*K1)
+     $    +CBASE*K1**2*TD(IG)*(8*K1*(U**2-(K0/K1)**2)
+     $    -2*CBASE**2*K1)) + AL(IG)-FSG(IG)
+C     A and a2 term from other group
+        DO IGG=1,NG
+         IF(IGG.NE.IG)THEN
+          IGP=IGG
+          IF(IGG.GT.IG)IGP=IGG-1
+         I=(2*NG+1)+(IG-1)*2*NG+(IGG-1)*1
+          AMAT3(I)=(TF(IGG)*( (1.0 - BETAT(IXY,KL))*
+     $      XHIP(IXY,KL,IG)+ BETATLAM(IXY,KL,IG) )
+     $      +SIGDSN(IXY,KL,IG,IGP))*CSH2(IXY,KL,IGG)
+          AMAT3(I)=-AMAT3(I)
+         I=(IG-1)*2*NG+(3*NG+1)+(IGG-1)*1
+          AMAT3(I)=-(TF(IGG)*( (1.0 - BETAT(IXY,KL))*
+     $      XHIP(IXY,KL,IG)+ BETATLAM(IXY,KL,IG) )
+     $      +SIGDSN(IXY,KL,IG,IGP))
+         ENDIF
+        ENDDO
+C     RHS
+        BRHS3(IG+NG)=QU2(IG)-LU2(IG)
+ 110   CONTINUE
+
+       IF(NG.EQ.2)THEN
+        CALL ONENODE4(AMAT3,BRHS3,XOUT3)
+       ELSEIF(NG.EQ.4)THEN
+        CALL ONENODE8(AMAT3,BRHS3,XOUT3)
+       ENDIF
+       DO 313 IG=1,NG
+        EXC(1,IG)=XOUT3(IG)
+        EXC(5,IG)=XOUT3(IG+NG)
+        EXC(3,IG)=(FL(IG)*FLRAT-EXC(1,IG)*CSH0(IXY,KL,IG))
+ 313   CONTINUE       
+C     ===================
+      ENDIF
+C     ===================
+C
+C     ZERO-OUT ARRAYS
+C     
+      DO I = 1,4*NG
+       BRHS3(I)= 0.0
+       XOUT3(I)=0.0
+      ENDDO
+      
+      DO J = 1,32*NG-32
+       AMAT3(J) = 0.0
+      ENDDO
+C     
+C     SOLVE A, a0,  AND a2 FOR NODE L+1
+C
+      DO 310 IG=1,NG
+C     
+C     OTH MOMENT
+C     
+C     A: 1,3 for NG=2 and 1,3,5,7 for NG=4
+       I=(IG-1)*2+1
+       AMAT3(I)=-2*TDP(IG)*AK(IXYP,KL,IG)*SINHUP(IG)*K0/CBASE
+C     a2: 2,4 for NG=2 and 2,4,6,8 for NG=4
+       I=(IG-1)*2+2
+       AMAT3(I)=-2*TDP(IG)*K0*K1/W2DENOM
+C     RHS
+       ADUM=0.0
+       DO IGG=1,NG
+        IF(IG.NE.IGG) THEN
+         IGP=IGG
+         IF(IGG.GT.IG) IGP=IGG-1
+         ADUM=ADUM+(TFP(IGG)*( (1.0 - BETAT(IXYP,KL))*
+     $     XHIP(IXYP,KL,IG)+ BETATLAM(IXYP,KL,IG) )
+     $     +SIGDSN(IXYP,KL,IG,IGP))*FLP(IGG)
+        ENDIF
+       ENDDO
+       BRHS3(IG)=-(ALP(IG)-FSGP(IG))*FLP(IG)*K0
+     $   +ADUM +QU0P(IG)-LU0P(IG)
+C     
+C     2ND MOMENT
+C     
+C     A: 5,10 for NG=2 and 9,18,27,36 for NG=4
+       I=IG*(2*NG+1)
+       AMAT3(I)=(1./(4*CBASE*K1*W2DENOM))*
+     $   ( SINHUP(IG)*TDP(IG)*(-16*K1**2/AK(IXYP,KL,IG)
+     $   +8*K0**2*AK(IXYP,KL,IG))
+     $   +CBASE*K1**2*TDP(IG)*
+     $   (8*COSHUP(IG)-2*CBASE*AK(IXYP,KL,IG)*SINHUP(IG)))
+     $   +(ALP(IG)-FSGP(IG))*CSH2(IXYP,KL,IG)
+C     a2: 7,12 for NG=2 and 13,22,31,40 for NG=4 
+       I=(IG-1)*(2*NG+1)+(3*NG+1)
+       AMAT3(I)=1./(4*CBASE*K1*W2DENOM*W2DENOM) *
+     $   (8*TDP(IG)*CBASE*(-K1**3*(CBASE**2/12.-(K0/K1)**2)
+     $   +K0**2*K1)
+     $   +CBASE*K1**2*TDP(IG)*(8*K1*(U**2-(K0/K1)**2)
+     $   -2*CBASE**2*K1)) + ALP(IG)-FSGP(IG)
+C     A and a2 term from other group
+       DO IGG=1,NG
+        IF(IGG.NE.IG)THEN
+         IGP=IGG
+         IF(IGG.GT.IG)IGP=IGG-1
+         I=(2*NG+1)+(IG-1)*2*NG+(IGG-1)*1
+         AMAT3(I)=(TFP(IGG)*( (1.0 - BETAT(IXYP,KL))*
+     $     XHIP(IXYP,KL,IG)+ BETATLAM(IXYP,KL,IG) )
+     $     +SIGDSN(IXYP,KL,IG,IGP))*CSH2(IXYP,KL,IGG)
+         AMAT3(I)=-AMAT3(I)
+         I=(IG-1)*2*NG+(3*NG+1)+(IGG-1)*1
+         AMAT3(I)=-(TFP(IGG)*( (1.0 - BETAT(IXYP,KL))*
+     $     XHIP(IXYP,KL,IG)+ BETATLAM(IXYP,KL,IG) )
+     $     +SIGDSN(IXYP,KL,IG,IGP))
+        ENDIF
+       ENDDO
+C     RHS
+       BRHS3(IG+NG)=QU2P(IG)-LU2P(IG)
+ 310  CONTINUE
+
+      IF(NG.EQ.2)THEN
+       CALL ONENODE4(AMAT3,BRHS3,XOUT3)
+      ELSEIF(NG.EQ.4)THEN
+       CALL ONENODE8(AMAT3,BRHS3,XOUT3)
+      ENDIF
+      DO 323 IG=1,NG
+       EXCP(1,IG)=XOUT3(IG)
+       EXCP(5,IG)=XOUT3(IG+NG)
+       EXCP(3,IG)=(FLP(IG)*FLRAT-EXCP(1,IG)*CSH0(IXYP,KL,IG))
+ 323  CONTINUE
+C
+C     STORE NODE L+1
+C
+      DO IG=1,NG
+       PC(IG)=EXCP(1,IG)
+       PC(IG+NG)=EXCP(3,IG)
+       PC(IG+2*NG)=EXCP(5,IG)
+      ENDDO
+C
+C     ZERO-OUT ARRAYS
+C     
+      DO I = 1,4*NG
+       BRHS3(I)= 0.0
+       XOUT3(I)=0.0
+      ENDDO
+      
+      DO J = 1,32*NG-32
+       AMAT3(J) = 0.0
+      ENDDO
+C
+C     SOLVE B and a1 FOR NODE L AND L+1
+C     
+C     FOR NG=2
+C
+C     (   A1   A2    0    0   A3   A4    0    0)(C11) (  A33)(RHS)
+C     (   A5   A6    0    0   A7   A8    0    0)(C12) (  A34)
+C     (    0    0   A9  A10    0    0  A11  A12)(C13) (  A35)
+C     (    0    0  A13  A14    0    0  A15  A16)(C14)=(  A36)
+C     (  A17    0  A18    0  A19    0  A20    0)(C15) (  A37)
+C     (    0  A21    0  A22    0  A23    0  A24)(C16) (  A38)
+C     (  A25    0  A26    0  A27    0  A28    0)(C17) (  A39)
+C     (    0  A29    0  A30    0  A31    0  A32)(C18) (  A40)
+C
+      DO 257 IG=1,NG
+C     
+C     FIRST MOMENT
+C     
+C     B terms of node L
+       ISTART=0
+       ISKIP=2*NG+1
+       I=ISTART+(IG-1)*ISKIP+1
+       AMAT3(I)=K1*TD(IG)*(-AK(IXY,KL,IG)*COSHU(IG)+2*SINHU(IG)/CBASE)
+     $   +(AL(IG)-FSG(IG))*SNH1(IXY,KL,IG)
+C     B terms of node L+1
+       ISTART=NG*NG*2
+       ISKIP=2*NG+1
+       I=ISTART+(IG-1)*ISKIP+1
+       AMAT3(I)=K1*TDP(IG)*(-AK(IXYP,KL,IG)*COSHUP(IG)
+     $   +2*SINHUP(IG)/CBASE)
+     $   +(ALP(IG)-FSGP(IG))*SNH1(IXYP,KL,IG)
+C     a1 terms of node L
+       ISTART=NG
+       ISKIP=2*NG+1
+       I=ISTART+(IG-1)*ISKIP+1
+       AMAT3(I)=AL(IG)-FSG(IG)
+C     a1 term of node L+1
+       ISTART=2*NG*NG+NG
+       ISKIP=2*NG+1
+       I=ISTART+(IG-1)*ISKIP+1
+       AMAT3(I)=ALP(IG)-FSGP(IG)
+C     B and a1 terms from other group - node L
+       DO IGG=1,NG
+        IF(IGG.NE.IG)THEN
+         IGP=IGG
+         IF(IGG.GT.IG)IGP=IGG-1
+         I=0+(IG-1)*(2*NG)+IGG
+         AMAT3(I)=-(TF(IGG)*( (1.0 - BETAT(IXY,KL))*
+     $     XHIP(IXY,KL,IG)+ BETATLAM(IXY,KL,IG) )
+     $     +SIGDSN(IXY,KL,IG,IGP))*SNH1(IXY,KL,IGG)
+         I=NG+(IG-1)*(2*NG)+IGG
+         AMAT3(I)=-(TF(IGG)*( (1.0 - BETAT(IXY,KL))*
+     $     XHIP(IXY,KL,IG)+ BETATLAM(IXY,KL,IG) )
+     $     +SIGDSN(IXY,KL,IG,IGP))
+        ENDIF
+       ENDDO
+C     B and a1 terms from other group - node L+1
+       DO IGG=1,NG
+        IF(IGG.NE.IG)THEN
+         IGP=IGG
+         IF(IGG.GT.IG)IGP=IGG-1
+         I=2*NG*NG+(IG-1)*(2*NG)+IGG
+         AMAT3(I)=-(TFP(IGG)*( (1.0 - BETAT(IXYP,KL))*
+     $     XHIP(IXYP,KL,IG)+ BETATLAM(IXYP,KL,IG) )
+     $     +SIGDSN(IXYP,KL,IG,IGP))*SNH1(IXYP,KL,IGG)
+         I=2*NG*NG+NG+(IG-1)*(2*NG)+IGG
+         AMAT3(I)=-(TFP(IGG)*( (1.0 - BETAT(IXYP,KL))*
+     $     XHIP(IXYP,KL,IG)+ BETATLAM(IXYP,KL,IG) )
+     $     +SIGDSN(IXYP,KL,IG,IGP))
+        ENDIF
+       ENDDO
+C     RHS
+       BRHS3(IG)=QU1(IG)-LU1(IG)
+       BRHS3(IG+NG)=QU1P(IG)-LU1P(IG)
+C     
+C     FLUX DISCONTINUITY
+C     
+       ISKIP=4
+C     B terms - NODE L
+       ISTART=4*NG*NG
+       I=ISTART+(IG-1)*ISKIP+1
+       AMAT3(I)=ADF(IG)*SINHU(IG)
+C     B terms - NODE L+1
+       ISTART=4*NG*NG+1
+       I=ISTART+(IG-1)*ISKIP+1
+       AMAT3(I)=-ADFP(IG)*-SINHUP(IG)
+C     a1 terms - NODE L 
+       ISTART=4*NG*NG+2
+       I=ISTART+(IG-1)*ISKIP+1
+       AMAT3(I)=ADF(IG)*K1*CBASE/2.
+C     a1 terms - NODE L+1
+       ISTART=4*NG*NG+3
+       I=ISTART+(IG-1)*ISKIP+1
+       AMAT3(I)=ADFP(IG)*K1*CBASE/2.
+C     RHS
+       BRHS3(IG+2*NG)=
+     $   -ADF(IG)*(EXC(1,IG)*COSHU(IG)+EXC(3,IG)*K0
+     $   +EXC(5,IG)*K1*((CBASE/2)**2-(K0/K1)**2)/W2DENOM)
+     $   +ADFP(IG)*(EXCP(1,IG)*COSHUP(IG)+EXCP(3,IG)*K0
+     $   +EXCP(5,IG)*K1*((CBASE/2)**2-(K0/K1)**2)/W2DENOM)
+C     
+C     CURRENT CONTINUITY
+C     
+       ISKIP=4
+C     B terms - NODE L
+       ISTART=4*NG*NG+4*NG
+       I=ISTART+(IG-1)*ISKIP+1
+       AMAT3(I)=-TD(IG)*AK(IXY,KL,IG)*COSHU(IG)
+C     B terms - NODE L+1
+       ISTART=4*NG*NG+1+4*NG
+       I=ISTART+(IG-1)*ISKIP+1
+       AMAT3(I)=TDP(IG)*AK(IXYP,KL,IG)*COSHUP(IG)
+C     a1 terms - NODE L
+       ISTART=4*NG*NG+2+4*NG
+       I=ISTART+(IG-1)*ISKIP+1
+       AMAT3(I)=-TD(IG)*K1
+C      a1 terms - NODE L+1
+       ISTART=4*NG*NG+3+4*NG
+       I=ISTART+(IG-1)*ISKIP+1
+       AMAT3(I)=TDP(IG)*K1
+C     RHS
+       BRHS3(IG+3*NG)=
+     $   TD(IG)*(EXC(1,IG)*AK(IXY,KL,IG)*SINHU(IG)
+     $   +EXC(5,IG)*CBASE*K1/W2DENOM)
+     $   -TDP(IG)*(EXCP(1,IG)*AK(IXYP,KL,IG)*-SINHUP(IG)
+     $   -EXCP(5,IG)*CBASE*K1/W2DENOM)
+ 257  CONTINUE
+
+      
+      IF(NG.EQ.2)THEN
+       CALL TWONODE8(AMAT3,BRHS3,XOUT3)
+      ELSEIF(NG.EQ.4)THEN
+       CALL TWONODE16(AMAT3,BRHS3,XOUT3)
+      ENDIF
+
+      DO 255 IG=1,NG
+       EXC(2,IG)=XOUT3(IG)
+       EXCP(2,IG)=XOUT3(IG+NG)
+       EXC(4,IG)=XOUT3(IG+2*NG)
+       EXCP(4,IG)=XOUT3(IG+3*NG)
+ 255  CONTINUE
+C     
+C     CALCULATE THE NEM CURRENT USING THE EXPANSION COEFFICIENTS OF THE
+C     FLUX AND FICK'S LAW.
+C     
+      DO 500 IG=1,NG
+
+       JNEM(IG)=-TD(IG)*(
+     $   EXC(1,IG)*AK(IXY,KL,IG)*SINHU(IG)
+     $   +EXC(2,IG)*AK(IXY,KL,IG)*COSHU(IG)
+     $   +EXC(4,IG)*K1
+     $   +EXC(5,IG)*CBASE*K1/W2DENOM )
+       JNEM(IG)=JNEM(IG)*1.42510306
+C
+C     SURFACE FLUXES
+C
+       IDUM=(IDIR-1)*2+1
+       SWS(IDUM+1,IXY,KL,IG)=
+     $   EXC(1,IG)*COSHU(IG)+EXC(2,IG)*SINHU(IG)+EXC(3,IG)*K0+
+     $   EXC(4,IG)*K1*U+
+     $   EXC(5,IG)*K1*(U**2-(K0/K1)**2)/W2DENOM
+       SWS(IDUM,IXYP,KL,IG)=
+     $   EXCP(1,IG)*COSHUP(IG)+EXCP(2,IG)*-SINHUP(IG)+EXCP(3,IG)*K0+
+     $   EXCP(4,IG)*K1*(-U)+
+     $   EXCP(5,IG)*K1*((-U)**2-(K0/K1)**2)/W2DENOM
+ 500  CONTINUE
+      RETURN
+      END

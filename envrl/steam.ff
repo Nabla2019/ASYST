@@ -1,0 +1,610 @@
+*deck steam
+c-----------------------------------------------------------------------
+c
+c     NBS/NRC water properties program.
+c
+c     Following modifications made for INEL version:
+c
+c     1) source code converted to lower case
+c
+c     2) "implicit double precision" changed to "implicit real*8"
+c
+c     3) "$if def,in32" inserted before each "implicit real*8"
+c
+c     4) explicit "double precision" changed to explicit "real"
+c
+c     5) "d" exponent designator changed to "e" in literal constants
+c        ("d0" deleted)
+c
+c     6) double precision intrinsic function names changed to generic
+c        names, e.g., dsqrt -> sqrt
+c
+c     7) "if(t.gt.647.125)" replaced with "if(t.gt.647.126)" in S.R. iso
+c        to allow calculation of saturation properties at critical temp.
+c
+c     8) "if (p.gt.22.052)" replaced with "if (p.gt.22.054915)" in subr.
+c        iso
+c
+c     9) "d=din/fd" changed to "d=din*fd" in subr. iso for correct
+c        conversion of density for isotherm table calculations.
+c
+c                                     John Tolli, EG&G Idaho, Inc.
+c                                     2/94
+c-----------------------------------------------------------------------
+c  More significant figures in rhoc for dome patch (from .322 to .32189)
+c   coexisting properties iteration tolerance from 10-6 to 10-8
+      program steam
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      character*8 nt,nd,np,nh,njt(5),nk(5),nv(4),nht(6),name(20)
+     1,nunt(20),ns,ns1,ns2,ntr(4)
+      dimension prop(20)
+      common /units/ it,id,ip,ih,ft,fd,fp,fh,/unitc/nt,nd,np,nh
+      common /qqqq/ q0,q5
+      common /fcts/ ad,gd,sd,ud,hd,cvd,cpd,dpdt,dvdt,cjtt,cjth
+      common /aconst/ wm,gascon,tz,z,dz,y,uref,sref
+      data njt/'deg/mpa','deg/bar','deg/atm','deg/psi','dgcm2/kg'/
+      data nk/'per mpa','per bar','per atm','per psi',' cm2/kg'/
+      data nv/' m3/kg ',' cm3/g ','dm3/mol','ft3/lb '/
+      data nht/'kj/kg.k ','j/(g.k) ','j/mol.k ','cal/g.k ','cal/molk'
+     1,'btu/lb.f'/
+      data name/' temp   ','pressure','density ','volume  ','enthalpy'
+     1,'entropy ','int ener','   cv   ','   cp   ','    a   ','    g   '
+     2,'  dp/dd ','  dp/dt ','  compr ',' sp snd ',' th cond','  visc  '
+     3,'j-t coef','        ','        '/
+      data ns1,ns2/' m/sec ','ft/sec '/
+      data ntr/' pa sec','psi sec',' w/(m.k)','btu/hftf'/
+      wm=18.0152
+      gascon=.461522
+      tz=647.073
+   8  call unit
+      ns=ns1
+      if(id.eq.4) ns=ns2
+      nunt(1)=nt
+      nunt(2)=np
+      nunt(3)=nd
+      nunt(4)=nv(id)
+      nunt(5)=nh
+      nunt(6)=nht(ih)
+      nunt(7)=nh
+      nunt(8)=nht(ih)
+      nunt(9)=nht(ih)
+      nunt(10)=nh
+      nunt(11)=nh
+      nunt(12)=name(20)
+      nunt(13)=name(20)
+      nunt(14)=nk(ip)
+      nunt(15)=ns
+      nunt(16)=ntr(3)
+      if(it.eq.4) nunt(16)=ntr(4)
+      nunt(17)=ntr(1)
+      if(it.eq.4) nunt(17)=ntr(2)
+      nunt(18)=njt(ip)
+  202 write(*,13)
+  13  format(' do you wish to calculate a single point (enter 1)'/
+     1'   a table (enter 2), or choose new options (enter 0)?')
+      read (*,*)kopt
+      if(kopt-1) 8,15,250
+  250 call iso(name,nunt)
+      go to 202
+  15  write (*,11)
+ 100  read(*,*)iopt,x,yy
+      if(iopt) 9,202,16
+  16  tt=yy
+      t=ttt(tt)
+      if(iopt.eq.5) goto 105
+      rt=gascon*t
+      call bb(t)
+      dvv=0.
+      psat=20000.
+      dll=1.11-.0003*t
+      sv=0.
+      hv=0.
+      sl=0.
+      hl=0.
+      if(t.gt.tz) go to 98
+      call pcorr(t,psat,dll,dvv)
+      sv=sd
+      hv=hd
+      call qq(t,dll)
+      pbs= base(dll,t)
+      call therm(dll,t)
+      sl=sd
+      hl=hd
+      hhhl=hl*rt
+      hhhv=hv*rt
+  98  goto (101,102,103,104,105,105,100),iopt
+ 101  pres=x
+      p=pres/fp
+      dvv=p/gascon/t
+      dgss=dvv
+      if(p.gt.psat) dgss=dll
+      if(psat.gt.10000.) dgss=dvv
+      if(psat.gt.0..and.p.ge.psat .and. t.lt.523.15) dgss=1.11-.0003*t
+      call dfind(d,p,dgss,t,dq)
+      dd=d/fd
+      goto 111
+ 102  dd=x
+      d=dd*fd
+      call qq(t,d)
+      pbs= base(d,t)
+      pres = fp*(rt*d*z + q0)
+      if(t.lt.tz .and. d.lt.dll .and. d.gt.dvv) go to 180
+      dq=rt*(z+y*dz)+q5
+      go to 111
+ 103  ss=x
+      sx=ss/gascon/fh/ft
+      dg=.3
+      if(t.ge.tz) goto 1034
+      if(sx.lt.sv .and. sx.gt.sl) go to 180
+      if(sx.gt.sv)  dg=dvv*.9
+      if(sx.lt.sl)  dg=dll*1.01
+ 1034 if(t.ge.tz .and. sx.gt.9.) dg=.01
+ 1031 dg1=dg*1.001
+      call qq(t,dg1)
+      psb= base(dg1,t)
+      call therm(dg1,t)
+      s0=sd
+      call qq(t,dg)
+      pbs= base(dg,t)
+      call therm(dg,t)
+      dq=rt*(z+y*dz)+q5
+      ddsdd=1000.*(s0-sd)
+      ds=sx-sd
+      dg=dg*(1.+ds/ddsdd)
+      if(dg.lt.1.e-6) dg=1.e-6
+      if(abs(ds).gt.1.e-6)goto 1031
+      d=dg
+      go to 111
+ 104  hh=x
+      hx=hh/rt/fh
+      if(t.lt.tz .and. hx.lt.hv .and. hx.gt.hl) go to 180
+      dg=.3
+      if(t.ge.tz .and. hx.gt.9.) dg=.01
+      if(t.lt.tz .and. hx.gt.hv)  dg=dvv*.9
+      if(t.lt.tz .and. hx.lt.hl)  dg=dll*1.01
+ 1041 dg1=dg*1.001
+      call qq(t,dg1)
+      pbs= base(dg1,t)
+      call therm(dg1,t)
+      h0=hd
+      call qq(t,dg)
+      pbs= base(dg,t)
+      call therm(dg,t)
+      dq=rt*(z+y*dz)+q5
+      ddhdd=1000.*(h0-hd)
+      dh=hx-hd
+      dg=dg*(1.+dh/ddhdd)
+      if(dg.lt.1.e-6) dg=1.e-6
+      if(abs(dh).gt.1.e-6)goto 1041
+      d=dg
+      go to 111
+  105 pres=yy
+      p=pres/fp
+      dg=.3
+      tg=hxt/10. + 300.
+      dll=0.
+      dvv=0.
+      call bb(tg)
+      if(p.gt.22.054) go to 1051
+      call tcorr(ts,p,dll,dvv)
+      tt=tti(ts)
+      psat=p
+      sv=sd
+      hv=hd
+      call qq(ts,dll)
+      pbs= base(dll,ts)
+      call therm(dll,ts)
+      sl=sd
+      hl=hd
+      t=ts
+ 1051 if(iopt.ge.6) goto 106
+      hh=x
+      hxt=hh/gascon/fh
+      hx=hxt/t
+      if(p.gt.22.054) go to 1055
+      if(hx.gt.hl .and. hx.lt.hv) goto 180
+      if(hx.le.hl) dg=1.02*dll
+      if(hx.ge.hv) dg=.9*dvv
+      if(hx.le.hl .or. hx.ge.hv) tg=ts
+ 1055 continue
+      dg=d
+      call bb(tg)
+      call dfind(d,p,dg,tg,dq)
+      call therm(d,tg)
+      dhdt=cpd
+      dh=hxt-hd*tg
+      dt=dh/dhdt
+      tg = tg + dt
+      if(abs(dh).gt.1.e-6) goto 1055
+      t=tg
+      tt=tti(t)
+      go to 111
+ 106  ss=x
+      sx=ss/gascon/fh/ft
+      dg=.3
+      if(p.ge.22.054) goto 1064
+      if(sx.lt.sv .and. sx.gt.sl) go to 180
+      if(sx.gt.sv)  dg=dvv*.9
+      if(sx.lt.sl)  dg=dll*1.01
+ 1064 if(p.ge.22.054 .and. sx.gt.9.) dg=.01
+ 1065 continue
+      call bb(tg)
+      call dfind(d,p,dg,tg,dq)
+      call therm(d,tg)
+      dsdt=cpd/tg
+      dt=(sx-sd)/dsdt
+      tg = tg + dt
+      if(abs(sx-sd).gt.1.e-6) goto 1065
+      t=tg
+      tt=tti(t)
+  111 prop(1)=tt
+      prop(2)=pres
+      call calc(d,t,prop)
+      write(*,22)
+      do 21 i=1,9
+  21  write(*,20)name(i),prop(i),nunt(i),name(i+9),prop(i+9),nunt(i+9)
+      write(*,22)
+  20  format(t4,a8,1x,g14.6,a8,t44,a8,1x,g14.6,a8)
+  22  format(4x,68('-'))
+  11  format(' enter option and values for x and y, where for:'/10x,
+     1'option=1, x=pressure and y=temperature'/17x,'2    density
+     2temperature'/17x,'3    entropy        temperature'/17x,
+     3'4    enthalpy       temperature'/17x,'5    enthalpy',7x
+     4,'pressure'/17x,'6    entropy',8x,'pressure'
+     5 /17x,'0,0,0  choose new options'/16x,'-1,0,0  exit')
+      go to 15
+  180 goto (100,182,183,184,184,100),iopt
+  182 q = (1./d-1./dll)/(1./dvv-1./dll)
+      go to 190
+  183 q = (sx-sl)/(sv-sl)
+      go to 190
+  184 q = (hx-hl)/(hv-hl)
+  190 d = q*dvv+(1-q)*dll
+      sd = q*sv+(1-q)*sl
+      hd = q*hv+(1-q)*hl
+      h = hd*t*gascon*fh
+      s = sd*gascon*fh*ft
+      dd=d/fd
+      pps=psat*fp
+      write(*,196) q,tt,nunt(1),pps,nunt(2),dd,nunt(3),s,nunt(6),h
+     1,nunt(5)
+      if(iopt.eq.2) write(*,197) pres,nunt(2)
+  196 format(' point is in two-phase region: quality = ',f7.4,/
+     1 '   t = ',g14.6,a8,/'  psat=',g14.6,a8,/
+     2 '   d = ',g14.6,a8,/
+     3 '   s = ',g14.6,a8,/'   h = ',g14.6,a8)
+  197 format(' the metastable pressure from this temperature and density
+     1 is',g14.6,a8)
+      go to 15
+   9        stop
+      end
+      subroutine iso(name,nunit)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      character*8 nt,nd,np,nh, name(20),nunit(20)
+      character*3 i2ph,ibl,ifl
+      dimension props(20)
+      common /units/ it,id,ip,ih,ft,fd,fp,fh,/unitc/nt,nd,np,nh
+      common /fcts/ ad,gd,sd,ud,hd,cvd,cpd,dpdt,dvdt,cjtt,cjth
+      common /aconst/ wm,gascon,tz,z,dz,y,uref,sref
+      common /qqqq/ q0,q5
+      data ibl,ifl/'   ','2ph'/
+      i2ph=ibl
+ 812  write(*,912)
+  912 format(' choose four properties by number to be printed from:'/t6,
+     1'(in addition to independent variables)'/t6,'1 temperature'
+     1,t32,'10 helmholtz fct'/t6,'2 pressure',t32,'11 gibbs function'/
+     2 t6,'3 density',t32,'12 dp/dd'/t6,'4 volume',t32,'13 dp/dt'/
+     3 t6,'5 enthalpy',t32,'14 compressibility'/t6,'6 entropy',t32,
+     4 '15 speed of sound'/t6,'7 internal energy',t32,'16 therm conducti
+     5vity'/t6,'8 cv',t32,'17 viscosity'/t6,'9 cp',t32,'18 joule-thomp c
+     6oef')
+      read(*,*) ip3,ip4,ip5,ip6
+      if(ip3.eq.0) return
+  15  write(*,11)
+      read(*,*) iopt
+      if(iopt) 9,812,151
+  151 if(iopt.gt.3) go to 100
+      write(*,811) name(iopt)
+      read(*,*) xiso
+  100 go to (101,201,301,401,501),iopt
+  101 write(*,102)
+  102 format(' enter other independent variable (2 for p, 3 for dens)')
+  802 format(' enter init, final and incremental values of this var.')
+      read(*,*) jopt
+      if(jopt-1) 15,101,103
+ 103  write(*,802)
+      read(*,*) y1,y2,yi
+      tt=xiso
+      tss=0.
+      t=ttt(tt)
+      if(jopt.eq.2) dgss=y1/fp/t/.4
+      iz=0
+      pss=200.
+      dgss=0.
+      dvv=0.
+      dll=0.
+      if(t.ge.647.1) go to 218
+      call pcorr(t,pss,dll,dvv)
+      if(jopt.ne.3) go to 218
+      dll1=dll/fd
+      dvv1=dvv/fd
+      write(*,446) tt,nunit(1),dll1,nunit(3),dvv1,nunit(3)
+ 218  dgss=dvv
+      write(*,444) name(iopt),name(jopt),name(ip3),name(ip4),name(ip5)
+     1,name(ip6),nunit(iopt),nunit(jopt),nunit(ip3),nunit(ip4)
+     2,nunit(ip5),nunit(ip6)
+      if(dgss.eq.0.) dgss=1.11-.0004*t
+      psat=pss*fp
+      if(jopt.eq.2 .and. y1.gt.psat) iz=3
+      if(y1.gt.psat) dgss=dll
+      if(jopt.ge.3) iz=3
+      pin=y1-yi
+      din=pin
+      pinc=yi/fp
+      if(iopt.eq.2) pinc=0.
+      dinc=yi*fd
+  22  if(jopt.eq.2) pin=pin+yi
+      if(jopt.eq.3) din=din+yi
+      if(jopt.eq.2 .and. pin.gt.y2) go to 101
+      if(jopt.eq.3 .and. din.gt.y2) go to 101
+      if(jopt.eq.2) pres=pin/fp
+      if(jopt.le.2) go to 24
+      d=din*fd
+      if(pss.gt.0. .and. d.lt.dll .and. d.gt.dvv) i2ph=ifl
+  24  continue
+      if(jopt.eq.3 .or. (jopt.eq.2 .and. pin.lt.psat)) go to 26
+      if(jopt.eq.1 .and. t.lt.tss) go to 26
+      tsave=tt-yi
+      if(jopt.eq.1 .and. iopt.eq.2 .and. iz.le.2) tt=tti(tss)
+      psave=pin-yi
+      if(jopt.eq.2 .and. pres.gt.pss .and. iz.ge.2) go to 26
+      if(jopt.eq.1 .and. t.gt.tss .and. iz.ge.2) go to 26
+  23  iz=iz+1
+      if(jopt.eq.2) pres=pss
+      if(jopt.eq.1) t=tss
+      if(iz.eq.1 .and. jopt.eq.1) d=dll
+      if(iz.eq.1 .and. jopt.eq.2) d=dvv
+      if(iz.eq.2 .and. jopt.eq.2) d=dll
+      if(iz.eq.2 .and. jopt.eq.1) d=dvv
+      if(iz.lt.3) go to 27
+  26  if(iopt.ne.3 .and. jopt.ne.3) call dfind(d,pres,dgss,t,dq)
+  27  call qq(t,d)
+      call bb(t)
+      pdum=gascon*t*d*base(d,t)+q0
+      dq=gascon*t*(z+y*dz)+q5
+      if(jopt.eq.3 .or. iopt.eq.3) pres=pdum
+      dgss=d + pinc/dq
+      call calc(d,t,props)
+      props(1)=tt
+      props(2)=pres*fp
+      write(*,21) props(iopt),props(jopt),props(ip3),props(ip4),props(
+     1 ip5),props(ip6),i2ph
+      i2ph=ibl
+  21  format(6g12.5,2x,a3)
+  444 format(2x,a8,4x,a8,4x,a8,4x,a8,4x,a8,4x,a8)
+  446 format(' the coexisting densities for t=',f9.3,a8,/' are',f11.6
+     1,a8,' and',f10.6,a8)
+  11  format( ' do you wish to calculate an isotherm (enter 1), an isoba
+     1r (enter 2)'/' an isochore (enter 3), a saturation table',
+     2' in t (enter 4) or in p (enter 5)')
+  811 format( ' enter value of ',a8)
+      if(iz.eq.1) write(*,12)
+   12  format('  -------------------------------------------------------
+     &------------')
+      if(iz.eq.1) go to 23
+      if(iz.eq.2 .and. jopt.eq.2) pin=psave
+      if(iz.eq.2 .and. jopt.eq.1) tt=tsave
+      if(iz.eq.2) iz = 3
+      go to (22,204,304),iopt
+  201 jopt=1
+      pinc=0.
+      psat=xiso
+      pin=psat
+      pres = xiso/fp
+      pss=pres
+  202 write(*,203)
+  203 format(' enter first last and increment of t')
+      read(*,*) t1,t2,yi
+      if(t1.eq.0. .and. t2.eq.0.) go to 15
+      write(*,444) name(iopt),name(jopt),name(ip3),name(ip4),name(ip5)
+     1,name(ip6),nunit(iopt),nunit(jopt),nunit(ip3),nunit(ip4)
+     2,nunit(ip5),nunit(ip6)
+      tt=t1-yi
+      t=ttt(tt)
+      dll=0.
+      dvv=0.
+      call tcorr(tss,pres,dll,dvv)
+      d=1.
+      tp=tt+yi
+      tp=ttt(tp)
+      if(tp.lt.tss .and. tss.gt.0.) d=dll*1.01
+      if(tp.gt.tss .and. tss.gt.0.) d=dvv*.9
+      iz=3
+      if(tp.lt.tss)iz=0
+  204 tt=tt+yi
+      t=ttt(tt)
+      if(tt.gt.t2) go to 202
+      dgss=d
+      go to 24
+  301 jopt=1
+      pinc=0.
+      d=xiso*fd
+  302 write(*,203)
+      read(*,*) t1,t2,yi
+      if(t1.eq.0. .and. t2.eq.0.) go to 15
+      write(*,444) name(iopt),name(jopt),name(ip3),name(ip4),name(ip5)
+     1,name(ip6),nunit(iopt),nunit(jopt),nunit(ip3),nunit(ip4)
+     2,nunit(ip5),nunit(ip6)
+      tt=t1-yi
+      iz=3
+      t=ttt(tt)
+      i2ph=ibl
+  304 tt=tt+yi
+      t=ttt(tt)
+      if(tt.gt.t2) go to 302
+      dl=0.
+      dv=0.
+      call pcorr(t,psat,dl,dv)
+      if(psat.gt.0. .and. d.lt.dl .and. d.gt.dv) i2ph=ifl
+      go to 27
+  401 write(*,203)
+      read(*,*) t1,t2,yi
+      if(t1.eq.0. .and. t2.eq.0.) go to 15
+      iopt=1
+      jopt=2
+      write(*,444) name(iopt),name(jopt),name(ip3),name(ip4),name(ip5)
+     1,name(ip6),nunit(iopt),nunit(jopt),nunit(ip3),nunit(ip4)
+     2,nunit(ip5),nunit(ip6)
+      tt=t1-yi
+      dl=0.
+      dv=0.
+  404 tt=tt+yi
+      if (tt.gt.t2) go to 401
+      t=ttt(tt)
+      call bb(t)
+cinel      if(t.gt.647.125) go to 401
+      if(t.gt.647.126) go to 401
+      call pcorr(t,p,dl,dv)
+      call qq(t,dl)
+      pdum=gascon*t*dl*base(dl,t)+q0
+      call calc(dl,t,props)
+      props(1)=tt
+      props(2)=p*fp
+      write(*,21) props(iopt),props(jopt),props(ip3),props(ip4),props(
+     1 ip5),props(ip6)
+      call qq(t,dv)
+      pdum = gascon*t*dv*base(dv,t)+q0
+      call calc(dv,t,props)
+      write(*,21) props(iopt),props(jopt),props(ip3),props(ip4),props(
+     1 ip5),props(ip6)
+      write(*,12)
+      go  to 404
+  501 write(*,503)
+  503 format(' enter first, last and increment of p')
+      read(*,*)p1,p2,pi
+      if(p1.eq.0. .and. p2.eq.0.) go to 15
+      iopt=2
+      jopt=1
+      write(*,444) name(iopt),name(jopt),name(ip3),name(ip4),name(ip5)
+     1,name(ip6),nunit(iopt),nunit(jopt),nunit(ip3),nunit(ip4)
+     2,nunit(ip5),nunit(ip6)
+      pp=p1-pi
+      dl=0.
+      dv=0.
+  504 pp=pp+pi
+      if(pp.gt.p2) goto 501
+      p=pp/fp
+cinel      if (p.gt.22.052) goto 501
+      if (p.gt.22.054915) goto 501
+      call tcorr(t,p,dl,dv)
+      call qq(t,dl)
+      call bb(t)
+      pdum = gascon*t*dl*base(dl,t)+q0
+      call calc(dl,t,props)
+      props(2)=pp
+      props(1)=tti(t)
+      write(*,21) props(iopt),props(jopt),props(ip3),props(ip4),props(
+     1 ip5),props(ip6)
+      call qq(t,dv)
+      p = gascon*t*dv*base(dv,t)+q0
+      call calc(dv,t,props)
+      write(*,21) props(iopt),props(jopt),props(ip3),props(ip4),props(
+     1 ip5),props(ip6)
+      write(*,12)
+      go to 504
+   9  stop
+      end
+      function tti(t)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /units/ it,id,ip,ih,ft,fd,fp,fh
+      go to (5,6,7,8),it
+   5  tti=t
+      return
+   6  tti=t-273.15
+      return
+   7  tti=t*1.8
+      return
+   8  tti=t*1.8-459.67
+      return
+      end
+      function ttt(t)
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      common /units/ it,id,ip,ih,ft,fd,fp,fh
+      go to (1,2,3,4),it
+   1  ttt=t
+      ft=1.
+      return
+   2  ttt=t+273.15
+      ft=1.
+      return
+   3  ttt=t/1.8
+      ft=.5555555555556
+      return
+   4  ttt=(t+459.67)/1.8
+      ft=.5555555555556
+      return
+      end
+cc
+      subroutine unit
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      character*11 a1,a2,a3,a4
+      character*8 nnt,nnd,nnp,nnh,nt,nd,np,nh
+      dimension ffd(4),ffp(5),ffh(6),nnt(4),nnd(4),nnp(5),nnh(6)
+      common /units/ it,id,ip,ih,ft,fd,fp,fh,/unitc/nt,nd,np,nh
+      common /fcts/ad,gd,sd,ud,hd,cvd,cpd,dpdt,dvdt,cjtt,cjth
+      common /aconst/ wm,gascon,tz,zb,dzb,yb,uref,sref
+      data ffd/1.e-3,1.,.0180152,.016018/
+      data ffp/1.,1.e1,9.869232667,145.038,10.1971/
+      data ffh/2*1.,18.0152,.2388459,4.30285666,.4299226/
+      data nnt/'  k','  c','  r','  f'/
+      data nnd/' kg/m3 ',' g/cm3 ',' mol/l ',' lb/ft3'/
+      data nnp/'  mpa  ','  bar  ','  atm  ','  psi  ',' kg/cm2'/
+      data nnh/' kj/kg ','  j/g  ',' j/mol ',' cal/g ','cal/mol'
+     1,' btu/lb'/
+      data a1,a2,a3,a4/'temperature','density    ','pressure   '
+     1,'energy     '/
+c
+      write(*,11) a1
+  30  write(*,12)
+      read(*,*) it
+      if(it.eq.0) stop
+      if(it.gt.4) goto 30
+c  set values of uref and sref so that u,s=0 at triple pt in liq
+      uref=-4328.4537635028
+      sref=7.6180719947411365
+      write(*,11) a2
+  31  write(*,13)
+      read(*,*) id
+      if(id.gt.4) goto 31
+      if(id.lt.1) go to 30
+      write(*,11) a3
+  32  write(*,14)
+      read(*,*) ip
+      if(ip.gt.5 ) goto 32
+      if(ip.lt.1) go to 31
+      write(*,11) a4
+  33  write(*,15)
+      read(*,*) ih
+      if(ih.gt.6 ) goto 33
+      if(ih.lt.1) go to 32
+  38  nt=nnt(it)
+      nd=nnd(id)
+      fd=ffd(id)
+      np=nnp(ip)
+      fp=ffp(ip)
+      nh=nnh(ih)
+      fh=ffh(ih)
+      return
+  99  stop
+  11  format(' enter units chosen for ',a11)
+  12  format(' choose from 1=deg k, 2=deg c, 3=deg r, 4=deg f, 0=stop')
+  13  format(' choose from 1=kg/m3, 2=g/cm3, 3=mol/l, 4=lb/ft3')
+  14  format(' choose from 1=mpa, 2=bar, 3=atm, 4=psia, 5=kg/cm2')
+  15  format(' choose from 1=kj/kg, 2=j/g, 3=j/mol, 4=calories/g, 5=calo
+     1ries/mol, 6=btu/lb')
+      end

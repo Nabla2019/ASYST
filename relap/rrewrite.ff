@@ -1,0 +1,355 @@
+*mlist
+       subroutine rrewrite
+c
+c  Copies the input Restart-plot file to a new file with a different
+c  header (first) line that is compatible with XMGR5.
+c
+c  Cognizant engineer: rjw.
+c
+*in32 iw
+*in32 ihlpsv
+*in32end
+c
+       use hynmod
+       use usrvarc
+       implicit none
+c
+       logical nogof
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       integer(8) ia8(lfsiz)
+       integer*4 ha(2*lfsiz)
+       equivalence (ia8(1),ha(1),fa(1))
+       include 'genrl.h'
+       include 'machls.h'
+       include 'maxmem.h'
+       include 'ufiles.h'
+       include 'ufilef.h'
+c
+       integer iw(11),iroutx,ncasx,
+     & iccm(ncoms),iccs(ncoms),iccf(ncoms),filszo(nfiles),inx(nfiles)
+       integer i,ias,in,inxx,ipr,isiz,iu,iud,ix,ixb,l1,
+     & lcntgs,lcontg,len,lenb,lenc,lx
+       integer ihlpsv(2)
+       real rw(11),fil(nfiles),iv
+       equivalence (rw(1),iw(1))
+       real fid,fsav,ftbnid
+       logical :: cpy=.true.,fl,frst,hit,lperr,rdc,rdebug,tfail
+       character ihldc*108,ihldp*64,crstrc*24,hldrec*24,labl1(2)*9,
+     & chwrd*8
+       character*8 blnk,dummy
+       integer iwrd
+       integer j
+c
+       data iu/3/, iud/1/
+       data crstrc/'restart-plot file'/
+       data hldrec/'   SCDAP/R5 '/
+       data labl1/'steady st','transient'/
+       data blnk/'        '/
+       include 'machlf.h'
+c
+       rdebug = .false.
+       rdc = .false.
+       fil = 0.0
+       inx = 0
+       nogof = .false.
+c
+!  Open restart-plot file and check first record.
+       len = 0
+       open (unit=rstplt,file=filsch(5),status='old',
+     & form='unformatted',iostat=len)
+       if (len .ne. 0) then
+         write (tty,2013) len,trim(filsch(5))
+ 2013  format ('Open failure number',i8,' on file ',a,', perhaps file is
+     & not available.')
+         write (output,2014) len,trim(filsch(5))
+ 2014  format ('0******** Open failure number',i8,' on file ',a,' perhap
+     &s file is not available.')
+         nogof = .true.
+         go to 41
+       endif
+   21  rewind rstplt
+       read (rstplt,end=27,err=28) len,iwrd
+       read (rstplt,end=27,err=28) rw(1:10)
+       if (len .eq. 10) go to 39
+       write (output,2016)
+ 2016  format ('0******** Wrong length on first record of restart input
+     &file.')
+       nogof = .true.
+       go to 41
+   27  write (output,2010)
+ 2010  format ('0******** Eof encountered on first read of restart input
+     & file, no file available.')
+       nogof = .true.
+       go to 41
+   28  write (output,2015)
+ 2015  format ('0******** Parity error on first record.')
+       nogof = .true.
+       go to 41
+   39  write (ihldc(1:24),'(3a8)') (rw(i),i=4,6)
+       if (ihldc(1:24) .ne. crstrc) then
+         write (output,2017)
+ 2017  format ('0******** Label in first record of restart input file is
+     & incorrect.')
+         nogof = .true.
+         go to 41
+       endif
+       write (output,2018) (rw(i),i=1,3),(rw(i),i=7,9),labl1(iw(10))
+ 2018  format ('0Restart input file was written by program ',3a8,' on ',
+     & 3a8,', ',a9,' run.')
+!  Open stripf file which will be used to contain rewritten restart-plot
+!  file.
+   41  open (unit=stripf,file=filsch(6),status='new',
+     & form='unformatted',iostat=i)
+       if (i .ne. 0) then
+         write (output,"('Open error number',i8,' on file ',a,', perha
+     &ps file already exists.')") i,trim(filsch(6))
+         write (output,"('******** Open error number',i8,' on file ',
+     & a,', perhaps file already exists.')") i,filsch(6)
+         nogof = .true.
+       else
+         read (hldrec(1:24),"(3a8)") rw(1:3)
+         write (stripf) len,iwrd
+         write (stripf) rw(1:10)
+       endif
+       if (.not.rdebug) then
+         fail = .true.
+c  Save information from common that will be overlaid by restart reads.
+         if (nogof) then
+           fail = .true.
+           return
+         endif
+         ihlpsv(1) = ihlppr(1)
+         ihlpsv(2) = ihlppr(2)
+         ipr = print
+         iroutx = iroute
+         ncasx = ncase
+         tfail = fail
+         ihldc = ctitle
+         ihldp = ptitle
+         do i = 1,ncoms
+           iccm(i) = comdat(i)
+           iccs(i) = comdln(i)
+           iccf(i) = filflg(i)
+         enddo
+         fsav = filid(1)
+         inxx = filndx(1)
+         isiz = filsiz(1)
+c  Get space for first restart record or plot record.
+         fid = ftbnid(1)
+       else
+         do i = 1,nfiles
+           if (fil(i) .ne. 0.0) then
+             call ftbdel (fil(i))
+             fil(i) = 0.0
+             inx(i) = 0
+           endif
+         enddo
+         call ftbdel (fid)
+       endif
+       call ftbrsv (fid,5,-1,ix)
+       ias = locf4(fa(1)) - 1
+       frst = .true.
+       lenb = 0
+       lperr = .false.
+c  Read restart record or plot record.
+   63  read (rstplt,end=90,err=62) lx,iwrd
+       read (rstplt,end=74,err=62) (ia8(in+ix-1),in=1,lx)
+       if (rdebug) write (output,3001) lx,ia8(ix),ia(ix+1),ia(ix+2)
+ 3001  format (' ',i10,a10,2i10)
+       write (stripf) lx,iwrd
+       write (stripf) (ia8(in+ix-1),in=1,lx)
+       write (chwrd,'(a8)') ia8(ix)
+       if (chwrd .eq. 'plotrec') then
+         if (lx .eq. lenc) go to 63
+         go to 56
+       endif
+       if (chwrd .ne. 'plotinf') go to 57
+       if (lx .ne. 3) go to 56
+       do i = 1,nfiles
+         if (fil(i) .eq. 0.0) cycle
+         call ftbdel (fil(i))
+         fil(i) = 0.0
+         inx(i) = 0
+       enddo
+       if (rdc) then
+         call ftbexp (0,maxscm,maxlcm)
+         rdc = .false.
+         call ftbsft (2.0,isiz,1,inxx)
+       endif
+       lenb  = ia(ix+1)
+       l1 = lenb + 2
+       lenc = ia(ix+2)
+       if (lcntgs(fid,1) .lt. l1) go to 78
+       call ftbsft (fid,l1,2,ix)
+       l1 = lcontg(1)
+       go to 63
+   57  if (chwrd.ne.'plotalf' .and. chwrd.ne.'plotnum') go to 58
+       if (lx .eq. lenb) go to 63
+   56  if (lperr) go to 63
+       write (output,2041)
+ 2041  format ('0******** Wrong length record in plotinf, plotalf, plotn
+     &um, or plotrec record of rstplt file.')
+       lperr = .true.
+       tfail = .true.
+       go to 63
+   58  if (chwrd .ne. 'restart') go to 65
+       if (lx .ne. 3) go to 59
+c  Read restart information and copy to new restart file.
+       fl = iand(ia(ix+1),16) .ne. 0
+       if (fl) then
+         read (rstplt,end=74,err=62) lx,iwrd
+         read (rstplt,end=74,err=62) (ia8(i+ix+2),i=1,lx)
+         if (rdebug) write (output,3002) lx,ia8(ix+3)
+ 3002  format ('         20',i10,a10)
+         write (stripf) lx,iwrd
+         write (stripf) (ia8(i+ix+2),i=1,lx)
+         if (lx .ne. 20) go to 66
+         write (ptitle,'(8a8)') (ia8(i+ix+2),i=1,8)
+         write (ctitle,'(12a8)') (ia8(i+ix+2),i=9,20)
+       endif
+       do i = 1,nfiles
+         filszo(i) = filsiz(i)
+       enddo
+       if (frst .and. .not.fl) call fabend
+       do i = 1,ncoms
+         if (frst) then
+           if (i .eq. 6) then
+             if (comdat(6) .eq. 0) iccm(6) = 0
+           endif
+         endif
+         if (iccm(i) .eq. 0) exit
+         if (.not.fl) then
+           if (iand(iccf(i),4) .eq. 0) cycle
+         endif
+         ixb = iccm(i) - ias
+         read (rstplt,end=74,err=62) lx,iwrd
+         read (rstplt,end=74,err=62) (ha(in+ixb-1),in=1,lx)
+         if (rdebug) write (output,3003) iccs(i),lx
+ 3003  format (' cb',i8,i10)
+         write (stripf) lx,iwrd
+         write (stripf) (ha(in+ixb-1),in=1,lx)
+         if (lx .ne. iccs(i)) go to 66
+       enddo
+       hit = .false.
+       do i = 1,nfiles
+         hit = hit .or. filsiz(i) .ne. filszo(i)
+       enddo
+       if (rdc .and. hit) then
+         call ftbexp(0,maxscm,maxlcm)
+         rdc = .false.
+         do i = 1,nfiles
+           if (fil(i) .ne. 0.0) then
+             call ftbdel (fil(i))
+             fil(i) = 0.0
+             inx(i) = 0
+           endif
+         enddo
+         call ftbsft (2.0,isiz,1,inxx)
+         l1 = lcontg(1)
+       endif
+       do i = 1,nfiles
+         if (filid(i) .eq. 0.0) cycle
+         if (filid(i) .lt. 0.0) then
+           if (.not.fl .or. iand(filflg(i),1).eq.0) cycle
+         endif
+         if (inx(i) .eq. 0) then
+           l1 = l1 - filsiz(i)
+           if (l1 .lt. 0) go to 78
+           fil(i) = ftbnid(1)
+           if (iand(filflg(i),1) .ne. 0) fil(i) = -fil(i)
+           call ftbrsv (fil(i),filsiz(i),-1,inx(i))
+         endif
+         read (rstplt,end=74,err=62) lx,iwrd
+         read (rstplt,end=74,err=62) (ia8(in+inx(i)-1),in=1,lx)
+         if (rdebug) write (output,3004) filsiz(i),lx
+ 3004  format (' db',i8,i10)
+         write (stripf) lx,iwrd
+         write (stripf) (ia8(in+inx(i)-1),in=1,lx)
+         if (lx .ne. filsiz(i)) go to 66
+       enddo
+       call hynodread (cpy)
+       if (fl) call usrvarread (cpy)
+       if (frst) frst = .false.
+       if (.not.rdc) then
+         call ftbsft (2.0,isiz,2,inxx)
+         call ftbrdc
+         rdc = .true.
+       endif
+       go to 63
+c
+   62  write (output,2022)
+ 2022  format ('0******** Parity error on file rstplt.')
+       go to 76
+   74  write (output,2023)
+ 2023  format ('0******** End of file on file rstplt did not occur in pr
+     &oper place.')
+   76  tfail = .true.
+       if (frst) go to 77
+       if (.not.rdc) go to 97
+       write (output,2034)
+ 2034  format ('0******** Data previously read will be used, data may be
+     & a combination of indicated restart record and previous record.')
+       go to 90
+   77  write (output,2038)
+ 2038  format ('0******** Error occurred before first restart record was
+     & read.')
+       go to 68
+   97  write (output,2028)
+ 2028  format ('0******** Error occurred at restart record following a r
+     &enodaliztion.')
+       go to 68
+   78  write (output,2026)
+ 2026  format ('0******** Insufficient space to handle restart, problem
+     &will be terminated.')
+       tfail = .true.
+   68  nogof = .true.
+       go to 89
+c
+   65  write (output,2036)
+ 2036  format ('0******** Wrong information in header of restart record.
+     & ')
+       go to 76
+c
+   66  write (output,2042)
+ 2042  format ('0******** Wrong length record in common or dynamic resta
+     &rt record.')
+       if (rdebug) go to 76
+       rdebug = .true.
+       write (output,3005)
+ 3005  format ('0******** Rereading rstplt with diagnostics enabled.')
+       go to 21
+   59  write (output,2037)
+ 2037  format ('0******** Wrong length record in header of restart recor
+     &d.')
+       go to 76
+c
+   90  continue
+c  Restore print control flags.
+       ihlppr(1) = ihlpsv(1)
+       ihlppr(2) = ihlpsv(2)
+   89  if (.not.rdc) go to 92
+       call ftbexp (0,maxscm,maxlcm)
+       call ftbsft (2.0,isiz,1,inxx)
+   92  call ftbdel (fid)
+c  Restore saved information to common.
+       print = ior(iand(print,not(17)),ipr)
+       iroute = iroutx
+       ncase = ncasx
+       ctitle = ihldc
+       ptitle = ihldp
+       do i = 1,ncoms
+         comdat(i) = iccm(i)
+         comdln(i) = iccs(i)
+       enddo
+       fail = tfail
+       filid(1) = fsav
+       filndx(1) = inxx
+       filsiz(1) = isiz
+       do i = 2,nfiles
+         filid(i) = fil(i)
+         filndx(i) = inx(i)
+       enddo
+       return
+       end

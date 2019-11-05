@@ -1,0 +1,230 @@
+*mlist
+*if def,selap
+       subroutine icpl (beta,ix,tz,tc,tlast,volme,volmve,
+     &    afz,afu,afs,afa1,afa2,afux2,afzx2,afbulk,immt,spideb,spidmx,
+     &    idsdeb,nidtop,ifpvol,igavol,cnstop,bfp,bubnum,genz,
+     &    keffz,tmelt,afalum,aflith,afcadm,afsoil,fracml)
+c
+c  Descriptive sentence goes here.
+c
+c  Cognizant engineer: ewc.
+c
+c This is a COUPLE ROUTINE
+*in32 ix
+*in32 immt
+*in32 idsdeb
+*in32 nidtop
+*in32 ifpvol
+*in32 igavol
+*in32end
+c
+       implicit none
+       include 'cpmdat.h'
+       include 'contrl.h'
+       include 'alcm.h'
+       include 'iparm.h'
+       include 'ufiles.h'
+       include 'scddat.h'
+       include 'slumpv.h'
+       include 'comctl.h'
+       include 'scdout.h'
+       include 'scdcom.h'
+       include 'scdpow.h'
+       include 'ndxara.h'
+       include 'nhtara.h'
+       include 'coupl.h'
+c
+c  Local variables.
+       integer i,igavol,j,jh,kk,l,mz,ma,ml,mq,n,ntmax
+       integer jii, iii, jj, jjj, num, icount
+c
+       integer ix(5,*),immt(*),idsdeb(*),nidtop(*),ifpvol(*)
+       real beta(*),tz(*),tc(*),tlast(*),volme(*),volmve(*),
+     & afz(*),afu(*),afs(*),afa1(*),afa2(*),afux2(*),afzx2(*),
+     & afbulk(*), spideb(numel,*), spidmx(numel,*), cnstop(*)
+       real afalum(*),aflith(*),afcadm(*),afsoil(*),
+     & fracml(*)
+      real  bfp(numel,nspdeb,*), bubnum(numel,*)
+      real genz(4,*)
+      real keffz(*),tmelt(*)
+       external cnvbnd,ifelfl
+c
+c     nslph = 0 = LWR core meltdown is being modeled, COUPLE model
+c                 represents material from core that slumps to lower
+c                 head.
+c     nspowi = 3 = SCDAP component 1 has its power calculated by
+c                     RELAP5 kinetics model.
+c            = 1   SCDAP power from RELAP5 general table
+      if(nslph.eq.0.and.(nspowi.eq.3.or.nspowi.eq.1))then
+      ncpowi(mcp)=3
+      ncpow=3
+      end if
+      if (nslph .ne.-1) then
+c**********************************************************************
+c***************initialize array for material transport****************
+c**********************************************************************
+      istcou=0
+      do 50 i=1,numel
+      afz(i) = 0.0
+      afu(i) = 0.0
+      afs(i) = 0.0
+      afa1(i) = 0.0
+      afa2(i) = 0.0
+      afux2(i) = 1.0
+      afzx2(i) = 0.0
+      afsoil(i)=0.0
+      afcadm(i)=0.0
+      aflith(i)=0.0
+      afalum(i)=0.0
+      fracml(i)=0.0
+      afbulk(i)= 0.0
+      volme(i) = 0.0
+      volmve(i) = 0.0
+      immt(i) = 0
+      genz(1,i)=0.0
+      genz(2,i)=0.0
+      genz(3,i)=0.0
+      genz(4,i)=0.0
+      keffz(i)=0.0
+      tmelt(i)=2873.
+   50 continue
+      end if
+c
+c      initialize arrays for fission product tracking in debris bed
+c      idsdeb array holds indexes of species to be tracked
+c      spideb array holds mass inventory of each fission product(nspdeb)
+c      for each element (numel) of debris bed
+c
+c      transfer ifpdb array from slumpv common to a array
+       if (nspdeb .gt. 0) then
+          icount = 0
+          do 40 jii = 1,ntpslp(mcp)
+             do 35 jj = 1,nsptrk(mcp,jii)
+                num = ifpdb(jj,mcp,jii)
+                if ((jii-1) .eq. 0) go to 32
+                do 30 iii = 1,jii-1
+                   do 25 jjj = 1,nsptrk(mcp,iii)
+                      if (num .eq. ifpdb(jjj,mcp,iii)) go to 35
+   25              continue
+   30           continue
+   32        continue
+                icount = icount + 1
+                idsdeb(icount) = num
+   35        continue
+   40     continue
+c         Zero the spideb array, unless a no slumping case.
+          do 60 i = 1,numel
+c      initialize array storing number of bubbles of each size range
+c      in each element.
+      do 53 j = 1,15
+      bubnum(i,j)=0.0
+   53 continue
+          do 55 j = 1,nspdeb
+c    21 bubble sizes tracked in subroutines rl and gasrl
+      do 54 l = 1,15
+      bfp(i,j,l)=0.0
+   54 continue
+   55 continue
+   60     continue
+      if (nslph .ne.-1) then
+        do 65 i = 1, numel
+        do 62 j = 1, nspdeb
+        spideb(i,j) = 0.0
+   62   continue
+   65   continue
+      end if
+c
+c         Initialize other fission product mass arrays.
+c
+        do 70 j = 1, nspdeb
+        do 67 i = 1, numel
+        spidmx(i,j) = spideb(i,j)
+   67   continue
+   70   continue
+c
+        if (nslph .ne. -1 .and. nslph .ne. 1) then
+          do 72 j = 1, nspdeb
+          wslxxx(j,mcp,1) = 0.0
+          wslxdt(j,mcp,1) = 0.0
+   72     continue
+        end if
+c
+       endif
+c
+c      initialize aray for element numbers through which top of debris
+c      bed passes
+       ntmax  = maxi - 1
+       do 75 i = 1,ntmax
+       nidtop(i)   = 0
+       cnstop(i)=1.
+   75  continue
+c***********************************************************************
+c     convert beta from degrees to radians
+c***********************************************************************
+      do 720 n=1,numel
+c       Also initialize reactor power at time of slumping into
+c      element n.
+      a(iratpo+n-1) = 0.0
+  720 beta(n)=beta(n)/57.29578
+c**********************************************************************
+c     initilize problem
+c**********************************************************************
+c     determine band width
+      j=0
+      do 3400 n=1,numel
+      do 3400 i=1,4
+      do 3250 l=1,4
+      kk=abs(ix(i,n)-ix(l,n))
+      if(kk-j)3250,3250,3200
+ 3200 j=kk
+ 3250 continue
+ 3400 continue
+      jh=0
+      if(numhc.gt.0) call cnvbnd(numhc,a(i40),a(i44),jh)
+      j=max(j,jh)
+      mband=j+1
+      write (output,2070) mcp, mband
+ 2070 format ('    for couple mesh', i3, ', bandwidth =', i6)
+      call ifelfl(numel,ifluid,nummat,a(i10),a(i8),a(i6),a(i7),
+     *             a(m12),a(m13))
+c     set array size for vector of temperatures at last time step,tlast
+c     ,for vector of temperatures at last try at current time step,tc
+c     ,and for total heat flux vector,qz
+c     ,and for capacitance vector,cs
+      n102 = last
+      last = n102 + numnp
+c     initilize temperature vectors
+      do 10 i=1,numnp
+      tlast(i) = tz(i)
+   10 tc(i) = tz(i)
+c     set array size for banded system conductance matrix which is
+c     stored in vector form
+      n150=last
+      last=n150+numnp
+      mz=numnp
+      mud=mband-1
+      mld=mud
+      mq=min(mz,1+mud+mld)
+      ml=mq-1-mld
+      ma=mz*mq-ml*(ml+1)/2
+      mcond=ma
+c     set array size for temperature equilibrium calculation in
+c     subroutine etemp
+      i112 = last
+      i113 = i112 + numnp
+      i114 = i113 + 4*numel
+      i115 = i114 + numnp
+      last = i115 + 4*numel
+      write (output,2010) last, iamax, mcond
+ 2010 format ('0    For all Couple meshes read so far, arrays need',
+     1        ' core of', i8, '; max. allowed =', i8                  /
+     2        '0       For conduction sol., this Couple mesh needs',
+     3        ' core of', i8)
+      if (last .gt. iamax) then
+        write (output,2020)
+ 2020   format ('0******** couple exceeds space allowed.')
+        fail = .true.
+      end if
+      return
+      end
+*endif

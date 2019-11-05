@@ -1,0 +1,209 @@
+*mlist
+$if def,selap
+       subroutine tcspow (bg, bv, evol, ratpow, wurcel, wuocel, walcel,
+     & genz, vole, spideb, spidmx, ix, numnp, numel)
+c
+c  Calculate power as determined by associated Scdap components and
+c  the fraction of uranium in each element.
+c  Also calculate masses of fission products slumped last time step.
+c
+c  Cognizant engineer: G. A. Jayne
+c
+c This is a COUPLE ROUTINE
+      implicit none
+c
+c  Input arguments -
+c     bg     = power densities
+c     bv     = power generating volumes associated with nodes
+c     evol   = element volumes
+c     ratpow = ratio of power density to average power density
+c     wurcel = masses of uranium
+c     wuocel = masses of uranium dioxide
+c     walcel = masses of aluminum
+c     genz    = power
+c     vole   = element quadrant volumes
+c     spideb = fission product masses
+c     spidmx = maximum fission product masses
+c     ix     = node corners i, j, k, and l, and mtl indicator
+c     numnp  = number of nodes
+c     numel  = number of elements
+c
+c  Output arguments -
+c     bg
+c     wurcel
+c     wuocel
+c     walcel
+c     genz
+c
+       include 'contrl.h'
+       include 'ufiles.h'
+       include 'cpmdat.h'
+       include 'scddat.h'
+       include 'coupl.h'
+       include 'couplc.h'
+       include 'slumpv.h'
+       include 'scdpow.h'
+       include 'fgrcom.h'
+       include 'ndxara.h'
+c
+      integer numnp, numel, ix(5,numel)
+      real bg(numnp), bv(numnp), evol(numel)
+      real ratpow(numel), wurcel(numel), wuocel(numel), walcel(numel)
+      real genz(4,numel),vole(4,numel),spideb(numel,*),spidmx(numel,*)
+c
+      external calmas
+c  Local variables
+       real fru, fpladj, pcfis, pcfdk, pctot, pdif, pfr, pfrv,
+     &     pnofdk, powel, ptot, utotr, wsav
+       real sumal, sumuo2
+      integer i, icm, k, kn, n, nkk
+      integer idebug
+      data idebug / 0 /
+c
+      nkk = iksave(mcp)
+c
+      do 30 n = 1, numel
+      do 20 i = 1, 4
+      genz(i,n) = 0.0
+   20 continue
+   30 continue
+c
+      do 40 n = 1, numnp
+      bg(n) = 0.0
+   40 continue
+c
+      if (nsptrk(mcp,nkk) .gt. 0) then
+        do 50 k = 1, nsptrk(mcp,nkk)
+        wslxdt(k,mcp,nkk) = 0.0
+   50   continue
+      end if
+c
+      pcfis = 0.0
+      pcfdk = 0.0
+      pctot = 0.0
+c
+      do 100 n = 1, ncmesh(mcp)
+cljs  icm = scdap component number
+      icm = icmesh(n,mcp)
+      if (idcomp(icm) .eq. 3) go to 100
+      if (powtot(icm) .le. 0.0) go to 100
+      if (iscoup(icm) .eq. 0) go to 100
+c
+c       Calculate power in the Couple mesh from each Scdap component.
+      ptot = powtot(icm) / rcpvfi(icm)
+      pdif = ptot - poatot(icm)
+      pfr = pdif/ptot
+      if      (ncpowi(mcp) .eq. 1) then
+c       Power is from Relap5 reactor kinetics.
+        pfrv = pfr / rcpvfi(icm)
+        pcfis = pcfis + pfrv*(powtot(icm)-powfdk(icm))
+        pcfdk = pcfdk + pfrv*powfdk(icm)
+        pctot = pcfis + pcfdk
+      else if (ncpowi(mcp) .eq. 2) then
+        pctot = pctot + pdif
+      end if
+      if (nsptrk(mcp,nkk) .gt. 0) then
+c         Calculate fission products in mesh, based on power.
+        do 80 k = 1, nsptrk(mcp,nkk)
+        kn = ifpdb(k,mcp,nkk)
+        wslxdt(k,mcp,nkk) = wslxdt(k,mcp,nkk) + pfr*fpmasi(kn,icm)
+   80   continue
+      end if
+  100 continue
+c
+      if (pctot .le. 0.0) go to 1000
+c
+      if (nsptrk(mcp,nkk) .gt. 0) then
+c         Calculate masses of fission products slumped this time step,
+c         and save current total masses in wslxxx.
+        do 200 k = 1, nsptrk(mcp,nkk)
+        if (idebug .gt. 0) then
+          write (output,140) k, wslxxx(k,mcp,nkk), wslxdt(k,mcp,nkk)
+  140   format (' k, wslxxx(k,mcp,nkk), wslxdt(k,mcp,nkk) =',i3,2e13.5)
+        end if
+        wsav = wslxdt(k,mcp,nkk)
+        wslxdt(k,mcp,nkk)=max(0.0,wslxdt(k,mcp,nkk)-wslxxx(k,mcp,nkk))
+        wslxxx(k,mcp,nkk) = wsav
+  200   continue
+      end if
+c
+c    Adjust power with input multipliers.
+      if (ncpowi(mcp) .eq. 1) then
+        pcfis = pmufot(mcp)*pcfis
+        pcfdk = pmufdk(mcp)*pcfdk
+        pctot = pcfis + pcfdk
+      else
+        pctot = pmufot(mcp)*pctot
+      end if
+c         Get masses of u, uo2, and al in elements, and sum of u and uo2
+c         It is assumed that u and uo2 are not both present.
+c           (Scdap ATR components slump u into the Couple mesh, while
+c           Scdap Fuel Rod components and CORA components slump uo2.)
+c
+      call calmas (wurcel, wuocel, walcel, sumal, sumuo2)
+      utotr = 0.0
+      do 230 n = 1, numel
+      utotr = utotr + wurcel(n) + wuocel(n)
+  230 continue
+c
+      if (utotr .gt. 0.0) then
+        utotr = 1.0 / utotr
+      else
+        go to 1000
+      end if
+c
+c      Calculate power in each element, based on fraction of u or uo2.
+c
+      if (ncpowi(mcp) .eq. 2 .or. nsptrk(mcp,nkk) .le. 0) then
+        do 300 n = 1, numel
+        fru = (wurcel(n) + wuocel(n))*utotr
+        if (fru .gt. 0.0) then
+          powel = fru*ratpow(n)*pctot
+c           Apportion power in each quadrant of the element.
+          do 250 i = 1, 4
+          genz(i,n) = powel*vole(i,n)/evol(n)
+  250     continue
+        end if
+  300   continue
+      else
+        pnofdk = pcfis
+        do 400 n = 1, numel
+c         Adjust fission product decay power in each Couple element
+c         to account for the loss of fission products.
+        fru = (wurcel(n) + wuocel(n))*utotr
+        if (fru .gt. 0.0) then
+          fpladj = 1.0
+          do 350 k = 1, nsptrk(mcp,nkk)
+          if (spidmx(n,k) .gt. 0.0) then
+            kn = ifpdb(k,mcp,nkk)
+            fpladj = fpladj-qfrspi(kn,mcp)*(1.0-spideb(n,k)/spidmx(n,k))
+          end if
+          if (idebug .gt. 0) then
+            write (output,340) n, k, kn, fru, qfrspi(kn,mcp),
+     1                        spideb(n,k), spidmx(n,k), fpladj
+  340       format ('    n, k, kn, fru, qfrspi(kn,mcp) =',3i5,2e13.5 /
+     1              '     spideb(n,k), spidmx(n,k), fpladj =',3e13.5)
+          endif
+  350     continue
+          fpladj = max (fpladj, 0.0)
+          powel = fru*ratpow(n)*(pnofdk + fpladj*pcfdk)
+c  Apportion power to each quadrant of the element.
+          do i = 1, 4
+            genz(i,n) = powel*vole(i,n)/evol(n)
+          enddo
+        endif
+  400   continue
+      endif
+c
+c  Calculate power density at each node.
+       do n = 1,numel
+         do i = 1,4
+           if (bv(ix(i,n)) .gt. 0.0) bg(ix(i,n)) = bg(ix(i,n)) +
+     &     genz(i,n)/bv(ix(i,n))
+         enddo
+       enddo
+c
+ 1000  continue
+       return
+       end
+$endif

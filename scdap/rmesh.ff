@@ -1,0 +1,446 @@
+*mlist
+*if def,selap
+      subroutine rmesh (jmin,jmax,imin,imax,ar,az,ncode,icomp)
+c
+c  rmesh processes couple mesh generation data.
+c
+c  Cognizant engineer: ewc.
+c
+*in32 jmin
+*in32 jmax
+*in32 imin
+*in32 imax
+*in32 ncode
+*in32 idat
+*in32end
+c
+       implicit none
+*call cons
+*call iparm
+*call parm
+*call ufiles
+*call fast
+*call comctl
+*call contrl
+       integer jmin(*),jmax(*),imin(*),imax(*),ncode(*),icomp
+       real ar(*),az(*)
+c
+c  Local variables.
+       integer i,i1,i2,i3,ii,iinc,io,iold,iption,iseg,istp,istrt,iter,j,
+     * j1,j2,j3,jinc,jj,jjmax,jo,jold,jstp,jstrt,kappa,l,l1,l2,
+     * l3,l4,lamda,lold,m,n,nelsum,nodsum,nstart,nstop,l31,l32,
+     * inext, ndata,knt
+       real adi,adj,ang1,ang2,bbf,bdf,conic,conjc,conmsh,del,delphi,di,
+     * diff,dj,dr,dz,r1,r2,r3,r4,r5,rc,res1,resid,rinc,rstp,
+     * rstrt,slac,slbf,slce,sldf,z1,z2,z3,z4,z5,zc,zinc,zstp,zstrt
+       integer inthold(7,9999),l20(19),nolines
+       real rlhold(6,199)
+       real rdat(13)
+       integer idat(13)
+       equivalence (rdat(1),idat(1))
+       external angle,circle,hdwr,mnimx,titl
+c
+      data l20/9*0,1,1,0,0,1,1,0,0,1,1/
+      conmsh=1.e-05
+      call titl
+      write (output,2000)
+ 2000 format(/'Calculation of mesh coordinate')
+      line = 7
+c***********************************************************************
+c     initialize
+c***********************************************************************
+      iseg=0
+      do 110 j=1,maxj
+      do 100 i=1,maxi
+      l=i+(j-1)*maxi
+      ncode(l)=0
+      ar(l)=0.
+      az(l)=0.
+      jmax(i)=0
+  100 jmin(i)=maxj
+      imin(j)=maxi
+  110 imax(j)=0
+c***********************************************************************
+c     use inp routines to read in all cards
+c***********************************************************************
+      l31=50020000+1000000*icomp
+      l32=l31+9998
+      knt = 1
+      call inplnk(l31,inext,nstart,ndata,fa(filndx(1)))
+      nolines=0
+      if ((inext .gt. l31) .and. (inext.le.l32))  then
+        do 51 knt=1,9998
+        if (inext .le. l32) then
+          l20(1)=inext
+          l20(2)=0
+          l20(3)=5
+          l20(4)=13
+          l20(5)=0
+          l20(6)=1
+          do 52 i=1,13
+   52     rdat(i)=0.0
+          call inp2(fa(filndx(1)),rdat,l20)
+          inthold(1,knt)=idat(1)
+          inthold(2,knt)=idat(2)
+          inthold(3,knt)=idat(3)
+          rlhold(1,knt)=rdat(4)
+          rlhold(2,knt)=rdat(5)
+          if(idat(1).ge.1)then
+            if(l20(6).lt.9)then
+              fail=.true.
+              write(output,2010)l20(1)
+              goto 51
+            endif
+            inthold(4,knt)=idat(6)
+            inthold(5,knt)=idat(7)
+            rlhold(3,knt)=rdat(8)
+            rlhold(4,knt)=rdat(9)
+          endif
+          if(idat(1).ge.2)then
+            if(l20(6).lt.13)then
+              fail=.true.
+              write(output,2010)l20(1)
+              goto 51
+            endif
+            inthold(6,knt)=idat(10)
+            inthold(7,knt)=idat(11)
+            rlhold(5,knt)=rdat(12)
+            rlhold(6,knt)=rdat(13)
+          endif
+          call inplnk(l20(1),inext,nstart,ndata,fa(filndx(1)))
+        else
+          nolines=knt-1
+          goto 54
+        endif
+  51    continue
+  54  continue
+      endif
+  150 iseg=iseg+1
+c check if we have processed all cards
+      if (iseg .gt. nolines) goto 400
+c move data from holding arrays into local work variables
+      iption=inthold(1,iseg)
+      i1=inthold(2,iseg)
+      j1=inthold(3,iseg)
+      i2=inthold(4,iseg)
+      j2=inthold(5,iseg)
+      i3=inthold(6,iseg)
+      j3=inthold(7,iseg)
+      r1=rlhold(1,iseg)
+      z1=rlhold(2,iseg)
+      r2=rlhold(3,iseg)
+      z2=rlhold(4,iseg)
+      r3=rlhold(5,iseg)
+      z3=rlhold(6,iseg)
+      r1 = r1*uncon
+      z1 = z1*uncon
+      r2 = r2*uncon
+      z2 = z2*uncon
+      r3 = r3*uncon
+      z3 = z3*uncon
+      if(i2.ne.0.and.iption.eq.0) write (output,2010)
+ 2010 format('*****  probable error on next card - ',
+     # 'assumed that iption = 1     ******')
+      if(i2.ne.0.and.iption.eq.0) iption=1
+      iption=iption+1
+      l=i1+(j1-1)*maxi
+      ar(l)=r1
+      az(l)=z1
+      ncode(l)=1
+      call mnimx(i1,j1)
+      go to (150,200,200,300,300),iption
+c***********************************************************************
+c     generate straight lines on boundary
+c***********************************************************************
+  200 di=abs(float(i2-i1))
+      dj=abs(float(j2-j1))
+      l=i2+(j2-1)*maxi
+      ar(l)=r2
+      az(l)=z2
+      ncode(l)=1
+      call mnimx(i2,j2)
+      istrt=i1
+      istp=i2
+      jstrt=j1
+      jstp=j2
+      diff=max(di,dj)
+      iter=diff-1.
+      iinc=0
+      jinc=0
+      if(i2.ne.i1) iinc=(i2-i1)/abs(i2-i1)
+      if(j2.ne.j1) jinc=(j2-j1)/abs(j2-j1)
+      kappa=1
+      if(i2.ne.i1.and.j2.ne.j1.and.iption.ne.3) kappa=2
+      if(kappa.eq.2) diff=2.*diff
+      rinc=(r2-r1)/diff
+      zinc=(z2-z1)/diff
+c     write (output,2002) di,dj,diff,rinc,zinc,iter,iinc,jinc,kappa
+c     line = line + 1
+c     if(line .ge. 55) call hdwr(line)
+c***********************************************************************
+c     check for input error
+c***********************************************************************
+      if(kappa.ne.2.or.di.eq.dj) go to 210
+      write (output,2003)
+      go to 150
+c***********************************************************************
+c     interpolate
+c***********************************************************************
+  210 i=i1
+      j=j1
+      if (iter .lt. 1) go to 235
+      do 230 m=1,iter
+      if(iter.eq.0.and.iption.eq.2) go to 230
+      if(kappa.eq.2) go to 220
+      iold=i
+      i=i+iinc
+      jold=j
+      j=j+jinc
+      l=i+(j-1)*maxi
+      lold=iold+(jold-1)*maxi
+      ar(l)=ar(lold)+rinc
+      az(l)=az(lold)+zinc
+      write (output,2005) i, j, ar(l), az(l)
+      line = line + 1
+      if(line .ge. 55) call hdwr(line)
+      call mnimx(i,j)
+      ncode(l)=1
+      go to 230
+  220 iold=i
+      i=i+iinc
+      l=i+(j-1)*maxi
+      lold=iold+(j-1)*maxi
+      ar(l)=ar(lold)+rinc
+      az(l)=az(lold)+zinc
+      write (output,2005) i, j, ar(l), az(l)
+      line = line + 1
+      if(line.ge.55) call hdwr(line)
+      ncode(l)=1
+      call mnimx(i,j)
+      jold=j
+      j=j+jinc
+      l=i+(j-1)*maxi
+      lold=i+(jold-1)*maxi
+      ar(l)=ar(lold)+rinc
+      az(l)=az(lold)+zinc
+      ncode(l)=1
+      write (output,2005) i, j, ar(l), az(l)
+      line = line + 1
+      if(line.ge.55) call hdwr(line)
+      call mnimx(i,j)
+  230 continue
+  235 continue
+      if(kappa.eq.1) go to 150
+      iold=i
+      i=i+iinc
+      l=i+(j-1)*maxi
+      lold=iold+(j-1)*maxi
+      ar(l)=ar(lold)+rinc
+      az(l)=az(lold)+zinc
+      ncode(l)=1
+      write (output,2005) i, j, ar(l), az(l)
+      line = line + 1
+      if(line.ge.55) call hdwr(line)
+      call mnimx(i,j)
+      go to 150
+c***********************************************************************
+c     generate circular arcs  on boundary
+c***********************************************************************
+  300 l=i2+(j2-1)*maxi
+      ar(l)=r2
+      az(l)=z2
+      ncode(l)=1
+      call mnimx(i2,j2)
+      if(iption.eq.5) go to 320
+c***********************************************************************
+c     find center of circle
+c***********************************************************************
+      l=i3+(j3-1)*maxi
+      ar(l)=r3
+      az(l)=z3
+      ncode(l)=1
+      call mnimx(i3,j3)
+      slac=(z2-z1)/(r2-r1)
+      slbf=-1./slac
+      slce=(z3-z2)/(r3-r2)
+      sldf=-1./slce
+c***********************************************************************
+c     check for input error
+c***********************************************************************
+      if(abs(slac-slce).gt..001) go to 310
+      write (output,2006) r1,z1,r2,z2,r3,z3,slac,slce
+      go to 150
+  310 r4=r1+(r2-r1)/2.
+      z4=z1+(z2-z1)/2.
+      r5=r2+(r3-r2)/2.
+      z5=z2+(z3-z2)/2.
+      bbf=z4-slbf*r4
+      bdf=z5-sldf*r5
+      rc=(bbf-bdf)/(sldf-slbf)
+      zc=slbf*rc+bbf
+      write (output,2007) rc,zc
+      line = line + 1
+      if(line .ge. 55) call hdwr(line)
+      kappa=1
+      r2=r3
+      z2=z3
+      i2=i3
+      j2=j3
+      go to 330
+  320 kappa=2
+      rc=r3
+      zc=z3
+  330 istrt=i1
+      istp=i2
+      jstrt=j1
+      jstp=j2
+      rstrt=r1
+      rstp=r2
+      zstrt=z1
+      zstp=z2
+  340 call angle(rstrt,zstrt,rc,zc,ang1)
+      call angle(rstp,zstp,rc,zc,ang2)
+      if(abs(ang2).le.1.e-5.and.ang1.gt.pi) ang2=2.*pi
+      if(abs(ang1).le.1.e-5.and.ang2.gt.pi) ang1=2.*pi
+c***********************************************************************
+c     find angular increment
+c***********************************************************************
+      di=abs(float(istp-istrt))
+      dj=abs(float(jstp-jstrt))
+      iinc=0
+      jinc=0
+      if(istrt.ne.istp) iinc=(istp-istrt)/abs(istp-istrt)
+      if(jstrt.ne.jstp) jinc=(jstp-jstrt)/abs(jstp-jstrt)
+      lamda=1
+      if(iinc.ne.0.and.jinc.ne.0) lamda=2
+      diff=max(di,dj)
+      iter=diff-1.
+      if(lamda.eq.2) diff=2.*diff
+      del = ang2 - ang1
+      if (del .ge. pi ) del =  - (2.0* pi - del )
+      if (del .le. -pi) del = del + 2.0*pi
+      delphi = del/diff
+c     write (output,2008) ang1,ang2,diff,delphi
+c     line = line + 1
+c     if(line.ge.55) call hdwr(line)
+c***********************************************************************
+c     check for input error
+c***********************************************************************
+      if(lamda.ne.2.or.di.eq.dj) go to 350
+      write (output,2003)
+      go to 150
+  350 io=istrt
+      jo=jstrt
+c     write (output,2004)
+c     line = line + 1
+c     if(line.ge.55) call hdwr(line)
+c     interpolate
+      if (iter .lt. 1) go to 385
+      do 380 m=1,iter
+      if(lamda.eq.2) go to 360
+      i=io+iinc
+      j=jo+jinc
+      call mnimx(i,j)
+      l=i+(j-1)*maxi
+      ncode(l)=1
+      call circle(ang1,delphi,rstrt,zstrt,rc,zc,i,j)
+      write (output,2005) i, j, ar(l), az(l)
+      line = line + 1
+      if(line.ge.55) call hdwr(line)
+      go to 370
+  360 i=io+iinc
+      j=jo
+      l=i+(j-1)*maxi
+      ncode(l)=1
+      call mnimx(i,j)
+      call circle(ang1,delphi,rstrt,zstrt,rc,zc,i,j)
+      write (output,2005) i, j, ar(l), az(l)
+      line = line + 1
+      if(line .ge. 55) call hdwr(line)
+      j=jo+jinc
+      l=i+(j-1)*maxi
+      ncode(l)=1
+      call mnimx(i,j)
+      call circle(ang1,delphi,rstrt,zstrt,rc,zc,i,j)
+      write (output,2005) i, j, ar(l), az(l)
+      line = line + 1
+      if(line .ge. 55) call hdwr(line)
+  370 io=i
+  380 jo=j
+  385 continue
+      if(lamda.ne.2) go to 390
+      if(iter.eq.0) go to 390
+      i=io+iinc
+      l=i+(j-1)*maxi
+      ncode(l)=1
+      call mnimx(i,j)
+      call circle(ang1,delphi,rstrt,zstrt,rc,zc,i,j)
+      write (output,2005) i, j, ar(l), az(l)
+      line = line + 1
+      if(line .ge. 55) call hdwr(line)
+  390 go to 150
+c***********************************************************************
+c     calculate coordinates of interior points
+c***********************************************************************
+  400 if(maxj.le.2) go to 430
+      j2=maxj-1
+      do 420 n=1,500
+      resid=0.
+      do 410 j=2,j2
+      i1=imin(j)+1
+      i2=imax(j)-1
+      do 410 i=i1,i2
+      l=i+(j-1)*maxi
+      if(ncode(l).eq.1) go to 410
+      l1=i+1+(j-1)*maxi
+      l2=i-1+(j-1)*maxi
+      l3=i+(j+1-1)*maxi
+      l4=i+(j-1-1)*maxi
+      di = -seti + float(i)
+      dj = -setj + float(j)
+      adi=abs(di)
+      adj=abs(dj)
+      if(adi.lt.0.001) di=1.e+10
+      if(adj.lt.0.001) dj=1.e+10
+      conic = coni/di
+      conjc = conj/dj
+       dr = (ar(l1) + ar(l2) + ar(l3) + ar(l4))*0.25 - ar(l) + (conic*
+     * (ar(l1) - ar(l2)) + conjc*(ar(l3) - ar(l4)))*0.125
+       dz = (az(l1) + az(l2) + az(l3) + az(l4))*0.25 - az(l) + (conjc*
+     * (az(l3) - az(l4)) + conic*(az(l1) - az(l2)))*0.125
+      resid=resid+abs(dr)+abs(dz)
+      ar(l)=ar(l)+1.8*dr
+      az(l)=az(l)+1.8*dz
+  410 continue
+      if(n.eq.1) res1=resid
+      if(n.eq.1.and.resid.eq.0) go to 430
+      if(resid/res1.lt.conmsh) go to 430
+  420 continue
+  430 write (output,2009) n
+      line = line + 1
+      if(line .ge. 55) call hdwr(line)
+      nodsum=0
+      do 900 j=1,maxj
+      nstart=imin(j)
+      nstop=imax(j)
+      do 900 i=nstart,nstop
+  900 nodsum=nodsum+1
+      nelsum=0
+      jjmax=maxj-1
+      do 910 jj=1,jjmax
+      nstop=min(imax(jj),imax(jj+1))-1
+      nstart=max(imin(jj),imin(jj+1))
+      do 910 ii=nstart,nstop
+  910 nelsum=nelsum+1
+      numnp=nodsum
+      numel=nelsum
+ 1001 format (3(2i3,2f8.3),i5)
+ 2003 format(1x,38h**bad input--this line is not diagonal)
+ 2005 format(2i5,1p,2e10.3)
+ 2006 format (51h ** bad input - these points do not define a circle/
+     13x,6f12.4,10x,2e20.8)
+ 2007 format ('  center coordinate (',f8.3,',',f8.3,')')
+ 2009  format('0 coordinates calculated after',i3,' iterations')
+      return
+      end
+*endif

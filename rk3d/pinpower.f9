@@ -1,0 +1,434 @@
+      SUBROUTINE PINPOWER(TXT,TCD,TNF,TPF,SIGDSN,
+     $  SW,SWS,SWC,PINLOCR,PINLOCT,AMAXPIN,AMAXPELLET,RELPWR,
+     $  NCOLXY,NCOLZ,TPFS,FFV,FFVRD,FRACT,RPOW,PPOW,DZ,XHIP,
+     $  NDNUM,NXSTART,NXEND)
+C     
+C     This subroutine performs a pin power reconstruction 
+C     in hexagonal geometry based upon the two-group 
+C     cross sections and fluxes (NSHAP = "HEXA" only).
+C     
+      include 'param.fcb'
+      include 'nonfue.fcb'
+      include 'nterm.fcb'
+      include 'che.fcb'
+      include 'cntl.fcb' !vmq
+      include 'crod.fcb'
+      include 'array.fcb'
+      include 'varlen.fcb'
+      include 'varlens.fcb'
+      include 'xsec1.fcb'
+      include 'xspolycom.fcb'
+      include 'geom.fcb'
+      include 'confmap.fcb'
+      include 'hexdim.fcb'
+      include 'pinpow.fcb'
+
+      DIMENSION PINLOCR(*),PINLOCT(*),TXT(NXYL,NZ,*),TCD(NXYL,NZ,*),
+     $  TNF(NXYL,NZ,*),TPF(NXYL,NZ,*),SIGDSN(NXYL,NZ,2,*),
+     $  SW(NXYL,NZ,*),SWS(6,NXYL,NZ,*),SWC(6,NXYL,NZ,*),
+     $  AMAXPELLET(NXYLMAX),AMAXPIN(NXYLMAX),
+     $  RELPWR(NXYL,NZ),TPFS(6,NXYL,NZ,*),
+     $  RPOW(NPIN),PPOW(NPIN),DZ(0:*),XHIP(NXYL,NZ,*),
+     $  FRACT(NXYL,*),FFVRD(NXYL,NZ,NPIN),FFV(NXYL,NZ,NPIN)
+
+      DIMENSION NCOLXY(NXYLMAX,*),NCOLZ(*),NDNUM(-1:NX+2,0:NY+1),
+     $  NXSTART(*),NXEND(*)
+
+      REAL*8 XSWE,XSEA,XSNW,XSNE,XSSW,XSSE !vmq
+      REAL*8 KSF,C0(2),C11(2),C12(2),C13(2),C21(2),C22(2),C23(2),
+     $  C3(2),GAMMA1,GAMMA2,GAMMA3,
+     $  RHO2X,RHO1Y,RHO2Y,RHO3,RHO4,SQRT3 !vmq
+
+C-----PIN FLUX
+      REAL*8 PI,FLXMU,FLXNU,PSI1,PSI2,R,THETA,ADUM !vmq
+      REAL*8 PHI1,PHI2 !vmq
+      REAL*8 ALAMBDA1,ALAMBDA2,TERM1,TERM2,TERM3,TERM4 !vmq
+      REAL*8 PHIMU(12),PHINU(12),ALPHAMU(12),ALPHANU(12),AMU,ANU
+
+      REAL*8 ALPHA1,ALPHA2,ALPHA3 !vmq
+      REAL*8 FLX(2) !vmq
+
+      SQRT3=SQRT(3.)
+      PI=ACOS(-1.0)
+      ALPHA1=0.
+      ALPHA2=PI/3.
+      ALPHA3=2.*PI/3.
+
+C
+C-----ASSIGN SURFACE KAPPA-SIGMA-F = NODE KAPPA-SIGMA-F IF 
+C-----NO BURNUP GRADIENT TREATMENT IS SELECTED
+C
+      IF(HEXBUGRAD.EQ.'N')THEN
+       DO IG=1,NG
+        DO IZ=IZCOLS,IZCOLE
+         DO IXY=1,NXYL
+          DO ISUR=1,6
+           TPFS(ISUR,IXY,IZ,IG)=TPF(IXY,IZ,IG)
+          ENDDO
+         ENDDO
+        ENDDO
+       ENDDO
+      ENDIF
+
+      IF(OUTPPR.EQ.'Y')THEN
+       WRITE(82,*)'PIN POWER RECONSTRUCTION OUTPUT'
+       write(82,*)
+       WRITE(82,123)NPIN
+       WRITE(82,*)
+       WRITE(82,*)'Note: x=0 and y=0 is at the center of the assembly'
+       WRITE(82,124)'PIN #','X-COORD','Y-COORD'
+       WRITE(82,125)
+       DO 121 I=1,NPIN
+        WRITE(82,122)I,PINLOCR(I)*COS(PINLOCT(I)),
+     $    PINLOCR(I)*SIN(PINLOCT(I))
+ 121   CONTINUE
+       WRITE(82,*)
+       WRITE(82,*)'ASSEMBLY NUMBER VS RADIAL LOCATION'
+       WRITE(82,*)
+       DO IY=1,NY
+        DO I=1,NXSTART(IY)-1
+         WRITE(82,127)'    '
+        ENDDO
+        WRITE(82,126)(NDNUM(IX,IY),IX=NXSTART(IY),NXEND(IY),NXSKIP)
+       ENDDO
+       WRITE(82,*)
+
+ 123   FORMAT(I6,' : NUMBER OF PIN LOCATIONS IN AN ASSEMBLY')
+ 124   FORMAT(A6,A13,A13)
+ 125   FORMAT(32('-'))
+ 122   FORMAT(I6,2E13.5)
+ 126   FORMAT(30(I3,'   '))
+ 127   FORMAT(A3,$A)
+ 128   FORMAT('PIN POWER FOR ASSEMBLY NUMBER: ',I4)
+ 129   FORMAT('AXIAL NODE NUMBER            : ',I4)
+ 130   FORMAT(I6,F10.4)
+ 131   FORMAT(A6,A10,
+     $   ' (see top of file for pin location vs pin number)')
+     
+      ENDIF
+
+      DO 300 IXY=1,NXYL
+       IF(OUTPPR.EQ.'Y')THEN
+        WRITE(82,*)
+        WRITE(82,128)IXY
+       ENDIF
+       DO N=1,NPIN
+        PPOW(N)=0.0
+       ENDDO
+       SUMZ=0.
+       AMAXPELLET(IXY)=0.0
+       AMAXPIN(IXY)=0.0
+       DO 302 IZ=IZCOLS,IZCOLE
+        I=NCOLXY(IXY,NCOLZ(IZ))
+        IF(I.LE.NFUEXY)GOTO 302
+        IF(OUTPPR.EQ.'Y')WRITE(82,129)IZ
+        SUMZ=SUMZ+DZ(IZ)
+C-----EIGENVALUE 1 AND 2
+        TERM1=(TXT(IXY,IZ,1)-XHIP(IXY,IZ,1)*TNF(IXY,IZ,1))
+     $    /TCD(IXY,IZ,1)
+        TERM2=-(XHIP(IXY,IZ,1)*TNF(IXY,IZ,2))/TCD(IXY,IZ,1)
+        TERM3=(-SIGDSN(IXY,IZ,2,1)-XHIP(IXY,IZ,2)*TNF(IXY,IZ,1))
+     $    /TCD(IXY,IZ,2)
+        TERM4=(TXT(IXY,IZ,2)-XHIP(IXY,IZ,2)*TNF(IXY,IZ,2))
+     $    /TCD(IXY,IZ,2)
+
+        ADUM=0.5*SQRT(TERM1**2-2*TERM1*TERM4+TERM4**2+4*TERM2*TERM3)
+
+        ALAMBDA1=TERM1/2.+TERM4/2.-ADUM
+        ALAMBDA2=TERM1/2.+TERM4/2.+ADUM
+
+        AL=1.
+ 1126   IF(ABS(ALAMBDA1).LT.1e-3)THEN
+         AL=AL*1.001
+         TERM1=(TXT(IXY,IZ,1)-TNF(IXY,IZ,1)/AL)/TCD(IXY,IZ,1)
+         TERM2=-(TNF(IXY,IZ,2)/AL)/TCD(IXY,IZ,1)
+         ADUM=0.5*SQRT(TERM1**2-2*TERM1*TERM4+TERM4**2+4*TERM2*TERM3)
+         ALAMBDA1=TERM1/2.+TERM4/2.-ADUM
+         ALAMBDA2=TERM1/2.+TERM4/2.+ADUM
+         GOTO 1126
+        ELSE
+         GOTO 1127
+        ENDIF
+
+ 1127   ILAMBDA=0
+        IF(ALAMBDA1.GT.0)THEN
+         AMU=SQRT(ALAMBDA1)
+         ILAMBDA=1
+        ELSE
+         AMU=SQRT(-ALAMBDA1)
+        ENDIF
+
+        ANU=SQRT(ALAMBDA2)
+        
+        PSI1=-(TERM4-ALAMBDA1)/TERM3
+        PSI2=-(TERM4-ALAMBDA2)/TERM3
+        ADUM=1./(PSI1-PSI2)
+C     
+C-----CALCULATE PIN-WISE FLUX
+C     
+        DO 104 ILOC=1,12
+         IF(ILOC.EQ.1)THEN
+          PHI1=1.5*SWS(2,IXY,IZ,1)
+     $      -0.25*(SWC(2,IXY,IZ,1)+SWC(3,IXY,IZ,1))
+          PHI2=1.5*SWS(2,IXY,IZ,2)
+     $      -0.25*(SWC(2,IXY,IZ,2)+SWC(3,IXY,IZ,2))
+         ELSEIF(ILOC.EQ.2)THEN
+          PHI1=SWC(2,IXY,IZ,1)
+          PHI2=SWC(2,IXY,IZ,2)
+         ELSEIF(ILOC.EQ.3)THEN
+          PHI1=1.5*SWS(5,IXY,IZ,1)
+     $      -0.25*(SWC(1,IXY,IZ,1)+SWC(2,IXY,IZ,1))
+          PHI2=1.5*SWS(5,IXY,IZ,2)
+     $      -0.25*(SWC(1,IXY,IZ,2)+SWC(2,IXY,IZ,2))
+         ELSEIF(ILOC.EQ.4)THEN
+          PHI1=SWC(1,IXY,IZ,1)
+          PHI2=SWC(1,IXY,IZ,2)
+         ELSEIF(ILOC.EQ.5)THEN
+          PHI1=1.5*SWS(3,IXY,IZ,1)
+     $      -0.25*(SWC(6,IXY,IZ,1)+SWC(1,IXY,IZ,1))
+          PHI2=1.5*SWS(3,IXY,IZ,2)
+     $      -0.25*(SWC(6,IXY,IZ,2)+SWC(1,IXY,IZ,2))
+         ELSEIF(ILOC.EQ.6)THEN
+          PHI1=SWC(6,IXY,IZ,1)
+          PHI2=SWC(6,IXY,IZ,2)
+         ELSEIF(ILOC.EQ.7)THEN
+          PHI1=1.5*SWS(1,IXY,IZ,1)
+     $      -0.25*(SWC(5,IXY,IZ,1)+SWC(6,IXY,IZ,1))
+          PHI2=1.5*SWS(1,IXY,IZ,2)
+     $      -0.25*(SWC(5,IXY,IZ,2)+SWC(6,IXY,IZ,2))
+         ELSEIF(ILOC.EQ.8)THEN
+          PHI1=SWC(5,IXY,IZ,1)
+          PHI2=SWC(5,IXY,IZ,2)
+         ELSEIF(ILOC.EQ.9)THEN
+          PHI1=1.5*SWS(6,IXY,IZ,1)
+     $      -0.25*(SWC(4,IXY,IZ,1)+SWC(5,IXY,IZ,1))
+          PHI2=1.5*SWS(6,IXY,IZ,2)
+     $      -0.25*(SWC(4,IXY,IZ,2)+SWC(5,IXY,IZ,2))
+         ELSEIF(ILOC.EQ.10)THEN
+          PHI1=SWC(4,IXY,IZ,1)
+          PHI2=SWC(4,IXY,IZ,2)
+         ELSEIF(ILOC.EQ.11)THEN
+          PHI1=1.5*SWS(4,IXY,IZ,1)
+     $      -0.25*(SWC(3,IXY,IZ,1)+SWC(4,IXY,IZ,1))
+          PHI2=1.5*SWS(4,IXY,IZ,2)
+     $      -0.25*(SWC(3,IXY,IZ,2)+SWC(4,IXY,IZ,2))
+         ELSEIF(ILOC.EQ.12)THEN
+          PHI1=SWC(3,IXY,IZ,1)
+          PHI2=SWC(3,IXY,IZ,2)
+         ENDIF
+         PHIMU(ILOC)=ADUM*(PHI1-PSI2*PHI2)
+         PHINU(ILOC)=ADUM*(-PHI1+PSI1*PHI2)
+ 104    CONTINUE
+
+        CALL PINFLX(PHIMU,PHINU,ALPHAMU,ALPHANU,AMU,ANU,ILAMBDA)
+
+        DO IG=1,2
+         XSWE=TPFS(1,IXY,IZ,IG)
+         XSEA=TPFS(2,IXY,IZ,IG)
+         XSNW=TPFS(3,IXY,IZ,IG)
+         XSSE=TPFS(4,IXY,IZ,IG)
+         XSNE=TPFS(5,IXY,IZ,IG)
+         XSSW=TPFS(6,IXY,IZ,IG)
+
+         C0(IG)=(1./6)*(-XSWE-XSEA-XSNW-XSSE-XSNE-XSSW)
+     $     +2.*TPF(IXY,IZ,IG)
+         C11(IG) = -SQRT3*(2.*XSWE-2.*XSEA+XSNW-XSSE-XSNE+XSSW)
+     $     /RHEXA/9.
+         RHO1Y=(XSNW-XSSE+XSNE-XSSW)/RHEXA/3.
+         RHO2X=3./20.*(6.*XSWE+6.*XSEA+XSNW+XSSE+XSNE+XSSW
+     $     -16.*TPF(IXY,IZ,IG))/RHEXA**2
+         RHO2Y =-(2.*XSWE+2.*XSEA+13.*(-XSNW-XSSE-XSNE-XSSW)
+     $     +48.*TPF(IXY,IZ,IG))/RHEXA**2/20.
+         RHO3= SQRT3*(-XSNW-XSSE+XSNE+XSSW)/RHEXA**2/2.
+         RHO4 = 2./9.*SQRT3*(XSWE-XSEA-XSNW+XSSE+XSNE-XSSW)
+     $     /RHEXA**3
+
+         C12(IG)=SQRT3/3.*RHO1Y
+         C13(IG)=C12(IG)
+         C21(IG)=RHO2X - 1./3*RHO2Y
+         C22(IG)=2./3*RHO2Y + 1./3*SQRT3*RHO3
+         C23(IG)=2./3*RHO2Y - 1./3*SQRT3*RHO3
+         C3(IG)=RHO4/0.75
+
+        ENDDO
+
+        SUM=0.0
+        NSUM=0
+        DO 105 N=1,NPIN
+         R=PINLOCR(N)
+         THETA=PINLOCT(N)
+C     
+C-------PIN FLUX
+C     
+         FLXMU=0.0
+         FLXNU=0.0
+         DO IDUM=1,3
+          K=(IDUM-1)*4+1
+          IF(ILAMBDA.EQ.1)THEN
+           FLXMU=FLXMU+DALPHA*
+     $       (ALPHAMU(K)  *SINH(AMU*R*COS(THETA-ALPHA(IDUM)))
+     $       +ALPHAMU(K+1)*COSH(AMU*R*COS(THETA-ALPHA(IDUM)))
+     $       +ALPHAMU(K+2)*COSH(AMU*R*SIN(THETA-ALPHA(IDUM)))
+     $       +ALPHAMU(K+3)*SINH(AMU*R*SIN(THETA-ALPHA(IDUM))))
+          ELSE
+           FLXMU=FLXMU+DALPHA*
+     $       (ALPHAMU(K)  *SIN(AMU*R*COS(THETA-ALPHA(IDUM)))
+     $       +ALPHAMU(K+1)*COS(AMU*R*COS(THETA-ALPHA(IDUM)))
+     $       +ALPHAMU(K+2)*COS(AMU*R*SIN(THETA-ALPHA(IDUM)))
+     $       +ALPHAMU(K+3)*SIN(AMU*R*SIN(THETA-ALPHA(IDUM))))
+          ENDIF
+          FLXNU=FLXNU+DALPHA*
+     $      (ALPHANU(K)  *SINH(ANU*R*COS(THETA-ALPHA(IDUM)))
+     $      +ALPHANU(K+1)*COSH(ANU*R*COS(THETA-ALPHA(IDUM)))
+     $      +ALPHANU(K+2)*COSH(ANU*R*SIN(THETA-ALPHA(IDUM)))
+     $      +ALPHANU(K+3)*SINH(ANU*R*SIN(THETA-ALPHA(IDUM))))
+         ENDDO
+
+         FLX(1)=PSI1*FLXMU+PSI2*FLXNU
+         FLX(2)=FLXMU+FLXNU
+         GAMMA1=R*COS(THETA-ALPHA1)
+         GAMMA2=R*COS(THETA-ALPHA2)
+         GAMMA3=R*COS(THETA-ALPHA3)
+
+         RPOW(N)=0.0
+         DO 103 IG=1,2
+          IF(HEXBUGRAD.EQ.'Y')THEN
+           KSF=C0(IG)+C11(IG)*GAMMA1+C12(IG)*GAMMA2+C13(IG)*GAMMA3
+     $       +C21(IG)*GAMMA1**2+C22(IG)*GAMMA2**2+C23(IG)*GAMMA3**2
+     $       +C3(IG)*(-GAMMA1**3+GAMMA2**3-GAMMA3**3)
+           IF(KSF.LT.0)THEN
+            WRITE(*,*)'NEGATIVE PIN KSF',IXY,N,IG,KSF
+            WRITE(*,*)'PINPOWER'
+            KSF=0.
+           ENDIF
+          ELSE
+           KSF=TPF(IXY,IZ,IG)
+          ENDIF
+          IF(FLX(IG).LT.0)THEN
+           WRITE(*,*)'NEGATIVE PIN FLUX ',FLX(IG)
+           WRITE(*,*)'NODE',IXY,' GROUP',IG,' PIN',N
+           WRITE(*,*)AMU,ANU,ALAMBDA1,ALAMBDA2
+           WRITE(*,*)'PINPOWER'
+           FLX(IG)=0.
+          ENDIF            
+
+          RPOW(N)=RPOW(N)+KSF*FLX(IG)
+ 103     CONTINUE
+         AFF=FRACT(IXY,IZ)*FFVRD(IXY,IZ,N) +
+     $    (1.00-FRACT(IXY,IZ))*FFV(IXY,IZ,N)
+         RPOW(N)=RPOW(N)*AFF    
+         IF(RPOW(N).NE.0.0)THEN
+          SUM=SUM+RPOW(N)
+          NSUM=NSUM+1
+         ENDIF
+ 105    CONTINUE
+        ADIV=SUM/NSUM
+
+        DO N=1,NPIN
+         RPOW(N)=RPOW(N)*RELPWR(IXY,IZ)/ADIV
+         PPOW(N)=PPOW(N)+RPOW(N)*DZ(IZ)
+         AMAXPELLET(IXY)=MAX(RPOW(N),AMAXPELLET(IXY))
+        ENDDO
+
+        IF(OUTPPR.EQ.'Y')THEN
+         WRITE(82,131)'PIN #','PIN POWER'
+         DO N=1,NPIN
+          WRITE(82,130)N,RPOW(N)
+         ENDDO
+        ENDIF
+
+ 302   CONTINUE
+
+        DO N=1,NPIN
+         IF(SUMZ .NE. 0.0) THEN !vmq
+          PPOW(N)=PPOW(N)/SUMZ
+         ENDIF
+         AMAXPIN(IXY)=MAX(PPOW(N),AMAXPIN(IXY))
+        ENDDO
+ 300  CONTINUE
+
+      RETURN
+      END
+
+      
+      SUBROUTINE PINFLX(PHIMU,PHINU,ALPHAMU,ALPHANU,AMU,ANU,ILAMBDA)
+C     
+C     This subroutine solves for the 12 coefficients in flux distribution
+C     at 12 discrete values of alpha
+C     
+      include 'confmap.fcb'
+      include 'pinpow.fcb'
+
+      REAL*8 PHIMU(12),PHINU(12),ALPHAMU(12),ALPHANU(12)
+      REAL*8 A(144)
+      REAL*8 AMU,ANU
+      
+
+      IF(ILAMBDA.EQ.1)THEN
+       CALL PINFLXMATA(A,AMU,N2)
+      ELSE
+       CALL PINFLXMATA(A,AMU,N1)
+      ENDIF
+      CALL DIR12FULL(A,PHIMU,ALPHAMU)
+
+      CALL PINFLXMATA(A,ANU,N2)
+      CALL DIR12FULL(A,PHINU,ALPHANU)
+      
+      RETURN
+      END
+
+      SUBROUTINE PINFLXMATA(A,EIG,IMU)
+      
+      include 'confmap.fcb'
+      include 'pinpow.fcb'
+C
+C     This subroutine forms the 12 x 12 matrix for the pin flux
+C     reconstruction. 
+C
+      REAL*8 A(144)
+      REAL*8 EIG
+      REAL*8 SINH,COSH,SIN,COS
+C
+C     ...   1    2    3    4    5    6    7    8    9   10   11   12
+C     --------------------------------------------------------------
+C     1 |   1    2    3    4    5    6    7    8    9   10   11   12
+C     2 |  13   14   15   16   17   18   19   20   21   22   23   24
+C     3 |  25   26   27   28   29   30   31   32   33   34   35   36
+C     4 |  37   38   39   40   41   42   43   44   45   46   47   48
+C     5 |  49   50   51   52   53   54   55   56   57   58   59   60
+C     6 |  61   62   63   64   65   66   67   68   69   70   71   72
+C     7 |  73   74   75   76   77   78   79   80   81   82   83   84
+C     8 |  85   86   87   88   89   90   91   92   93   94   95   96
+C     9 |  97   98   99  100  101  102  103  104  105  106  107  108
+C     10| 109  110  111  112  113  114  115  116  117  118  119  120
+C     11| 121  122  123  124  125  126  127  128  129  130  131  132
+C     12| 133  134  135  136  137  138  139  140  141  142  143  144
+C     
+
+      PI=ACOS(-1.)
+      DO 100 I=1,12
+       IF(MOD(I,2).EQ.1)THEN
+        R=RHEXA*SQRT(3.)/2.
+       ELSE
+        R=RHEXA
+       ENDIF
+       THETA=(I-1)*PI/6.
+       DO 101 J=1,3
+        K=(I-1)*12+((J-1)*4+1)
+        IF(IMU.EQ.1)THEN
+         A(K)  =SIN(EIG*R*COS(THETA-ALPHA(J)))*DALPHA
+         A(K+1)=COS(EIG*R*COS(THETA-ALPHA(J)))*DALPHA
+         A(K+2)=COS(EIG*R*SIN(THETA-ALPHA(J)))*DALPHA
+         A(K+3)=SIN(EIG*R*SIN(THETA-ALPHA(J)))*DALPHA
+        ELSE
+         A(K)  =SINH(EIG*R*COS(THETA-ALPHA(J)))*DALPHA
+         A(K+1)=COSH(EIG*R*COS(THETA-ALPHA(J)))*DALPHA
+         A(K+2)=COSH(EIG*R*SIN(THETA-ALPHA(J)))*DALPHA
+         A(K+3)=SINH(EIG*R*SIN(THETA-ALPHA(J)))*DALPHA
+        ENDIF
+ 101   CONTINUE
+ 100  CONTINUE
+      
+      RETURN
+      END
+

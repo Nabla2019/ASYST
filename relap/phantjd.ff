@@ -1,0 +1,695 @@
+*mlist
+       subroutine phantjd
+$if def,makemap
+c
+c  This subroutine constructs a surface from phantj.
+c
+c  Cognizant engineer: gam, vam
+c
+       use lpdatc
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'makmap.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'tsctlc.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+      integer NODOS
+c  Number nested do loops in this driver.
+      parameter(NODOS=8)
+      character*80 titl(9)
+c
+      integer iii, j, jx, jjj, kkk, lll, nfix(NODOS)
+      integer check, idummy, ix
+      integer ii1, ii2, ii3, ii4, ii5, ii6, ii7, ii8, i
+      integer idie, zlabel
+c     integer ntypjo
+      real xstrt(NODOS), xstop(NODOS), xdelta(NODOS)
+      real xout, yout, zout, zmin, zmax
+      real voidgtemp, gflux
+c     real agvg, afvf
+c
+c
+      integer jj,mm,nn
+      integer ist, npts(2)
+      real strstp(2,2)
+      logical found
+      character*15 labels(2), names(NODOS)
+      character*40 labelz, znames(24)
+      data zmin /1.0e+30/, zmax /-1.0e+30/
+      data names /'Press (MPa)',
+     &            'voidg \a_g',
+     &            'uf U_f (J/kg)',
+     &            'ug U_g (J/kg)',
+     &            'quala X_n',
+     &            'velf v_f (m/s)',
+     &            'velg v_g (m/s)',
+     &            'diamj d_j (m)'/
+      data znames /'extj01', 'extj02', 'extj03', 'extj04', 'extj05',
+     &             'extj06', 'extj07', 'extj08', 'extj09', 'extj10',
+     &             'extj11', 'extj12', 'extj13', 'extj14', 'extj15',
+     &             'extj16', 'extj17', 'extj18', 'extj19', 'extj20',
+     &             'F_i_j (N-s^2/m^5)',
+     &             'C_0_j',
+     &             'ireg',
+     &             ''/
+c
+      external statep
+c   output map data file
+      open (unit = 36,file='pjmap.inp',status='old')
+c
+c
+      check = 1
+      idummy = 1
+c
+c  First find the target junction
+c
+c
+c  iii is junction block index (jundat.h)
+       found = .false.
+       j = lpdat(issys)%lij
+c  Loop over all junctions.
+       do jx=1,lpdat(issys)%lijn
+          if (junno(j) .eq. target) then
+             found = .true.
+             iii = j
+             ix = jcnxs(iii)
+             kkk = ij1nx(iii)
+             lll = ij2nx(iii)
+             write(*,*) 'target junction ',junno(iii),' index = ',iii
+             write(*,*) 'to volume ',volno(lll)
+             write(*,*) 'from volume ',volno(kkk)
+          endif
+         j = j + ijskp
+       enddo
+c
+       if (found) then
+c
+$if def,extv20
+c  initialize the extra variables
+        extj01(iii) = 0.0
+        extj02(iii) = 0.0
+        extj03(iii) = 0.0
+        extj04(iii) = 0.0
+        extj05(iii) = 0.0
+        extj06(iii) = 0.0
+        extj07(iii) = 0.0
+        extj08(iii) = 0.0
+        extj09(iii) = 0.0
+        extj10(iii) = 0.0
+        extj11(iii) = 0.0
+        extj12(iii) = 0.0
+        extj13(iii) = 0.0
+        extj14(iii) = 0.0
+        extj15(iii) = 0.0
+        extj16(iii) = 0.0
+        extj17(iii) = 0.0
+        extj18(iii) = 0.0
+        extj19(iii) = 0.0
+        extj20(iii) = 0.0
+$endif
+c
+        gflux = voidgj(iii)*rhogj(iii)*velgj(iii)/athrot(iii)
+     &        + voidfj(iii)*rhofj(iii)*velfj(iii)/athrot(iii)
+ 
+        write(*,*) 'ncount    ',ncount        ,' timeht    ',timeht
+        write(*,*) 'pressure  ',p(kkk)
+        write(*,*) 'voidg     ',voidg(kkk)
+        write(*,*) 'uf        ',uf(kkk)
+        write(*,*) 'ug        ',ug(kkk)
+        write(*,*) 'quala     ',quala(kkk)
+        write(*,*) 'velfj in  ',velfj(iii)
+        write(*,*) 'velgj in  ',velgj(iii)
+        write(*,*) 'gflux in  ',gflux
+c
+c
+c     read(36,*) ntypjo
+c
+c
+      do 10 jjj = 1,NODOS
+c
+         read(36,*) nfix(jjj)
+         read(36,*) xstrt(jjj)
+         read(36,*) xstop(jjj)
+c
+   10 continue
+c
+c     read(36,*) afvf
+c     read(36,*) agvg
+      read(36,*) zlabel
+      read(36,*) idie
+      close(36)
+c
+c
+c  get the labels and limits for the plot
+c  the first variable goes with the y-axis and second goes with x-axis
+      ist = 0
+      do 16 i = 1,NODOS
+        if (nfix(i) .gt. 1) then
+          ist = ist + 1
+          labels(ist) = names(i)
+          strstp(1,ist) = xstrt(i)
+          strstp(2,ist) = xstop(i)
+c  convert pressure to MPa
+          strstp(1,ist) = strstp(1,ist)*1.0e-6
+          strstp(2,ist) = strstp(2,ist)*1.0e-6
+          npts(ist) = nfix(i)
+        elseif (nfix(i) .lt. 1) then
+          ist = ist + 1
+          labels(ist) = names(i)
+          if (i .eq. 1) then
+            strstp(1,ist) = max(0.0,xstrt(i)*p(kkk))
+            strstp(2,ist) = xstop(i)*p(kkk)
+            xstrt(i) = strstp(1,ist)
+            xstop(i) = strstp(2,ist)
+c  convert pressure to MPa
+            strstp(1,ist) = strstp(1,ist)*1.0e-6
+            strstp(2,ist) = strstp(2,ist)*1.0e-6
+          elseif (i .eq. 2) then
+            strstp(1,ist) = max(0.0,xstrt(i)*voidg(kkk))
+            strstp(2,ist) = min(1.0,xstop(i)*voidg(kkk))
+            xstrt(i) = strstp(1,ist)
+            xstop(i) = strstp(2,ist)
+          elseif (i .eq. 3) then
+            strstp(1,ist) = max(0.0,xstrt(i)*uf(kkk))
+            strstp(2,ist) = xstop(i)*uf(kkk)
+            xstrt(i) = strstp(1,ist)
+            xstop(i) = strstp(2,ist)
+          elseif (i .eq. 4) then
+            strstp(1,ist) = max(0.0,xstrt(i)*ug(kkk))
+            strstp(2,ist) = xstop(i)*ug(kkk)
+            xstrt(i) = strstp(1,ist)
+            xstop(i) = strstp(2,ist)
+          elseif (i .eq. 5) then
+            strstp(1,ist) = max(0.0,xstrt(i)*quala(kkk))
+            strstp(2,ist) = min(1.0,xstop(i)*quala(kkk))
+            xstrt(i) = strstp(1,ist)
+            xstop(i) = strstp(2,ist)
+          elseif (i .eq. 6) then
+            strstp(1,ist) = xstrt(i)*velfj(kkk)
+            strstp(2,ist) = xstop(i)*velfj(kkk)
+            xstrt(i) = strstp(1,ist)
+            xstop(i) = strstp(2,ist)
+          elseif (i .eq. 7) then
+            strstp(1,ist) = xstrt(i)*velgj(kkk)
+            strstp(2,ist) = xstop(i)*velgj(kkk)
+            xstrt(i) = strstp(1,ist)
+            xstop(i) = strstp(2,ist)
+          elseif (i .eq. 8) then
+            strstp(1,ist) = xstrt(i)*diamj(iii)
+            strstp(2,ist) = xstop(i)*diamj(iii)
+            xstrt(i) = strstp(1,ist)
+            xstop(i) = strstp(2,ist)
+c           agvg = voidg(kkk)*velgj(iii)
+c           afvf = voidf(kkk)*velfj(iii)
+c           if (ntypjo .eq. 1) then
+c              strstp(1,ist) = xstrt(i)*agvg
+c              strstp(2,ist) = xstop(i)*agvg
+c           else
+c              strstp(1,ist) = xstrt(i)*afvf
+c              strstp(2,ist) = xstop(i)*afvf
+c           endif
+c           xstrt(i) = strstp(1,ist)
+c           xstop(i) = strstp(2,ist)
+          endif
+          nfix(i) = abs(nfix(i))
+          npts(ist) = nfix(i)
+        endif
+        if (ist .eq. 2) go to 17
+  16  continue
+c
+  17  continue
+      labelz = znames(zlabel)
+c   input map variables and ranges file
+      open (unit = 36,file='map.dat',status='unknown')
+c  write out axis label, min, max values and z axis label
+        write(36,*) labels(2)
+        write(36,*) strstp(1,2)
+        write(36,*) strstp(2,2)
+        write(36,*) npts(2)
+        write(36,*) labels(1)
+        write(36,*) strstp(1,1)
+        write(36,*) strstp(2,1)
+        write(36,*) npts(1)
+c
+      if (nfix(1) .gt. 1) then
+         xdelta(1) = (xstop(1)-xstrt(1))/float(nfix(1)-1)
+         p(kkk) = xstrt(1) - xdelta(1)
+         p(lll) = xstrt(1) - xdelta(1)
+         po(kkk) = p(kkk)
+         po(lll) = p(lll)
+      else
+         xdelta(1) = 0.0
+      endif
+c
+      do 90 ii1 = 1,nfix(1)
+c
+         p(kkk) = p(kkk) + xdelta(1)
+         p(lll) = p(lll) + xdelta(1)
+         po(kkk) = p(kkk)
+         po(lll) = p(lll)
+c
+         if (nfix(2) .gt. 1) then
+            xdelta(2) = (xstop(2)-xstrt(2))/float(nfix(2)-1)
+            voidg(kkk) = xstrt(2) - xdelta(2)
+            voidf(kkk) = 1.0 - voidg(kkk)
+            voidg(lll) = xstrt(2) - xdelta(2)
+            voidf(lll) = 1.0 - voidg(lll)
+            voidgo(kkk) = voidg(kkk)
+            voidgo(lll) = voidg(lll)
+         else
+            xdelta(2) = 0.0
+         endif
+c
+         do 80 ii2 = 1,nfix(2)
+c
+            voidg(kkk) = voidg(kkk) + xdelta(2)
+            voidf(kkk) = 1.0 - voidg(kkk)
+            voidg(lll) = voidg(lll) + xdelta(2)
+            voidf(lll) = 1.0 - voidg(lll)
+            voidgo(kkk) = voidg(kkk)
+            voidgo(lll) = voidg(lll)
+c
+            if (nfix(3) .gt. 1) then
+               xdelta(3) = (xstop(3)-xstrt(3))/float(nfix(3)-1)
+               uf(kkk) = xstrt(3) - xdelta(3)
+               uf(lll) = xstrt(3) - xdelta(3)
+               ufo(kkk) = uf(kkk)
+               ufo(lll) = uf(lll)
+            else
+               xdelta(3) = 0.0
+            endif
+c
+            do 70 ii3 = 1,nfix(3)
+c
+               uf(kkk) = uf(kkk) + xdelta(3)
+               uf(lll) = uf(lll) + xdelta(3)
+               ufo(kkk) = uf(kkk)
+               ufo(lll) = uf(lll)
+c
+               if (nfix(4) .gt. 1) then
+                  xdelta(4) = (xstop(4)-xstrt(4))/float(nfix(4)-1)
+                  ug(kkk) = xstrt(4) - xdelta(4)
+                  ug(lll) = xstrt(4) - xdelta(4)
+                  ugo(kkk) = ug(kkk)
+                  ugo(lll) = ug(lll)
+               else
+                  xdelta(4) = 0.0
+               endif
+c
+               do 60 ii4 = 1,nfix(4)
+c
+                  ug(kkk) = ug(kkk) + xdelta(4)
+                  ug(lll) = ug(lll) + xdelta(4)
+                  ugo(kkk) = ug(kkk)
+                  ugo(lll) = ug(lll)
+ 
+                  if (nfix(5) .gt. 1) then
+                     xdelta(5) =
+     &                 (xstop(5)-xstrt(5))/float(nfix(5)-1)
+                     quala(kkk) = xstrt(5) - xdelta(5)
+                     quala(lll) = xstrt(5) - xdelta(5)
+                     qualao(kkk) = quala(kkk)
+                     qualao(lll) = quala(lll)
+                  else
+                     xdelta(5) = 0.0
+                  endif
+c
+                  do 50 ii5 = 1,nfix(5)
+c
+                     quala(kkk) = quala(kkk) + xdelta(5)
+                     quala(lll) = quala(lll) + xdelta(5)
+                     qualao(kkk) = quala(kkk)
+                     qualao(lll) = quala(lll)
+c
+c  reset qualan and qualno in case the problem was not initialized
+c  with air in the volume
+c
+                      nn = kkk
+                      mm = lll
+                      do 51 jj = 1,noncn
+                        qualan(nn) = qn(jj)
+                        qualno(nn) = qn(jj)
+                        qualan(mm) = qn(jj)
+                        qualno(mm) = qn(jj)
+                        nn = nn + 1
+                        mm = mm + 1
+   51                 continue
+c
+c
+                     if (nfix(6) .gt. 1) then
+                        xdelta(6) =
+     &                    (xstop(6)-xstrt(6))/float(nfix(6)-1)
+                        velfj(iii) = xstrt(6) - xdelta(6)
+                        velfjo(iii) = velfj(iii)
+                     else
+                        xdelta(6) = 0.0
+                     endif
+c
+                     do 40 ii6 = 1,nfix(6)
+c
+                        velfj(iii) = velfj(iii) + xdelta(6)
+                        velfjo(iii) = velfj(iii)
+c
+                        if (nfix(7) .gt. 1) then
+                           xdelta(7) =
+     &                       (xstop(7)-xstrt(7))/float(nfix(7)-1)
+                           velgj(iii) = xstrt(7) - xdelta(7)
+                           velgjo(iii) = velgj(iii)
+                        else
+                           xdelta(7) = 0.0
+                        endif
+c
+                        do 30 ii7 = 1,nfix(7)
+c
+                           velgj(iii) = velgj(iii) + xdelta(7)
+                           velgjo(iii) = velgj(iii)
+c
+                           voidgtemp = voidg(kkk)
+                           call statep(check)
+                           voidg(kkk) = voidgtemp
+                           voidg(lll) = voidgtemp
+c
+                           if (nfix(8) .gt. 1) then
+                              xdelta(8) =
+     &                         (xstop(8)-xstrt(8))/float(nfix(8)-1)
+                              diamj(iii) = xstrt(8) - xdelta(8)
+c                             if (ntypjo .eq. 1) then
+c                                agvg = xstrt(8) - xdelta(8)
+c                             else
+c                                afvf = xstrt(8) - xdelta(8)
+c                             endif
+                           else
+                              xdelta(8) = 0.0
+c                             agvg = voidg(kkk)*velgj(iii)
+c                             afvf = voidf(kkk)*velfj(iii)
+                           endif
+c
+c
+                           do 20 ii8 = 1,nfix(8)
+                              diamj(iii) = diamj(iii) + xdelta(8)
+c                             if (ntypjo .eq. 1) then
+c                                agvg = agvg + xdelta(8)
+c                             else
+c                                afvf = afvf + xdelta(8)
+c                             endif
+c
+c                             if (voidf(kkk) .ne. 0.0) then
+c                               velfj(iii)  = afvf / voidf(kkk)
+c                             endif
+c                             velfjo(iii) = velfj(iii)
+ 
+c                             if (voidg(kkk) .ne. 0.0) then
+c                               velgj(iii)  = agvg / voidg(kkk)
+c                             endif
+c                             velgjo(iii) = velgj(iii)
+c
+                              voidgtemp = voidg(kkk)
+                              call statep(check)
+                              voidg(kkk) = voidgtemp
+                              voidg(lll) = voidgtemp
+c
+                              call jprop(idummy)
+                              call phantj(0)
+c
+c
+                              if     (nfix(1) .gt. 1) then
+c                                   convert to MPa
+                                 xout = p(kkk)*1.0e-6
+                                 if     (nfix(2) .gt. 1) then
+                                    yout = voidg(kkk)
+                                 elseif (nfix(3) .gt. 1) then
+                                    yout = uf(kkk)
+                                 elseif (nfix(4) .gt. 1) then
+                                    yout = ug(kkk)
+                                 elseif (nfix(5) .gt. 1) then
+                                    yout = quala(kkk)
+                                 elseif (nfix(6) .gt. 1) then
+                                    yout = velfj(iii)
+                                 elseif (nfix(7) .gt. 1) then
+                                    yout = velgj(iii)
+                                 else
+                                    yout = diamj(iii)
+c                                   if (ntypjo .eq. 1) then
+c                                      yout = agvg
+c                                   else
+c                                      yout = afvf
+c                                   endif
+                                 endif
+                              elseif (nfix(2) .gt. 1) then
+                                 xout = voidg(kkk)
+                                 if     (nfix(3) .gt. 1) then
+                                    yout = uf(kkk)
+                                 elseif (nfix(4) .gt. 1) then
+                                    yout = ug(kkk)
+                                 elseif (nfix(5) .gt. 1) then
+                                    yout = quala(kkk)
+                                 elseif (nfix(6) .gt. 1) then
+                                    yout = velfj(iii)
+                                 elseif (nfix(7) .gt. 1) then
+                                    yout = velgj(iii)
+                                 else
+                                    yout = diamj(iii)
+c                                   if (ntypjo .eq. 1) then
+c                                      yout = agvg
+c                                   else
+c                                      yout = afvf
+c                                   endif
+                                 endif
+                              elseif (nfix(3) .gt. 1) then
+                                 xout = uf(kkk)
+                                 if     (nfix(4) .gt. 1) then
+                                    yout = ug(kkk)
+                                 elseif (nfix(5) .gt. 1) then
+                                    yout = quala(kkk)
+                                 elseif (nfix(6) .gt. 1) then
+                                    yout = velfj(iii)
+                                 elseif (nfix(7) .gt. 1) then
+                                    yout = velgj(iii)
+                                 else
+                                    yout = diamj(iii)
+c                                   if (ntypjo .eq. 1) then
+c                                      yout = agvg
+c                                   else
+c                                      yout = afvf
+c                                   endif
+                                 endif
+                              elseif (nfix(4) .gt. 1) then
+                                 xout = ug(kkk)
+                                 if     (nfix(5) .gt. 1) then
+                                    yout = quala(kkk)
+                                 elseif (nfix(6) .gt. 1) then
+                                    yout = velfj(iii)
+                                 elseif (nfix(7) .gt. 1) then
+                                    yout = velgj(iii)
+                                 else
+                                    yout = diamj(iii)
+c                                   if (ntypjo .eq. 1) then
+c                                      yout = agvg
+c                                   else
+c                                      yout = afvf
+c                                   endif
+                                 endif
+                              elseif (nfix(5) .gt. 1) then
+                                 xout = quala(kkk)
+                                 if     (nfix(6) .gt. 1) then
+                                    yout = velfj(iii)
+                                 elseif (nfix(7) .gt. 1) then
+                                    yout = velgj(iii)
+                                 else
+                                    yout = diamj(iii)
+c                                   if (ntypjo .eq. 1) then
+c                                      yout = agvg
+c                                   else
+c                                      yout = afvf
+c                                   endif
+                                 endif
+                              elseif (nfix(6) .gt. 1) then
+                                 xout = velfj(kkk)
+                                 if     (nfix(7) .gt. 1) then
+                                    yout = velgj(iii)
+                                 else
+                                    yout = diamj(iii)
+c                                   if (ntypjo .eq. 1) then
+c                                      yout = agvg
+c                                   else
+c                                      yout = afvf
+c                                   endif
+                                 endif
+                              else
+                                 xout = velgj(iii)
+                                 yout = diamj(iii)
+c                                if (ntypjo .eq. 1) then
+c                                   yout = agvg
+c                                else
+c                                   yout = afvf
+c                                endif
+                              endif
+c
+                             if (zlabel .eq. 1) then
+                                zout = extj01(iii)
+                             elseif (zlabel .eq. 2) then
+                                zout = extj02(iii)
+                             elseif (zlabel .eq. 3) then
+                                zout = extj03(iii)
+                             elseif (zlabel .eq. 4) then
+                                zout = extj04(iii)
+                             elseif (zlabel .eq. 5) then
+                                zout = extj05(iii)
+                             elseif (zlabel .eq. 6) then
+                                zout = extj06(iii)
+                             elseif (zlabel .eq. 7) then
+                                zout = extj07(iii)
+                             elseif (zlabel .eq. 8) then
+                                zout = extj08(iii)
+                             elseif (zlabel .eq. 9) then
+                                zout = extj09(iii)
+                             elseif (zlabel .eq. 10) then
+                                zout = extj10(iii)
+                             elseif (zlabel .eq. 11) then
+                                zout = extj11(iii)
+                             elseif (zlabel .eq. 12) then
+                                zout = extj12(iii)
+                             elseif (zlabel .eq. 13) then
+                                zout = extj13(iii)
+                             elseif (zlabel .eq. 14) then
+                                zout = extj14(iii)
+                             elseif (zlabel .eq. 15) then
+                                zout = extj15(iii)
+                             elseif (zlabel .eq. 16) then
+                                zout = extj16(iii)
+                             elseif (zlabel .eq. 17) then
+                                zout = extj17(iii)
+                             elseif (zlabel .eq. 18) then
+                                zout = extj18(iii)
+                             elseif (zlabel .eq. 19) then
+                                zout = extj19(iii)
+                             elseif (zlabel .eq. 20) then
+                                zout = extj20(iii)
+                              elseif (zlabel .eq. 21) then
+                                 zout = fij(iii)
+                              elseif (zlabel .eq. 22) then
+                                 zout = c0j(iii)
+                              elseif (zlabel .eq. 23) then
+                                 zout = ireg(ix)
+                              endif
+c
+                              write(36,*) zout
+                              zmax = max(zmax,zout)
+                              zmin = min(zmin,zout)
+c
+c
+   20                      continue
+   30                   continue
+   40                continue
+   50             continue
+   60          continue
+   70       continue
+   80    continue
+   90 continue
+c
+         titl(1) = ''
+         titl(2) = ''
+         titl(3) = ''
+         titl(4) = ''
+         titl(5) = ''
+         titl(6) = ''
+         titl(7) = ''
+         titl(8) = ''
+         titl(9) = ''
+c
+c  write out z axis label, min, and max values
+         write(36,*) labelz
+         write(36,*) zmin
+         write(36,*) zmax
+c
+c  this do loop does titl(1) and titl(2)
+         ist = 0
+         do i=1,8
+           if (nfix(i) .gt. 1) then
+             ist = ist + 1
+             write(titl(ist),798)
+     &          'Axis',ist,' start=',xstrt(i),
+     &          ', delta=',xdelta(i),
+     &          ', stop=',xstop(i)
+  798        format(a,i2,a,g12.3,a,g12.6,a,g12.3)
+             write(36,'(a80)') titl(ist)
+           endif
+         enddo
+c
+         write(titl(3),803)
+     &       'ncount: ',targcn,
+     &       ', junct: ',target,
+     &       ', zmin: ',zmin,
+     &       ', zmax: ',zmax
+  803    format(a,i5,a,i9,a,g10.4,a,g10.4)
+         write(36,'(a80)') titl(3)
+c
+         write(titl(4),804)
+     &       'Stop data for fij:',fij(iii),
+     &       ', c0j:',c0j(iii),
+     &       ', sinbt:',sinbt(ix)
+  804    format(1p,3(a,g10.3))
+         write(36,'(a80)') titl(4)
+c
+         write(titl(5),805)
+     &       'velfj:',velfj(iii),
+     &       ', velgj:',velgj(iii),
+     &       ', voidj:',voidj(iii),
+     &       ', fijo:',fijo(iii)
+  805    format(1p,4(a,g10.3))
+         write(36,'(a80)') titl(5)
+c
+         write(titl(6),806)
+     &       'vgjj:',vgjj(iii),
+     &       ', fxj:',fxj(iii),
+     &       ', faaj: ',faaj(iii),
+     &       ', diamj: ',diamj(iii)
+  806    format(1p,4(a,g10.3))
+         write(36,'(a80)') titl(6)
+c
+         write(titl(7),807)
+     &       'athrot: ',athrot(iii),
+     &       ', p: ',p(kkk),
+     &       ', flompj: ',flompj(ix),
+     &       ', ireg: ',ireg(ix)
+  807    format(1p,2(a,g10.3),2(a,i3))
+         write(36,'(a80)') titl(7)
+c
+        gflux = voidgj(iii)*rhogj(iii)*velgj(iii)/athrot(iii)
+     &        + voidfj(iii)*rhofj(iii)*velfj(iii)/athrot(iii)
+ 
+         write(titl(8),808)
+     &       'quala: ',quala(kkk),
+     &       ', quale: ',quale(kkk),
+     &       ', voidg: ',voidg(kkk),
+     &       ', gflux: ',gflux
+  808    format(1p,4(a,g10.3))
+         write(36,'(a80)') titl(8)
+c
+         write(titl(9),809)
+     &       'ajun: ',ajun(iii),
+     &       ', mflowj: ',mflowj(iii),
+     &       ', sonicj: ',sonicj(iii)
+  809    format(1p,3(a,g10.3))
+         write(36,'(a80)') titl(9)
+c
+      if (idie .eq. 1) then
+         done = -7
+      endif
+c
+      endif
+c
+      close(36)
+c
+$endif
+      return
+      end

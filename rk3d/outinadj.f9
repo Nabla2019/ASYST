@@ -1,0 +1,331 @@
+      SUBROUTINE OUTINADJ(
+     &  BETAT,BETATLAM,AVBU,VOLU,FNSWT,FNPPOT,FNPPPOT,SW,TNF,
+     &  SIGDSN,XHIP,SCW,SCAT,ITRR,WOM,WOMOLD,
+     &  FNSHIFT,SWPPOT )
+C
+C     THIS SUBROUTINE PERFORMS OUTER-INNER ITERATIONS UTILIZING
+C     FDM OR NEM OPTION FOR THE ADJOINT SOLUTION
+C     
+      include 'param.fcb'
+      include 'veloc.fcb'
+      include 'conv.fcb'
+      include 'crhs.fcb'
+      include 'nemcnt.fcb'
+      include 'power.fcb'
+      include 'opti.fcb'
+      include 'burn.fcb'
+      include 'geom.fcb'
+      include 'soln2.fcb'
+      include 'cntl.fcb'
+      include 'start.fcb'
+      include 'crod.fcb'
+      include 'crit.fcb'
+      include 'tim.fcb'
+      include 'xsec1.fcb'
+      include 'che.fcb'
+      include 'extsor.fcb'
+      include 'spectral.fcb'
+      include 'cheby.fcb'
+      include 'flamdold.fcb'
+      include 'varlen.fcb'
+      include 'array.fcb'
+      include 'depletepc.fcb'
+      
+      DIMENSION
+     &  SCW(NXYL,NZ,*)                        ,SCAT(NXYL,NZ,*)        ,
+     &  BETAT(NXYL,*)                         ,BETATLAM(NXYL,NZ,*)    ,
+     &  SW(NXYL,NZ,*)                         ,AVBU(*)                ,
+     &  VOLU(NXYL,*)                          ,FNSHIFT(NXYL,NZ,*)     ,
+     &  FNSWT(NXYL,*)                         ,FNPPOT(NXYL,*)         ,
+     &  FNPPPOT(NXYL,*)                       ,TNF(NXYL,NZ,*)         ,
+     &  SIGDSN(NXYL,NZ,NG,*)                  ,XHIP(NXYL,NZ,*)        ,
+     &  ITRR(*)                ,
+     &  WOM(*)                                ,
+     &  WOMOLD(*)                             ,SWPPOT(NXYL,NZ,*)
+
+      CHARACTER*8 NNEW
+      
+      TSTARTTH=TTHST
+      TSTARTXS=TXSFDST
+      TSTARTLS=TLSST
+      IBSRCH=1
+      IFDBK=1
+      RTRECST=0.
+      KKCST=0
+      INEM = 0
+      NCNT=-1
+      MAOUTERUP=1
+      
+      WRITE(*,5)
+ 5    FORMAT(////'########START OF ADJOINT FLUX CALCULATION#########'//)
+      IF(NPC.EQ.'Y') THEN
+       WRITE(55,998)
+       WRITE (55,1021) AVBU(IBU)
+       WRITE(55,880)
+       WRITE(55,881) (IG,WOM(IG),ITRR(IG),IG=1,NG)
+      ENDIF
+      
+      CALL GTIME(RTOUT1)
+      
+      ISRCH=0
+      
+C.....INITIALIZE THE NEM VARIABLES
+C     
+      NCALNON = 0
+      TNCPU = 0.0
+C     
+C-----OUTER   ITERATIONS   START----------------------
+C     
+10000 CONTINUE
+      
+      KSST = KSST+1
+      
+      IF(KSST.EQ.KITR .OR. NPC.EQ.'Y') THEN
+       IF(NEWCP.EQ.1) WRITE(55,*)
+       WRITE(55,1020) KSST
+      ENDIF  
+C !vmq      IF(CRTON.EQ.'Y') THEN
+C !vmq       IF(NEWCP.EQ.1) WRITE(6,*)
+C !vmq       WRITE(*,1020) KSST
+C !vmq       WRITE(6,*)'--------------------------'
+C !vmq      ENDIF
+C     
+C------SET FISSION SOURCE(N), FISSION SOURCE(N-1),
+C------SET FISSION SOURCE(N-2)
+C     
+      DO 32 IZ = 1, NZ
+       DO 31 IXY = 1, NXYL
+        FNPPPOT(IXY,IZ)=FNPPOT(IXY,IZ)
+        FNPPOT(IXY,IZ)=FNSWT(IXY,IZ)
+ 31    CONTINUE
+ 32   CONTINUE
+      
+C !vmq no weil      IF(IOUTER.EQ.2.AND.OMEGAEXT.GT.0.0) THEN
+C !vmq no weil       DO 221 IZ = 1, NZ
+C !vmq no weil        DO 21 IXY = 1, NXYL
+C !vmq no weil         DO 20 IG=1,NG
+C !vmq no weil          SWPPOT(IXY,IZ,IG)=SW(IXY,IZ,IG)
+C !vmq no weil 20      CONTINUE
+C !vmq no weil 21     CONTINUE
+C !vmq no weil 221   CONTINUE
+C !vmq no weil      ENDIF	  
+
+      DO 223 IZ = 1, NZ
+       DO 23 IXY = 1, NXYL
+        DO 22 IG = 1, NG
+         SCW(IXY,IZ,IG)=TNF(IXY,IZ,IG)
+     &     *(FNPPOT(IXY,IZ)/FLAMDA)-FNSHIFT(IXY,IZ,IG)*SW(IXY,IZ,IG)
+ 22     CONTINUE
+ 23    CONTINUE
+ 223  CONTINUE
+C     
+C-----INNER   ITERATIONS   START------------------------
+C     
+      CALL GTIME(RTREC1)
+      
+C     
+C-------THERMAL GROUPS SOLUTION-------------------
+C     
+C     NGT : NUMBER OF THERMAL GROUPS
+C     N_THRMITR : INPUT VALUE OF NUMBER OF THERMAL ITERATIONS
+C     I_THRMITR : COUNTER OF THERMAL ITERATIONS
+C     
+      I_THRMITR = 0
+      
+ 501  CONTINUE
+      
+      INERH = 0
+      DO 500 IGT = NG,NGF+1,-1
+       DO 491 IZ=1,NZ
+        DO 490 IXY=1,NXYL
+         SCAT(IXY,IZ,IGT) = 0.0
+         DO 485 IGP=1,NG
+          IF(IGP.EQ.IGT) GOTO 485
+          IGTP=IGT
+          IF(IGT.GT.IGP) IGTP=IGT-1
+          SCAT(IXY,IZ,IGT) = SCAT(IXY,IZ,IGT)
+     *      +SIGDSN(IXY,IZ,IGP,IGTP)*SW(IXY,IZ,IGP)
+ 485     CONTINUE
+         SCAT(IXY,IZ,IGT)=SCAT(IXY,IZ,IGT)*VOLU(IXY,IZ)
+ 490    CONTINUE
+ 491   CONTINUE
+       
+       DO 50 KC2=1,ITRR(IGT)
+        CALL LSORB(IGT,
+     &    A(LSWN),A(LCWN),A(LWOMN),A(LWOMON),AINT(LIRPLANN),
+     &    AINT(LIBPLANN),AINT(LIRPLN),AINT(LIBPLN),AINT(LIYPLANN),
+     &    AINT(LIYPLN),A(LXCWVN),A(LXSWSVN) )
+ 50    CONTINUE
+       INERH = INERH + ITRR(IGT)
+ 500  CONTINUE
+      
+      INERTOTH = INERH
+      
+      I_THRMITR = I_THRMITR + 1
+      IF (I_THRMITR.LT.N_THRMITR) GOTO 501
+      
+C     
+C-------FAST GROUPS SOLUTION----------------------
+C     
+C     NGF : NUMBER OF FAST GROUPS
+C     
+      INERF = 0
+      IF(NGF.GT.0) THEN
+       DO 400 IGF = NGF,1,-1
+        DO 391 IZ=1,NZ
+         DO 390 IXY=1,NXYL
+          SCAT(IXY,IZ,IGF) = 0.0
+          DO 385 IGP=1,NG
+           IF(IGP.EQ.IGF) GOTO 385
+           IGFP=IGF
+           IF(IGF.GT.IGP) IGFP=IGF-1
+           SCAT(IXY,IZ,IGF) = SCAT(IXY,IZ,IGF)
+     *       +SIGDSN(IXY,IZ,IGP,IGFP)*SW(IXY,IZ,IGP)
+ 385      CONTINUE
+          SCAT(IXY,IZ,IGF)=SCAT(IXY,IZ,IGF)*VOLU(IXY,IZ)
+ 390     CONTINUE
+ 391    CONTINUE
+        DO 40 KC1=1,ITRR(IGF)
+         CALL LSORB(IGF,
+     &     A(LSWN),A(LCWN),A(LWOMN),A(LWOMON),AINT(LIRPLANN),
+     &     AINT(LIBPLANN),AINT(LIRPLN),AINT(LIBPLN),AINT(LIYPLANN),
+     &     AINT(LIYPLN),A(LXCWVN),A(LXSWSVN) )
+ 40     CONTINUE
+        INERF = INERF + ITRR(IGF)
+ 400   CONTINUE
+      ENDIF
+      INERTOTF = INERF
+C     
+C-----INNER   ITERATIONS   END--------------------------
+C     
+      CALL GTIME(RTREC2)
+      
+      RTRECST=RTRECST+(RTREC2-RTREC1)
+      KKCST=KKCST+INERTOTF+INERTOTH
+      
+      DO 412 IZ=1,NZ
+       DO 411 IXY=1,NXYL
+        FNSWT(IXY,IZ) = 0.00000
+        DO 410 IG=1,NG
+         FNSWT(IXY,IZ)=FNSWT(IXY,IZ)
+     *     +  ( (1.0 - BETAT(IXY,IZ))*XHIP(IXY,IZ,IG)
+     *     + BETATLAM(IXY,IZ,IG) )*SW(IXY,IZ,IG)
+ 410    CONTINUE
+        FNSWT(IXY,IZ)=FNSWT(IXY,IZ)*VOLU(IXY,IZ)
+ 411   CONTINUE
+ 412  CONTINUE
+C     
+C-----EXTRAPOLATE   THE   FISSION   SOURCE ---------------
+C-----CALCULATE   THE   ERRORS   -------------------------
+C-----(1) EIGENVALUE           -------------------------
+C-----(2) FISSION SOURCE       -------------------------
+C-----(3) POINT FISSION SOURCE -------------------------
+C     
+      CCKE = CKE
+      
+C !vmq no weil      IF(IOUTER.EQ.1) THEN
+       CALL CHEBY1(KSST,MAOUTERUP,CCKE,IRETRN,
+     &   A(LFNSWTN),A(LFNPPOTN),A(LFNPPPOTN),AINT(LNCOLXYN),
+     &   AINT(LNCOLZN),RESIDUAL)
+C !vmq no weil      ELSEIF(IOUTER.EQ.2) THEN
+C !vmq no weil       CALL WEILANDT1(KSST,CCKE,IRETRN,
+C !vmq no weil     &   A(LFNSWTN),A(LFNPPOTN),AINT(LNCOLXYN),AINT(LNCOLZN),
+C !vmq no weil     &   A(LSWN),A(LSWPPOTN),RESIDUAL )
+C !vmq no weil      ENDIF
+      
+      CKE = CCKE
+C     
+C     
+C-----CHECK   THE   OUTER   LOOP   CONVERGENCE -------------
+C-----
+C-----NOT CONVERGED                    (IRETRN=1)
+C-----NOT CONVERGED AND EXCEEDED LIMIT (IRETRN=2)
+C-----CONVERGED                        (IRETRN=3)
+C-----
+C     
+      GOTO (1111,222,200), IRETRN
+C     
+C...  SET FLAG .EQ. 0 IF JUST ENDED A OUTER CYCLE
+C     
+ 1111 IF(NORDCP.GT.0.AND.NEWCP.EQ.1.AND.IOUTER.EQ.2
+     &  .AND.(WEILANDTFS*WSCALE).GT.0.0) NCNT=NCNT+1
+      IF(NCNT.EQ.0) THEN
+       
+C !vmq       IF(CRTON.EQ.'Y') THEN
+C !vmq        WRITE(*,180) WEILANDTFS*WSCALE
+C !vmq 180    FORMAT(' >>>>>>>  PERFORMING WEILANDT SHIFT UPDATE WITH ',
+C !vmq     &    'SHIFT = ',E12.5)         
+C !vmq       ENDIF
+C !vmq no wei       CALL WSHIFT(A(LTNFN),
+C !vmq no wei     &   A(LSWN),A(LFNSWTN),A(LFNSHIFTN),A(LBETATN),
+C !vmq no wei     &   A(LXHIPN),A(LBETATLAMN),A(LFILAMDT1N))
+       
+       CALL TRIDIA0( A(LRBWXVN),A(LBBWXVN),
+     &   A(LRBFVN),A(LBBFVN),A(LRQWVN),A(LBQWVN),
+     &   A(LYBWXVN),A(LYBFVN),A(LYQWVN),A(LAWZN),
+     &   A(LBWZN),A(LAQN),AINT(LIRPLANN),AINT(LIBPLANN),
+     &   AINT(LIYPLANN),A(LBFN),A(LQWN),
+     &   A(LFNSHIFTN) )
+       
+       LWOMFLAG=0
+       DO 185 IG=1,NG
+        IF(WOM(IG).GT.0.0) THEN
+         RELWOM=ABS((WOM(IG)-WOMOLD(IG))/WOM(IG))
+        ELSE
+         RELWOM=1.0
+        ENDIF
+        WOMOLD(IG)=WOM(IG)
+        IF(RELWOM.GE.0.01.OR.KSST.LE.20) LWOMFLAG=1
+ 185   CONTINUE
+       IF(LWOMFLAG.EQ.1) THEN	  
+        CALL GTIME(TIN)	  
+        CALL LSORB0(A(LSSWN),AINT(LITRRN),A(LWOMN),
+     &    A(LWOMON),A(LFLUXN) )
+        CALL GTIME(TOUT)
+        TLSST=TLSST+(TOUT-TIN)
+        IF(NPC.EQ.'Y') THEN
+         WRITE(55,880)
+         WRITE(55,881) (IG,WOM(IG),ITRR(IG),IG=1,NG)
+        ENDIF
+       ENDIF
+       NCNT=-1
+       NEWCP = 1
+       MAOUTERUP=KSST
+       
+      ENDIF  
+      
+      GOTO 10000
+C     
+C-----PRINT CONVERGENCE STATUS -------------------------
+C     
+ 222  CONTINUE
+      CALL GTIME(RTOUT2)
+      OUTOTST=(RTOUT2-RTOUT1)
+      RTOUTST=(RTOUT2-RTOUT1)-(TXSFDST-TSTARTXS)-(TTHST-TSTARTTH)
+     *  -(TSCALST+TNCPU+RTRECST)-(TLSST-TSTARTLS)
+      RTRECST=RTRECST+TLSST
+      WRITE(55,1050)
+      CONVRG='NO'
+      NNEW = 'N'
+      
+ 200  CONTINUE
+      CALL GTIME(RTOUT2)
+      OUTOTST=(RTOUT2-RTOUT1)
+      RTOUTST=(RTOUT2-RTOUT1)-(TXSFDST-TSTARTXS)-(TTHST-TSTARTTH)
+     *  -(TSCALST+TNCPU+RTRECST)-(TLSST-TSTARTLS)
+      RTRECST=RTRECST+TLSST
+      CONVRG='YES'
+      NNEW = 'Y'
+      
+ 880  FORMAT(//1X,'ENERGY',
+     *  /1X,'GROUP  ',9X,'OMEGA',7X,'INNER IT./OUTER IT.')
+ 881  FORMAT(3X,I2,6X,E13.5,11X,I3)
+ 1020 FORMAT('***  OUTER ITERATION STEP = ',I3)
+ 998  FORMAT(1H1,//T55,'(( ITERATION EDIT ))',//)
+ 1021 FORMAT (T2,'AVERAGE BURNUP : ',F10.2,' MWD/MTU')
+ 676  FORMAT(10X,'CORE RELATIVE POWER (%) =  ',F11.5)
+ 1050 FORMAT('***WARNING*** OUTER ITERATION LOOP (W/ OR W/O',
+     *  '  CRITICALITY SEARCH) FAILED TO CONVERGE')
+      
+      RETURN
+      END

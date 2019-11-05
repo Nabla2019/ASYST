@@ -1,0 +1,154 @@
+*mlist
+       subroutine gapcon (indt,indtc,indr,indxgp,icol,ngas,indgas,
+     & molgas,xkg,dtdt,cltave,block,irupt,iplas,tfuel,tclad)
+c
+c  gapcon computes the effective gap conductivity.
+c  Cognizant engineer: rjw (hxc).
+c
+c   indt     -    beginning index of temporary storage for radial temp.
+c   indtc    -    skip factor for the above storage
+c   indr     -    beginning index for radial intervals variable gprinc
+c   indxgp   -    index for gap variables gprouf and gpudis
+c   icol     -    node number at gap
+c   ngas     -    number of gas spieces
+c   indgas   -    gas component index array
+c   molgas   -    mole fraction array
+c   pgas     -    gap gas pressure
+c   pfluid   -    coolant pressure
+c   xkg      -    conductivity of gas mixture
+c   xkg      -    effeictive gap conductivity
+c
+c   dtdt     -    clad heatup rate (k/s) (calc in heatup)
+c   cltave   -    ave clad temp (k)
+c   block    -    percent channel blockage after rupture of clad
+c   irupt    -    1 if rupture has occurred for fuel rod, and this
+c                 is the ruptured node.  otherwise 0.
+c   iplas    -    1 if plastic strain & blockage is to be calculated
+c   tfuel    -    outside fuel surface temperature
+c   tclad    -    inside clad surface temperature
+c
+       implicit none
+       integer indt,indtc,indr,indxgp,icol,ngas
+       integer indgas(ngas),irupt,iplas
+       real molgas(ngas),xkg,dtdt,cltave,block,tfuel,tclad
+c
+       include 'fast.h'
+       include 'gapvar.h'
+       include 'htscr.h'
+       include 'htsrcm.h'
+c
+       integer i,inde,indy,indz,k
+       real emissc,emissf,eplas,ey,fe,gapwid,hgap,hrad,htot,rclad,
+     & rfuel,sig,sqrtmw(7),term1,term2,term3,ucl,utf,xnu
+c
+c  Sqrt of molecular weight.
+c                  he     ar      kr      xe
+       data sqrtmw/2.00065,6.32044,9.15423,11.45862,
+     &            5.29277,1.41982,5.65680/
+c                 n2      h2      o2
+c
+c  Stefan-Boltzmann constant (w/m**2-k**4)
+       data sig/5.6697e-8/
+c
+c  If not ruptured do following.
+       if (irupt .eq. 0) then
+c  Computation of fuel thermal expansion.
+         inde = icol - 1
+         indz = indr
+         indy = indt
+         utf = 0.0
+         do 204 i = 1,inde
+           utf=(1.0e-5*hte(indy) - 3.0e-3 + 4.0e-2*
+     &     exp(-5.0e3/hte(indy)))*gprinc(indz) + utf
+           indy = indy + indtc
+           indz = indz + htgskp
+  204    continue
+c  Computation of cladding deformation.
+         inde = indz + htgskp
+         xnu = gprinc(inde)**2
+         ey = gprinc(inde+htgskp)**2
+         term1 = (pgas*gprinc(inde) - pfluid*gprinc(inde+htgskp))/
+     &   (gprinc(inde+htgskp) - gprinc(inde))
+         term2 = (pgas*xnu - pfluid*ey)/(ey - xnu)
+c  Young's modulus and poisson ratio for cladding.
+         call celmdr (hte(indy+indtc),ey,xnu)
+c  Cladding thermal expansion.
+         call cthxpr (hte(indy+indtc),term3)
+c  If plastic strain is to be calc from Nureg-0630 tables, then do it.
+c  some var. names:
+c    cltave = ave clad temperature
+c    dtdt   = heatup rate
+c    term1  = hoop stress in clad
+c  Note, if the rod (not just the node) is ruptured then the plastic
+c  strain calc. could be bypassed for all nodes in the rod, since
+c  pgap=pfluid.  To do that need to pass in flag to gapcon to show rod
+c  is ruptured even if this nod is not ruptured.
+c  Initialise eplas for the case iplas=0.
+         eplas = 0.0
+         if (iplas .eq. 1) call cplexp (cltave,dtdt,term1,irupt,eplas,
+     &   block)
+c  Plastic strain into change of clad radius.
+         eplas = max(eplas, strnpl(indxgp))
+         strnpl(indxgp) = eplas
+         ucl = (term3 + eplas + (term1 - xnu*term2)/ey)*(gprinc(inde) +
+     &   gprinc(inde+htgskp))*0.5
+c  Average gap width.
+         ey =4.0e-3*gprinc(indz)
+         gapwid = max(gprinc(indz) - utf + ucl + gpudis(indxgp),ey)
+c  Calculate clad and fuel radii.
+         rclad  = gprinc(indz+htgskp) + ucl
+c  Do not let the gap width or clad radius diminish after plastic
+c  strain begins.
+         rfuel = rclad - gapwid
+c  Save the gap width and clad outer radius for editing in majout.
+         gapwd(indxgp) = gapwid
+c  Keep the sign on cladex if it is ever set.
+         cladex(indxgp) = sign(gprinc(inde+htgskp) + ucl,cladex(indxgp))
+c  Set clad radius negative if it has burst.
+         if (block.gt.0.0 .and. cladex(indxgp).gt.0.0) cladex(indxgp) =
+     &   -cladex(indxgp)
+c  Above coding executed for unruptured node.
+       else
+c  Ruptured node.  Use gap width at rupture (gapwd(indxgp)).
+c  Ignore fuel thermal expansion effect on gap width.
+         indz = indr + (icol-1)*htgskp
+         indy = indt + (icol-1)*indtc
+         ey = 4.0e-3*gprinc(indz)
+         gapwid = gapwd(indxgp)
+         rclad = abs(cladex(indxgp))
+         rfuel = rclad - gapwid
+       endif
+c  Now have geometry figured, so calculate conductance.
+c  Temperature jump distance.
+       term1 = 0.425 - 2.3e-4*min(hte(indy),1000.0)
+       term2 = 0.740 - 2.5e-4*min(hte(indy),1000.0)
+       term3 = 0.0
+       do 220 i = 1,ngas
+         k = indgas(i)
+         term3 = term3 + molgas(i)*(term1 + 7.85562e-3*(sqrtmw(k) -
+     &   sqrtmw(1))*(sqrtmw(k) + sqrtmw(1))*(term2 - term1))/sqrtmw(k)
+  220  continue
+       xnu = 0.024688*xkg*sqrt(hte(indy))/(pgas*term3) + 3.2*
+     & gprouf(indxgp)
+c  Calculation of effective gap conductace, using the deformation
+c  information.
+       term1 = 0.0
+       term3 = ey*0.5
+       ey = 2.0*gapwid
+       do 300 i = 1,8
+         term2 = min(max(term3,gapwid + (-1.0 + (float(i)*2.0 - 1.0)*
+     &   0.125)*gapwid),ey)
+         term1  = term1 + 1.0/(term2 + xnu)
+  300  continue
+       hgap = term1*0.125*xkg
+c  Set fuel and clad surface emissivities to reasonable value.
+       emissf = 0.6
+       emissc = 0.6
+       fe = 1.0/(1.0/emissf + (rfuel/rclad)*(1.0/emissc - 1.0))
+       hrad = sig*fe*(tfuel**2 + tclad**2)*(tfuel + tclad)
+       htot = hgap + hrad
+c  Effective conductivity.
+c  k * initial width of the gap.
+       xkg = htot*gprinc(indz)
+       return
+       end

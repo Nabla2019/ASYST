@@ -1,0 +1,904 @@
+*mlist
+       subroutine eqfinm
+c
+c  eqfinm computes the new time pressure and carries out the back
+c  substitution to obtain the new time metal specific internal energy,
+c  metal void fraction, liquid specific internal energy, vapor specific
+c  internal energy, void fraction, noncondensible quality, and boron
+c  density as well as the vapor generation rate and mixture density.
+c
+c  Cognizant engineer: jat rar rjw ssa (tcc).
+c
+*if def,mmfld
+c
+       use lpdatc
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'tsctlc.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local and scratch variables.
+c  Scratch variables are not needed after eqfinm is done.
+       real conbor,conmfv,conmgv,dalj,damx,rdt,sorcm,tempq,tempm,
+     & tff,voidgx
+       integer i,ii,i1,ih1,ih2,ih3,ih4,il,ix,k,kk,l,ll,m,nn,nh1,nh2,nh3,
+     & nh4
+c
+c  Compute new pressure and initialize sourcp for next loop.
+       ix = ixvff
+       i = lpdat(issys)%liv
+       do k = 1,lpdat(issys)%livn
+         b7(ix) = sourcp(k)
+         p(i) = po(i) + sourcp(k)
+         scv1(ix) = v(i)*dt
+         sorp(ix) = gamas(i)*scv1(ix) + sorcmm(ix) -
+     &   (hyarf(i) + hyarg(i) + voidm(i)*rhomt(i))*
+     &   (v(i) - vo(i))
+         ix = ix + scskp
+         i = i + ivskp
+       enddo
+       if (lnoncn(issys) .ne. 0) then
+         do 273 nn = 1,lnoncn(issys)
+           ix = ixvff
+           i = lpdat(issys)%liv
+           if (nn .ne. nonhy) then
+cdir$ ivdep
+             do 274 m = 1,lpdat(issys)%livn
+               sorp(ix) = sorp(ix) + gaman(i+nn-1)*scv1(ix)
+               ix = ix + scskp
+               i = i + ivskp
+  274        continue
+           else
+             do 275 m = 1,lpdat(issys)%livn
+               sorp(ix) = sorp(ix) - 8.0*gaman(i+nn-1)*scv1(ix)
+               ix = ix + scskp
+               i = i + ivskp
+  275        continue
+           endif
+  273    continue
+       endif
+c  Add convective terms to source terms.
+       ix = ixjff
+       i = lpdat(issys)%lij
+cdir$ ivdep
+       do 10 m = 1,lpdat(issys)%lijn
+         scv1(ix) = dt*ajun(i)
+         conmf(ix) = scv1(ix)*voidfj(i)*rhofj(i)*velfj(i)
+         conmg(ix) = scv1(ix)*voidgj(i)*rhogj(i)*velgj(i)
+         conmm(ix) = scv1(ix)*voidmj(i)*rhomj(i)*velmj(i)
+         scv2(ix) = conmg(ix)*qualaj(i)
+         cond(ix) = conmg(ix) - conmf(ix)
+         conm(ix) = conmg(ix) + conmf(ix)
+         ix = ix + scskp
+         i = i + ijskp
+   10  continue
+c
+       ix = ixjff
+       i = lpdat(issys)%lij
+cdir$ ivdep
+       do 11 m = 1,lpdat(issys)%lijn
+         scv3(ix) = (ugj(i) + po(ij1nx(i))/rhogj(i))*conmg(ix)
+         scv4(ix) = (ufj(i) + po(ij1nx(i))/rhofj(i))*conmf(ix)
+         scv5(ix) = (ugj(i) + po(ij2nx(i))/rhogj(i))*conmg(ix)
+         scv6(ix) = (ufj(i) + po(ij2nx(i))/rhofj(i))*conmf(ix)
+         smv1(ix) = (umj(i) + po(ij1nx(i))/rhomj(i))*conmm(ix)
+         smv2(ix) = (umj(i) + po(ij2nx(i))/rhomj(i))*conmm(ix)
+         ix = ix + scskp
+         i = i + ijskp
+   11  continue
+       if (lnoncn(issys) .ne. 0) then
+         do 276 nn = 1,lnoncn(issys)
+           ix = ixjff
+           i = lpdat(issys)%lij
+cdir$ ivdep
+           do 277 m = 1,lpdat(issys)%lijn
+             scv2n(ix+nn-1) = qualnj(i+nn-1)*scv2(ix)
+             ix = ix + scskp
+             i = i + ijskp
+  277      continue
+  276    continue
+       endif
+c
+       if (lnonmf(issys) .ne. 0) then
+         do 376 nn = 1,lnonmf(issys)
+           ix = ixjff
+           i = lpdat(issys)%lij
+cdir$ ivdep
+           do 377 m = 1,lpdat(issys)%lijn
+             smv3(ix+nn-1) = qualmj(i+nn-1)*conmm(ix)
+             ix = ix + scskp
+             i = i + ijskp
+  377      continue
+  376    continue
+       endif
+       ll = lvjusr(llvect(issys))
+       if (lvptr(ll) .ne. 0) then
+         do 17 ii = 1,lvptr(ll)
+           ll = ll + 1
+           kk = ll
+cdir$ ivdep
+           do 12 m = 1,lvptr(ll)
+             ll = ll + 1
+             i = lvptr(ll)
+             ix = jcnxs(i)
+             k = jcnx1(i)
+             l = jcnx1(i+1)
+             sourca(k) = sourca(k) - scv2(ix)
+             sourca(l) = sourca(l) + scv2(ix)
+             sourcg(k) = sourcg(k) - scv3(ix)
+             sourcg(l) = sourcg(l) + scv5(ix)
+             sourcf(k) = sourcf(k) - scv4(ix)
+             sourcf(l) = sourcf(l) + scv6(ix)
+             sourcm(k) = sourcm(k) - cond(ix)
+             sourcm(l) = sourcm(l) + cond(ix)
+             sorp(k) = sorp(k) - conm(ix) - conmm(ix)
+             sorp(l) = sorp(l) + conm(ix) + conmm(ix)
+             sorcmm(k) = sorcmm(k) - conmm(ix)
+             sorcmm(l) = sorcmm(l) + conmm(ix)
+             sorcme(k) = sorcme(k) - smv1(ix)
+             sorcme(l) = sorcme(l) + smv2(ix)
+   12      continue
+           if (lnoncn(issys) .ne. 0) then
+             do 278 nn = 1,lnoncn(issys)
+               ll = kk
+cdir$ ivdep
+               do 279 m = 1,lvptr(ll)
+                 ll = ll + 1
+                 i = lvptr(ll)
+                 ix = jcnxs(i)
+                 sourcn(jcnx1(i)+nn-1) = sourcn(jcnx1(i)+nn-1) -
+     &           scv2n(ix+nn-1)
+                 sourcn(jcnx1(i+1)+nn-1) = sourcn(jcnx1(i+1)+nn-1) +
+     &           scv2n(ix+nn-1)
+  279          continue
+  278        continue
+           endif
+c
+           if (lnonmf(issys) .ne. 0) then
+             do 378 nn = 1,lnonmf(issys)
+               ll = kk
+cdir$ ivdep
+               do 379 m = 1,lvptr(ll)
+                 ll = ll + 1
+                 i = lvptr(ll)
+                 ix = jcnxs(i)
+                 sorcmn(jcnx1(i)+nn-1) = sorcmn(jcnx1(i)+nn-1) -
+     &           smv3(ix+nn-1)
+                 sorcmn(jcnx1(i+1)+nn-1) = sorcmn(jcnx1(i+1)+nn-1) +
+     &           smv3(ix+nn-1)
+  379          continue
+  378        continue
+           endif
+c
+           if (.not.chngno(23)) then
+             ll = kk
+cdir$ ivdep
+             do 22 m = 1,lvptr(ll)
+               ll = ll + 1
+               i = lvptr(ll)
+               ix = jcnxs(i)
+               kk = ij1nx(i)
+               if (velfj(i) .lt. 0.0) kk = ij2nx(i)
+               conbor = borono(kk)*velfj(i)*scv1(ix)
+               if (iand(vctrl(ij1nx(i)),1) .eq. 0) boron(ij1nx(i)) =
+     &         ((boron(ij1nx(i)) + gamas(ij1nx(i))*dt)*v(ij1nx(i)) -
+     &         conbor)*recipv(ij1nx(i))
+               if (iand(vctrl(ij2nx(i)),1) .eq. 0) boron(ij2nx(i)) =
+     &         ((boron(ij2nx(i)) + gamas(ij2nx(i))*dt)*v(ij2nx(i)) +
+     &         conbor)*recipv(ij2nx(i))
+   22        continue
+           endif
+   17    continue
+       endif
+       ll = ll + 1
+       if (lvptr(ll) .ne. 0) then
+         kk = ll
+cdir$ nextscalar
+         do 18 m = 1,lvptr(ll)
+           ll = ll + 1
+           i = lvptr(ll)
+           ix = jcnxs(i)
+           l = jcnx1(i+1)
+           k = jcnx1(i)
+           sourca(k) = sourca(k) - scv2(ix)
+           sourca(l) = sourca(l) + scv2(ix)
+           sourcg(k) = sourcg(k) - scv3(ix)
+           sourcg(l) = sourcg(l) + scv5(ix)
+           sourcf(k) = sourcf(k) - scv4(ix)
+           sourcf(l) = sourcf(l) + scv6(ix)
+           sourcm(k) = sourcm(k) - cond(ix)
+           sourcm(l) = sourcm(l) + cond(ix)
+           sorp(k) = sorp(k) - conm(ix) - conmm(ix)
+           sorp(l) = sorp(l) + conm(ix) + conmm(ix)
+           sorcmm(k) = sorcmm(k) - conmm(ix)
+           sorcmm(l) = sorcmm(l) + conmm(ix)
+           sorcme(k) = sorcme(k) - smv1(ix)
+           sorcme(l) = sorcme(l) + smv2(ix)
+   18    continue
+         if (lnoncn(issys) .ne. 0) then
+           do 19 nn = 1,lnoncn(issys)
+             ll = kk
+cdir$ nextscalar
+             do 20 m = 1,lvptr(ll)
+               ll = ll + 1
+               i = lvptr(ll)
+               ix = jcnxs(i)
+               sourcn(jcnx1(i)+nn-1) = sourcn(jcnx1(i)+nn-1) -
+     &         scv2n(ix+nn-1)
+               sourcn(jcnx1(i+1)+nn-1) = sourcn(jcnx1(i+1)+nn-1) +
+     &         scv2n(ix+nn-1)
+   20        continue
+   19      continue
+         endif
+c
+           if (lnonmf(issys) .ne. 0) then
+             do 319 nn = 1,lnonmf(issys)
+               ll = kk
+cdir$ ivdep
+               do 320 m = 1,lvptr(ll)
+                 ll = ll + 1
+                 i = lvptr(ll)
+                 ix = jcnxs(i)
+                 sorcmn(jcnx1(i)+nn-1) = sorcmn(jcnx1(i)+nn-1) -
+     &           smv3(ix+nn-1)
+                 sorcmn(jcnx1(i+1)+nn-1) = sorcmn(jcnx1(i+1)+nn-1) +
+     &           smv3(ix+nn-1)
+  320          continue
+  319        continue
+           endif
+c
+         if (.not.chngno(23)) then
+           ll = kk
+cdir$ nextscalar
+           do 23 m = 1,lvptr(ll)
+             ll = ll + 1
+             i = lvptr(ll)
+             ix = jcnxs(i)
+             kk = ij1nx(i)
+             if (velfj(i) .lt. 0.0) kk = ij2nx(i)
+             conbor = borono(kk)*velfj(i)*scv1(ix)
+             if (iand(vctrl(ij1nx(i)),1) .eq. 0) boron(ij1nx(i)) =
+     &       ((boron(ij1nx(i)) + gamas(ij1nx(i))*dt)*v(ij1nx(i)) -
+     &       conbor)*recipv(ij1nx(i))
+             if (iand(vctrl(ij2nx(i)),1) .eq. 0) boron(ij2nx(i)) =
+     &       ((boron(ij2nx(i)) + gamas(ij2nx(i))*dt)*v(ij2nx(i)) +
+     &       conbor)*recipv(ij2nx(i))
+   23      continue
+         endif
+       endif
+c
+c  Debug printout.
+$if def,dbgprnt
+       if (help .ne. 0) then
+         call helphd ('eqfinm',10)
+         write (output,2001)
+ 2001  format('0Common junction data'/1x,119('=')/1x,'junno',9x,
+     & 'i',2x,'ajun(i)',6x,'voidfj(i)',4x,'rhofj(i)',5x,'velfj(i)',5x,
+     & 'ufj(i)',7x,'conmf(i)',5x,'cond(i)',6x,'conm(i)'/18x,
+     & 'qualaj(i)',4x,'voidgj(i)',4x,'rhogj(i)',5x,'velgj(i)',5x,
+     & 'ugj(i)',7x,'conmg(i)'/1x,119('='))
+         ll = 1
+         ix = ixjff
+         i = lpdat(issys)%lij
+         do 31 m = 1,lpdat(issys)%lijn
+           write (output,2002) junno(i),ll,ajun(i),voidfj(i),rhofj(i),
+     &     velfj(i),ufj(i),conmf(ix),cond(ix),conm(ix),qualaj(i),
+     &     voidgj(i),rhogj(i),velgj(i),ugj(i),conmg(ix)
+ 2002  format(i10.9,i6,1p,8g13.5/16x,6g13.5)
+           ix = ix + scskp
+           ll = ll + 1
+           i = i + ijskp
+   31    continue
+         write (output,3001)
+ 3001  format('0 common junction data for metal field'/1x,119('=')/1x,
+     & 'junno',9x,'i',2x,'voidmj(i)',4x,'rhomj(i)',5x,'velmj(i)',5x,
+     & 'umj(i)',7x,'conmm(i)'/1x,119('='))
+         ll = 1
+         ix = ixjff
+         i = lpdat(issys)%lij
+         do 431 m = 1,lpdat(issys)%lijn
+           write (output,3002) junno(i),ll,voidmj(i),rhomj(i),velmj(i),
+     &     umj(i),conmm(ix)
+ 3002  format(i10,i6,1p,5g13.5)
+           ix = ix + scskp
+           ll = ll + 1
+           i = i + ijskp
+  431    continue
+         write (output,2003)
+ 2003  format('0From-to contributions to source terms'/1x,119('=')/
+     & 1x,'junno',9x,'i',12x,'k',2x,'scv2(i)',6x,'scv3(i)',6x,'scv4(i)',
+     & 16x,'l',2x,'scv2(i)',6x,'scv5(i)',6x,'scv6(i)'/1x,119('='))
+         ll = 1
+         ix = ixjff
+         i = lpdat(issys)%lij
+         do 32 m = 1,lpdat(issys)%lijn
+           write (output,2004) junno(i),ll,ij1vn(i),scv2(ix),scv3(ix),
+     &     scv4(ix),ij2vn(i),scv2(ix),scv5(ix),scv6(ix)
+ 2004  format(i10.9,i6,i13,1p,3g13.5,i13,3g13.5)
+           ll = ll + 1
+           ix = ix + scskp
+           i = i + ijskp
+   32    continue
+         write (output,3003)
+ 3003  format('0from-to contributions to source terms for metal field'/
+     & 1x,119('=')/1x,'junno',9x,'i',12x,'k',2x,'smv1(i)',6x,'smv2(i)'
+     & ,6x,'l'/1x,119('='))
+         ll = 1
+         ix = ixjff
+         i = lpdat(issys)%lij
+         do 432 m = 1,lpdat(issys)%lijn
+           write (output,3004) junno(i),ll,ij1vn(i),smv1(ix),smv2(ix),
+     &     ij2vn(i)
+ 3004  format(i10.9,i6,i13,1p,2g13.5,i13)
+           ll = ll + 1
+           ix = ix + scskp
+           i = i + ijskp
+  432    continue
+       endif
+$endif
+$if def,nanscr
+c  Nan out conmf,conmg,cond,conm,scv1,scv2,scv3,scv4,scv5,scv6
+       call nanscj(3,12)
+$endif
+c
+c  Loop over all volumes, compute volume quantities, check limits,
+c  and truncate.
+c  Second, solve a*x = b using factors of matrix a.
+c  Initially, solve l*y = b.
+       nh1 = ihld2(ixvff)
+       if (nh1 .ne. 0) then
+         rdt = 1.0/dt
+         ih1 = ixvff
+cdir$ ivdep
+         do 101 m = 1,nh1
+           i = ihld1(ih1)
+           ix = vctrls(i)
+           b1(ix) = sorcmm(ix)*recipv(i)
+     &   - a17(ix)*b7(ix)
+           b2(ix) = sorcme(ix)*recipv(i)
+     &   - a27(ix)*b7(ix)
+           b3(ix) = sourca(ix)*recipv(i) - a37(ix)*b7(ix)
+           b4(ix) = sourcg(ix)*recipv(i) - a47(ix)*b7(ix)
+           b5(ix) = sourcf(ix)*recipv(i) - a57(ix)*b7(ix)
+           b6(ix) = sourcm(ix)*recipv(i) - a67(ix)*b7(ix)
+c  Back substitution.
+           b2(ix) = b2(ix) + a21(ix)*b1(ix)
+           b4(ix) = b4(ix) + a43(ix)*b3(ix)
+     &    + a42(ix)*b2(ix)
+           b5(ix) = b5(ix) + a54(ix)*b4(ix) + a53(ix)*b3(ix) +
+     &     a52(ix)*b2(ix) + a51(ix)*b1(ix)
+           b6(ix) = b6(ix) + a65(ix)*b5(ix) + a64(ix)*b4(ix) +
+     &     a63(ix)*b3(ix) + a62(ix)*b2(ix) + a61(ix)*b1(ix)
+c  Then, solve u*x = y.
+           b6(ix) = b6(ix)*a66(ix)
+           b5(ix) = (b5(ix) - a56(ix)*b6(ix))*a55(ix)
+           b4(ix) = (b4(ix) - a45(ix)*b5(ix) - a46(ix)*b6(ix))*a44(ix)
+           b3(ix) = (b3(ix) - a34(ix)*b4(ix) - a36(ix)*b6(ix))*a33(ix)
+           b2(ix) = (b2(ix) - a23(ix)*b3(ix)
+     &    - a24(ix)*b4(ix) - a25(ix)*b5(ix))*a22(ix)
+           b1(ix) = (b1(ix) - a12(ix)*b2(ix))*a11(ix)
+c  Compute new time variables.
+           voidm(i) = voidmo(i) + b1(ix)
+           um(i) = umo(i) + b2(ix)
+           quala(i) = qualao(i) + b3(ix)
+           ug(i) = ugo(i) + b4(ix)
+           uf(i) = ufo(i) + b5(ix)
+           voidg(i) = voidgo(i) + b6(ix)
+c  Calculate rhom and vapgen.
+           rhom(i) = rho(i) + recipv(i)*sorp(ix)
+           highdt(ix) = gg(ix) + gxa(ix)*b3(ix) + gug(ix)*b4(ix) +
+     &     gal(ix)*b6(ix) + gp(ix)*b7(ix)
+           hifhdt(ix) = ff(ix) + fxa(ix)*b3(ix) + fug(ix)*b4(ix) +
+     &     fuf(ix)*b5(ix) + fal(ix)*b6(ix) + fp(ix)*b7(ix)
+           gammaw(i) = gammaw(i) - fgrw(ix)*b6(ix)*rdt
+           dotm(i) = -(highdt(ix) + hifhdt(ix))*rdt + gammaw(i) +
+     &     gammac(i)
+           ltest(ix) = voidgo(i).ne.0.0 .and. voidf(i).ne.0.0
+           amrmn(ix) = (amrm(ix)*vo(i) + sorcmm(ix))*recipv(i)
+           amrmn(ix) = max( 0.0,amrmn(ix) )
+           ltest2(ix) = amrmn(ix).ge.1.0e-15
+           ih1 = ih1 + scskp
+  101    continue
+c  Recalculate new time values using conservative formulation.
+         nh2 = 0
+         nh4 = 0
+         ih4 = ixvff
+         ih1 = ixvff
+         ih2 = ixvff
+         do 102 m = 1,nh1
+           i = ihld1(ih1)
+           ix = vctrls(i)
+           if (ltest(ix)) then
+             ihld2(ih2) = i
+             ih2 = ih2 + scskp
+             nh2 = nh2 + 1
+           endif
+           if (ltest2(ix)) then
+             ihld4(ih4) = i
+             ih4 = ih4 + scskp
+             nh4 = nh4 + 1
+           endif
+           ih1 = ih1 + scskp
+  102    continue
+         if (nh2 .ne. 0) then
+           ih2 = ixvff
+cdir$ ivdep
+           do 103 m = 1,nh2
+             i = ihld2(ih2)
+             ix = vctrls(i)
+             sorcm = sourcm(ix) + v(i)*2.0*(gg(ix) + ff(ix) -
+     &       (gammaw(i) + gammac(i))*dt)
+             conmgv = (sorp(ix) - sorcmm(ix) + sorcm)*0.5
+             conmfv = (sorp(ix) - sorcmm(ix) - sorcm)*0.5
+             agrg(ix) = (hyarg(i)*vo(i) + conmgv)*recipv(i) + dotm(i)*dt
+             afrf(ix) = (hyarf(i)*vo(i) + conmfv)*recipv(i) - dotm(i)*dt
+             sourci(ix) = a1(ix)*b3(ix) + a2(ix)*b4(ix) + a3(ix)*b5(ix)
+     &       + (a4(ix) + po(i))*b6(ix) + a5(ix)*b7(ix)
+             ugnc(ix) = ug(i)
+             ufnc(ix) = uf(i)
+             ug(i) = ((agug(ix)*rhog(i)*vo(i) + sourcg(ix))*recipv(i) -
+     &       sourci(ix))/agrg(ix)
+             uf(i) = ((afuf(ix)*rhof(i)*vo(i) + sourcf(ix))*recipv(i) +
+     &       sourci(ix) + po(i)*b1(ix))/afrf(ix)
+             ltest(ix) = (qualao(i).ne.0.0 .and. qualao(i).ne.1.0) .or.
+     &       (quala(i).le.0.0 .or. quala(i).ge.1.0)
+             b3(ix) = max(0.0,voidg(i))*(1.0 - fracal(ix))
+             b4(ix) = 0.05*voidgo(i)
+             ltest2(ix) = b3(ix) .lt. b4(ix)
+             b5(ix) = max(0.0,1.0-voidg(i)-voidmo(i))*(1.0-fracag(ix))
+             b6(ix) = 0.05*(1.0-voidgo(i)-voidmo(i))
+             ltest3(ix) = b5(ix) .lt. b6(ix)
+             ih2 = ih2 + scskp
+  103      continue
+           nh3 = 0
+           ih2 = ixvff
+           ih3 = ixvff
+           do 104 m = 1,nh2
+             i = ihld2(ih2)
+             ix = vctrls(i)
+             if (ltest(ix)) then
+               ihld3(ih3) = i
+               ih3 = ih3 + scskp
+               nh3 = nh3 + 1
+             endif
+             ih2 = ih2 + scskp
+  104      continue
+           if (nh3 .ne. 0) then
+             ih3 = ixvff
+cdir$ ivdep
+             do 105 m = 1,nh3
+               i = ihld3(ih3)
+               ix = vctrls(i)
+               quala(i) = (agxa(ix)*rhog(i)*vo(i) + sourca(ix))*
+     &         recipv(i)/agrg(ix)
+               ih3 = ih3 + scskp
+  105        continue
+           endif
+           nh3 = 0
+           ih2 = ixvff
+           ih3 = ixvff
+           do 106 m = 1,nh2
+             i = ihld2(ih2)
+             ix = vctrls(i)
+             if (ltest2(ix)) then
+               ihld3(ih3) = i
+               ih3 = ih3 + scskp
+               nh3 = nh3 + 1
+             endif
+             ih2 = ih2 + scskp
+  106      continue
+           if (nh3 .ne. 0) then
+             ih3 = ixvff
+cdir$ ivdep
+             do 107 m = 1,nh3
+               i = ihld3(ih3)
+               ix = vctrls(i)
+               ug(i) = (ug(i)*b3(ix) + ugnc(ix)*(b4(ix) - b3(ix)))/
+     &         b4(ix)
+               ih3 = ih3 + scskp
+  107        continue
+           endif
+           nh3 = 0
+           ih2 = ixvff
+           ih3 = ixvff
+           do 108 m = 1,nh2
+             i = ihld2(ih2)
+             ix = vctrls(i)
+             if (ltest3(ix)) then
+               ihld3(ih3) = i
+               ih3 = ih3 + scskp
+               nh3 = nh3 + 1
+             endif
+             ih2 = ih2 + scskp
+  108      continue
+           if (nh3 .ne. 0) then
+             ih3 = ixvff
+cdir$ ivdep
+             do 109 m = 1,nh3
+               i = ihld3(ih3)
+               ix = vctrls(i)
+               uf(i) = (uf(i)*b5(ix) + ufnc(ix)*(b6(ix) - b5(ix)))/
+     &         b6(ix)
+               ih3 = ih3 + scskp
+  109        continue
+           endif
+           ih2 = ixvff
+cdir$ ivdep
+           do 110 m = 1,nh2
+             i = ihld2(ih2)
+             ix = vctrls(i)
+             voidg(i) = 1.0 - afrf(ix)/(rhof(i) + drfdp(i)*b7(ix)
+     &       + drfduf(i)*(uf(i)-ufo(i)))
+     &       - amrmn(ix)/(rhomt(i) + drmdum(i)*(um(i)-umo(i)))
+             ih2 = ih2 + scskp
+  110      continue
+         endif
+         if (nh4 .ne. 0) then
+           ih4 = ixvff
+cdir$ ivdep
+           do 201 m = 1,nh4
+             i = ihld4(ih4)
+           ix = vctrls(i)
+           umnc(ix) = um(i)
+           vodmnc(ix) = voidm(i)
+           amrmn(ix) = (amrm(ix)*vo(i)+sorcmm(ix))*recipv(i)
+           um(i) = ((amum(ix)*rhomt(i)*vo(i)+sorcme(ix))*recipv(i) -
+     &     po(i)*b1(ix))/amrmn(ix)
+           voidm(i) = amrmn(ix)/(rhomt(i)+drmdum(i)*(um(i)-umo(i)))
+           ih4 = ih4 + scskp
+  201    continue
+         endif
+c  Check for voidg, quala, and rhom limits. check for voidg and voidf
+c  appearance.
+         ih1 = ixvff
+cdir$ ivdep
+         do 111 m = 1,nh1
+           i = ihld1(ih1)
+           ix = vctrls(i)
+           voidgx = errhi*rhof(i)/(max(1.0e-05,(rhof(i) - rhog(i))))
+           ltest(ix) = voidg(i).lt.-voidgx .or. voidg(i).gt.(1.0
+     &     +voidgx)
+     &     .or. rhom(i).le.0.0
+           ltest2(ix) = voidgo(i).le.0.0 .or. voidf(i).le.0.0
+           ih1 = ih1 + scskp
+  111    continue
+         nh2 = 0
+         nh3 = 0
+         ih1 = ixvff
+         ih2 = ixvff
+         ih3 = ixvff
+         do 112 m = 1,nh1
+           i = ihld1(ih1)
+           ix = vctrls(i)
+           if (ltest(ix)) then
+             ihld2(ih2) = i
+             ih2 = ih2 + scskp
+             nh2 = nh2 + 1
+           else if (ltest2(ix)) then
+             ihld3(ih3) = i
+             ih3 = ih3 + scskp
+             nh3 = nh3 + 1
+           endif
+           ih1 = ih1 + scskp
+  112    continue
+         if (nh3 .ne. 0) then
+           ih3 = ixvff
+cdir$ ivdep
+           do 113 m = 1,nh3
+             i = ihld3(ih3)
+             ix = vctrls(i)
+             tff = 0.02/dl(i)
+             ltest2(ix) = voidg(i).ge.tff .and. voidg(i).le.(1.0-
+     &       voidm(i)-tff)
+             ih3 = ih3 + scskp
+  113      continue
+           ih3 = ixvff
+           do 115 m = 1,nh3
+             i = ihld3(ih3)
+             ix = vctrls(i)
+             if (ltest2(ix)) then
+               ihld2(ih2) = i
+               ih2 = ih2 + scskp
+               nh2 = nh2 + 1
+             endif
+             ih3 = ih3 + scskp
+  115      continue
+         endif
+         if (nh2 .ne. 0) then
+           lsuces(issys) = 1
+           ih2 = ixvff
+cdir$ ivdep
+           do 116 m = 1,nh2
+             i = ihld2(ih2)
+             vctrl(i) = ior(vctrl(i),2048)
+             ih2 = ih2 + scskp
+  116      continue
+         endif
+         ih1 = ixvff
+ccccccccccccccccccccccccccccccccccccccc
+c  Truncate voidm and voidg.
+c  The following line can be removed if chngno(8) and chngno(10) are
+c  removed.
+         ltest(ixvff) = .false.
+cdir$ ivdep
+         do 117 m = 1,nh1
+           i = ihld1(ih1)
+           ix = vctrls(i)
+           tff = 0.02/dl(i)
+           if ((voidf(i).eq.0.0 .and. (1.0-voidg(i)-voidm(i)).gt.tff)
+     &     .or.(voidmo(i).eq.0.0 .and. voidm(i).gt.tff)) then
+             lsuces(issys) = 1
+             vctrl(i) = ior(vctrl(i),2048)
+           endif
+           if (voidm(i) .lt. 1.0e-10) voidm(i) = 0.0
+           if (voidm(i) .gt. 0.9999999999) voidm(i) = 1.0
+           voidg(i) = max(0.0,min(voidg(i),(1.0-voidm(i))))
+           if (voidg(i).lt.1.0e-12 .or. (voidg(i).lt.1.0e-10 .and.
+     &     hifhdt(ix).ge.0.0)) voidg(i) = 0.0
+           if (voidg(i).gt.(0.99999999-voidm(i)) .or.
+     &     (voidg(i).gt.(0.999999-voidm(i)) .and. highdt(ix).le.0.0))
+     &     voidg(i) = 1.0 - voidm(i)
+c  The following two lines can be removed if chngno(8) is removed.
+           ltest(ixvff) = (voidgo(i).gt.0.01 .and. voidg(i).lt.0.001)
+     &     .or. ltest(ixvff)
+c  The following two lines can be removed if chngno(10) is removed.
+           if (chngno(10)) ltest(ixvff) = (abs(po(i) - p(i)) .gt.
+     &     min(po(i),p(i),50000.0)) .or. ltest(ixvff)
+ccccccccccccccccccccccccccccccccccccccccccccccc
+c  Truncate quala and adjust dotm.  Truncate boron and dotm.
+           delxa(ix) = quala(i)
+           if (voidg(i).eq.0.0 .or. quala(i).lt.1.0e-10) quala(i) = 0.0
+          quala(i) = min(1.0,max(0.0,quala(i)))
+           delxa(ix) = quala(i) - delxa(ix)
+           dotm(i)  = dotm(i) - (gxa(ix) + fxa(ix))*delxa(ix)*rdt
+           boron(i) = max(boron(i),0.0)
+           ih1 = ih1 + scskp
+  117    continue
+       if (chngno(8)) then
+         if (ltest(ixvff)) lsuces(issys) = 1
+         damx = 0.0
+         ih1 = ixvff
+         do m = 1,nh1
+           i = ihld1(ih1)
+           if (voidg(i) .gt. 0.010) then
+             dalj = (voidgo(i) - voidg(i))/voidg(i)
+             if (voidg(i).lt.0.10) dalj = 2.5*dalj
+             damx = max(damx,dalj,0.0)
+           endif
+            ih1 = ih1 + scskp
+         enddo
+         if (damx .gt. 0.5) lsuces(issys) = 1
+       endif
+         if (lnoncn(issys) .ne. 0) then
+           do i1= 1,lnoncn(issys)
+             ih1 = ixvff
+cdir$ ivdep
+             do m = 1,nh1
+               i = ihld1(ih1)
+               qualan(i+i1-1) = 0.0
+               ih1 = ih1 + scskp
+             enddo
+           enddo
+           nh2 = 0
+           ih1 = ixvff
+           ih2 = ixvff
+           do m = 1,nh1
+             i = ihld1(ih1)
+             if (quala(i) .ge. 1.0e-20) then
+               ihld2(ih2) = i
+               ih2 = ih2 + scskp
+               nh2 = nh2 + 1
+             endif
+             ih1 = ih1 + scskp
+           enddo
+           if (nh2 .ne. 0) then
+             ih2 = ixvff
+cdir$ ivdep
+             do m = 1,nh2
+               i = ihld2(ih2)
+               ix = vctrls(i)
+               b3(ix) = 0.0
+               b4(ix) = voidgo(i)*qualao(i)*rhogo(i)*vo(i)
+               b5(ix) = recipv(i)/(voidg(i)*quala(i)*rhog(i))
+               ih2 = ih2 + scskp
+             enddo
+             do i1 = 1,lnoncn(issys)
+               ih2 = ixvff
+cdir$ ivdep
+               do m = 1,nh2
+                 i = ihld2(ih2)
+                 ix = vctrls(i)
+                 k = i + i1
+                 il = ix + i1
+                 tempq = b4(ix)*qualno(k-1)
+                 if (-sourcn(il-1) .gt. tempq) sourcn(il-1) = -0.5*
+     &           tempq
+                 qualan(k-1) = (tempq + sourcn(il-1))*b5(ix)
+                 qualan(k-1) = max(0.0,min(qualan(k-1),1.0))
+                 b3(ix) = b3(ix) + qualan(k-1)
+                 ih2 = ih2 + scskp
+               enddo
+             enddo
+             nh3 = 0
+             ih2 = ixvff
+             ih3 = ixvff
+             do m = 1,nh2
+               i = ihld2(ih2)
+               ix = vctrls(i)
+         if(b3(ix).gt.0.0)then
+                 ihld3(ih3) = i
+                 ih3 = ih3 + scskp
+                 nh3 = nh3 + 1
+               endif
+               ih2 = ih2 + scskp
+             enddo
+             if (nh3 .ne. 0) then
+               ih3 = ixvff
+cdir$ ivdep
+               do m = 1,nh3
+                 i = ihld3(ih3)
+                 ix = vctrls(i)
+                 b3(ix) = 1.0/b3(ix)
+                 ih3 = ih3 + scskp
+               enddo
+               do i1 = 1,lnoncn(issys)
+                 ih3 = ixvff
+cdir$ ivdep
+                 do m = 1,nh3
+                   i = ihld3(ih3)
+                   ix = vctrls(i)
+                   qualan(i+i1-1) = qualan(i+i1-1)*b3(ix)
+                   ih3 = ih3 + scskp
+                 enddo
+               enddo
+             endif
+           endif
+         endif
+         if (lnonmf(issys) .ne. 0) then
+           do i1 = 1,lnonmf(issys)
+             ih1 = ixvff
+cdir$ ivdep
+             do m = 1,nh1
+               i = ihld1(ih1)
+               qualm(i+i1-1) = 0.0
+               if (voidmo(i) .eq. 0.0 .and. voidm(i) .gt. 0.0) then
+                 if (iand(imap(i),ishft(3,24)) .eq. 0) then
+                   lsuces(issys) = 4
+                   imap(i) = ior(imap(i),ishft(3,24))
+                   ix = vctrls(i)
+                   umo(i) = sorcme(ix)*recipv(i)/(voidm(i)*rhomt(i))
+                 elseif (iand(ishft(imap(i),-24),3) .eq. 3) then
+                   imap(i) = iand(imap(i),not(ishft(1,24)))
+                 endif
+               endif
+               if (.not.(voidmo(i).eq.0.0 .and. voidm(i).gt.0.0)) then
+                 imap(i) = iand(imap(i),not(ishft(3,24)))
+               endif
+               ih1 = ih1 + scskp
+             enddo
+           enddo
+           nh4 = 0
+           ih1 = ixvff
+           ih4 = ixvff
+           do m = 1,nh1
+             i = ihld1(ih1)
+         if(voidm(i).gt.1.0e-5)then
+               ihld4(ih4) = i
+               ih4 = ih4 + scskp
+               nh4 = nh4 + 1
+             endif
+             ih1 = ih1 + scskp
+           enddo
+           if (nh4.ne.0) then
+             ih4 = ixvff
+cdir$ ivdep
+             do m = 1,nh4
+               i = ihld4(ih4)
+               ix = vctrls(i)
+               b1(ix) = 0.0
+               b2(ix) = amrm(ix)*vo(i)
+               b7(ix) = recipv(i)/(voidm(i)*rhomt(i))
+               ih4 = ih4 + scskp
+             enddo
+             do i1 = 1,lnonmf(issys)
+               ih4 = ixvff
+cdir$ ivdep
+               do m = 1,nh4
+                 i = ihld4(ih4)
+                 ix = vctrls(i)
+                 k = i + i1
+                 il = ix + i1
+                 tempm = b2(ix)*qualmo(k-1)
+                 if (-sorcmn(il-1).gt.tempm) sorcmn(il-1) =
+     &           -0.5*tempm
+                 qualm(k-1) = (tempm+sorcmn(il-1))*b7(ix)
+                 qualm(k-1) = max(0.0,min(1.0,qualm(k-1)))
+                 b1(ix) = b1(ix) + qualm(k-1)
+                 ih4 = ih4 + scskp
+               enddo
+             enddo
+             nh3 = 0
+             ih4 = ixvff
+             ih3 = ixvff
+             do m = 1,nh4
+               i = ihld4(ih4)
+               ix = vctrls(i)
+               if (b1(ix).gt.0.0) then
+                 ihld3(ih3) = i
+                 ih3 = ih3 + scskp
+                 nh3 = nh3 + 1
+               endif
+               ih4 = ih4 + scskp
+             enddo
+             if (nh3 .ne. 0) then
+               ih3 = ixvff
+cdir$ ivdep
+               do m = 1,nh3
+                 i = ihld3(ih3)
+                 ix = vctrls(i)
+                 b1(ix) = 1.0/b1(ix)
+                 ih3 = ih3 + scskp
+               enddo
+               do i1 = 1,lnonmf(issys)
+                 ih3 = ixvff
+cdir$ ivdep
+                 do m = 1,nh3
+                   i = ihld3(ih3)
+                   ix = vctrls(i)
+                   qualm(i+i1-1) = qualm(i+i1-1)*b1(ix)
+                   ih3 = ih3 + scskp
+                 enddo
+               enddo
+             endif
+           endif
+         endif
+       endif
+c
+c  Debug printout.
+       if (help .ne. 0) then
+         call helphd ('eqfinm',10)
+         write (output,2005)
+ 2005  format ('0Volume data'/1x,132('=')/1x,'volno',9x,'i',2x,
+     & 'sourcf(i)',4x,'sourcm(i)',4x,'sorp(i)  ',4x,'po(i)',8x,'ugo(i)',
+     & 7x,'ufo(i)',7x,'voidgo(i)',4x,'qualao(i)',4x,'rhom(i)'/18x,
+     & 'sourcg(i)',4x,'sourca(i)',4x,'delxa(i)',5x,'p(i)',9x,'ug(i)',8x,
+     & 'uf(i)',8x,'voidg(i)',5x,'quala(i)',5x,'dotm(i)'/1x,132('='))
+         ix = ixvff
+         ll = 1
+         i = lpdat(issys)%liv
+         do m = 1,lpdat(issys)%livn
+           write (output,2006) volno(i),ll,sourcf(ix),sourcm(ix),
+     &     sorp(ix),po(i),ugo(i),ufo(i),voidgo(i),qualao(i),rhom(i),
+     &     sourcg(ix),sourca(ix),delxa(ix),p(i),ug(i),uf(i),voidg(i),
+     &     quala(i),dotm(i)
+ 2006  format(i10.9,i6,1p,9g13.5/16x,9g13.5)
+           ix = ix + scskp
+           ll = ll + 1
+           i = i + ivskp
+         enddo
+         write (output,3005)
+ 3005  format('0volume data for metal field'/1x,132('=')/1x,'volno',9x,
+     & 'i',2x,'sorcmm(i)',4x,'sorcme(i)',4x,'umo(i)',7x,'um(i)',7x,
+     & 'voidmo(i)',5x,'voidm(i)',6x,'rhomt(i)'/1x,132('='))
+         ix = ixvff
+         ll = 1
+         i = lpdat(issys)%liv
+         do m = 1,lpdat(issys)%livn
+           write (output,3006) volno(i),ll,sorcmm(ix),sorcme(ix),umo(i),
+     &     um(i),voidmo(i),voidm(i),rhomt(i)
+ 3006  format(i10.9,i6,1p,7g13.5)
+           ix = ix + scskp
+           ll = ll + 1
+           i = i + ivskp
+         enddo
+       endif
+*endif
+       return
+       end

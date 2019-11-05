@@ -1,0 +1,1134 @@
+       subroutine ma30ad (nn,icn,a,licn,lenr,lenrl,idisp,ip,iq,
+     & irn,lirn,lenc,ifirst,lastr,nextr,lastc,nextc,iptr,ipc,u,
+     & iflag)
+       use ma28mod
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       real(kr) u
+       integer iflag,licn,lirn,nn
+       real(kr) a(:)
+       integer icn(:),idisp(:),ifirst(:),ip(:),ipc(:),iptr(:),
+     & iq(:),irn(:),lastc(:),lastr(:),lenc(:),lenr(:),lenrl(:),
+     & nextc(:),nextr(:)
+!
+!  Date:  01 Jan 1984     Copyright UKAEA, Harwell.
+!  If the user requires a more convenient data interface then the
+!  ma28 package should be used. The ma28 subroutines call the ma30
+!  subroutines after checking the user's input data and optionally
+!  using mc23a/ad to permute the matrix to block triangular form.
+!  This package of subroutines (ma30a/ad, ma30b/bd, ma30c/cd and
+!  ma30d/dd) performs operations pertinent to the solution of a
+!  general sparse n by n system of linear uequations (i.e. solve
+!  ax=b). Structually singular matrices are permitted including
+!  those with row or columns consisting entirely of zeros (i.e.
+!  including rectangular matrices). It is assumed that the non-zeros
+!  of the matrix a do not differ widely in size. If necessary a prior
+!  call of the scaling subroutine mc19a/ad may be made.
+!  A discussion of the design of these subroutines is given by Duff
+!  and Reid (ACM Trans Math Software 5 pp 18-35,1979 (css 48)) while
+!  fuller details of the implementation are given in Duff (Harwell
+!  Report AERE-R 8730,1977). The additional pivoting option in
+!  ma30a/ad and the use of drop tolerances (see common block
+!  ma30i/id) were added to the package after joint work with Reid,
+!  Schaumburg, Wasniewski and Zlatev (Duff, Reid, Schaumburg,
+!  Wasniewski and Zlatev, Harwell Report css 135, 1983).
+!
+!  ma30a/ad performs the lu decomposition of the diagonal blocks of
+!  the permutation paq of a sparse matrix a, where input permutations
+!  p1 and q1 are used to define the diagonal blocks. There may be
+!  non-zeros in the off-diagonal blocks but they are unaffected by
+!  ma30a/ad. p and p1 differ only within blocks as do q and q1. The
+!  permutations p1 and q1 may be found by calling mc23a/ad or the
+!  matrix may be treated as a single block by using p1=q1=i. The
+!  matrix non-zeros should be held compactly by rows, although it
+!  should be noted that the user can supply the matrix by columns
+!  to get the lu decomposition of a transpose.
+!
+!  This description should also be consulted for further information
+!  on most of the parameters of ma30bd and ma30cd.
+!  The parameters are...
+!
+!  n   is an integer variable which must be set by the user to the
+!      order of the matrix. It is not altered by ma30a/ad.
+!  icn is an integer array of length licn. Positions idisp(2) to
+!      licn must be set by the user to contain the column indices of
+!      the non-zeros in the diagonal blocks of p1*a*q1. Those belonging
+!      to a single row must be contiguous but the ordering of column
+!      indices with each row is unimportant. The non-zeros of row i
+!      precede those of row i+1,i=1,...,n-1 and no wasted space is
+!      allowed between the rows. On output the column indices of the
+!      lu decomposition of paq are held in positions idisp(1) to
+!      idisp(2), the rows are in pivotal order, and the column indices
+!      of the l part of each row are in pivotal order and precede those
+!      of u. Again there is no wasted space either within a row or
+!      between the rows. icn(1) to icn(idisp(1)-1), are neither
+!      required nor altered. If mc23a/ad been called, these will hold
+!      information about the off-diagonal blocks.
+!  a is a real/double precision array of length licn whose entries
+!      idisp(2) to licn must be set by the user to the  values of the
+!      non-zero entries of the matrix in the order indicated by icn.
+!      On output a will hold the lu factors of the matrix where again
+!      the position in the matrix is determined by the corresponding
+!      values in icn. a(1) to a(idisp(1)-1) are neither required nor
+!      altered.
+!  licn  is an integer variable which must be set by the user to the
+!      length of arrays icn and a. It must be big enough for a and icn
+!      to hold all the non-zeros of l and u and leave some "elbow
+!      room".  It is possible to calculate a minimum value for licn by
+!      a preliminary run of ma30a/ad. the adequacy of the elbow room
+!      can be judged by the size of the common block variable icncp. it
+!      Is not altered by ma30a/ad.
+!  lenr  is an integer array of length n. On input, lenr(i) should
+!      equal the number of non-zeros in row i, i=1,...,n of the
+!      diagonal blocks of p1*a*q1. On output, lenr(i) will equal the
+!      total number of non-zeros in row i of l and row i of u.
+!  lenrl  is an integer array of length n. On output from ma30a/ad,
+!      lenrl(i) will hold the number of non-zeros in row i of l.
+!  idisp  is an integer array of length 2. the user should set idisp(1)
+!      to be the first available position in a/icn for the lu
+!      decomposition while idisp(2) is set to the position in a/icn of
+!      the first non-zero in the diagonal blocks of p1*a*q1. On output,
+!      idisp(1) will be unaltered while idisp(2) will be set to the
+!      position in a/icn of the last non-zero of the lu decomposition.
+!  ip  is an integer array of length n which holds a permutation of
+!      the integers 1 to n. On input to ma30a/ad, the absolute value of
+!      ip(i) must be set to the row of a which is row i of p1*a*q1. A
+!      negative value for ip(i) indicates that row i is at the end of a
+!      diagonal block. On output from ma30a/ad, ip(i) indicates the row
+!      of a which is the i th row in paq. ip(i) will still be negative
+!      for the last row of each block (except the last).
+!  iq is an integer array of length n which again holds a
+!      permutation of the integers 1 to n. On input to ma30a/ad, iq(j)
+!      must be set to the column of a which is column j of p1*a*q1. On
+!      output from ma30a/ad, the absolute value of iq(j) indicates the
+!      column of a which is the j th in paq. For rows, i say, in which
+!      structural or numerical singularity is detected iq(i) is
+!      negated.
+!  irn  is an integer array of length lirn used as workspace by
+!      ma30a/ad.
+!  lirn  is an integer variable. It should be greater than the
+!      largest number of non-zeros in a diagonal block of p1*a*q1 but
+!      need not be as large as licn. It is the length of array irn and
+!      should be large enough to hold the active part of any block,
+!      plus some "elbow room", the a posteriori adequacy of which can
+!      be estimated by examining the size of common block variable
+!      irncp.
+!  lenc,ifirst,lastr,nextr,lastc,nextc are all integer arrays of
+!      length n which are used as workspace by ma30a/ad. If nsrch is
+!      set to a value less than or equal to n, then arrays lastc and
+!      nextc are not referenced by ma30a/ad and so can be dummied in
+!      the call to ma30a/ad.
+!  iptr,ipc are integer arrays of length n which are used as workspace
+!      by ma30a/ad.
+!  u   is a real/double precision variable which should be set by the
+!      user to a value between 0. and 1.0. If less than zero it is
+!      reset to zero and if its value is 1.0 or greater it is reset to
+!      0.9999 (0.999999999 in d version). It determines the balance
+!      between pivoting for sparsity and for stability, values near
+!      zero emphasizing sparsity and values near one emphasizing
+!      stability. We recommend u=0.1 as a posible first trial value.
+!      The stability can be judged by a later call to mc24a/ad or by
+!      setting lbig to .true.
+!  iflag is an integer variable. It will have a non-negative value if
+!      ma30a/ad is successful. Negative values indicate error
+!      conditions while positive values indicate that the matrix has
+!      been successfully decomposed but is singular. For each non-zero
+!      value, an appropriate message is output on unit lp. Possible
+!      non-zero values for iflag are ...
+!
+!  -1  the matrix is structually singular with rank given by irank.
+!  +1  if, however, the user wants the lu decomposition of a
+!      structurally singular matrix and sets the common block variable
+!      abort1 to .false., then, in the event of singularity and a
+!      successful decomposition, iflag is returned with the value +1
+!      and no message is output.
+!  -2  the matrix is numerically singular (it may also be structually
+!      singular) with estimated rank given by irank in common block
+!      ma30f/fd.
+!  +2  the  user can choose to continue the decomposition even when a
+!      zero pivot is encountered by setting common block variable
+!      abort2 to .false. If a singularity is encountered, iflag will
+!      then return with a value of +2, and no message is output if the
+!      decomposition has been completed successfully.
+!  -3  lirn has not been large enough to continue with the
+!      decomposition. If the stage was zero then common block variable
+!      minirn gives the length sufficient to start the decomposition on
+!      this block. For a successful decomposition on this block the
+!      user should make lirn slightly (say about n/2) greater than this
+!      value.
+!  -4  licn not large enough to continue with the decomposition.
+!  -5  the decomposition has been completed but some of the lu factors
+!      have been discarded to create enough room in a/icn to continue
+!      the decomposition. The variable minicn in common block ma30f/fd
+!      then gives the size that licn should be to enable the
+!      factorization to be successful. If the user sets common block
+!      variable abort3 to .true., then the subroutine will exit
+!      immediately instead of destroying any factors and continuing.
+!  -6  both licn and lirn are too small. Termination has been caused by
+!      lack of space in irn (see error iflag= -3), but already some of
+!      the lu factors in a/icn have been lost (see error iflag= -5).
+!      minicn gives the minimum amount of space required in a/icn for
+!      decomposition up to this point.
+!
+       interface
+!
+       subroutine ma30dd(a,icn,iptr,n,iactiv,itop,reals)
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer iactiv,itop,jpos,n
+       logical reals
+       real(kr) a(:)
+       integer icn(:),iptr(:)
+       end subroutine ma30dd
+!
+       end interface
+!
+       real(kr) aanew,amax,anew,au,pivrat,pivr,scale
+       real(kr), parameter :: umax=0.999999999_kr
+       integer colupd,dispc,i,i1,i2,iactiv,ibeg,idispl,idrop,idummy,
+     & iend,ifill,ifir,ii,iii,ijfir,ijp1,ijpos,ilast,indrow,ipiv,ipos,
+     & irows,ising,isrch,isw,isw1,iop,ir,itop,j,j1,j2,jbeg,jcost,jcount,
+     & jdiff,jdummy,jend,jj,jmore,jnew,jnpos,jold,jpiv,jpos,k,jroom,
+     & jval,jzer,jzero,kcost,kdrop,l,lc,lenpiv,lenpp,ll,lr,morei,msrch,
+     & n,nblock,nc,nnm1,nr,nz,nz2,nzcol,nzmin,nzpc,nzrow,oldend,oldpiv,
+     & pivend,pivot,pivrow,rowi
+!
+       msrch = nsrch
+       ndrop = 0
+       lnpiv = 0
+       lpiv = 0
+       mapiv = 0
+       manpiv = 0
+       iavpiv = 0
+       ianpiv = 0
+       kountl = 0
+       minirn = 0
+       minicn = idisp(1) - 1
+       morei = 0
+       irank = nn
+       irncp = 0
+       icncp = 0
+       iflag = 0
+!  Reset u if necessary.
+       u = min(u,umax)
+!  ibeg is the position of the next pivot row after elimination step
+!  using it.
+       u = max(u,0.0_kr)
+       ibeg = idisp(1)
+!  iactiv is the position of the first entry in the active part of
+!  a/icn.
+       iactiv = idisp(2)
+! nzrow is current number of non-zeros in active and unprocessed part
+! of row file icn.
+       nzrow = licn - iactiv + 1
+       minicn = nzrow + minicn
+!
+!  Count the number of diagonal blocks and set up pointers to the
+!  beginnings of the rows.
+!  num is the number of diagonal blocks.
+       num = 1
+       iptr(1) = iactiv
+       if (nn.ne.1) then
+         nnm1 = nn - 1
+         do i=1,nnm1
+           if (ip(i).lt.0) num = num + 1
+           iptr(i+1) = iptr(i) + lenr(i)
+         enddo
+       endif
+!  ilast is the last row in the previous block.
+       ilast = 0
+!
+! ***********************************************
+! ****    lu decomposition of block nblock   ****
+! ***********************************************
+!
+!  Each pass through this loop performs lu decomposition on one
+!  of the diagonal blocks.
+       do 1000 nblock=1,num
+         istart = ilast + 1
+         do irows=istart,nn
+           if (ip(irows).lt.0) go to 40
+         enddo
+         irows = nn
+   40    ilast = irows
+!  n is the number of rows in the current block.
+!  istart is the index of the first row in the current block.
+!  ilast is the index of the last row in the current block.
+!  iactiv is the position of the first entry in the block.
+!  itop is the position of the last entry in the block.
+         n = ilast - istart + 1
+         if (n.ne.1) go to 90
+!
+!  Code for dealing with 1x1 block.
+         lenrl(ilast) = 0
+         ising = istart
+         if (lenr(ilast).eq.0) then
+!  Block is structurally singular.
+           irank = irank - 1
+           ising = -ising
+           if (iflag.ne.2 .and. iflag.ne.-5) iflag = 1
+           if (.not.abort1) go to 80
+           idisp(2) = iactiv
+           iflag = -1
+           if (lp.ne.0) write (lp,9999)
+ 9999  format (' Error return from ma30a/ad because matrix is structural
+     &ly singular.')
+           return
+         endif
+         scale = abs(a(iactiv))
+         if (scale.ne.0.0_kr) then
+           if (lbig) big = max(big,scale)
+         else
+           ising = -ising
+           irank = irank - 1
+           iptr(ilast) = 0
+           if (iflag.ne.-5) iflag = 2
+           if (abort2) then
+             idisp(2) = iactiv
+             iflag = -2
+             if (lp.ne.0) write (lp,9998)
+ 9998  format (' Error return from ma30a/ad because matrix is numericall
+     &y singular.')
+             return
+           endif
+         endif
+         a(ibeg) = a(iactiv)
+         icn(ibeg) = icn(iactiv)
+         iactiv = iactiv + 1
+         iptr(istart) = 0
+         ibeg = ibeg + 1
+         nzrow = nzrow - 1
+   80    lastr(istart) = istart
+         ipc(istart) = -ising
+         go to 1000
+!
+!  Non-trivial block.
+   90    itop = licn
+         if (ilast.ne.nn) itop = iptr(ilast+1) - 1
+!
+!  Set up column oriented storage.
+         do i=istart,ilast
+           lenrl(i) = 0
+           lenc(i) = 0
+         enddo
+         if (itop-iactiv.ge.lirn) then
+           minirn = itop - iactiv + 1
+           pivot = istart - 1
+           go to 1100
+         endif
+!
+!  Calculate column counts.
+         do ii=iactiv,itop
+           i = icn(ii)
+           lenc(i) = lenc(i) + 1
+         enddo
+!  Set up column pointers so that ipc(j) points to position after end
+!  of column j in column file.
+         ipc(ilast) = lirn + 1
+         j1 = istart + 1
+         do jj=j1,ilast
+          j = ilast - jj + j1 - 1
+          ipc(j) = ipc(j+1) - lenc(j+1)
+         enddo
+         do indrow=istart,ilast
+           j1 = iptr(indrow)
+           j2 = j1 + lenr(indrow) - 1
+           if (j1.gt.j2) cycle
+           do jj=j1,j2
+             j = icn(jj)
+             ipos = ipc(j) - 1
+             irn(ipos) = indrow
+             ipc(j) = ipos
+           enddo
+         enddo
+!  dispc is the lowest indexed active location in the column file.
+         dispc = ipc(istart)
+         nzcol = lirn - dispc + 1
+         minirn = max(nzcol,minirn)
+         nzmin = 1
+!
+!  Initialize array ifirst.  ifirst(i) = +/- k indicates that row/col
+!  k has i non-zeros. If ifirst(i) = 0, there is no row or column
+!  with i non zeros.
+         ifirst(1:n) = 0
+!
+!  Compute ordering of row and column counts.
+!  First run through columns (from column n to column 1).
+         do jj=istart,ilast
+           j = ilast - jj + istart
+           nz = lenc(j)
+           if (nz.eq.0) then
+             ipc(j) = 0
+           else
+             if (nsrch.gt.nn) then
+               isw = ifirst(nz)
+               ifirst(nz) = -j
+               lastc(j) = 0
+               nextc(j) = -isw
+               isw1 = abs(isw)
+               if (isw.ne.0) lastc(isw1) = j
+             endif
+           endif
+         enddo
+!  Now run through rows (again from n to 1).
+         do ii=istart,ilast
+           i = ilast - ii + istart
+           nz = lenr(i)
+           if (nz.eq.0) then
+             iptr(i) = 0
+             lastr(i) = 0
+           else
+             isw = ifirst(nz)
+             ifirst(nz) = i
+             if (isw.le.0) then
+               nextr(i) = 0
+               lastr(i) = isw
+             else
+               nextr(i) = isw
+               lastr(i) = lastr(isw)
+               lastr(isw) = i
+             endif
+           endif
+         enddo
+!
+! **********************************************
+! ****    Start of main elimination loop    ****
+! **********************************************
+         lp1: do pivot=istart,ilast
+!
+!  First find the pivot using markowitz criterion with stability
+!  control.
+!  jcost is the markowitz cost of the best pivot so far,.. this
+!  pivot is in row ipiv and column jpiv.
+           nz2 = nzmin
+           jcost = n*n
+!
+!  Examine rows/columns in order of ascending count.
+           do 340 l=1,2
+             pivrat = 0.0_kr
+             isrch = 1
+             ll = l
+!  A pass with l equal to 2 is only performed in the case of
+!  singularity.
+             do 330 nz=nz2,n
+               if (jcost.le.(nz-1)**2) go to 420
+               ijfir = ifirst(nz)
+               if (ijfir) 230, 220, 240
+  220          if (ll.eq.1) nzmin = nz + 1
+               go to 330
+  230          ll = 2
+               ijfir = -ijfir
+               go to 290
+  240          ll = 2
+!  Scan rows with nz non-zeros.
+                 do idummy=1,n
+                   if (jcost.le.(nz-1)**2) go to 420
+                   if (isrch.gt.msrch) go to 420
+                   if (ijfir.eq.0) go to 280
+!  Row ijfir is now examined.
+                   i = ijfir
+                   ijfir = nextr(i)
+!  First calculate multiplier threshold level.
+                   amax = 0.0_kr
+                   j1 = iptr(i) + lenrl(i)
+                   j2 = iptr(i) + lenr(i) - 1
+                   do jj=j1,j2
+                     amax = max(amax,abs(a(jj)))
+                   enddo
+                   au = amax*u
+                   isrch = isrch + 1
+!  Scan row for possible pivots.
+                   do jj=j1,j2
+                     if (abs(a(jj)).gt.au .or. l.ne.1) then
+                       j = icn(jj)
+                       kcost = (nz-1)*(lenc(j)-1)
+                       if (kcost.le.jcost) then
+                         pivr = 0.0_kr
+                         if (amax.ne.0.0_kr) pivr = abs(a(jj))/amax
+                         if (kcost.ne.jcost .or. (pivr.gt.pivrat
+     &                   .and. nsrch.le.nn+1)) then
+!  Best pivot so far is found.
+                           jcost = kcost
+                           ijpos = jj
+                           ipiv = i
+                           jpiv = j
+                           if (msrch.gt.nn+1 .and. jcost.le.(nz-1)**2)
+     &                     go to 420
+                           pivrat = pivr
+                         endif
+                       endif
+                     endif
+                   enddo
+                 enddo
+!
+!  Columns with nz non-zeros now examined.
+  280            ijfir = ifirst(nz)
+                 ijfir = -lastr(ijfir)
+  290            if (jcost.le.nz*(nz-1)) go to 420
+                 if (msrch.le.nn) go to 330
+                 do 320 idummy=1,n
+                   if (ijfir.eq.0) go to 330
+                   j = ijfir
+                   ijfir = nextc(ijfir)
+                   i1 = ipc(j)
+                   i2 = i1 + nz - 1
+!  Scan column j.
+                   do ii=i1,i2
+                     i = irn(ii)
+                     kcost = (nz-1)*(lenr(i)-lenrl(i)-1)
+                     if (kcost.ge.jcost) cycle
+!  Pivot has best markowitz count so far ... now check its
+!  suitability on numeric grounds by examining the other non-zeros
+!  in its row.
+                     j1 = iptr(i) + lenrl(i)
+                     j2 = iptr(i) + lenr(i) - 1
+! we need a stability check on singleton columns because of possible
+!     problems with underdetermined systems.
+                     amax = 0.0_kr
+                     do jj=j1,j2
+                       amax = max(amax,abs(a(jj)))
+                       if (icn(jj).eq.j) jpos = jj
+                     enddo
+                     if (abs(a(jpos)).gt.amax*u .or. l.ne.1) then
+                       jcost = kcost
+                       ipiv = i
+                       jpiv = j
+                       ijpos = jpos
+                       if (amax.ne.0.0_kr) pivrat = abs(a(jpos))/amax
+                       if (jcost.le.nz*(nz-1)) go to 420
+                     endif
+                   enddo
+  320            continue
+  330          continue
+!  In the event of singularity, we must make sure all rows and columns
+!  are tested.
+               msrch = n
+!
+!  Matrix is numerically or structurally singular  ... which it is will
+!  be diagnosed later.
+               irank = irank - 1
+  340        continue
+!  Assign rest of rows and columns to ordering array.
+!  Matrix is structurally singular.
+             if (iflag.ne.2 .and. iflag.ne.-5) iflag = 1
+             irank = irank - ilast + pivot + 1
+             if (abort1) then
+               idisp(2) = iactiv
+               iflag = -1
+               if (lp.ne.0) write (lp,9999)
+               return
+             endif
+             k = pivot - 1
+             do 390 i=istart,ilast
+               if (lastr(i).ne.0) go to 390
+               k = k + 1
+               lastr(i) = k
+               if (lenrl(i).eq.0) go to 380
+               minicn = max(minicn,nzrow+ibeg-1+morei+lenrl(i))
+               if (iactiv - ibeg.lt.lenrl(i)) then
+                 call ma30dd (a,icn,iptr(istart:),n,iactiv,itop,.true.)
+!  Check now to see if ma30d/dd has created enough available space.
+                 if (iactiv-ibeg.lt.lenrl(i)) then
+!  Create more space by destroying previously created lu factors.
+                   morei = morei + ibeg - idisp(1)
+                   ibeg = idisp(1)
+                   if (lp.ne.0) write (lp,9997)
+ 9997  format (' Lu decomposition destroyed to create more space.')
+                   iflag = -5
+                   if (abort3) go to 1090
+                 endif
+               endif
+               j1 = iptr(i)
+               j2 = j1 + lenrl(i) - 1
+               iptr(i) = 0
+               do jj=j1,j2
+                 a(ibeg) = a(jj)
+                 icn(ibeg) = icn(jj)
+                 icn(jj) = 0
+                 ibeg = ibeg + 1
+               enddo
+               nzrow = nzrow - lenrl(i)
+  380          if (k.eq.ilast) go to 400
+  390        continue
+  400        k = pivot - 1
+             do i=istart,ilast
+               if (ipc(i).ne.0) cycle
+               k = k + 1
+               ipc(i) = k
+               if (k.eq.ilast) go to 990
+             enddo
+!
+!  The pivot has now been found in position (ipiv,jpiv) in location
+!  ijpos in row file.
+!  Update column and row ordering arrays to correspond with removal
+!  of the active part of the matrix.
+  420        ising = pivot
+             if (a(ijpos).eq.0.0_kr) then
+!  Numerical singularity is recorded here.
+               ising = -ising
+               if (iflag.ne.-5) iflag = 2
+               if (abort2) then
+                 idisp(2) = iactiv
+                 iflag = -2
+                 if (lp.ne.0) write (lp,9998)
+                 return
+               endif
+             endif
+             oldpiv = iptr(ipiv) + lenrl(ipiv)
+             oldend = iptr(ipiv) + lenr(ipiv) - 1
+!  Changes to column ordering.
+             if (nsrch.le.nn) go to 460
+             colupd = nn + 1
+             lenpp = oldend-oldpiv+1
+             if (lenpp.lt.4) lpiv(1) = lpiv(1) + 1
+             if (lenpp.ge.4 .and. lenpp.le.6) lpiv(2) = lpiv(2) + 1
+             if (lenpp.ge.7 .and. lenpp.le.10) lpiv(3) = lpiv(3) + 1
+             if (lenpp.ge.11 .and. lenpp.le.15) lpiv(4) = lpiv(4) + 1
+             if (lenpp.ge.16 .and. lenpp.le.20) lpiv(5) = lpiv(5) + 1
+             if (lenpp.ge.21 .and. lenpp.le.30) lpiv(6) = lpiv(6) + 1
+             if (lenpp.ge.31 .and. lenpp.le.50) lpiv(7) = lpiv(7) + 1
+             if (lenpp.ge.51 .and. lenpp.le.70) lpiv(8) = lpiv(8) + 1
+             if (lenpp.ge.71 .and. lenpp.le.100) lpiv(9) = lpiv(9) + 1
+             if (lenpp.ge.101) lpiv(10) = lpiv(10) + 1
+             mapiv = max(mapiv,lenpp)
+             iavpiv = iavpiv + lenpp
+             do jj=oldpiv,oldend
+               j = icn(jj)
+               lc = lastc(j)
+               nc = nextc(j)
+               nextc(j) = -colupd
+               if (jj.ne.ijpos) colupd = j
+               if (nc.ne.0) lastc(nc) = lc
+               if (lc.ne.0) then
+                 nextc(lc) = nc
+               else
+                 nz = lenc(j)
+                 isw = ifirst(nz)
+                 if (isw.gt.0) lastr(isw) = -nc
+                 if (isw.lt.0) ifirst(nz) = -nc
+               endif
+             enddo
+!  Changes to row ordering.
+  460        i1 = ipc(jpiv)
+             i2 = i1 + lenc(jpiv) - 1
+             do ii=i1,i2
+               i = irn(ii)
+               lr = lastr(i)
+               nr = nextr(i)
+               if (nr.ne.0) lastr(nr) = lr
+               if (lr.gt.0) then
+                 nextr(lr) = nr
+               else
+                 nz = lenr(i) - lenrl(i)
+                 if (nr.ne.0) ifirst(nz) = nr
+                 if (nr.eq.0) ifirst(nz) = lr
+               endif
+             enddo
+!
+!  Move pivot to position lenrl+1 in pivot row and move pivot row
+!  to the beginning of the available storage.
+!  The l part and the pivot in the old copy of the pivot row is
+!  nullified while, in the strictly upper triangular part, the
+!  column indices, j say, are overwritten by the corresponding
+!  entry of iq (iq(j)) and iq(j) is set to the negative of the
+!  displacement of the column index from the pivot entry.
+             if (oldpiv.ne.ijpos) then
+               au = a(oldpiv)
+               a(oldpiv) = a(ijpos)
+               a(ijpos) = au
+               icn(ijpos) = icn(oldpiv)
+               icn(oldpiv) = jpiv
+             endif
+!  Check to see if there is space immediately available in a/icn to
+!  hold new copy of pivot row.
+             minicn = max(minicn,nzrow+ibeg-1+morei+lenr(ipiv))
+             if (iactiv-ibeg.ge.lenr(ipiv)) go to 500
+             call ma30dd(a,icn,iptr(istart:),n,iactiv,itop,.true.)
+             oldpiv = iptr(ipiv) + lenrl(ipiv)
+             oldend = iptr(ipiv) + lenr(ipiv) - 1
+!  Check now to see if ma30d/dd has created enough available space.
+             if (iactiv-ibeg.ge.lenr(ipiv)) go to 500
+!  Create more space by destroying previously created lu factors.
+             morei = morei + ibeg - idisp(1)
+             ibeg = idisp(1)
+             if (lp.ne.0) write (lp,9997)
+             iflag = -5
+             if (abort3) go to 1090
+             if (iactiv-ibeg.lt.lenr(ipiv)) then
+!  There is still not enough room in a/icn.
+               iflag = -4
+               go to 1090
+             endif
+!  Copy pivot row and set up iq array.
+  500        ijpos = 0
+             j1 = iptr(ipiv)
+!
+             do jj=j1,oldend
+               a(ibeg) = a(jj)
+               icn(ibeg) = icn(jj)
+               if (ijpos.eq.0) then
+                 if (icn(jj).eq.jpiv) ijpos = ibeg
+                 icn(jj) = 0
+               else
+                 k = ibeg - ijpos
+                 j = icn(jj)
+                 icn(jj) = iq(j)
+                 iq(j) = -k
+               endif
+               ibeg = ibeg + 1
+             enddo
+!
+             ijp1 = ijpos + 1
+             pivend = ibeg - 1
+             lenpiv = pivend - ijpos
+             nzrow = nzrow - lenrl(ipiv) - 1
+             iptr(ipiv) = oldpiv + 1
+             if (lenpiv.eq.0) iptr(ipiv) = 0
+!
+!  Remove pivot row (including pivot) from column oriented file.
+             do jj=ijpos,pivend
+               j = icn(jj)
+               i1 = ipc(j)
+               lenc(j) = lenc(j) - 1
+! i2 is last position in new column.
+               i2 = ipc(j) + lenc(j) - 1
+               do ii=i1,i2
+                 if (irn(ii).ne.ipiv) cycle
+                 irn(ii) = irn(i2+1)
+                 exit
+               enddo
+               irn(i2+1) = 0
+             enddo
+             nzcol = nzcol - lenpiv - 1
+!
+!  Go down the pivot column and for each row with a non-zero add
+!  the appropriate multiple of the pivot row to it.
+!  We loop on the number of non-zeros in the pivot column since
+!  ma30d/dd may change its actual position.
+!
+             nzpc = lenc(jpiv)
+             if (nzpc.eq.0) go to 900
+             do 840 iii=1,nzpc
+               ii = ipc(jpiv) + iii - 1
+               i = irn(ii)
+!  Search row i for non-zero to be eliminated, calculate multiplier,
+!  and place it in position lenrl+1 in its row.
+!  idrop is the number of non-zero entries dropped from row i
+!  because these fall beneath tolerance level.
+!
+               idrop = 0
+               j1 = iptr(i) + lenrl(i)
+               iend = iptr(i) + lenr(i) - 1
+               do jj=j1,iend
+                 if (icn(jj).ne.jpiv) cycle
+!  If pivot is zero, rest of column is and so multiplier is zero.
+                 au = 0.0_kr
+                 if (a(ijpos).ne.0.0_kr) au = -a(jj)/a(ijpos)
+                 if (lbig) big = max(big,abs(au))
+                 a(jj) = a(j1)
+                 a(j1) = au
+                 icn(jj) = icn(j1)
+                 icn(j1) = jpiv
+                 lenrl(i) = lenrl(i) + 1
+                 exit
+               enddo
+!  Jump if pivot row is a singleton.
+               if (lenpiv.eq.0) go to 840
+!  Now perform necessary operations on rest of non-pivot row i.
+               rowi = j1 + 1
+               iop = 0
+!  Jump if all the pivot row causes fill-in.
+               if (rowi.gt.iend) go to 650
+!  Perform operations on current non-zeros in row i.
+!  Innermost loop.
+               lenpp = iend-rowi+1
+               if (lenpp.lt.4) lnpiv(1) = lnpiv(1) + 1
+               if (lenpp.ge.4 .and. lenpp.le.6) lnpiv(2) = lnpiv(2) + 1
+               if (lenpp.ge.7 .and. lenpp.le.10) lnpiv(3) = lnpiv(3) + 1
+               if (lenpp.ge.11 .and. lenpp.le.15) lnpiv(4) = lnpiv(4) +
+     &         1
+               if (lenpp.ge.16 .and. lenpp.le.20) lnpiv(5) = lnpiv(5) +
+     &         1
+               if (lenpp.ge.21 .and. lenpp.le.30) lnpiv(6) = lnpiv(6) +
+     &         1
+               if (lenpp.ge.31 .and. lenpp.le.50) lnpiv(7) = lnpiv(7) +
+     &         1
+               if (lenpp.ge.51 .and. lenpp.le.70) lnpiv(8) = lnpiv(8) +
+     &         1
+               if (lenpp.ge.71 .and. lenpp.le.100) lnpiv(9) = lnpiv(9) +
+     &         1
+               if (lenpp.ge.101) lnpiv(10) = lnpiv(10) + 1
+               manpiv = max(manpiv,lenpp)
+               ianpiv = ianpiv + lenpp
+               kountl = kountl + 1
+               do jj=rowi,iend
+                 j = icn(jj)
+                 if (iq(j).gt.0) cycle
+                 iop = iop + 1
+                 pivrow = ijpos - iq(j)
+                 a(jj) = a(jj) + au*a(pivrow)
+                 if (lbig) big = max(abs(a(jj)),big)
+                 icn(pivrow) = -icn(pivrow)
+                 if (abs(a(jj)).lt.tol) idrop = idrop + 1
+               enddo
+!
+!  Jump if no non-zeros in non-pivot row have been removed
+!  because these are beneath the drop-tolerance tol.
+               if (idrop.eq.0) go to 650
+!
+!  Run through non-pivot row compressing row so that only non-zeros
+!  greater than tol are stored. All non-zeros less than tol are also
+!  removed from the column structure.
+               jnew = rowi
+               do 630 jj=rowi,iend
+                 if (abs(a(jj)).lt.tol) go to 600
+                 a(jnew) = a(jj)
+                 icn(jnew) = icn(jj)
+                 jnew = jnew + 1
+                 go to 630
+!
+!  Remove non-zero entry from column structure.
+  600            j = icn(jj)
+                 i1 = ipc(j)
+                 i2 = i1 + lenc(j) - 1
+                 do ii=i1,i2
+                   if (irn(ii).eq.i) exit
+                 enddo
+                 irn(ii) = irn(i2)
+                 irn(i2) = 0
+                 lenc(j) = lenc(j) - 1
+                 if (nsrch.le.nn) go to 630
+!  Remove column from column chain and place in update chain.
+                 if (nextc(j).lt.0) go to 630
+!  Jump if column already in update chain.
+                 lc = lastc(j)
+                 nc = nextc(j)
+                 nextc(j) = -colupd
+                 colupd = j
+                 if (nc.ne.0) lastc(nc) = lc
+                 if (lc.ne.0) then
+                   nextc(lc) = nc
+                 else
+                   nz = lenc(j) + 1
+                   isw = ifirst(nz)
+                   if (isw.gt.0) lastr(isw) = -nc
+                   if (isw.lt.0) ifirst(nz) = -nc
+                 endif
+  630          continue
+               icn(jnew:iend) = 0
+!  The value of idrop might be different from that calculated earlier
+!  because, we may now have dropped some non-zeros which were not
+!  modified by the pivot row.
+               idrop = iend + 1 - jnew
+               iend = jnew - 1
+               lenr(i) = lenr(i) - idrop
+               nzrow = nzrow - idrop
+               nzcol = nzcol - idrop
+               ndrop = ndrop + idrop
+  650          ifill = lenpiv - iop
+!  Jump is if there is no fill-in.
+               if (ifill.eq.0) go to 750
+!  Now for the fill-in.
+               minicn = max(minicn,morei+ibeg-1+nzrow+ifill+lenr(i))
+!  See if there is room for fill-in.
+!  Get maximum space for row i in situ.
+               do jdiff=1,ifill
+                 jnpos = iend + jdiff
+                 if (jnpos.gt.licn) go to 670
+                 if (icn(jnpos).ne.0) go to 670
+               enddo
+!  There is room for all the fill-in after the end of the row so it
+!  can be left in situ.
+!  Next available space for fill-in.
+               iend = iend + 1
+               go to 750
+!  jmore spaces for fill-in are required in front of row.
+  670          jmore = ifill - jdiff + 1
+               i1 = iptr(i)
+!  We now look in front of the row to see if there is space for
+!  the rest of the fill-in.
+               do jdiff=1,jmore
+                 jnpos = i1 - jdiff
+                 if (jnpos.lt.iactiv) exit
+                 if (icn(jnpos).ne.0) go to 700
+               enddo
+               jnpos = i1 - jmore
+               go to 710
+!  Whole row must be moved to the beginning of available storage.
+  700          jnpos = iactiv - lenr(i) - ifill
+!  Jump if there is space immediately available for the shifted row.
+  710          if (jnpos.ge.ibeg) go to 730
+               call ma30dd (a,icn,iptr(istart:),n,iactiv,itop,.true.)
+               i1 = iptr(i)
+               iend = i1 + lenr(i) - 1
+               jnpos = iactiv - lenr(i) - ifill
+               if (jnpos.ge.ibeg) go to 730
+!  No space available so try to create some by throwing away previous
+!  lu decomposition.
+               morei = morei + ibeg - idisp(1) - lenpiv - 1
+               if (lp.ne.0) write (lp,9997)
+               iflag = -5
+               if (abort3) go to 1090
+!  Keep record of current pivot row.
+               ibeg = idisp(1)
+               icn(ibeg) = jpiv
+               a(ibeg) = a(ijpos)
+               ijpos = ibeg
+               do jj=ijp1,pivend
+                 ibeg = ibeg + 1
+                 a(ibeg) = a(jj)
+                 icn(ibeg) = icn(jj)
+               enddo
+               ijp1 = ijpos + 1
+               pivend = ibeg
+               ibeg = ibeg + 1
+               if (jnpos.lt.ibeg) then
+!  This still does not give enough room.
+                 iflag = -4
+                 go to 1090
+               endif
+  730          iactiv = min(iactiv,jnpos)
+!  Move non-pivot row i.
+               iptr(i) = jnpos
+               do jj=i1,iend
+                 a(jnpos) = a(jj)
+                 icn(jnpos) = icn(jj)
+                 jnpos = jnpos + 1
+                 icn(jj) = 0
+               enddo
+!  First new available space.
+               iend = jnpos
+  750          nzrow = nzrow + ifill
+!  Innermost fill-in loop which also resets icn.
+               idrop = 0
+               do 830 jj=ijp1,pivend
+                 j = icn(jj)
+                 if (j.lt.0) go to 820
+                 anew = au*a(jj)
+                 aanew = abs(anew)
+                 if (aanew.ge.tol) go to 760
+                 idrop = idrop + 1
+                 ndrop = ndrop + 1
+                 nzrow = nzrow - 1
+                 minicn = minicn - 1
+                 ifill = ifill - 1
+                 go to 830
+  760            if (lbig) big = max(aanew,big)
+                 a(iend) = anew
+                 icn(iend) = j
+                 iend = iend + 1
+!  Put new entry in column file.
+                 minirn = max(minirn,nzcol+lenc(j)+1)
+                 jend = ipc(j) + lenc(j)
+                 jroom = nzpc - iii + 1 + lenc(j)
+                 if (jend.gt.lirn) go to 770
+                 if (irn(jend).eq.0) go to 810
+  770            if (jroom.lt.dispc) go to 780
+!  Compress column file to obtain space for new copy of column.
+                 call ma30dd (a,irn,ipc(istart:),n,dispc,lirn,.false.)
+                 if (jroom.lt.dispc) go to 780
+                 jroom = dispc - 1
+                 if (jroom.ge.lenc(j)+1) go to 780
+!  Column file is not large enough.
+                 go to 1100
+!  Copy column to beginning of file.
+  780            jbeg = ipc(j)
+                 jend = ipc(j) + lenc(j) - 1
+                 jzero = dispc - 1
+                 dispc = dispc - jroom
+                 idispl = dispc
+                 do ii=jbeg,jend
+                   irn(idispl) = irn(ii)
+                   irn(ii) = 0
+                   idispl = idispl + 1
+                 enddo
+                 ipc(j) = dispc
+                 jend = idispl
+                 irn(jend:jzero) = 0
+  810            irn(jend) = i
+                 nzcol = nzcol + 1
+                 lenc(j) = lenc(j) + 1
+!  End of adjustment to column file.
+                 go to 830
+!
+  820            icn(jj) = -j
+  830          continue
+               if (idrop.ne.0) then
+                 do kdrop=1,idrop
+                   icn(iend) = 0
+                   iend = iend + 1
+                 enddo
+               endif
+  834          lenr(i) = lenr(i) + ifill
+!  End of scan of pivot column.
+  840        continue
+!
+!  Remove pivot column from column oriented storage and update row
+!  ordering arrays.
+             i1 = ipc(jpiv)
+             i2 = ipc(jpiv) + lenc(jpiv) - 1
+             nzcol = nzcol - lenc(jpiv)
+             do ii=i1,i2
+               i = irn(ii)
+               irn(ii) = 0
+               nz = lenr(i) - lenrl(i)
+               if (nz.eq.0) then
+                 lastr(i) = 0
+                 cycle
+               endif
+               ifir = ifirst(nz)
+               ifirst(nz) = i
+               if (ifir) 860, 880, 870
+  860          lastr(i) = ifir
+               nextr(i) = 0
+               cycle
+  870          lastr(i) = lastr(ifir)
+               nextr(i) = ifir
+               lastr(ifir) = i
+               cycle
+  880          lastr(i) = 0
+               nextr(i) = 0
+               nzmin = min(nzmin,nz)
+             enddo
+!  Restore iq and nullify u part of old pivot row.
+!  Record the column permutation in lastc(jpiv) and the row
+!  permutation in lastr(ipiv).
+  900        ipc(jpiv) = -ising
+             lastr(ipiv) = pivot
+             if (lenpiv.eq.0) cycle lp1
+             nzrow = nzrow - lenpiv
+             jval = ijp1
+             jzer = iptr(ipiv)
+             iptr(ipiv) = 0
+             do jcount=1,lenpiv
+               j = icn(jval)
+               iq(j) = icn(jzer)
+               icn(jzer) = 0
+               jval = jval + 1
+               jzer = jzer + 1
+             enddo
+!  Adjust column ordering arrays.
+             if (nsrch.le.nn) then
+               do jj=ijp1,pivend
+                 j = icn(jj)
+                 nz = lenc(j)
+                 if (nz.eq.0) then
+                   ipc(j) = 0
+                 else
+                   nzmin = min(nzmin,nz)
+                 endif
+               enddo
+               cycle lp1
+             endif
+             jj = colupd
+             do jdummy=1,nn
+               j = jj
+               if (j.eq.nn+1) cycle lp1
+               jj = -nextc(j)
+               nz = lenc(j)
+               if (nz.eq.0) then
+                 ipc(j) = 0
+                 cycle
+               endif
+               ifir = ifirst(nz)
+               lastc(j) = 0
+               if (ifir) 930, 940, 950
+  930          ifirst(nz) = -j
+               ifir = -ifir
+               lastc(ifir) = j
+               nextc(j) = ifir
+               cycle
+  940          ifirst(nz) = -j
+               nextc(j) = 0
+               go to 960
+  950          lc = -lastr(ifir)
+               lastr(ifir) = -j
+               nextc(j) = lc
+               if (lc.ne.0) lastc(lc) = j
+  960          nzmin = min(nzmin,nz)
+             enddo
+           enddo lp1
+! ********************************************
+! ****    End of main elimination loop    ****
+! ********************************************
+!
+!  Reset iactiv to point to the beginning of the next block.
+  990    if (ilast.ne.nn) iactiv = iptr(ilast+1)
+ 1000  continue
+!
+! ********************************************
+! ****    End of deomposition of block    ****
+! ********************************************
+!
+!  Record singularity (if any) in iq array.
+       if (irank.ne.nn) then
+         do i=1,nn
+           if (ipc(i).lt.0) cycle
+           ising = ipc(i)
+           iq(ising) = -iq(ising)
+           ipc(i) = -ising
+         enddo
+       endif
+!
+!  Run through lu decomposition changing column indices to that of new
+!  order and permuting lenr and lenrl arrays according to pivot
+!  permutations.
+       istart = idisp(1)
+       iend = ibeg - 1
+       if (iend.ge.istart) then
+         do jj=istart,iend
+           jold = icn(jj)
+           icn(jj) = -ipc(jold)
+         enddo
+       endif
+       do ii=1,nn
+         i = lastr(ii)
+         nextr(i) = lenr(ii)
+         iptr(i) = lenrl(ii)
+       enddo
+       do i=1,nn
+         lenrl(i) = iptr(i)
+         lenr(i) = nextr(i)
+       enddo
+!
+!  Update permutation arrays ip and iq.
+       do ii=1,nn
+         i = lastr(ii)
+         j = -ipc(ii)
+         nextr(i) = abs(ip(ii)+0)
+         iptr(j) = abs(iq(ii)+0)
+       enddo
+       do i=1,nn
+         if (ip(i).lt.0) nextr(i) = -nextr(i)
+         ip(i) = nextr(i)
+         if (iq(i).lt.0) iptr(i) = -iptr(i)
+         iq(i) = iptr(i)
+       enddo
+       ip(nn) = abs(ip(nn)+0)
+       idisp(2) = iend
+       return
+!
+!   ***    Error returns    ***
+ 1090  idisp(2) = iactiv
+       if (lp.eq.0) return
+       write (lp,9996)
+ 9996  format (' Error return from ma30a/ad because licn is not big enou
+     &gh.')
+       go to 1110
+ 1100  if (iflag.eq.-5) iflag = -6
+       if (iflag.ne.-6) iflag = -3
+       idisp(2) = iactiv
+       if (lp.eq.0) return
+       if (iflag.eq.-3) write (lp,9995)
+ 9995  format (' Error return from ma30a/ad because lirn is not big enou
+     &gh.')
+       if (iflag.eq.-6) write (lp,9994)
+ 9994  format (' Error return from ma30a/ad because lirn and licn are to
+     &o small.')
+ 1110  pivot = pivot - istart + 1
+       write (lp,9993) pivot,nblock,istart,ilast
+ 9993  format (' At stage',i5,' in block',i5,' with first row',
+     & i5,' and last row',i5)
+       if (pivot.eq.0) write (lp,9992) minirn
+ 9992  format (' To continue set lirn to at least',i8)
+       return
+       end

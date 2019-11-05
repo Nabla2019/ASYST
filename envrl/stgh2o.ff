@@ -1,0 +1,1977 @@
+       program  stgh2o
+c
+c
+c      stgh2o  - generate tables of selected thermodynamic properties
+c                (temperatures, pressures, specific volumes, internal
+c                energies, thermal expansion coefficients, isothermal
+c                compressibilities, specific heats, and entropies for
+c                both saturation and single phase conditions, liquid
+c                and/or vapor states) for light water using astem
+c                formulation
+c
+c
+c      Authors:  R. J. Wagner, EG&G Idaho, Inc.
+c                J. E. Tolli, EG&G Idaho, Inc.
+c      Date:     8/91, 9/91
+c      Language: FORTRAN 77
+c      Refs:     (1) Astem routines, ANCR-1026
+c                (2) R. J. Wagner, "STH2O, A SUBROUTINE PACKAGE TO
+c                    COMPUTE THE THERMODYNAMIC PROPERTIES OF WATER",
+c                    Idaho National Engineering Laboratory (Aerojet
+c                    Nuclear) internal report (1973)
+c                (3) R. J. Wagner, "STH2X WATER PROPERTY SUBROUTINES",
+c                    attachment to ref. (2) (February 25, 1977)
+c
+c
+c      Calling sequence:
+c
+c                stgh2o
+c
+c      Parameters:
+c
+c                none
+c
+c      Files:
+c
+c                * (default input file);  contains user supplied data;
+c                if first input character is not '!', program executes
+c                in table generation mode (see subroutine gentpf
+c                for input description);  if first input character is
+c                '!', program executes in interactive mode (see
+c                subroutine iactv for input description)
+c
+c                * (default output file);  list of thermodynamic
+c                properties in S. I. units
+c
+c                tpfh2o (FORTRAN unit 1);  thermodynamic properties in
+c                unformatted (binary) tables (output)
+c
+c                FORTRAN unit 2;  contains data as copied from
+c                default input for subsequent list directed reading,
+c                with blank lines omitted (scratch output, input)
+c
+c      This program is a modification of the sth2xt program written
+c      by R. J. Wagner.
+c
+c
+       implicit  none
+c
+c
+c  Common blocks:
+c
+       common  /const/ t1,t2
+       real  t1,t2
+c
+       common  /crit/ tcrit,pcrit,vcrit,hcrit
+       real  tcrit,pcrit,vcrit,hcrit
+c
+       common  /minmax/ tmin,pmin,tmax,pmax
+       real  tmin,pmin,tmax,pmax
+c
+       common  /prop/ v(2),u(2),beta(2),akappa(2),cp(2),s(2)
+       real  v,u,beta,akappa,cp,s
+c
+       common  /sat/ tsat,psat
+       real  tsat,psat
+c
+       common  /state/ istate
+       integer  istate
+c
+       common  /tp/ t,p
+       real  t,p
+c
+       common  /tpold/ told,pold
+       real  told,pold
+c
+       common  /trip/ ttrip,ptrip,vtrip
+       real  ttrip,ptrip,vtrip
+c
+c
+c  Glossary of common block variables:
+c
+c               common
+c    variable    block
+c      name      name    meaning
+c    --------  --------  -------
+c
+c    akappa    /prop/    isothermal compressibility at t,p (pa)
+c    beta      /prop/    thermal expansion coefficient at t,p (k**-1)
+c    cp        /prop/    specific heat at constant pressure at t,p
+c                        (j/kg-k)
+c    hcrit     /crit/    critical enthalpy (j/kg)
+c    istate    /state/   flag indicating physical state of the fluid at
+c                        t,p as follows:
+c                          1 = saturation
+c                          2 = liquid
+c                          3 = vapor
+c    p         /tp/      pressure actually used in calculations (pa)
+c    pcrit     /crit/    critical pressure (pa)
+c    pmax      /minmax/  maximum allowed input pressure (pa)
+c    pmin      /minmax/  minimum allowed input pressure (pa)
+c    pold      /tpold/   pressure value used for the previous t,p
+c                        (non-saturation) calculations (pa)
+c    psat      /sat/     saturation pressure at temperature t (pa)
+c    ptrip     /trip/    triple point pressure (pa)
+c    s         /prop/    entropy at t,p (j/kg-k)
+c    t         /tp/      temperature actually used in calculations (k)
+c    t1        /const/   62315.0/64730.0
+c    t2        /const/   86315.0/64730.0
+c    tcrit     /crit/    critical temperature (k)
+c    tmax      /minmax/  maximum allowed input temperature (k)
+c    tmin      /minmax/  minimum allowed input temperature (k)
+c    told      /tpold/   temperature value used for the previous t,p
+c                        (non-saturation) calculations (k)
+c    tsat      /sat/     saturation temperature at pressure p (k)
+c    ttrip     /trip/    triple point temperature (k)
+c    u         /prop/    internal energy at t,p (j/kg)
+c    v         /prop/    volume at t,p (kg/m**3)
+c    vcrit     /crit/    critical volume (m**3/kg)
+c    vtrip     /trip/    triple point volume (m**3/kg)
+c
+c    --------  --------  -------
+c
+c    note:  for variables in the /prop/ common block, var(1) is for the
+c           liquid state and var(2) is for the vapor state
+c
+c
+c  Local variables:
+c
+       integer  ios, n2p1, nprops
+       parameter  ( nprops = 6 )
+       parameter  ( n2p1 = 2 * nprops + 1 )
+       character  record*80, sdat(n2p1,2)*40, versn*26
+c
+c
+c  Externals:
+c
+       external  gentpf, iactv, iasme
+c
+c
+       data  versn /'stgh2o      1.1 (09/07/91)'/
+c
+$if def,hp,3
+      on real*4 underflow call trap4
+      on real*8 underflow call trap8
+      on external error ignore
+c
+c--initialize
+c
+       call  iasme (2)
+c
+c--read first input record to determine run type
+c
+       read (*,1000,iostat=ios) record
+       if ( ios. ne. 0 ) then
+         write (*,*) ' ***** error reading first input record,',
+     &               ' iostat = ',ios
+         write (*,*) ' ***** execution immediately terminated'
+         stop 1
+       endif
+c
+c--generate data
+c
+       if ( record(1:1) .ne. '!' ) then
+         call  gentpf (versn,record,nprops)
+       else
+         call  iactv (versn,n2p1,sdat)
+       endif
+c
+c
+ 1000  format (a)
+c
+c
+       end
+       block data  blkdat
+c
+c
+c      blkdat  - initialize common block constants
+c
+c      Author:   J. E. Tolli, EG&G Idaho, Inc.
+c      Date:     11/89, 8/91
+c      Language: Fortran 77
+c
+c      Calling sequence:
+c
+c                none (block data routine)
+c
+c
+$if def,in32,1
+       implicit  double precision (a-h,o-z)
+c
+c
+       common  /const/ t1,t2
+c
+       common  /crit/ tcrit,pcrit,vcrit,hcrit
+c
+       common  /minmax/ tmin,pmin,tmax,pmax
+c
+       common  /trip/ ttrip,ptrip,vtrip
+c
+c
+       data      t1      ,       t2       /
+     &      9.6269118e-01, 1.33346207e+00 /
+c
+       data    tcrit   ,   pcrit   ,   vcrit   ,    hcrit    /
+     *       6.4730e+02, 2.2120e+07, 3.1700e-03, 7.01204e+04 /
+c
+       data     tmin   ,    pmin   ,   tmax   ,   pmax   /
+     *       2.7316e+02, 6.1124e+02, 5.000e+03, 1.00e+08 /
+c
+       data    ttrip   ,   ptrip   ,   vtrip   /
+     *       2.7316e+02, 6.1124e+02, 1.0002e-03 /
+c
+c
+       end
+      subroutine dels ( tlo, thi, ds, ier )
+c
+c  This routine calculates the change in entropy of steam
+c  from temperature tlo to temperature thi in the janaf tables.
+c
+c     inputs: tlo - lower temperature limit (k)
+c     thi - upper temperature limit (k)
+c     output:
+c     ds - delta entropy,(tlo to thi)--(j/kg deg-1**2)
+c
+c     this routine was written by s. w. james
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      real tcp(52), s(52)
+c
+c  The following entropy values are taken from janaf thermo-chemical
+c  tables by Stull and Prophet.
+c  The units are cal.mole(-1)deg(-2) in the data statements.
+c  The temperatures are in degrees kelvin.
+      data s / 55.592, 56.545, 57.441, 58.288, 59.092,
+     *         59.859, 60.591, 61.293, 61.965, 62.612,
+     *         63.234, 63.834, 64.412, 64.971, 65.511,
+     *         66.034, 66.541, 67.032, 67.508, 67.971,
+     *         68.421, 68.856, 69.284, 69.698, 70.102,
+     *         70.496, 70.881, 71.256, 71.622, 71.980,
+     *         72.331, 72.673, 73.008, 73.336, 73.658,
+     *         73.973, 74.281, 74.584, 74.881, 75.172,
+     *         75.459, 75.740, 76.016, 76.287, 76.553,
+     *         76.816, 77.074, 77.327, 77.577, 77.823,
+     *         78.065, 78.065/
+      data  tcp /  1000.,1100.,1200.,1300.,1400.,1500.,
+     *             1600.,1700.,1800.,1900.,2000.,2100.,
+     *             2200.,2300.,2400.,2500.,2600.,2700.,
+     *             2800.,2900.,3000.,3100.,3200.,3300.,
+     *             3400.,3500.,3600.,3700.,3800.,3900.,
+     *             4000.,4100.,4200.,4300.,4400.,4500.,
+     *             4600.,4700.,4800.,4900.,5000.,5100.,
+     *             5200.,5300.,5400.,5500.,5600.,5700.,
+     *             5800.,5900.,6000.,6000. /
+c  si is the conversion factor to si units for entropy.
+      data si / 232.238/
+      ier = 0
+c
+c  Check that 1000 .le. tlo .le. thi .le. 6000 (deg k).
+      if ( 1000.0 .le. tlo ) go to 20
+      write (*,10)
+   10 format('0******** Error, 1000.le.tlo.le.thi.le.6000 violated.')
+      ier = 1
+   20 if ( tlo .le. thi ) go to 30
+      write (*,10)
+      ier = 1
+   30 if ( thi .le. 6000.) go to 40
+      write (*,10)
+      ier = 1
+   40 if ( ier .ne. 1 ) go to 60
+      write (*,50)
+   50 format ('0******** Error inputs out of range in dels')
+      go to 110
+   60 continue
+c
+c  Find bracketing intervals for tlo and thi.
+      do 70 n = 1, 51
+         if (tcp(n).le.tlo.and.tlo.lt.tcp(n+1)) go to 80
+   70    continue
+c
+   80 do 90 m = 1, 51
+         if (tcp(m).le.thi.and.thi.lt.tcp(m+1)) go to 100
+   90    continue
+  100 continue
+      slope1 = ( s(n+1) - s(n) )*0.01
+      slope2 = ( s(m+1) - s(m) )*0.01
+      slo = slope1 * ( tlo - tcp(n) ) + s(n)
+      shi = slope2 * ( thi - tcp(m) ) + s(m)
+      ds = shi - slo
+c
+c  Convert entropy to si units.
+      ds = ds * si
+  110 continue
+      return
+      end
+       subroutine  gentpf (versn,record,nprops)
+c
+c
+c      gentpf  - generate thermodynamic properties file for
+c                light water
+c
+c
+c      Author:   J. E. Tolli, EG&G Idaho, Inc.
+c      Date:     9/91
+c      Language: FORTRAN 77
+c
+c
+c      Calling sequence:
+c
+c                call  gentpf (cp1,cp2,ip3)
+c
+c      Parameters:
+c
+c                cp1 = versn  = program version (input)
+c
+c                cp2 = record = input record string (input)
+c
+c                ip3 = nprops = number of different thermodynamic
+c                               properties (input)
+c
+c      Files:
+c
+c                * (default input file);  contains user supplied data;
+c                first data record is ignored if first character is '*';
+c                first active data record contains the title to be given
+c                to the thermodynamic properties file;  next active data
+c                record contains the number of temperatures to be used,
+c                followed by at least one blank, comma, or slash,
+c                followed by any other characters the user wishes;  next
+c                active data record(s) contain temperature values in
+c                ascending order, delimited by at least one blank,
+c                comma, or end-of-record;  next active data record
+c                contains the number of pressures to be used, followed
+c                by at least one blank, comma, or slash, followed by any
+c                other characters the user wishes;  next active data
+c                record(s) contain pressure values in ascending order,
+c                delimited by at least one blank, comma, or
+c                end-of-record;  last input records, if any, may contain
+c                any characters the user wishes;  an active data record
+c                is any non-blank record from the title record
+c                to the last record containing pressure values;
+c                temperatures and pressures must be in S. I. units
+c
+c                * (default output file);  list of thermodynamic
+c                properties in S. I. units
+c
+c                tpfh2o (FORTRAN unit 1);  thermodynamic properties in
+c                unformatted (binary) tables (output)
+c
+c                FORTRAN unit 2;  contains data as copied from
+c                default input for subsequent list directed reading,
+c                with blank lines omitted (scratch output, input)
+c
+c
+       implicit  none
+c
+c
+c  Arguments:
+c
+       integer   nprops
+       character*(*)  versn, record
+c
+c
+c  Common blocks:
+c
+       common  /crit/ tcrit,pcrit,vcrit,hcrit
+       real  tcrit,pcrit,vcrit,hcrit
+c
+       common  /minmax/ tmin,pmin,tmax,pmax
+       real  tmin,pmin,tmax,pmax
+c
+       common  /trip/ ttrip,ptrip,vtrip
+       real  ttrip,ptrip,vtrip
+c
+c
+c  Local variables:
+c
+       integer  i, ios, it3bp, it3p0, it4bp, it4p0, it5bp, it5p0,
+     &          maxlen, maxlpp, next, np, nprpnt, nsp, nst, nt, ntot
+       parameter  ( maxlen = 50000 )
+       real  tables(maxlen)
+       logical  error
+       character  blnkln*80, day*10, timeod*8
+c
+c
+       save
+c
+       data  ios /0/, maxlpp /55/
+       data  error /.false./
+       data  blnkln /' '/
+c
+c--get date and time
+       call  edate (day)
+       call  eclock (timeod)
+c
+c--make sure to get title for tables
+       if ( record(1:1) .eq. '*' )  read (*,1000,iostat=ios) record
+       if ( ios .ne. 0 ) then
+         write (*,*) ' ***** error reading tables title, iostat = ',ios
+         error = .true.
+       endif
+c
+c--open binary file for tables
+c
+       open (1,file='tpfh2o',form='unformatted',status='unknown')
+c
+c--open auxilliary input file
+c
+       open (2,status='scratch')
+c
+c--display table heading and write information to binary file
+c
+       write (*,1100) record,day,timeod,versn,record
+       write (1) record
+       record = 'generated on ' // day // ' at ' // timeod
+     &                                 // ' by ' // versn
+       write (1) record
+c
+c--display rest of input and copy to auxilliary input file
+c
+   10  continue
+       read (*,1000,end=20) record
+       write (*,1000) ' ',record
+       if (record.ne.blnkln)  write (2,1000) record
+       go to 10
+c
+c--rewind auxilliary input file
+c
+   20  continue
+       rewind 2
+c
+c--read number of temperatures
+c
+       read (2,*,iostat=ios) nt
+       if ( ios .ne. 0 ) then
+         write (*,*) ' ***** error reading number of temperatures,',
+     &               ' iostat = ',ios
+         error = .true.
+       endif
+c
+c--read and store temperature values (first table)
+c
+       read (2,*,iostat=ios) (tables(i),i=1,nt)
+       if ( ios .ne. 0 ) then
+         write (*,*) ' ***** error reading temperatures, iostat = ',ios
+         error = .true.
+       endif
+       next = nt + 1
+c
+c--check temperatures for ascending order
+c
+       do 30 i=1,nt-1
+         if ( tables(i) .ge. tables(i+1) ) then
+           write (*,1000) ' ***** error ***** temperatures not in',
+     &                    ' ascending order'
+           error = .true.
+         endif
+   30  continue
+c
+c--read number of pressures
+c
+       read (2,*,iostat=ios) np
+       if ( ios .ne. 0 ) then
+         write (*,*) ' ***** error reading number of pressures,',
+     &               ' iostat = ',ios
+         error = .true.
+       endif
+c
+c--read and store pressure values (second table)
+c
+       read (2,*,iostat=ios) (tables(i),i=next,next+np-1)
+       if ( ios .ne. 0 ) then
+         write (*,*) ' ***** error reading pressures, iostat = ',ios
+         error = .true.
+       endif
+       next = next + np
+c
+c--check pressures for ascending order
+c
+       do 40 i=nt+1,nt+np-1
+         if ( tables(i) .ge. tables(i+1) ) then
+           write (*,1000) ' ***** error ***** pressures not in',
+     &                    ' ascending order'
+           error = .true.
+         endif
+   40  continue
+c
+c--delete auxilliary input file
+c
+       close (2)
+c
+c--check for input errors
+c
+       if (error) then
+         write (*,*) ' ***** execution terminated'
+         go to 999
+       endif
+c
+c--display data limits
+c
+       write (*,1200) tmin,pmin,tmax,pmax,ttrip,ptrip,vtrip,tcrit,pcrit,
+     &                vcrit
+c
+c--get number of saturation temperatures
+c
+       do 50 i=1,nt
+         if (tables(i).gt.tcrit)  go to 60
+   50  continue
+   60  continue
+       nst = i - 1
+c
+c--get number of saturation pressures
+c
+       do 70 i=nt+1,nt+np
+         if (tables(i).gt.pcrit)  go to 80
+   70  continue
+   80  continue
+       nsp = i - 1 - nt
+c
+c--calculate base table pointers
+c
+       it3p0 = nt + np
+       it3bp = it3p0 - 2*nprops
+       it4p0 = it3p0 + ( 2*nprops + 1 ) * nst
+       it4bp = it4p0 - 2*nprops
+       it5p0 = it4p0 + ( 2*nprops + 1 ) * nsp
+       nprpnt = nprops*nt
+       it5bp = it5p0 - nprpnt - nprops + 1
+c
+c--calculate number of words in binary table
+c
+       ntot = nt + np + ( 1 + 2*nprops ) * nst + ( 1 + 2*nprops ) * nsp
+     &           + nprops * nt * np
+       if (ntot.gt.maxlen) then
+         write (*,1300) ntot,maxlen
+         stop
+       endif
+c
+c--display table statistics
+c
+       write (*,1400) nt,np,nst,nsp,ntot
+c
+c--write data limits, table statistics, and pointers to binary file
+c
+       write (1) ttrip,ptrip,vtrip,tcrit,pcrit,vcrit,
+     &           tmin,pmin,tmax,pmax,
+     &           nt,np,nst,nsp,
+     &           it3bp,it4bp,it5bp,nprpnt,it3p0
+       write (1) ntot
+c
+c--generate remaining thermodynamic properties tables
+c
+c--get saturation properties for t v. p table (third table)
+c
+       call  table3 (tables,1,nst,next,nprops,maxlpp)
+c
+c--get saturation properties for p v. t table (fourth table)
+c
+       call  table4 (tables,nt+1,nt+nsp,next,nprops,maxlpp)
+c
+c--get thermodynamic properties for each combination of temperature and
+c--pressure (fifth table)
+c
+       call  table5 (tables,nt+1,nt+np,1,nt,next,nprops,maxlpp)
+c
+c--check number of words stored in binary tables
+c
+       if (next-1.ne.ntot) then
+         write (*,1500) next-1,ntot
+         stop
+       endif
+c
+c--write out binary tables
+c
+       write (1) (tables(i),i=1,ntot)
+c
+c--done
+c
+  999  continue
+       return
+c
+c
+ 1000  format (a,a)
+ 1100  format ('1'/' ',a//' Generated on ',a,' at ',a,' by '//
+     &         1x,a,', program to generate light water',
+     &           ' thermodynamic properties tables in S.I. units.'/////
+     &         ' Input data:'//1x,a)
+ 1200  format ('1'/' Data limits:'//
+     &         37x,'temperature',5x,' pressure  ',5x,'  volume   '/
+     &         37x,'-----------',5x,'-----------',5x,'-----------'/
+     &         '   minimum allowed input value =',1p,2e16.5,5x,
+     &           '    n/a    '/
+     &         '   maximum allowed input value =',1p,2e16.5,5x,
+     &           '    n/a    '/
+     &         '   triple point value          =',1p,3e16.5/
+     &         '   critical point value        =',1p,3e16.5)
+ 1300  format ('0*****error - number of words required for binary ',
+     &           'tables =',i6/
+     &         '              maximum allowed =',i6/
+     &         '0*****execution stopped')
+ 1400  format (//////////' Table statistics:'//
+     &         '   number of temperatures            =',i6/
+     &         '   number of pressures               =',i6/
+     &         '   number of saturation temperatures =',i6/
+     &         '   number of saturation pressures    =',i6/
+     &         '   number of words in binary tables  =',i6)
+ 1500  format ('1*****error - number of words stored in binary ',
+     &           'tables =',i6/
+     &         '              number of words expected =',i6)
+c
+c
+       end
+       subroutine  iactv (versn,n2p1,sdat)
+c
+c
+c      iactv   - display thermodynamic properties to default output
+c                for temperature,pressure values read from default
+c                input
+c
+c
+c      Author:   J. E. Tolli, EG&G Idaho, Inc.
+c      Date:     9/91
+c      Language: FORTRAN 77
+c
+c
+c      Calling sequence:
+c
+c                call  iactv (cp1,ip2,rp3)
+c
+c      Parameters:
+c
+c                cp1 = versn  = program version (input)
+c
+c                ip2 = n2p1   = number of saturation properties
+c                               (input)
+c
+c                rp3 = sdat   = scratch array for holding saturation
+c                               properties
+c
+c      Files:
+c
+c                * (default input file);  temperature,pressure values
+c                in list directed input format, one number per input
+c                record;  values must be in S. I. units;  a value of
+c                zero means the previously entered value for that
+c                parameter (temperature or pressure) is used;  a
+c                temperature value of -1 causes data limits to be
+c                displayed;  a temperature value of -9 causes program
+c                execution to be terminated
+c
+c                * (default output file);  list of thermodynamic
+c                properties in S. I. units
+c
+c
+       implicit  none
+c
+c
+c  Arguments:
+c
+       integer  n2p1
+       character*(*)  sdat(n2p1,*), versn
+c
+c
+c  Common blocks:
+c
+       common  /crit/ tcrit,pcrit,vcrit,hcrit
+       real  tcrit,pcrit,vcrit,hcrit
+c
+       common  /minmax/ tmin,pmin,tmax,pmax
+       real  tmin,pmin,tmax,pmax
+c
+       common  /prop/ v(2),u(2),beta(2),akappa(2),cp(2),s(2)
+       real  v,u,beta,akappa,cp,s
+c
+       common  /sat/ tsat,psat
+       real  tsat,psat
+c
+       common  /state/ istate
+       integer  istate
+c
+       common  /tpold/ told,pold
+       real  told,pold
+c
+       common  /trip/ ttrip,ptrip,vtrip
+       real  ttrip,ptrip,vtrip
+c
+c
+c  Local variables:
+c
+       real  pres, temp, uinput(2)
+       integer  i, iv, j
+       character  state*12
+c
+c
+c  Externals:
+c
+       external  thermp
+c
+c
+       save
+c
+c
+c--display initial message
+c
+       write (*,1000) versn
+       write (*,1000) 'Program to compute thermodynamic ',
+     &                'properties of light water.'
+       write (*,1000) ' '
+       write (*,1000) 'All data in S.I. units.'
+c
+c--initialize told, pold
+c
+       told = 0.0
+       pold = 0.0
+c
+c--display data limits
+c
+   10  continue
+       write (*,1100) tmin,pmin,tmax,pmax,ttrip,ptrip,vtrip,tcrit,
+     &                pcrit,vcrit
+c
+c--read temperature and pressure values
+c
+   20  continue
+       write (*,1000) 'enter temperature ',
+     &                '(0=prev.temp., -1=limits, -9=quit)'
+       read (*,*,end=999,err=30) uinput(1)
+       if ( uinput(1) .eq. 0.0 ) then
+         if ( told .ne. 0.0 ) then
+           uinput(1) = told
+         else
+           write (*,1000) 'no previously entered temperature value'
+           go to 20
+         endif
+       else  if ( uinput(1) .eq. -1.0 ) then
+         go to 10
+       else  if ( uinput(1) .eq. -9.0 ) then
+         write (*,1000) 'quit'
+         go to 999
+       else  if ( uinput(1) .lt. tmin .or. uinput(1) .gt. tmax ) then
+         write (*,1000) 'temperature value outside allowed limits'
+         write (*,1000) ' '
+         go to 20
+       endif
+       go to 40
+   30  continue
+       write (*,1000) 'temperature value not valid'
+       write (*,1000) ' '
+       go to 20
+   40  continue
+       write (*,1000) 'enter pressure (0=prev.pres.)'
+       read (*,*,end=999,err=50) uinput(2)
+       if ( uinput(2) .eq. 0.0 ) then
+         if ( pold .ne. 0.0 ) then
+           uinput(2) = pold
+         else
+           write (*,1000) 'no previously entered pressure value'
+           go to 40
+         endif
+       else  if ( uinput(2) .lt. pmin .or. uinput(2) .gt. pmax ) then
+         write (*,1000) 'pressure value outside allowed limits'
+         write (*,1000) ' '
+         go to 40
+       endif
+       go to 60
+   50  continue
+       write (*,1000) 'pressure value not valid'
+       write (*,1000) ' '
+       go to 40
+c
+c--blank out saturation data display array
+c
+   60  continue
+       do 80 i=1,2
+         do 70 j=1,n2p1
+           sdat(j,i) = ' '
+   70    continue
+   80  continue
+c
+c--calculate and display thermodynamic properties
+c
+c--get saturation properties for t v. p table
+c
+       if ( uinput(1).le.tcrit ) then
+         temp = uinput(1)
+         pres = 0.0
+         v(1) = -1.0
+         v(2) = -1.0
+         call  thermp (temp,pres)
+         if ( v(1).lt.0.0 .and. v(2).lt.0.0 )  go to 20
+         if (istate.ne.1) then
+           write (*,1300) istate,' temperature =',temp
+           go to 20
+         endif
+         write (sdat( 1,1),'(5x,''sat.pressure    = '',1p,e12.5)')  psat
+         write (sdat( 2,1),'(5x,''liq.sp.volume   = '',1p,e12.5)')  v(1)
+         write (sdat( 3,1),'(5x,''liq.int.energy  = '',1p,e12.5)')  u(1)
+         write (sdat( 4,1),'(5x,''liq.therm.expsn = '',1p,e12.5)')
+     &                                                           beta(1)
+         write (sdat( 5,1),'(5x,''liq.compress    = '',1p,e12.5)')
+     &                                                         akappa(1)
+         write (sdat( 6,1),'(5x,''liq.heat cap.   = '',1p,e12.5)') cp(1)
+         write (sdat( 7,1),'(5x,''liq.entropy     = '',1p,e12.5)')  s(1)
+         write (sdat( 8,1),'(5x,''vap.sp.volume   = '',1p,e12.5)')  v(2)
+         write (sdat( 9,1),'(5x,''vap.int.energy  = '',1p,e12.5)')  u(2)
+         write (sdat(10,1),'(5x,''vap.therm.expsn = '',1p,e12.5)')
+     &                                                           beta(2)
+         write (sdat(11,1),'(5x,''vap.compress    = '',1p,e12.5)')
+     &                                                         akappa(2)
+         write (sdat(12,1),'(5x,''vap.heat cap.   = '',1p,e12.5)') cp(2)
+         write (sdat(13,1),'(5x,''vap.entropy     = '',1p,e12.5)')  s(2)
+       else
+         sdat(5,1) = '          temperature outside'
+         sdat(6,1) = '          saturation range'
+       endif
+c
+c--get saturation properties for p v. t table
+c
+       if ( uinput(2).le.pcrit ) then
+         temp = 0.0
+         pres = uinput(2)
+         v(1) = -1.0
+         v(2) = -1.0
+         call  thermp (temp,pres)
+         if ( v(1).lt.0.0 .and. v(2).lt.0.0 )  go to 20
+         if (istate.ne.1) then
+           write (*,1300) istate,' pressure =',pres
+           go to 20
+         endif
+         write (sdat( 1,2),'(5x,''sat.temperature = '',1p,e12.5)')  tsat
+         write (sdat( 2,2),'(5x,''liq.sp.volume   = '',1p,e12.5)')  v(1)
+         write (sdat( 3,2),'(5x,''liq.int.energy  = '',1p,e12.5)')  u(1)
+         write (sdat( 4,2),'(5x,''liq.therm.expsn = '',1p,e12.5)')
+     &                                                           beta(1)
+         write (sdat( 5,2),'(5x,''liq.compress    = '',1p,e12.5)')
+     &                                                         akappa(1)
+         write (sdat( 6,2),'(5x,''liq.heat cap.   = '',1p,e12.5)') cp(1)
+         write (sdat( 7,2),'(5x,''liq.entropy     = '',1p,e12.5)')  s(1)
+         write (sdat( 8,2),'(5x,''vap.sp.volume   = '',1p,e12.5)')  v(2)
+         write (sdat( 9,2),'(5x,''vap.int.energy  = '',1p,e12.5)')  u(2)
+         write (sdat(10,2),'(5x,''vap.therm.expsn = '',1p,e12.5)')
+     &                                                           beta(2)
+         write (sdat(11,2),'(5x,''vap.compress    = '',1p,e12.5)')
+     &                                                         akappa(2)
+         write (sdat(12,2),'(5x,''vap.heat cap.   = '',1p,e12.5)') cp(2)
+         write (sdat(13,2),'(5x,''vap.entropy     = '',1p,e12.5)')  s(2)
+       else
+         sdat(5,2) = '          pressure outside'
+         sdat(6,2) = '          saturation range'
+       endif
+c
+c--re-set told, pold before non-saturation calculations
+c
+       told = tmin - 1.0
+       pold = pmin - 1.0
+c
+c--get thermodynamic properties for the given temperature at this
+c--pressure
+c
+       temp = uinput(1)
+       pres = uinput(2)
+       v(1) = -1.0
+       v(2) = -1.0
+       call  thermp (temp,pres)
+       if ( v(1).lt.0.0 .and. v(2).lt.0.0 )  go to 20
+c
+c--check istate to set correct index for property variables
+c--(liquid state used if t,p in saturation region)
+c
+       if (istate.ne.3) then
+         iv = 1
+       else
+         iv = 2
+       endif
+c
+c--set state display string according to the value of istate
+c
+       if (istate.eq.1) then
+         state = '(sat-liquid)'
+       else  if (istate.eq.2) then
+         state = '(  liquid  )'
+       else
+         state = '(  vapor   )'
+       endif
+c
+c--display values
+c
+       write (*,1200) temp,pres
+       do 90 i=1,n2p1
+         write (*,1000) sdat(i,1),sdat(i,2)
+   90  continue
+       write (*,1400) temp,pres,state,v(iv),akappa(iv),u(iv),cp(iv),
+     &                beta(iv),s(iv)
+       read (*,*)
+       go to 20
+c
+  999  continue
+       return
+c
+c
+ 1000  format (a,a)
+ 1100  format (/'Data limits:'/
+     &         36x,'temperature',5x,' pressure  ',5x,'  volume   '/
+     &         36x,'-----------',5x,'-----------',5x,'-----------'/
+     &         '  minimum allowed input value =',1p,2e16.5,5x,
+     &           '    n/a    '/
+     &         '  maximum allowed input value =',1p,2e16.5,5x,
+     &           '    n/a    '/
+     &         '  triple point value          =',1p,3e16.5/
+     &         '  critical point value        =',1p,3e16.5/)
+ 1200  format (/13x,'Thermodynamic properties of light water at ',
+     &           'saturation'/
+     &         5x,'----------------------------------------',
+     &           '------------------------------'/
+     &         5x,1p,'temperature     =',e13.5,10x,'pressure        =',
+     &           e13.5)
+ 1300  format ('istate =',i2,' not valid for saturation properties at',
+     &           a,f12.6,' k')
+ 1400  format (/19x,'Thermodynamic properties of light water at '/
+     &         7x,1p,'temperature = ',e11.5,' and pressure = ',e11.5,1x,
+     &            a/
+     &         7x,'----------------------------------------',
+     &           '-------------------------'/
+     &         11x,'sp.volume   = ',e12.5,5x,'compress    = ',e12.5/
+     &         11x,'int.energy  = ',e12.5,5x,'heat cap.   = ',e12.5/
+     &         11x,'therm.expsn = ',e12.5,5x,'entropy     = ',e12.5)
+c
+c
+       end
+      subroutine intgrc ( tlo, thi, csubpp, a, ier)
+c
+c  This routine integrates c sub p for water from a lower limit of tlo
+c  to an upper limit of thi.  A trapezoidal method is employed to do
+c  the integration.
+c
+c     inputs: tlo - lower temperature limit (k)
+c     thi - upper temperature limit (k)
+c     outputs:
+c     a - the integral of csubp from tlo to thi ( j/kg) )
+c     csubpp - c sub p at temperature thi (j kg(-1) deg(-1))
+c     ier - error flag: no error if ier = 0.
+c
+c  This routine was written by S. W. James.
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+      real tcp(52), csubp(52)
+c
+c  The following sp.heats for water are taken from janaf thermo-
+c  chemical tables by Stull and Prophet.
+c  The units are cal.mole(-1)deg(-1) in the data statements.
+c  The temperatures are in degrees kelvin.
+      data  csubp /  9.851, 10.152, 10.444, 10.753, 10.987,
+     *              11.233, 11.462, 11.674, 11.869, 12.048,
+     *              12.214, 12.366, 12.505, 12.634, 12.753,
+     *              12.863, 12.965, 13.059, 13.146, 13.226,
+     *              13.304, 13.374, 13.441, 13.503, 13.562,
+     *              13.617, 13.669, 13.716, 13.768, 13.808,
+     *              13.850, 13.890, 13.957, 13.963, 13.997,
+     *              14.030, 14.061, 14.091, 14.120, 14.148,
+     *              14.174, 14.201, 14.228, 14.254, 14.279,
+     *              14.303, 14.328, 14.351, 14.375, 14.396,
+     *              14.422, 14.422/
+      data  tcp /  1000.,1100.,1200.,1300.,1400.,1500.,
+     *             1600.,1700.,1800.,1900.,2000.,2100.,
+     *             2200.,2300.,2400.,2500.,2600.,2700.,
+     *             2800.,2900.,3000.,3100.,3200.,3300.,
+     *             3400.,3500.,3600.,3700.,3800.,3900.,
+     *             4000.,4100.,4200.,4300.,4400.,4500.,
+     *             4600.,4700.,4800.,4900.,5000.,5100.,
+     *             5200.,5300.,5400.,5500.,5600.,5700.,
+     *             5800.,5900.,6000.,6000. /
+c  si is the conversion factor to si units for csubp:
+      data si/232.238/
+      ier = 0
+c
+c  Check that 1000 .le. tlo .le. thi .le. 6000 (deg k).
+      if ( 1000.0 .le. tlo ) go to 20
+      write (*,10)
+   10 format ('0******** Error:1000.le.tlo.le.thi.le.6000 violated')
+      ier = 1
+   20 if ( tlo .le. thi ) go to 30
+      write (*,10)
+      ier = 1
+   30 if ( thi .le. 6000.) go to 40
+      write (*,10)
+      ier = 1
+   40 if ( ier .ne. 1 ) go to 60
+      write (*,50)
+   50 format ('0******** Error in routine to integrate csubp for water')
+      go to 130
+   60 continue
+c
+c  Find bracketing intervals for tlo and thi.
+      do 70 n = 1, 51
+         if (tcp(n).le.tlo.and.tlo.lt.tcp(n+1)) go to 80
+   70    continue
+c
+   80 do 90 m = 1, 51
+         if (tcp(m).le.thi.and.thi.lt.tcp(m+1)) go to 100
+   90    continue
+  100 continue
+      slope1 = ( csubp(n+1) - csubp(n) )*0.01
+      slope2 = ( csubp(m+1) - csubp(m) )*0.01
+c
+      cplo = slope1 * ( tlo - tcp(n) ) + csubp(n)
+      cphi = slope2 * ( thi - tcp(m) ) + csubp(m)
+      a = 0.5*( ( cplo + csubp(n+1)) * (tcp(n+1) - tlo)
+     *     +   ( cphi + csubp(m)) * (thi - tcp(m))  )
+      if ( n .eq.m ) a = 0.5*( cplo + cphi )*( thi - tlo )
+      if ( n + 1  .ge.  m  ) go to 120
+      j1 = n + 1
+      j2 = m - 1
+      do 110 j = j1, j2
+  110    a = a + 0.5*(csubp(j) + csubp(j+1))*(tcp(j+1) - tcp(j))
+  120 continue
+c
+c  Convert area and csubpp to si.
+      csubpp = si * cphi
+      a = si * a
+  130 continue
+      return
+      end
+       subroutine  satprp (ta,pa)
+c
+c      satprp  - calculate properties at saturation
+c
+c      Authors:  R. J. Wagner, EG&G Idaho, Inc.
+c                J. E. Tolli, EG&G Idaho, Inc.
+c      Date:     8/91
+c      Language: FORTRAN 77
+c
+c      Calling sequence:
+c
+c                call  satprp (p1,p2)
+c
+c      Parameters:
+c
+c                p1 = ta = reduced temperature, input
+c
+c                p2 = pa = reduced pressure, input
+c
+c      This routine is a modification of subroutine sat1 from the
+c      sth2xg program.
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+c
+c
+       common  /const/ t1,t2
+c
+       common  /crit/ tcrit,pcrit,vcrit,hcrit
+c
+       common  /prop/ v(2),u(2),beta(2),akappa(2),cp(2),s(2)
+c
+       common  /tp/ t,p
+c
+c
+       real af(6),ag(6),f(6),g(6)
+       logical  nogo
+c
+c
+       save
+c
+c
+       data i3/3/,i4/4/
+c
+c
+       if (ta .le. t1) then
+         call gibbab (af,pa,ta,2,1)
+         call gibbab (ag,pa,ta,2,2)
+         call cona (af,2,f,0,0,hcrit,pcrit,tcrit)
+         call cona (ag,2,g,0,0,hcrit,pcrit,tcrit)
+         vf=af(2)
+         vg=ag(2)
+         v(1) = f(2)
+         v(2) = g(2)
+         u(1) = f(1) - t*f(4) - p*f(2)
+         u(2) = g(1) - t*g(4) - p*g(2)
+         beta(1) = f(5)/f(2)
+         beta(2) = g(5)/g(2)
+         akappa(1) = -f(3)/f(2)
+         akappa(2) = -g(3)/g(2)
+         cp(1) = -t*f(6)
+         cp(2) = -t*g(6)
+         s(1) = -f(4)
+         s(2) = -g(4)
+       else
+         call root (vf,pa,ta,uf,d1,i4,nogo)
+         if (nogo)  write (*,*) 'satprp - root failure, ',
+     &                          't = ',t,', p = ',p
+         call helmcd (af,vf,ta,2,i4)
+         call root (vg,pa,ta,ug,d1,i3,nogo)
+         if (nogo)  write (*,*) 'satprp - root failure, ',
+     &                          't = ',t,', p = ',p
+         call helmcd (ag,vg,ta,2,i3)
+         call cona (af,2,f,0,0,hcrit,vcrit,tcrit)
+         call cona (ag,2,g,0,0,hcrit,vcrit,tcrit)
+         v(1) = vf*vcrit
+         v(2) = vg*vcrit
+         u(1) = uf*hcrit
+         u(2) = ug*hcrit
+         d1 = v(1)*f(3)
+         d2 = v(2)*g(3)
+         beta(1) = -f(5)/d1
+         beta(2) = -g(5)/d2
+         akappa(1) = 1.0/d1
+         akappa(2) = 1.0/d2
+         cp(1) = t*(f(5)*f(5)/f(3) - f(6))
+         cp(2) = t*(g(5)*g(5)/g(3) - g(6))
+         s(1) = -f(4)
+         s(2) = -g(4)
+       endif
+c
+c--re-set critical point derivatives if necessary
+c
+       if ( t.eq.tcrit .or. p.eq.pcrit ) then
+         beta(1) = 0.6310674807664440
+         akappa(1) = 7.1251224618562390e-07
+         cp(1) = 334752.7814080883
+         beta(2) = beta(1)
+         akappa(2) = akappa(1)
+         cp(2) = cp(1)
+       endif
+c
+       return
+c
+c
+       end
+       subroutine  snglph (ta,pa)
+c
+c      snglph  - calculate single phase properties
+c
+c      Authors:  R. J. Wagner, EG&G Idaho, Inc.
+c                J. E. Tolli, EG&G Idaho, Inc.
+c      Date:     8/91
+c      Language: FORTRAN 77
+c
+c      Calling sequence:
+c
+c                call  snglph (p1,p2)
+c
+c      Parameters:
+c
+c                p1 = ta = reduced temperature
+c
+c                p2 = pa = reduced pressure
+c
+c      This routine is a modification of subroutine snph from the
+c      sth2xg program written by R. J. Wagner.
+c
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+c
+c
+       common  /const/ t1,t2
+c
+       common  /crit/ tcrit,pcrit,vcrit,hcrit
+c
+       common  /state/ istate
+c
+       common  /prop/ v(2),u(2),beta(2),akappa(2),cp(2),s(2)
+c
+       common  /sat/ tsat,psat
+c
+       common  /tp/ t,p
+c
+c
+       real af(6),f(6)
+       logical nogo
+c
+c
+       save
+c
+c
+       iv = istate - 1
+       if ( ta .le. 1.0 )  pk = psat/pcrit
+       if (ta.gt.t1 .and. ta.le.t2) call psatl (pl,ta,0)
+       if (t .gt. 1073.15) go to 100
+       if (ta .gt. t1) go to 12
+       if (pa .lt. pk) go to 22
+       go to 21
+   12  if (ta .ge. 1.0) go to 13
+       if (pa .le. pl) go to 22
+       if (pa .lt. pk) go to 23
+       go to 24
+   13  if (ta .ge. t2) go to 22
+       if (pa .le. pl) go to 22
+       go to 23
+   21  ir = 1
+       go to 26
+   22  ir = 2
+   26  call gibbab (af,pa,ta,2,ir)
+       call cona (af,2,f,0,0,hcrit,pcrit,tcrit)
+       vb = af(2)
+       v(iv) = f(2)
+       u(iv) = f(1) - t*f(4) - p*f(2)
+       beta(iv) = f(5)/f(2)
+       akappa(iv) = -f(3)/f(2)
+       cp(iv) = -t*f(6)
+       s(iv) = -f(4)
+       go to 11
+   23  ir = 3
+       go to 27
+   24  ir = 4
+   27  call root (vb,pa,ta,ub,d1,ir,nogo)
+       if (nogo)  write (*,*) ' snglph - root failure, p = ',p,
+     &                        ', t = ',t
+       call helmcd (af,vb,ta,2,ir)
+       call cona (af,2,f,0,0,hcrit,vcrit,tcrit)
+       v(iv) = vb*vcrit
+       u(iv) = ub*hcrit
+       d1 = v(iv)*f(3)
+       beta(iv) = -f(5)/d1
+       akappa(iv) = 1.0/d1
+       cp(iv) = t*(f(5)*f(5)/f(3) - f(6))
+       s(iv) = -f(4)
+c  Finished now with astem.  This area has been used for temps
+c  within the range of astem - up to 1073.15 deg k.
+       go to 11
+c
+  100  continue
+c
+c  This branch for the case where temperatures are beyond astem's
+c  upper limit of 1073.15 deg k.  The janaf treatment of Stull
+c  and Prophet is used here.
+       ta = 1073.15/tcrit
+       ir = 2
+       call gibbab ( af, pa, ta, 2, ir)
+       call cona ( af, 2, f, 0, 0, hcrit, pcrit, tcrit )
+       s0 = -f(4)
+       u0 = f(1) - 1073.15*f(4) - p*f(2)
+       vb = f(2)
+       r = p*vb/1073.15
+       vb = r * t / p
+c
+c  Integrate c sub p.
+       call intgrc ( 1073.15, t, csubpi, cpint, ier )
+       if ( ier .ne. 0 )  write (*,*) ' snglph - integration error',
+     &                                ', p = ',p,', t = ',t
+       ub = u0 + cpint - r * ( t - 1073.15 )
+c
+c  Calculate ds from 1073.15 to t.
+       call dels ( 1073.15, t, ds, ier )
+       if ( ier .ne. 0 )  write (*,*) ' snglph - error in routine dels'
+       v(iv) = vb
+       u(iv) = ub
+       beta(iv) = 1.0/t
+       akappa(iv) = 1.0/p
+       cp(iv) = csubpi
+       s(iv) = s0 + ds
+c
+   11  continue
+c
+c--overwrite critical point derivatives if necessary
+c
+c      if ( t.eq.tcrit .and. p.eq.pcrit ) then
+c        beta(iv) = 0.6310674807664440
+c        akappa(iv) = 7.1251224618562390e-07
+c        cp(iv) = 334752.7814080883
+c      endif
+c
+       return
+c
+c
+       end
+       subroutine  table3 (tables,i1,i2,next,nprops,maxlpp)
+c
+c
+c      table3  - generate temperature v. pressure saturation table
+c
+c
+c      Author:   J. E. Tolli, EG&G Idaho, Inc.
+c      Date:     8/91
+c      Language: FORTRAN 77
+c
+c
+c      Calling sequence:
+c
+c                call  table3 (rp1,ip2,ip3,ip4,ip5,ip6)
+c
+c      Parameters:
+c
+c                rp1 = tables = array containing thermodynamic tables
+c                               (input,output)
+c
+c                ip2 = i1     = pointer to first saturation temperature
+c                               in tables array (input)
+c
+c                ip3 = i2     = pointer to last saturation temperature
+c                               in tables array (input)
+c
+c                ip4 = next   = index to next available word in tables
+c                               array (input)
+c
+c                ip5 = nprops = number of different properties stored
+c                               in tables, not including temperature
+c                               and pressure (input)
+c
+c                ip6 = maxlpp = maximum number of lines per page to be
+c                               written to printable output file
+c                               (input)
+c
+c      Files:
+c
+c                * (default output file);  printable list of
+c                thermodynamic properties in S. I. units
+c
+c
+       implicit  none
+c
+c
+c  Arguments:
+c
+       real  tables(*)
+       integer  i1, i2, maxlpp, next, nprops
+c
+c
+c  Common blocks:
+c
+       common  /prop/ v(2),u(2),beta(2),akappa(2),cp(2),s(2)
+       real  v,u,beta,akappa,cp,s
+c
+       common  /sat/ tsat,psat
+       real  tsat,psat
+c
+       common  /state/ istate
+       integer  istate
+c
+c
+c  Local variables:
+c
+       real  pres, temp
+       integer  i, j, last, nline
+c
+c
+c  Externals:
+c
+       external  thermp
+c
+c
+       save
+c
+c
+c--display table heading and initialize line count
+c
+       write (*,1000) '(temperature v. pressure)','temperature',
+     &                ' pressure  '
+       nline = 7
+c
+       do 10 i=i1,i2
+c
+         temp = tables(i)
+         pres = 0.0
+         call  thermp (temp,pres)
+         if (istate.ne.1) then
+           write (*,1100) istate,' temperature =',temp
+           stop
+         endif
+c
+c--place values in binary table
+c
+c--store saturation pressure
+c
+         tables(next) = psat
+c
+c--store specific volume
+c
+         tables(next+1) = v(1)
+         tables(next+1+nprops) = v(2)
+c
+c--store internal energy
+c
+         tables(next+2) = u(1)
+         tables(next+2+nprops) = u(2)
+c
+c--store thermal expansion coefficient
+c
+         tables(next+3) = beta(1)
+         tables(next+3+nprops) = beta(2)
+c
+c--store isothermal compressibility
+c
+         tables(next+4) = akappa(1)
+         tables(next+4+nprops) = akappa(2)
+c
+c--store specific heat
+c
+         tables(next+5) = cp(1)
+         tables(next+5+nprops) = cp(2)
+c
+c--store entropy
+c
+         tables(next+6) = s(1)
+         tables(next+6+nprops) = s(2)
+c
+c--display values
+c
+         nline = nline + 2
+         if (nline.gt.maxlpp) then
+           write (*,1000) '(temperature v. pressure)','temperature',
+     &                    ' pressure  '
+           nline = 9
+         endif
+         last = next + 2*nprops
+         write (*,1200) tables(i),(tables(j),j=next,last)
+c
+         next = last + 1
+c
+   10  continue
+c
+c--done
+c
+       return
+c
+c
+ 1000  format ('1'/' Saturation properties of light water ',a,':'//
+     &         1x,a,3x,a,'      state       specific  ',
+     &           '    internal       thermal     isothermal ',
+     &           '    specific       entropy'/
+     &         '                                             volume   ',
+     &           '     energy       expansion     compress.       heat'/
+     &         ' -----------   -----------   -----------   -----------',
+     &           '   -----------   -----------   -----------',
+     &           '   -----------   -----------'/)
+ 1100  format (' istate =',i2,' not valid for saturation properties at',
+     &           a,f12.6,' k')
+ 1200  format (1p,1x,2(e11.5,3x),2x,'liquid',5x,6(e12.5,2x)/32x,'vapor',
+     &         5x,6(e12.5,2x))
+c
+c
+       end
+       subroutine  table4 (tables,i1,i2,next,nprops,maxlpp)
+c
+c
+c      table4  - generate pressure v. temperature saturation table
+c
+c
+c      Author:   J. E. Tolli, EG&G Idaho, Inc.
+c      Date:     8/91
+c      Language: FORTRAN 77
+c
+c
+c      Calling sequence:
+c
+c                call  table4 (rp1,ip2,ip3,ip4,ip5,ip6)
+c
+c      Parameters:
+c
+c                rp1 = tables = array containing thermodynamic tables
+c                               (input,output)
+c
+c                ip2 = i1     = pointer to first saturation pressure
+c                               in tables array (input)
+c
+c                ip3 = i2     = pointer to last saturation pressure
+c                               in tables array (input)
+c
+c                ip4 = next   = index to next available word in tables
+c                               array (input)
+c
+c                ip5 = nprops = number of different properties stored
+c                               in tables, not including temperature
+c                               and pressure (input)
+c
+c                ip6 = maxlpp = maximum number of lines per page to be
+c                               written to printable output file
+c                               (input)
+c
+c      Files:
+c
+c                * (default output file);  printable list of
+c                thermodynamic properties in S. I. units
+c
+c
+       implicit  none
+c
+c
+c  Arguments:
+c
+       real  tables(*)
+       integer  i1, i2, maxlpp, next, nprops
+c
+c
+       common  /prop/ v(2),u(2),beta(2),akappa(2),cp(2),s(2)
+       real  v,u,beta,akappa,cp,s
+c
+       common  /sat/ tsat,psat
+       real  tsat,psat
+c
+       common  /state/ istate
+       integer  istate
+c
+c
+c  Local variables:
+c
+       real  pres, temp
+       integer  i, j, last, nline
+c
+c
+c  Externals:
+c
+       external  thermp
+c
+c
+       save
+c
+c
+c--display table heading and initialize line count
+c
+       write (*,1000) '(pressure v. temperature)',' pressure  ',
+     &                'temperature'
+       nline = 7
+c
+       do 10 i=i1,i2
+c
+         temp = 0.0
+         pres = tables(i)
+         call  thermp (temp,pres)
+         if (istate.ne.1) then
+           write (*,1100) istate,' temperature =',temp
+           stop
+         endif
+c
+c--place values in binary table
+c
+c--store saturation temperature
+c
+         tables(next) = tsat
+c
+c--store specific volume
+c
+         tables(next+1) = v(1)
+         tables(next+1+nprops) = v(2)
+c
+c--store internal energy
+c
+         tables(next+2) = u(1)
+         tables(next+2+nprops) = u(2)
+c
+c--store thermal expansion coefficient
+c
+         tables(next+3) = beta(1)
+         tables(next+3+nprops) = beta(2)
+c
+c--store isothermal compressibility
+c
+         tables(next+4) = akappa(1)
+         tables(next+4+nprops) = akappa(2)
+c
+c--store specific heat
+c
+         tables(next+5) = cp(1)
+         tables(next+5+nprops) = cp(2)
+c
+c--store entropy
+c
+         tables(next+6) = s(1)
+         tables(next+6+nprops) = s(2)
+c
+c--display values
+c
+         nline = nline + 2
+         if (nline.gt.maxlpp) then
+           write (*,1000) '(pressure v. temperature)',' pressure  ',
+     &                    'temperature'
+           nline = 9
+         endif
+         last = next + 2*nprops
+         write (*,1200) tables(i),(tables(j),j=next,last)
+c
+         next = last + 1
+c
+   10  continue
+c
+c--done
+c
+       return
+c
+c
+ 1000  format ('1'/' Saturation properties of light water ',a,':'//
+     &         1x,a,3x,a,'      state       specific  ',
+     &           '    internal       thermal     isothermal ',
+     &           '    specific       entropy'/
+     &         '                                             volume   ',
+     &           '     energy       expansion     compress.       heat'/
+     &         ' -----------   -----------   -----------   -----------',
+     &           '   -----------   -----------   -----------',
+     &           '   -----------   -----------'/)
+ 1100  format (' istate =',i2,' not valid for saturation properties at',
+     &           a,f12.6,' k')
+ 1200  format (1p,1x,2(e11.5,3x),2x,'liquid',5x,6(e12.5,2x)/32x,'vapor',
+     &         5x,6(e12.5,2x))
+c
+c
+       end
+       subroutine  table5 (tables,i1p,i2p,i1t,i2t,next,nprops,maxlpp)
+c
+c
+c      table5  - generate thermodynamic properties table for each
+c                combination of temperature and pressure
+c
+c
+c      Author:   J. E. Tolli, EG&G Idaho, Inc.
+c      Date:     8/91
+c      Language: FORTRAN 77
+c
+c
+c      Calling sequence:
+c
+c                call  table5 (rp1,ip2,ip3,ip4,ip5,ip6,ip7,ip8)
+c
+c      Parameters:
+c
+c                rp1 = tables = array containing thermodynamic tables
+c                               (input,output)
+c
+c                ip2 = i1p    = pointer to first pressure
+c                               in tables array (input)
+c
+c                ip3 = i2p    = pointer to last pressure
+c                               in tables array (input)
+c
+c                ip4 = i1t    = pointer to first temperature
+c                               in tables array (input)
+c
+c                ip5 = i2t    = pointer to last temperature
+c                               in tables array (input)
+c
+c                ip6 = next   = index to next available word in tables
+c                               array (input)
+c
+c                ip7 = nprops = number of different properties stored
+c                               in tables, not including temperature
+c                               and pressure (input)
+c
+c                ip8 = maxlpp = maximum number of lines per page to be
+c                               written to printable output file
+c                               (input)
+c
+c      Files:
+c
+c                * (default output file);  printable list of
+c                thermodynamic properties in S. I. units
+c
+c
+       implicit  none
+c
+c
+c  Arguments:
+c
+       real  tables(*)
+       integer  i1p, i1t, i2p, i2t, maxlpp, next, nprops
+c
+c
+c  Common blocks:
+c
+       common  /minmax/ tmin,pmin,tmax,pmax
+       real  tmin,pmin,tmax,pmax
+c
+       common  /prop/ v(2),u(2),beta(2),akappa(2),cp(2),s(2)
+       real  v,u,beta,akappa,cp,s
+c
+       common  /state/ istate
+       integer  istate
+c
+       common  /tpold/ told,pold
+       real  told,pold
+c
+c
+c  Local variables:
+c
+       real  pres, temp
+       integer  i, iv, j, k, last, nline
+       character  blanks*11, cpres*11, state*11
+c
+c
+c  Externals:
+c
+       external  thermp
+c
+c
+       save
+c
+c
+       data  blanks /' '/
+c
+c
+c--initialize told, pold before non-saturation calculations
+c
+       told = tmin - 1.0
+       pold = pmin - 1.0
+c
+c--get thermodynamic properties for each combination of temperature
+c--and pressure
+c
+       do 20 i=i1p,i2p
+c
+c--get pressure and save pressure display value in cpres string
+c
+         pres = tables(i)
+         write (cpres,'(1p,e11.5)') pres
+c
+c--initialize line count to the maximum number of lines per page to
+c--force a new page heading at the first temperature for this pressure
+c
+         nline = maxlpp
+c
+c--get thermodynamic properties for each given temperature at this
+c--pressure
+c
+         do 10 j=i1t,i2t
+c
+           temp = tables(j)
+           call  thermp (temp,pres)
+c
+c--check istate to set correct index for property variables
+c--(liquid state used if t,p in saturation region)
+c
+           if (istate.ne.3) then
+             iv = 1
+           else
+             iv = 2
+           endif
+c
+c--place values in binary table
+c
+c--store specific volume
+c
+           tables(next) = v(iv)
+c
+c--store internal energy
+c
+           tables(next+1) = u(iv)
+c
+c--store thermal expansion coefficient
+c
+           tables(next+2) = beta(iv)
+c
+c--store isothermal compressibility
+c
+           tables(next+3) = akappa(iv)
+c
+c--store specific heat
+c
+           tables(next+4) = cp(iv)
+c
+c--store entropy
+c
+           tables(next+5) = s(iv)
+c
+c--set state display string according to the value of istate
+c
+           if (istate.eq.1) then
+             state = 'sat-liquid '
+           else  if (istate.eq.2) then
+             state = '  liquid   '
+           else
+             state = '   vapor   '
+           endif
+c
+c--display values
+c
+           last = next + nprops - 1
+           nline = nline + 1
+           if (nline.gt.maxlpp) then
+             write (*,1000)
+             write (*,1100) cpres,tables(j),state,
+     &                      (tables(k),k=next,last)
+             nline = 8
+           else
+             write (*,1100) blanks,tables(j),state,
+     &                      (tables(k),k=next,last)
+           endif
+c
+           next = last + 1
+c
+   10    continue
+c
+   20  continue
+c
+c--done
+c
+       return
+c
+c
+ 1000  format ('1'/' Thermodynamic properties of light water:'//
+     &         '  pressure     temperature      state       specific  ',
+     &           '    internal       thermal     isothermal ',
+     &           '    specific       entropy'/
+     &         '                                             volume   ',
+     &           '     energy       expansion     compress.       heat'/
+     &         ' -----------   -----------   -----------   -----------',
+     &           '   -----------   -----------   -----------',
+     &           '   -----------   -----------'/)
+ 1100  format (1p,1x,a,3x,e11.5,3x,a,2x,6(e12.5,2x))
+c
+c
+       end
+       subroutine  thermp (temp,pres)
+c
+c
+c      thermp  - generate thermodynamic properties for light water at
+c                given temperature and pressure
+c
+c      Author:   J. E. Tolli, EG&G Idaho, Inc.
+c      Date:     11/89, 8/91
+c      Language: Fortran 77
+c
+c      Calling sequence:
+c
+c                call  thermp (p1,p2)
+c
+c      Parameters:
+c
+c                p1 = temp = temperature (k), input
+c
+c                p2 = pres = pressure (pa), input
+c
+c
+$if def,in32,1
+       implicit  double precision (a-h,o-z)
+c
+c
+       common  /crit/ tcrit,pcrit,vcrit,hcrit
+c
+       common  /minmax/ tmin,pmin,tmax,pmax
+c
+       common  /sat/ tsat,psat
+c
+       common  /state/ istate
+c
+       common  /tp/ t,p
+c
+       common  /tpold/ told,pold
+c
+c
+       logical  nogo
+c
+c
+       save
+c
+c
+c--set temperature and pressure values
+c
+       t = temp
+       p = pres
+c
+c--check for valid temperature and pressure values
+c
+       if (t.eq.0. .and. p.eq.0.) then
+         write (*,*) ' temperature and pressure both zero'
+         istate = 0
+         go to 999
+       endif
+       if (t.ne.0.) then
+         if (t.lt.tmin .or. t.gt.tmax) then
+           write (*,*) ' temperature ',t,' out of range'
+           istate = 0
+           go to 999
+         endif
+       endif
+       if (p.ne.0.) then
+         if (p.lt.pmin .or. p.gt.pmax) then
+           write (*,*) ' pressure ',p,' out of range'
+           istate = 0
+           go to 999
+         endif
+       endif
+c
+c--set saturation pressure and/or temperature;  also set told and pold
+c--for non-saturation request (if necessary), and set t and/or p for
+c--saturation request
+c
+c--check for non-saturation request
+c
+       if (t.ne.0. .and. p.ne.0.) then
+c
+         if (t.ne.told) then
+           ta = t / tcrit
+           if (t.le.tcrit) then
+             call  psatk (psata,ta,0)
+             psat = psata * pcrit
+           else
+             psat = pcrit
+           endif
+           told = t
+         endif
+c
+         if (p.ne.pold) then
+           pa = p / pcrit
+           if (p.le.pcrit) then
+             call  root (tsata,pa,d1,d2,d3,-5,nogo)
+             if (nogo)  write (*,*) 'thermp - root failure with p = ',p
+             tsat = tsata * tcrit
+           else
+             tsat = tcrit
+           endif
+           pold = p
+         endif
+c
+       endif
+c
+c--check for saturation request based on pressure
+c
+       if (t.eq.0.) then
+         if (p.le.pcrit) then
+           pa = p / pcrit
+           call  root (ta,pa,d1,d2,d3,-5,nogo)
+           if (nogo)  write (*,*) 'thermp - root failure with p = ',p
+           tsat = ta * tcrit
+           t = tsat
+           psat = p
+         else
+           write (*,*) ' pressure ',p,' too high for saturation'
+           go to 999
+         endif
+       endif
+c
+c--check for saturation request based on temperature
+c
+       if (p.eq.0.) then
+         if (t.le.tcrit) then
+           ta = t / tcrit
+           call  psatk (pa,ta,0)
+           psat = pa * pcrit
+           p = psat
+           tsat = t
+         else
+           write (*,*) ' temperature ',t,' too high for saturation'
+           go to 999
+         endif
+       endif
+c
+c--determine state
+c
+       if ( t .le. tcrit ) then
+         tmtsat = t - tsat
+         rdiff = abs ( tmtsat/t )
+         if ( (rdiff .lt. 0.0001) .and. (p .le. pcrit) ) then
+           istate = 1
+         else  if (p.gt.psat) then
+           istate = 2
+         else
+           istate = 3
+         endif
+       else
+         istate = 3
+       endif
+c
+c--get properties
+c
+       if (istate.eq.1) then
+         call  satprp (ta,pa)
+       else
+         call  snglph (ta,pa)
+       endif
+c
+c
+c--done
+c
+  999  continue
+       return
+c
+c
+       end

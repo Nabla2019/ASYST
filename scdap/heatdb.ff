@@ -1,0 +1,287 @@
+*mlist
+*if def,selap
+       subroutine heatdb(i,j,deltc,tsat)
+c
+c  heatdb calculates the heatup of axial nodes that have deteriorated
+c  from rod-like geometry to rubble or cohesive debris.
+c
+c  Cognizant engineer: ljs.
+c
+c      i = axial node under consideration
+c               (input).
+c      j = component number under consideration. (input)
+c      deltc = time step (s)  (input)
+c      tsat = saturation temperature (k)
+c
+       implicit none
+*call cons
+*call contrl
+*call scddat
+*call scdout
+*call scdcom
+*call tblsp
+*call ufiles
+*call ndxara
+*call scdpow
+c     get parameter statement for number of constituents
+*call cpmdat
+*call dbacct
+*call debcom
+*call intcom
+c
+c  Local variables.
+       integer i,j,kdyn,l,matmlt,n
+       real afrudb,afrzdb,brnup,deltc,deltqi,
+     * doxydb,emltmx,enth,frpudb,tmpdb2,tsat,wagdb1,wbcdb1,
+     * wssdb1,wssodb,wuodb1,wzodb1,wzrdb1,wzuodb
+       real ws,af,wtot
+       real frcmol
+       dimension ws(maxcon),af(maxcon)
+       real zunthl
+       real zunth1
+       real powdeb
+       real tsolpl,tliqpl
+       real qtotox,hgprt1,ceffzr,ceffuo,ceff,oxlis0,
+     # qdkns,wmxdif,frcmc1,dlttmp
+       real powad1,powad2,asurox,qdebmx,wapprx,fmarea,frgemb,dlthtc
+       real frcrdc,coefre,exprdc
+       integer kk,kk1,kk2,m,ichn,nshap
+       real coxwtk
+       external zunthl,coxwtk,oxydef
+       external zunth1
+       external atomfr,mixdlt
+       data coefre/ 0.5/, exprdc/ 0.5/
+       data frgemb / 1.0/
+       data dlthtc / 5./
+c     setup data for calling subroutine mixdlt.
+       powdeb=0.0
+c      calculate heat generation due to nuclear heat in debris.
+       do24n=1,ndbreg
+       if(idbcom(n).eq.j)then
+       kk1=ndebbt(n)
+       kk2=ndebup(n)
+       m=1
+       do22kk=kk1,kk2
+         if(kk.eq.i)then
+         powdeb=powdbl(m,n)*voldeb(m,n)/float(nsigl(j))
+         end if
+         m=m+1
+22       continue
+       end if
+24       continue
+         powad1=0.0
+         if(idrfz2(i,j).eq.1.or.idrfz2(i,j).eq.2)then
+           powad2=powadd(i,j)
+           powad1=powad1+powad2
+         end if
+c
+c       powadd(n,j)=heat generation in fuel that was liquefied and
+c                   slumped from axial node n of component j (w).
+       powdeb=powrub(i,j)+powad1
+       if(nspowi.eq.3.or.nspowi.eq.1)then
+c      Note. powtot(1)=power for component 1 as calculated by
+c      RELAP5 reactor kinentics model.  The terms powrub and powadd
+c      were divided by this power at time of debris formation.
+       powdeb=powdeb*powtot(1)
+       end if
+       qtotox=0.0
+       hgprt1=0.0
+       ceffzr=coxwtk(tcnd03(1,i,j))
+       ceffuo=24.4*exp(-26241./tcnd03(1,i,j))
+       ceff=(1.-fuocld(i,j))*ceffzr + fuocld(i,j)*ceffuo
+c   multiply oxidation kinetics rate by ratio of surface area in
+c   current state of degeneration to surface area in intact configuratio
+c   multiplier could also be put on surface area term but then mass of
+c   oxidized Zr would not be correctly computed.
+       ichn=ncmpgp(j)
+       frcmc1=frcmcl(i,ichn)
+       frcrdc=coefre*frcmc1**exprdc
+       if(frcrdc.gt.1.0)frcrdc=1.0
+       if(frcrdc.lt.0.0)frcrdc=0.0
+       ceff=(1.-frcrdc)*ceff
+       wgzrd1(i,j)=sqrt(wgzrd0(i,j)**2+ceff*deltc)
+c      Limit weight gain to maximum allowed by mass diffusion.
+       nshap=1
+       if(irubqq(i,j).eq.1)nshap=3
+       call oxydef(oxlis0,i,nshap)
+       wmxdif=oxlis0*dt+wgzrd0(i,j)
+c***   if(noxide2(i,j).ge.2)wmxdif=wgzrd0(i,j)
+       if(wgzrd1(i,j).gt.wmxdif)wgzrd1(i,j)=wmxdif
+       if(wgzrd1(i,j).gt.wmxcld(i,j))wgzrd1(i,j)=wmxcld(i,j)
+c      Calculate heat generation per unit surface area.
+       qdkns=hefcld(i,j)*(wgzrd1(i,j)-wgzrd0(i,j))/deltc
+c      calculate total heat generation due to oxidation for particles
+c    If debris from fragmentation of embrittled fuel rods, apply
+c    multiplier to surface area.
+       fmarea=1.
+       if(nshap.eq.3)fmarea=frgemb
+       asurox=fmarea*nzrdeb(i,j)*6.*(tzrdeb(i,j)**2)
+       qtotox=asurox*qdkns
+c    update oxygen contact at node to account for Zr oxidation during
+c    time step.
+       woxrub(i,j)=woxrub(i,j)+fmarea*nzrdeb(i,j)*6.*(tzrdeb(i,j)**2)
+     # *(wgzrd1(i,j)-wgzrd0(i,j))
+c      calculate hydrogen production due to oxidation of particles
+       hgprt1=((wgzrd1(i,j)-wgzrd0(i,j))*
+     # fmarea*nzrdeb(i,j)*6.*(tzrdeb(i,j)**2)/8.)/deltc
+c      calculate heat generation from oxidation of UO2 in rubble
+c      debris.
+       wguod1(i,j)=sqrt(wguod0(i,j)**2+ceffuo*deltc)
+c      Note. Oxidation of UO2 is so slow that check for limitation
+c      due to mass transfer limitations is not required.
+       if(wguod1(i,j).gt.wmxful(i,j))wguod1(i,j)=wmxful(i,j)
+c      Note.  Heat of reaction of UO2 oxidizing to U3O8 is
+c             4.66e+6 J/kg of UO2 converted to U3O8.
+       qdkns=4.66e+6*(wguod1(i,j)-wguod0(i,j))/deltc
+       qtotox=qtotox+nuodeb(i,j)*6.*(tuodeb(i,j)**2)*qdkns
+c    update oxygen content at node to account for oxidation of UO2
+c    during time step.
+       woxrub(i,j)=woxrub(i,j)+nuodeb(i,j)*6.*(tuodeb(i,j)**2)
+     # *(wguod1(i,j)-wguod0(i,j))
+       hgprt1=hgprt1+((wguod1(i,j)-wguod0(i,j))*
+     # nuodeb(i,j)*6.*(tuodeb(i,j)**2)/8.)/deltc
+c      calculate oxidation of drops of relocated material in rubble
+c      debris.
+c        account for oxidation of drops that are in this node.
+c***   do20n=1,naz
+       n=i
+       if(idrfz2(n,j).ne.1.and.idrfz2(n,j).ne.2)go to 20
+c      calculate effective oxidation kinetics constant.
+c      First obtain oxidation kinetics constant for Zr.
+       ceffzr=coxwtk(tcnd03(1,i,j))
+c      Next, obtain oxidation kinetics equation for UO2.
+       ceffuo=24.4*exp(-26241./tcnd03(1,i,j))
+c      Calculate effective oxidation kinetics constant.
+       ceff=(1.-fudfz2(n,j))*ceffzr + fudfz2(n,j)*ceffuo
+c      Calculate change in weight gain.
+       wdrfz2(n,j)=sqrt(wdrfz1(n,j)**2+ceff*deltc)
+c      Limit weight gain to maximum allowed by mass diffusion.
+       nshap=1
+       if(irubqq(i,j).eq.1)nshap=3
+       call oxydef(oxlis0,i,nshap)
+       wmxdif=oxlis0*dt+wdrfz1(n,j)
+       if(wdrfz2(n,j).gt.wmxdif)wdrfz2(n,j)=wmxdif
+       if(wdrfz2(n,j).gt.wdfzm2(n,j))then
+       wdrfz2(n,j)=wdfzm2(n,j)
+       idrfz2(n,j)=3
+       if(idrfz1(n,j).ne.3)then
+!      write(output,923)
+!923    format(' *** Complete oxidation of frozen drops of',
+!    # ' relocated cladding material *** ')
+!      write(output,925)timehy,j,n,i
+!925    format(' time =',e12.6,' s;  component no. =',i3,
+!    # ' axial node of origin of drops =',i3,' current axial',
+!    # ' node =',i3)
+!      write(output,927)wdrfz2(n,j)
+!927    format(' weight gain at completion of oxidation =',
+!    # e10.4,' kg O2/m2')
+       end if
+       go to 20
+       end if
+c      Calculate heat generation per unit surface area.
+       if(wdrfz2(n,j).lt.wdrfz1(n,j))wdrfz2(n,j)=wdrfz1(n,j)
+       qdkns=hfzox2(n,j)*(wdrfz2(n,j)-wdrfz1(n,j))/deltc
+c      calculate total heat generation due to oxidation for drop.
+       qtotox=qtotox+2.*pi*(rdrops(n,j)**2)*ndrfz2(n,j)*qdkns
+       qdrops(i,j)=qdrops(i,j)+ndrfz2(n,j)*
+     # 2.*pi*(rdrops(n,j)**2)*qdkns/dzcond((j-1)*ndax+i)
+c      calculate hydrogen production due to oxidation of drops.
+       hgprt1=hgprt1+((wdrfz2(n,j)-wdrfz1(n,j))*
+     # ndrfz2(n,j)*2.*pi*(rdrops(n,j)**2)/8.)/deltc
+20     continue
+       if(hgprt1.lt.0.0)hgprt1=0.0
+       hgdeb(i,j)=hgprt1
+       qdebox(i,j)=qtotox
+c      update source term for noncondensibles.
+       qdebmx=qdebcl(i,j)
+       deltqi=(frcpen(i,j)*powdeb+qtotox-qdebcl(i,j))*deltc
+       wapprx=wuorub(i,j)+wzorub(i,j)+wzrdeb(i,j)
+c   limit deltqi to minimum temperature change during time step of 200 K/s.
+c   approximate heat capacity to be 500 J/kg.K.
+       qdebmx=200.*dt*wapprx*500.
+         if(deltqi.lt.0.0)then       
+           if(abs(deltqi).gt.qdebmx)deltqi=-qdebmx
+c     For completely quenched debris, add protection against water
+c     property failure.
+           if(tcnd03(1,i,j).lt.(tsat-dlthtc))deltqi=0.0
+         end if
+c      zero out compositions that do not exist.
+       frcmol=1.
+       wuodb1=frcmol*frcpen(i,j)*wuorub(i,j)
+       wzodb1=frcmol*frcpen(i,j)*wzorub(i,j)
+       wagdb1=frcmol*frcpen(i,j)*wagrub(i,j)
+       wssdb1=frcmol*frcpen(i,j)*wssrub(i,j)
+       wzrdb1=frcmol*frcpen(i,j)*wzrdeb(i,j)
+       wssodb=0.0
+       wzuodb=0.0
+       afrudb=0.333333334
+       afrzdb=0.5
+       wbcdb1=0.0
+       brnup=0.0
+       doxydb=0.0
+       frpudb=0.0
+       tsolpl=tmlsol(i,j)
+       tliqpl=tmlliq(i,j)
+       call mixdlt(deltqi,wuodb1,wzrdb1,wzodb1,
+     # wagdb1, wssdb1, wssodb, wzuodb, afrudb, afrzdb, wbcdb1,
+     # brnup,frpudb, doxydb, emltdb(i,j), emltmx, matmlt,
+     # tsolpl,tliqpl,tcnd03(1,i,j),tmpdb2)
+c***  TEMPORARY. Assume coolant never has temperature less
+c***  then saturation temperature.  This constraint can be removed
+c***  when more accurate calculation of debirs to fluid heat transfer is
+c***  implemented.  Current modeling without this constraint can result
+c***  in debris calculated to have temperature 20 K less than saturation
+c***  temperature even though coolant is two-phase.
+c***  if(tmpdb2.lt.tsat)tmpdb2=tsat
+       kdyn=(j-1)*ndax+i
+       do100l=1,nrodes(kdyn)
+       tcond3(l,i,j)=tmpdb2
+  100  continue
+c     update of fraction of way through phase change is performed
+c     in subroutine scdad5 (frcmcl increases monotonically since it
+c     is measure of state of damage due to melting and which does not
+c     anneal out.
+       if(idebqn(i,j).eq.1)then
+c      calculate stored thermal energy of debris.
+c***  old way
+c***   wuo2=wuorub(i,j)
+c***   wzr=0.74*wzorub(i,j)
+c***   wox=0.26*wzorub(i,j)
+c***   call atomfr(wuo2,wzr,wox,afracu,afracz,afraco)
+       frcmol=1.
+       wuodb1=frcmol*frcpen(i,j)*wuorub(i,j)
+       wzodb1=frcmol*frcpen(i,j)*wzorub(i,j)
+       wagdb1=frcmol*frcpen(i,j)*wagrub(i,j)
+       wssdb1=frcmol*frcpen(i,j)*wssrub(i,j)
+       wzrdb1=frcmol*frcpen(i,j)*wzrdeb(i,j)
+       wssodb=0.0
+       wzuodb=0.0
+       afrudb=0.333333334
+       afrzdb=0.5
+       wbcdb1=0.0
+       do120n=1,maxcon
+120    ws(n)=0.0
+       ws(1)=wzrdb1
+       ws(2)=0.0
+       ws(3)=wssdb1
+       ws(4)=wagdb1
+       ws(5)=wbcdb1
+       ws(6)=wuodb1
+       ws(7)=wzodb1
+       ws(8)=0.0
+       ws(9)=0.0
+       ws(10)=0.0
+c     determine atomic fractions of each constituent
+       call calaf(ws, wtot, af)
+       enth=zunth1(af(1),af(2),af(3),af(4),af(5),af(6),af(7),
+     # tmpdb2, af(8), af(9), af(10), af(11), tsat)
+c***   enth=zunthl(afracu,afracz,tmpdb2,tsat)
+       debent(i,j)=frcmol*float(nsigl(j))*(wuorub(i,j)+wzorub(i,j)+
+     # wssrub(i,j)+wzrdeb(i,j))*enth
+800    continue
+       debqen(i,j)=0.0
+       debtpi(i,j)=tmpdb2
+       end if
+       return
+       end
+*endif

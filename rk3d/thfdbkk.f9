@@ -1,0 +1,244 @@
+      SUBROUTINE THFDBKK(NTHSWITCH,
+     &  WTFR,VOLU,AREA,DOPL,RHOW,TAVF,HEFF,HEFFOLD,TCOLCOLD,
+     &  TAVFOLD,GGMKIN,RHOWOLD,GGMK,TTCOLIN,PWRDN,PWRDNOLD,
+     &  HEATFLUX,DZ,NCOLXY,NCOLZ,FUFR,TCOLC,TFREF,TTCOLINOLD,
+     &  UNEW,UOLD )
+C
+C     THIS SUBROUTINE CALCULATES COOLANT INTERNAL ENERGY, COOLANT DENSITY
+C     AND FUEL TEMPERATURES FOR THE TRANSIENT PROBLEM
+C
+      include 'param.fcb'
+      include 'perttr.fcb'
+      include 'thermk.fcb'
+      include 'power.fcb'
+      include 'geom.fcb'
+      include 'thermo.fcb'
+      include 'soln2.fcb'
+      include 'start.fcb'
+      include 'cntl.fcb'
+      include 'nonfue.fcb'
+      include 'bpitch.fcb'
+      include 'thcoef.fcb'
+      include 'th_cof.fcb'
+      include 'array.fcb'
+      include 'varlen.fcb'
+      
+      DIMENSION
+     &  NCOLXY(NXYLMAX,*)                           ,NCOLZ(*)        ,
+     &  WTFR(*)                                     ,TTCOLINOLD(*)   ,
+     &  VOLU(NXYL,*)                                ,TCOLC(NXYL,*)   ,
+     &  AREA(*)                                     ,HEFFOLD(NXYL,*) ,
+     &  TCOLCOLD(NXYL,*)                            ,TAVFOLD(NXYL,*) ,
+     &  GGMKIN(*)                                   ,RHOWOLD(NXYL,*) ,
+     &  GGMK(NXYL,NZ+1)                             ,TTCOLIN(*)      ,
+     &  TAVF(NXYL,*)                                ,HEFF(NXYL,*)    ,
+     &  DOPL(NXYL,*)                                ,FUFR(*)         ,
+     &  RHOW(NXYL,*)                                ,PWRDN(NXYL,*)   ,
+     &  PWRDNOLD(NXYL,*)                            ,HEATFLUX(NXYL,*),
+     &  UNEW(NXYL,*)                                ,UOLD(NXYL,*)    ,
+     &  DZ(0:*)                                     ,TFREF(*)
+      
+      IF(ANFDBK .NE. 'Y') RETURN
+C     
+C---- CONVERT PRESSURE FROM PSIA TO MEV/CM**3
+C     
+      PINDY=4.30336E+10*PIN
+C     
+C---- CALCULATE INTERNAL HEAT DISTRIBUTION
+C---- AND CORRESPONDING COOLANT HEAT CAPACITY, DENSITY
+C---- AND MASS FLOW RATE
+C     
+      
+      DO 10 IXY=1,NXYL
+       DO 10 IZ=1,NZ
+        IZP=IZ+1
+        IF(IZ.EQ.1) THEN
+         UCOLBOTOLD=PROPPOLY(NPOLUCOL,COF_UCOL,TTCOLINOLD(IXY),
+     &     SC0_UCOL,SC1_UCOL)
+         UCOLBOT=PROPPOLY(NPOLUCOL,COF_UCOL,TTCOLIN(IXY),
+     &     SC0_UCOL,SC1_UCOL)
+         RHOWBOT=PROPPOLY(NPOLRHOWC,COF_RHOWC,UCOLBOT,
+     &     SC0_RHOWC,SC1_RHOWC)
+         IF(GMASS.GT..0) THEN
+          GGMKBOT=GGMKIN(IXY)*WTFR(NCOLXY(IXY,NCOLZ(IZCOLS)))
+         ELSE
+          GGMKBOT=GGMKIN(IXY)
+         ENDIF
+         RHOWBOTOLD=RHOWBOT
+         GGMKBOTOLD=GGMKBOT
+        ELSE
+         UCOLBOTOLD=UOLD(IXY,IZ-1)
+         UCOLBOT=UNEW(IXY,IZ-1)
+         RHOWBOT=RHOW(IXY,IZ-1)
+         GGMKBOT=GGMK(IXY,IZ)
+         RHOWBOTOLD=RHOWTMP
+         GGMKBOTOLD=GGMKTMP
+        ENDIF
+        IF(IZ.EQ.NZ) IZP=IZ
+        IZZ = IZ
+        IF(NZ.EQ.1) IZZ=IZCOLS
+        I = NCOLXY(IXY,NCOLZ(IZ))
+        II = NCOLXY(IXY,NCOLZ(IZP))
+        III = NCOLXY(IXY,NCOLZ(IZCOLS))
+        IF(NTHSWITCH.EQ.1.OR.
+     &    (I.GT.NFUEXY.AND.IZ.GE.IZCOLS)) THEN
+C     
+C...  CHECK FOR THE HEAT FLUX IN EACH REGION
+C     
+        IF(I .LE. NFUEXY) THEN
+         AMHEAT = 0.00
+        ELSE
+         AMHEAT = 1.00
+        ENDIF
+        
+        UOLDT = UOLD(IXY,IZ)
+C     
+C...  CHECK THE FLOW REGIME FOR THE PAST TIME STEP
+C...  APPLY THE CORRECT FLOW REGIME DENSITY
+C     
+        IF(UOLDT.LT.UCOLL)THEN
+         BBH = PROPPOLY(NPOLDRHOWC,COF_DRHOWC,UOLDT,
+     &     SC0_DRHOWC,SC1_DRHOWC)
+         AAH = RHOWOLD(IXY,IZ)-BBH*UOLDT
+        ELSE
+         ADEN= RHOG*(UCOLG-UOLDT)+RHOL*(UOLDT-UCOLL)
+         BBH = (RHOL-(RHOL-RHOG)/ADEN)/ADEN
+         AAH = RHOWOLD(IXY,IZ)-BBH*UOLDT
+        ENDIF
+C     
+C.... CALCULATE THE NEW INTERNAL HEAT
+C     
+        GAMMA1 = VOLU(IXY,IZ)*WTFR(II)*RHOWOLD(IXY,IZ)
+        GAMMA2 = VOLU(IXY,IZ)*WTFR(II)*BBH
+        GAMMA3 = AREA(IXY)*WTFR(I)*GGMKBOT*DELTAT
+        GAMMA4 = AMHEAT*SRFF*DZ(IZ)*DELTAT
+        GAMMA5 = AMHEAT*VOLU(IXY,IZ)*(1.0-DEPF)*DELTAT
+        
+        ZZZ =  GAMMA1 - GAMMA2*UOLDT
+        
+        UNEW(IXY,IZ) = (
+     &    +GAMMA1 * UOLDT
+     &    -GAMMA2 * UOLDT**2
+     &    +GAMMA3 * (UCOLBOTOLD-UOLDT)
+     &    +GAMMA4 * HEATFLUX(IXY,IZ)
+     &    +GAMMA5 * (PWRDN(IXY,IZ)+PWRDNOLD(IXY,IZ))*0.5
+     &    -((1.0/RHOW(IXY,IZ))*AREA(IXY)*WTFR(II)*GGMK(IXY,IZ+1)
+     &    - (1.0/RHOWBOTOLD)*AREA(IXY)*WTFR(I)*GGMKBOTOLD )
+     &    *PINDY*DELTAT)/ZZZ
+        
+        RHOWTMP=RHOW(IXY,IZ)
+        CALL FLUIDCON(IXY,IZ,TTCOLIN(IXY),TCOLC,RHOW,UNEW)
+C     
+C-----MASS FLOW RATE CALCULATION
+C     
+        GGMKTMP=GGMK(IXY,IZ+1)
+        GGMK(IXY,IZ+1) = (
+     &    - (VOLU(IXY,IZ)*WTFR(II)/DELTAT)
+     &    *( RHOW(IXY,IZ) - RHOWOLD(IXY,IZ) )
+     &    + GGMKBOT * AREA(IXY)*WTFR(I)
+     &    )/(  AREA(IXY)*WTFR(II) )
+C     
+C-----STABILIZING STEP [SETS]
+C     
+        GAMMA1 = VOLU(IXY,IZ)*WTFR(II)*RHOW(IXY,IZ)
+        GAMMA3 = AREA(IXY)*WTFR(I)*GGMKBOT*DELTAT
+        AKAPA1 = AREA(IXY)*WTFR(II)*GGMK(IXY,IZ+1)*DELTAT
+        
+        ZZZZ = GAMMA1 + AKAPA1
+        
+        UNEW(IXY,IZ) = (
+     &    +GAMMA1 * UOLDT
+     &    +GAMMA4 * HEATFLUX(IXY,IZ)
+     &    +GAMMA5 * (PWRDN(IXY,IZ)+PWRDNOLD(IXY,IZ))*0.5
+     &    +GAMMA3 * UCOLBOT
+     &    -((1.0/RHOW(IXY,IZ))*AREA(IXY)*WTFR(II)*GGMK(IXY,IZ+1)
+     &    - (1.0/RHOWBOT)*AREA(IXY)*WTFR(I)*GGMKBOT )
+     &    *PINDY*DELTAT)/ZZZZ
+        
+        CALL FLUIDCON(IXY,IZ,TTCOLIN(IXY),TCOLC,RHOW,UNEW)
+C     
+C-----MASS FLOW RATE CALCULATION
+C     
+        GGMK(IXY,IZ+1) = (
+     &    - (VOLU(IXY,IZ)*WTFR(II)/DELTAT )
+     &    *( RHOW(IXY,IZ) - RHOWOLD(IXY,IZ) )
+     &    + GGMKBOT * AREA(IXY)*WTFR(I)
+     &    )/(  AREA(IXY)*WTFR(II) )
+        
+       ENDIF
+       
+ 10   CONTINUE
+C     
+C---- CALCULATING THE FOLLOWING :
+C---- AVERAGE FUEL TEMPERATURE AND FUEL SURFACE TEMPERATURE
+C---- CORRESPONDING TO THE POINT-WISE AVERAGE LINEAR POWER
+C---- DENSITY (ONLY FOR THE FUEL REGION) BY INTERPOLATION
+C---- AND CALCULATE THE DOPPLER FEEDBACK :
+C     
+      DO 110 IZ=IZCOLS,IZCOLE
+       DO 100 IXY=1,NXYL
+        I=NCOLXY(IXY,NCOLZ(IZ))
+        IF(I .LE. NFUEXY) GOTO 100
+        
+        TAVTFD = TAVF(IXY,IZ)
+        
+        TAVFRANG = COF_TAF(0)
+        IF(TAVTFD.LT.TAVFRANG) THEN
+         TAVTFDEFF= TAVFRANG
+        ELSE
+         TAVTFDEFF=TAVTFD
+        ENDIF
+        
+        CPPF   = PROPPOLY(NPOLCPF,COF_CPF,TAVTFD,
+     &    SC0_CPF,SC1_CPF)
+        
+        IF(NTHSWITCH.EQ.1)
+     &    HEFF(IXY,IZ) =  PROPPOLY(NPOLHFF,COF_HFF,TAVTFDEFF,
+     &    SC0_HFF,SC1_HFF)
+        
+        ALPHA1  = CPPF * RHOWTF * VOLU(IXY,IZ) * FUFR(I)
+        
+        FNFRODS = NFRODS * (AREA(IXY)/BAREA)
+        
+        ALPHA2 =
+     &    ((HEFF(IXY,IZ)+HEFFOLD(IXY,IZ))/4.0 )
+     &    *FNFRODS*SRFF*DZ(IZ)*DELTAT
+        
+        BETATFD = ALPHA1 + ALPHA2
+        
+        
+        TAVF(IXY,IZ) = (1.0/BETATFD)*(
+     &    + ( ALPHA1 - ALPHA2 ) * TAVFOLD(IXY,IZ)
+     &    + ALPHA2 * TCOLCOLD(IXY,IZ)
+     &    + ALPHA2 * TCOLC(IXY,IZ)
+     &    + DEPF*
+     &    (PWRDN(IXY,IZ)+PWRDNOLD(IXY,IZ))
+     &    *0.5*VOLU(IXY,IZ)*DELTAT)
+        
+        HEATFLUX(IXY,IZ) =
+     &    (  FNFRODS )*
+     &    (  ( HEFF(IXY,IZ)+ HEFFOLD(IXY,IZ) )/4.0  )
+     &    * ( ( TAVF(IXY,IZ)+ TAVFOLD(IXY,IZ) )
+     &    -(TCOLC(IXY,IZ)+TCOLCOLD(IXY,IZ)) )
+        EFFKWFT=(SRFF/(DEPF*FNFRODS))*HEATFLUX(IXY,IZ)*CONVKWFT
+        
+        SURFTF= PROPPOLY(NPOLTSF,COF_TSF,EFFKWFT,
+     &    SC0_TSF,SC1_TSF)
+        DELTEMP = TCOLC(IXY,IZ) - COF_TSF(0)
+C     NEAERA           PEAKTF=1.7970+4.3085E-4*TAVF(IXY,IZ)
+C     NEAERA     &      -1.4366E-7*(TAVF(IXY,IZ)**2)+1.6475E-11*(TAVF(IXY,IZ)**3)
+        AVTFF=TAVF(IXY,IZ)+460.
+        SURFTF=SURFTF+DELTEMP+460.
+        TKMOD=TCOLC(IXY,IZ)+460.
+C     NEAERA           TCLTFF=SURFTF+PEAKTF*(AVTFF-SURFTF)
+C     NEAERA           TEFF=TKMOD+WC*(WP*TCLTFF+(1.-WP)*SURFTF-TKMOD)
+C     NEAERA  REMOVE LINES: START            
+        TEFF=TKMOD+WC*(WP*AVTFF+(1.-WP)*SURFTF-TKMOD)
+C     NEAERA  REMOVE LINES: END            
+        DOPL(IXY,IZ)=(TEFF**0.5-(TFREF(I)+460.)**0.5)
+        
+ 100   CONTINUE
+ 110  CONTINUE
+      
+      RETURN
+      END

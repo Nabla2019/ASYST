@@ -1,0 +1,377 @@
+*mlist
+       subroutine ilevel
+c
+c  This subroutine tracks two-phase level in
+c  1-D vertical components.
+c
+c  Cognizant engineer: kuo,wlw
+c
+c  Purpose --
+c    perform calculations to detect a two-phase level within a
+c      hydrodynamic cell.
+c    compute level propagation velocity, above-level void fraction,
+c      below-level void fraction, and level position related to
+c      the bottom of the cell.
+c    set level flags.
+c  icheck = 0, level calculation at end of advancement, compute
+c     level position at end of advancement and move to adjacent volume
+c     if appropriate
+c  icheck = 1, level calculation at beginning of time step, project
+c     level position at end of time step and move to adjacent volume
+c     if appropriate
+c  New volume variables
+c    voidla   void fraction above the two-phase level
+c    voidao
+c    voidlb   void fraction below the two-phase level
+c    voidbo
+c    vlev    velocity of the two-phase level movement
+c    dlev    location of the two-phase level
+c    dlevo
+c  Parameters define the existance of two-phase level
+c    dvoidc  critical void difference
+c    dvoidi  critical void difference for inverse profile
+c    voidlt  void fraction limit for volume
+c
+c    this subroutine consists of three main blocks.
+c    1) the first block determines the level position, either by
+c       examination on the level criteria ( icheck = 0 ), or by
+c       extrapolation of the level position( icheck = 1 ).
+c    2) the second block detemines the pressure gradient correction
+c       term for each volume containing a level after propigating
+c       the level to the adjacent volume if the level position
+c       determined in the first block lies outside of the volume. The
+c       junctions effected by either level movement or by level
+c       appearance are marked for processing by the next block.
+c    3) the velocities in the junctions marked by the second block
+c       are recomputed to be consistant with the level positions.
+c     the first two blocks are contained in a loop over all volumes
+c     while the second loop is over a list containing the indices
+c     of the junctions marked by the loop over volumes.
+c
+       use invtbl
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'eccmxc.h'
+       include 'jundat.h'
+       include 'levtbl.h'
+       include 'lvectr.h'
+       include 'przdat.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'lvel.h'
+c
+c  local variables
+       integer i,ibot,itop,jbot,ifrmto,jtop,jx,jxx,jtype,
+     & jvx,jupdw,jupdwb,jupdwt,l,loop,m,mm,ll
+       integer itmax,iare,iarb,
+     & ilv,ilvb,ilvtp,ilvbt,inv,ivord
+       real ck,cinf,co,dll,dmax,fctr,flxfm,flxg,flxgm,
+     & flxm,glent,testa,testb,vcrt,vfm,vfp,vgj,vgm,vgp,
+     & rhofg,eps,voida,voidb,alpa,alpb
+       real  voidgb,voidgt,voidfb,voidft
+       logical offmod
+       data offmod/.false./
+c
+c  Data statements.
+       data eps/1.0e-04/,itmax/20/
+c
+c  Loop over volumes.
+       do 266 issys = 1,nloops
+         ll = lpdat(issys)%levstk + filndx(43)
+         if( levskn(ll).gt.0 ) then
+         do 267 mm = 1,levskn(ll)
+           i = levskh(ll) + filndx(4)
+c
+c  level can be in volume, set global level control flag
+           imdctl(1) = ior(imdctl(1),1)
+   10      continue
+c  Loop over junctions attached to volume.
+           ilv = iand(ishft(vctrlx(i),-7),1)
+           ilvb = iand(ishft(vctrlx(i),-8),1)
+           iare = 0
+           iarb = 0
+           alpb = voidg(i)
+           alpa = voidg(i)
+           itop = 0
+           ibot = 0
+           jtop = 0
+           jbot = 0
+           rhofg = max((rhof(i) - rhog(i)), 1.0e-7)
+           l = invfnd(i)
+           do loop = 1,invcnt(i)
+             jx = invj(l)%invvnx
+c  Consider this jun if it is not a jet jun.
+             if (iand(jc(jx),ishft(1,25)) .ne. 0) go to 227
+c  jx is junction  index.
+             jxx = jcnxs(jx)
+             jtype = iand(ishft(jc(jx),-26),1)
+             if (chngno(48)) then
+               if (jtype.eq.0) go to 227
+             else
+               if (jtype.eq.0) go to 227
+             endif
+c
+c  Get from-to junction flag.
+             ifrmto = iand(ishft(invj(l)%invjun,-2),1)
+c  Get up-down juction flag.
+             jupdw  = iand(ishft(jc(jx),-27),1)
+c
+c  Set top-bot flag.
+             jtype = abs(ifrmto - jupdw)
+             if (ifrmto .eq. 0) then
+               jvx = filndx(4) + ivskp*(ij2vn(jx) - 1)
+             else
+               jvx = filndx(4) + ivskp*(ij1vn(jx) - 1)
+             endif
+             if (jtype .eq. 1) then
+c  If multiple junction on bottom face, no level in volume
+               if( jbot.eq.0 ) then
+                 jbot = jx
+                 jupdwb = jupdw
+                 ibot = jvx
+               else
+                 jbot = -1
+               endif
+             else
+c  Multiple junctions on top face, no level in volume.
+               if( jtop .eq. 0 ) then
+                 jtop = jx
+                 jupdwt = jupdw
+                 itop = jvx
+               else
+                 jtop = -1
+               endif
+             endif
+  227        l = l + 1
+           enddo
+c
+c  Volume must have at least one vertical momentum junction.
+           if( (jtop.eq.0) .and. (jbot.eq.0)) go to 3998
+           if( jtop.eq.-1 .or. jbot.eq.-1 ) go to 3998
+           voidgb = 0.0
+           if( ibot.ne.0 ) then
+             voidgb = voidg(ibot)
+             ilvbt = iand(ishft(vctrlx(ibot),-7),1)
+           endif
+           voidgt = 1.0
+           if( itop.ne.0 ) then
+             voidgt = voidg(itop)
+             ilvtp = iand(ishft(vctrlx(itop),-7),1)
+           endif
+           voidft = 1.0 - voidgt
+           voidfb = 1.0 - voidgb
+           testb = (voidgb - voidg(i)) - dvoidi
+           testa = (voidg(i) - voidgt) - dvoidi
+c
+           if( jtop.eq.0 ) then
+             iare = 1
+             go to 170
+           elseif (testa  .gt. 0.0) then
+             go to 130
+           elseif ( jbot.eq.0 ) then
+             iarb = 1
+             go to 190
+           elseif (testb  .gt. 0.0) then
+             go to 140
+           else
+             go to 150
+           endif
+  130      continue
+           if( iand(jc(jtop),ishft(1,8)).ne.0 ) then
+             iare = 1
+             go to 170
+           else
+             go to 3999
+           endif
+  140      continue
+           if( iand(jc(jbot),ishft(1,8)).ne.0 ) then
+             iarb = 1
+             go to 190
+           else
+             go to 3999
+           endif
+c C .. volume i ** normal void profile.
+  150      continue
+           testa = (voidgt - voidg(i)) - dvoidc
+           testb = (voidg(i) - voidgb) - dvoidc
+c
+           if ( ilvtp.eq.1) then
+             go to 3999
+           elseif( ilvbt.eq.1 ) then
+             go to 3999
+           elseif ( testa.gt.0.0 .and. ( voidgt.gt.voidlt .or.
+     &       iare.eq.1 ) ) then
+             go to 160
+           elseif ( testb.gt.0.0 .and. ( voidg(i).gt.voidlt .or.
+     &       iarb.eq.1 ) ) then
+             go to 160
+           endif
+           go to 3999
+  160      continue
+           voidb = voidgb
+           voida = voidgt
+           if( iare.eq.1 ) voida = 0.999
+           if( iarb.eq.1 ) voidb = 0.000
+           go to 210
+c
+  170      continue
+c B .. volume i ** below a void profile inversion.
+           if ( ilvbt.eq.1 ) then
+               go to 3999
+           elseif ((0.999-voidg(i)) .gt. dvoidc) then
+               go to 180
+           elseif ((voidg(i)-voidgb) .gt. dvoidc) then
+             go to 180
+           else
+             go to 3999
+           endif
+  180      continue
+           voidb = voidgb
+           voida = 0.999
+           go to 210
+c A .. volume i ** above a void profile inversion.
+  190      continue
+           if( ilvtp.eq.1 ) then
+               go to 3999
+           elseif ( (voidg(itop)-voidg(i)).gt.dvoidc .and.
+     &     voidg(itop) .gt. voidlt ) then
+             go to 200
+           elseif ( (voidg(i)-0.001).gt.dvoidc .and.
+     &       voidg(itop).gt.voidlt ) then
+             go to 200
+           else
+             go to 3999
+           endif
+c
+  200      continue
+           voida = voidgt
+           voidb = 0.0
+           if( jbot.ne.0 ) then
+              vfm = velfj(jbot)*ajun(jbot)/avol(i)
+              vgm = velgj(jbot)*ajun(jbot)/avol(i)
+            else
+              vfm = 0.0
+              vgm = 0.0
+            endif
+            fctr = 1.0
+            if (jupdwb .eq. 1) fctr = - 1.0
+            vfm = vfm*fctr
+            vgm = vgm*fctr
+            if(vfm*vgm .ne. 0.0 ) then
+              flxgm = 0.5*vgm*((voidgb+alpb) +
+     &        sign(1.0,vgm)*(voidgb-alpb))
+              flxfm = 0.5*vfm*((voidfb+(1.0-alpb)) +
+     &        sign(1.0,vfm)*(voidfb-(1.0-alpb)))
+              flxm = flxgm + flxfm
+              vgj = 1.41*(rhofg*gravcn*sigma(i)/
+     &        (rhof(i)*rho(i)))**0.25
+              cinf = 1.0 - 0.2*sqrt((rhof(i)*sqrt(gravcn*diamv(i)))/
+     &        (abs(vgm)*voidg(i)*rhog(i) +
+     &        abs(vfm)*voidf(i)*rhof(i)))
+              co = cinf - (cinf-1.0)*sqrt(rhog(i)/rhof(i))
+              co = min(co,1.33)
+              voidb = flxgm/(co*flxm + vgj)
+              voidb = min(voidb,1/co)
+              voidb = max(voidb,0.0)
+            endif
+  210      continue
+           voidlb(i) = min(voidb,voidg(i))
+           if( voidg(i)-voidlb(i).lt.1.e-06 ) go to 3999
+  220      continue
+           if( dlev(i).eq.dl(i)) go to 230
+           fctr = 1.0
+           if (jupdwt .eq. 1) fctr = -1.0
+           if( jtop.ne.0 ) then
+             vgp = velgj(jtop)*ajun(jtop)/avol(i)
+             vfp = velfj(jtop)*ajun(jtop)/avol(i)
+           else
+             vgp = 0.0
+             vfp = 0.0
+           endif
+           vgp = vgp*fctr
+           vfp = vfp*fctr
+           flxg = voida*vgp
+           if (vgp .le. 0.0 .or. vfp.le.0.0 ) go to 230
+             dmax = 0.3375*(rhog(i)*vgp*vgp/
+     &       (gravcn*rhofg))
+             vcrt = 2.0*(sigma(i)*gravcn*rhofg/
+     &       (rhog(i)*rhog(i)))**0.25
+             ck = 2.0*dmax*flxg/
+     &       (vcrt*gravcn*sqrt(sigma(i)/(rhofg)))
+             glent = (3.0e-5*(sqrt(ck)+530.0*(ck**2.1))*
+     &       sqrt((rhofg)/rhog(i)))*flxg*rhog(i)
+             voidla(i) = 1.0 - glent/(rhof(i)*vfp)
+             voidla(i) = max(voidla(i),0.9)
+             go to 240
+  230      continue
+           voidla(i) = voida
+  240      continue
+           voidla(i) = min(voidla(i),voida)
+           voidla(i) = max(voidg(i),voidla(i))
+           if( voidla(i)-voidg(i).lt.1.e-06 ) go to 3999
+  250      continue
+c
+c  Location of the two-phase level.
+           dll = dl(i)
+           if ((voidla(i)-voidlb(i)) .gt. 0.1) then
+             dlev(i) = dll*(voidla(i)-voidg(i))/(voidla(i)-voidlb(i))
+             dlev(i) = max(0.0,min(dlev(i),dll))
+           else
+cc    level not present voidla < voidlb ?????
+             go to 3999
+           endif
+c  Calculation of level velocity.
+           vlev(i) = 0.0
+           if( jtop.ne.0 ) then
+             vlev(i) = velgj(jtop)
+           elseif( jbot.ne.0 ) then
+             vlev(i) = velfj(jbot)
+           endif
+           vollev(i) = dlev(i)
+           vctrlx(i) = ior(vctrlx(i),ishft(1,7))
+           vctrlx(i) = ior(vctrlx(i),ishft(1,8))
+           levskl(ll) = i - filndx(4)
+         go to 4000
+c  No level in volume i.
+ 3998      continue
+c
+c  No level in volume i, no vertical junctions attached to volume
+c  or multiple vertical junctions attached to bottom or top face
+c  turn off level bit for volume
+c
+           imap(i) = iand(imap(i),not(ishft(1,28)))
+           write(output,9999) volno(i)
+ 9999      format('0$$$$$$$$$ Level model in volume ',i10,' turned off,'
+     &' because this volume violates level model connection rules ')
+ 3999      continue
+           voidla(i) = 0.0
+           voidlb(i) = 0.0
+           vlev(i) = 0.0
+           dplev(i) = 0.0
+           vollev(i) = 0.0
+           dlev(i) =  0.0
+           if( jbot.eq.0 .or. iand(ishft(jc(jbot),-8),1).eq.1
+     &     .or. iand(ishft(jc(jbot),-1),1).eq.1
+     &     .or. iand(vctrl(ibot),1).eq.1 ) then
+              go to 4000
+           else
+              i = ibot
+              go to 10
+           endif
+ 4000    continue
+         ll = ll + levskp
+  267    continue
+         endif
+c  End of stack loop for this system.
+  266  continue
+       call ijprop
+       return
+       end

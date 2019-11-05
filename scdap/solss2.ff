@@ -1,0 +1,166 @@
+*mlist
+*if def,selap
+       subroutine solss2 (kb,naz,tsur,tsol,tliqav,wbotss,
+     # haddbt, dz,wfross,avoidl,hadd,rftemp,ifrag,
+     # vladeb,dzfrcl,hremov,wremgt)
+c  
+c 
+c  Descriptive sentence for solss goes here.
+c
+c#
+c#     calling subroutine: solab
+c#     subroutines called: matpro
+c#     engineer/programmer: l.j. siefken
+c#
+c#     argument list :
+c#     kb        = elevation at which liquid neutron ab-
+c#                  sorber material begins to flow. (m)
+c#                  (input)
+c#     naz       = number of axial zones      (input)
+c#     tsur(k)   = average temperature of control rod in
+c#                 axial zone k at end of time step. (k).
+c#                 side=1-->GT outer surface temp. (input)
+c#                 side=2-->GT inner  surface temp.
+c#     tsol      = solidification temperature (k)   (input)
+c#      tliqav    = average temperature of liquified mater-
+c#                  at start of flow. (k)   (input)
+c#    wbotss    = mass of liquified stainless steel
+c#                which flowed below bottom
+c#                of core. (kg)    (input/output)
+c#     wflo(ss)      = mass of liquified material at start of
+c#                 flow. (kg)    (input)
+c#     haddbt    = heat added to region below core due to
+c#                 flow of liquified control rod material.
+c#                 (j)     (input/output)
+c#     dz(k)     = height of each axial zone  (m)  (input)
+c#    wfross(k) = mass of solidified stainless steel in
+c#                axial zone k. (kg)    (input/output)
+c#     avoidl(k) = flow area around guide tube. (m**2)
+c#                 (input)
+c#     hadd(k)   = heat added to axial zone k during time
+c#                 step due to flow of liquified control
+c#                 rod material. (j)    (output)
+c#     rftemp    = reference temperature for enthalpy cal-
+c#                 culations. normally, rftemp is set equal
+c#                 to room temperature. (k)    (input)
+c#     ifrag(k)  = variable indicating whether or not in-
+c#                 tact control rod, debris bed or void
+c#                 region exists in axial zone k.
+c#                 0 = intact control rod
+c#                 1 or 2 = debris bed
+c#     vladeb(k) = volume of liquid which can be absorbed
+c#                 by debris bed in axial zone k. (m**2)
+c#                 (input)
+c#                 3 = void region
+c#                 (input)
+c#    dzfrcl(k) = fraction of height of axial zone k which
+c#                is completely filled with liquified/
+c#                solidified control rod material resting
+c#                on top of debris bed.  (input/output)
+c#   hremov(k) = removed heat from axial node k (J)
+
+       implicit none
+          include 'scddat.h'       
+          include 'contrl.h'
+          include 'ufiles.h'
+          include 'conele.h'
+c
+       integer kb,naz
+       real tsol,tliqav,wbotss,haddbt,rftemp
+       integer ifrag,i,side
+       real tsur,dz,avoidl,vladeb,wfross,hadd,dzfrcl,wflossel,
+     +   hremov,sflow,wremgt  
+       dimension tsur(ndax),dz(*),avoidl(ndax),ifrag(*),
+     +    vladeb(*),wfross(*), hadd(*),dzfrcl(*),hremov(*),
+     +    wremgt(*)
+c
+c  Local variables.
+       integer k,ksol,kbsol,kstack,nsw,l,ictype
+       real rho,rhoo,vol,vols,wfso,wfss,volrel
+       real sden,senthl,soden
+       external sden,senthl,soden
+c
+        ictype =2
+        nsw=0
+        ksol=0
+        wfso=0.0
+        wfss=0.0
+
+c   Relocation on the surface of Guide tube
+  100  do l=1,3
+           wfss = wfss + wrbszo(kb,icomp,l)
+        enddo
+        wfss = wfss + wrbszo(kb,icomp,8)
+        do l=4,7
+           wfso = wfso + wrbszo(kb,icomp,l)
+        enddo
+        do150k=kb,1,-1
+          if(k.eq.kb)goto 150
+          if(nsw.eq.1)goto 150
+          if(wremgt(k).ge.1.e-10)goto 150
+          if(tsur(k).lt.tsol)then
+            nsw=1
+            ksol=k
+          end if
+          if(nsw.eq.1)go to 150
+          if(ifrag(k).eq.1.or.ifrag(k).eq.2)then
+            nsw=1
+            ksol=k
+          end if
+  150   continue
+        if(ksol.ge.1)go to 200
+c  calculate mass and heat added to region below bottom of core.
+        wbotss=wfss+wfso+wbotss
+c  there is no enthalphy subroutine for oxydant                
+        haddbt=haddbt+(wfss+wfso)*senthl(tliqav,rftemp)
+        hremov(kb)=hremov(kb)+(wfss+wfso)*senthl(tliqav,rftemp)
+        go to 400
+  200   continue
+       kbsol=ksol
+       if(ifrag(kbsol).eq.0)then
+          wfross(kbsol)=wfross(kbsol)+wfss+wfso
+          do l=1,8
+            wrbszo(kbsol,icomp,l)=wrbszo(kbsol,icomp,l)+
+     &                     wrbszo(kb,icomp,l)   
+          enddo
+          hadd(kbsol)=hadd(kbsol)+(wfss+wfso)*senthl(tliqav,rftemp)
+        else
+        rho=sden(tliqav)
+        rhoo=soden(tliqav)
+        vol=wfss/rho+wfso/rhoo
+        if(vol.le.vladeb(kbsol))vols=vol
+        if(vol.gt.vladeb(kbsol))vols=vladeb(k)
+         wfross(kbsol)=wfross(kbsol)+(wfss+wfso)*vols/vol
+         do i=1,8
+           wrbszo(kbsol,icomp,l)=wrbszo(kbsol,icomp,l)+
+     #         wrbszo(kb,icomp,l)*vols/vol 
+         enddo
+        
+        hadd(kbsol)=hadd(kbsol)+(wfss+wfso)*vols/vol
+     #  *senthl(tliqav, rftemp)
+        if((vol-vols).lt.1.e-10)go to 240
+        kstack=kbsol+1
+c
+c      stack balance of liquid on top of debris.
+        if(kstack.gt.naz)kstack=naz
+         do i=1,8
+           wrbszo(kstack,icomp,l)=wrbszo(kstack,icomp,l)+
+     #        wrbszo(kb,icomp,l)*(vol-vols)/vol 
+        enddo
+        wfross(kstack)=wfross(kstack)+
+     #  (wfss+wfso)*(vol-vols)/vol
+        hadd(kstack)=hadd(kstack)+(wfss+wfso)*
+     #          (vol-vols)/vol*senthl(tliqav, rftemp)
+        dzfrcl(kstack)=dzfrcl(kstack)+
+     #  (vol-vols)/avoidl(kstack)
+  240    continue
+        end if
+  400   continue
+        do l=1,8
+            wrbszo(kb,icomp,l)=0.0
+        enddo
+        hremov(kb)=hremov(kb)+(wfss+wfso)*senthl(tliqav, rftemp)
+        return
+        
+      end
+*endif

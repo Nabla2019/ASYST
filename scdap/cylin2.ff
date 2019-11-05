@@ -1,0 +1,284 @@
+*mlist
+*if def,selap
+      subroutine cylin2
+c 
+c This subroutinedrives the SCDAP control rod analysis.
+c with bwr reactor. The default absorber material is set to B4C
+c Cognizant engineer: 
+c
+      implicit none
+*call comctl
+*call contrl
+*call fast
+*call scddat
+*call radata
+*call plndat
+*call solcom
+*call nbtim
+*call cmptim
+*call miscon
+*call ptscom
+*call fpnonv
+*call voldat
+*call fpfast
+*call cmatp
+*call cons
+*call trnot1
+*call iocom
+*call effprp
+*call tblsp
+*call debout
+*call intcom
+*call ndxara
+*call nhtara
+*call fpdkht
+*call scdads
+*call scdcom
+*call scdout
+*call trnot2
+*call ufiles        
+*call conele
+c  Local variables.
+      real tsur, effcp,  effgen, effk,
+     # wconab, wcongt, wconss, afracl, avoidl, hremov,
+     # azira, dum, estimd, fnsigl, haddbt,
+     # poxfr, rel1,
+     # rel2, snrelr, snrem, tcld, timdbf, vzira, eta,
+     # usmach, avir, rorel,
+     # oxgain,tclsur,poxgt,poxcl,poxab,poxha
+      real avfunc,snfunc,aden
+      integer jk,im,il,ictype
+      real amw(18), yin(18),yout(18),temp1,pres1,dum1
+      integer i, i34, ierr, ir, isp, ispo, ispvk,
+     +iwarn, kx, l, mz, m2, mdyn, n, nag, ncd,
+     +nelm, nsn, nvolin, mltabi, mltgti, mltssi,
+     +radnab, radnss
+      real len,tranlen,b4cgs1,length,velgas
+      integer lhyvol,lmaxgt,k,j
+      dimension tsur(ndax),
+     # effcp(ndrd,ndax), effgen(ndrd,ndax),
+     # effk(ndrd,ndax), mltabi(ndax), mltgti(ndax),
+     # mltssi(ndax), wconab(ndax), wcongt(ndax), wconss(ndax),
+     # afracl(ndax), avoidl(ndax), hremov(ndax),
+     # avir(ndrd,ndax), rorel(ndax),radnab(ndax),
+     # oxgain(ndax),tclsur(ndax),b4cgs1(ndax,ndcomp,5)
+c
+       external brchsw,ccdata,cpress,cstate,efprop,
+     +fpspix,gridsc,heatc2,meshgn,nheat,oxdcon2,
+     +tinr,trate,tspowr,usmach,avfunc,effhtc2,liqcon2,
+     +b4cadvsi
+c  ifrag :
+c  tsur  : surface temperature in current time step (k)
+c tsur0 : surface temperature in previous time step (k)
+c tclsur : absorber cladding surface temp. in previous time step (k)
+      mz = ndax * ( icomp - 1 ) + 1
+      m2 = ndax * 2 * ( icomp - 1 ) + 1
+      n = ndrd * ndax * ( icomp - 1 ) + 1
+      eta = usmach(1)
+      naxpz(icomp) = naz
+      ictype=2
+      length =0.
+      velgas =0.
+cljs  set to zero mass of control rod material slumping below core
+cljs  during time step.
+c      wbotsr(icomp)=0.0
+c      wbotzr(icomp)=0.0
+c      wbotab(icomp)=0.0
+c override fragmentation due to quench until debris models are
+c implemented in scdsimp.
+      do 10 i = 1,naz
+        ifrag(mz-1+i) = 0
+c calculate cross section of control rod
+        afuel(mz-1+i)=pi*rco(mz)**2
+c start of time step temperatures
+c repeated in ccdata
+        do 10 l=1,nrodes(mz-1+i)
+          tcnd03(l,i,icomp)=tcond3(l,i,icomp)
+   10 continue
+      idsrup(icomp) = 0
+      estimd = 0.0
+      timdbf = timdb + deltdb
+      timec = timdb
+        call ccdata
+        do 30 i=1,naz
+          tsur(i)=tcnd03(nrods2(i,icomp),i,icomp)
+          tsur0(i)=tcnd03(nrods2(i,icomp),i,icomp)
+          tclsur(i)=tcnd03(nrcond(i+(icomp-1)*ndax)-1,i,icomp)
+          l=nvad(ndax*(icomp-1)+i)+filndx(4)
+          tcolc(ndax*(icomp-1)+i)=voidg(l)*tempg(l)+voidf(l)*tempf(l)
+          dhmsszr(i,icomp)=0.0
+   30   continue
+   
+c Get power for this Scdap component.
+        call tspowr
+        call nheat(afuel(mz), ncrust(icomp), dum)
+        do 60 i=1,naz
+          if(icohpp(i,icomp).eq.1) noxide(mz-1+i)=6 
+          if(irubpp(i,icomp).eq.1) noxide(mz-1+i)=6
+   60   continue
+
+c   control rod component oxidation     
+        call oxdcon2
+
+c  compute carbonaceous species production rate and cumulative production
+        ratco(icomp)=0.0
+        ratco2(icomp)=0.0
+        ratch4(icomp)=0.0 
+        wb4ctot(icomp)=0.0
+
+c   calculate carbon gas production rate in mole        
+        do i=1,naz
+          ratco(icomp)=ratco(icomp)+float(nsigl1)*cooxd2(i,icomp)
+     &     *1.e3/28.011
+          ratco2(icomp)=ratco2(icomp)+float(nsigl1)*co2oxd2(i,icomp)
+     &     *1.e3/44.010
+          ratch4(icomp)=ratch4(icomp)+float(nsigl1)*ch4oxd2(i,icomp)
+     &     *1.e3/16.043
+          wh2b4c(icomp)=wh2b4c(icomp)+float(nsigl1)*h2oxb4c(i,icomp)
+     &     *dt
+          wb4ctot(icomp)=wb4ctot(icomp)+cwb4c(i,icomp)
+        enddo
+
+c    calulate total carbon gas production rate        
+        cumco(icomp)=cumco(icomp)+ratco(icomp)*dt
+        cumco2(icomp)=cumco2(icomp)+ratco2(icomp)*dt
+        cumch4(icomp)=cumch4(icomp)+ratch4(icomp)*dt
+        cartot(icomp)=cumco(icomp)+cumco2(icomp)+cumch4(icomp)
+
+        
+        do 70 i = 1,naz
+c put outer clad radius back if > crust radius
+          rocrst(mz-1+i) = max(rocrst(mz-1+i), rco(mz-1+i))
+c compute beta zircaloy thickness.
+   70   continue
+        wdtqlp(icomp)=0.0
+        do 80 i=1,naz
+          qchlbn(i,icomp)=0.0
+c      calculate flow area around guide tube.
+c      pitch is assumed same for all components
+          avoidl(i)=pitch(1)**2 -pi*rco(mz+i-1)**2
+   80   continue
+
+       do i=1,naz   
+          oxgain(i) = (oxdwc2(i,icomp)*
+     &    snfunc(ngeom(icomp),rci2(i,icomp),dzcnd2(i,icomp),1.0)+
+     &    oxdwci2(i,icomp)*snfunc(ngeom(icomp),rco2(i,icomp),
+     &    dzcnd2(i,icomp),1.0))
+        enddo       
+        
+        call liqcon2(dt, dzcond(mz), naz, rci(mz),
+     +  rco(mz),rnoxd(mz),rnoxdi(mz),rpel(mz),riss(mz),rftemp, 
+     +  tsur, tsur0, zcond(mz), avoidl, ndisrp(mz), vladeb(mz), nfi(mz), 
+     +  rocrst(mz), wbotab(icomp), wbotsr(icomp), wbotzr(icomp),wfroab
+     +  (mz),wfroabi(mz),wfrosr(mz),wfrosri(mz),wfrozr(mz), wremab(mz), 
+     +  wremsr(mz),wremzr(mz),hadd(mz), haddbt, hremov, wconab, wconss, 
+     +  wcongt,afracl, dzfrcl(mz), mltabi, mltssi, mltgti, timec, rorel,
+     +  oxdwf,wabbng,wsrbng2,oxgain,tclsur)
+      
+        wdtqlp(icomp)=float(nsigl1)*haddbt
+        
+        do 85 i = 1,naz
+c consider relocation volume of ss and zr
+          rocrst(mz-1+i) = max(rocrst(mz-1+i), rorel(i))
+   85 continue
+   
+        do 90 i=1,naz
+          if(hadd(mz-1+i).gt.1.0)then
+            qchlbn(i,icomp)=float(nsigl1)*hadd(mz-1+i)
+            hadd(mz-1+i)=1.0
+          end if          
+          if(b4cox(i,icomp).eq.2)icohpp(i,icomp)=1
+c check nfrslg when it is incorporated into oxidiz for air oxidation  
+          nfrslg(mz-1+i) = 0
+          rabcn1(i,icomp)=(cwb4c(i,icomp)/aden(ictype,
+     +      tclsur(i))/pi)**0.5                  
+   90   continue
+     
+c turn breach switch on if cladding breach occurred.
+        call brchsw (nfi(mz),nzero,naz,ibrch(icomp))
+        call cpress(ibrch(icomp),nvirn,naz,ngeom(icomp),
+     +  nrcond(mz), nrodes(mz), pcool, tcond(n), xcond(n), pgas(icomp))
+        call cstate
+c calculate temperatures for axial nodes which do not belong to
+c a debris region or are not void.
+        icoht(icomp) = 0
+        icohb(icomp) = 0
+c Note.  Coding deleted that switched temperature solution from
+c 2-d to 1-d after material relocation began.
+        do 120 i = 1,naz
+c calculate new radial mesh.
+          call meshgn (nrcldi(mz-1+i),nrodes(mz-1+i),rci(mz-1+i), rco
+     +    (mz-1+i), xcond3(1,i,icomp))
+c calculate power from oxidation heat and liquifying
+c material for control rod.
+c poxfr : total heat generation (W/m)
+c poxgt : heat geneartion on guide tube (W/m)
+c poxcl  :  heat generation on absorber cladding (W/m)
+c poxab : heat generation on absorber material (W/m)
+c poxha :  heat addition by relocation (W/m)
+          poxfr = oxdhcc(i,icomp)+oxdhfc(i,icomp)+oxdhss(i,icomp)
+     +     +oxdhab(i,icomp)+dhmsszr(i,icomp)+
+     +     hadd(mz-1+i)/(dzcond(mz-1+i)*dt)
+          poxgt = oxdhcc(i,icomp)+oxdhfc(i,icomp)
+     +     +dhmsszr(i,icomp)+hadd(mz-1+i)/(dzcond(mz-1+i)*dt)
+          poxcl =oxdhss(i,icomp)
+          poxab=oxdhab(i,icomp)
+          poxha=hadd(mz-1+i)/(dzcond(mz-1+i)*dt)
+c inaz passed by common to define current axial node
+          inaz = i
+c ?what inaz for? 
+          kx = mz + i - 1 
+
+c      Note: effcpc,effcpf,effqk do nothing later so ingnore        
+          call effhtc2(poxfr,poxgt,poxcl,poxab, unuc(i), tsur(i),
+     +       tsur0(i),tclsur(i),effcp(1,i),
+     +       effgen(1,i),effk(1,i))
+
+  120   continue
+c  nvirn : reactor type 1: PWR 2 : BWR
+c  nvirn gets 1 in case of electrically heated core
+c  through subroutine rbundl          
+        call heatc2( icomp,effk,effcp,effgen,nvirn )
+        do 200 i = 1,naz
+          nelm = numelm(mz+i-1)
+          do 190 ir = 1,nelm
+            avir(ir,i) = pi*dzcond(mz+i-1)*( xcond3(ir+1,i,icomp)+
+     +      xcond3(ir,i,icomp) )* ( xcond3(ir+1,i,icomp)-xcond3
+     +      (ir,i,icomp) )
+  190     continue
+  200   continue
+        do 220 i = 1,naz
+          nelm = numelm(mz+i-1)
+          do 210 ir = 1,nelm
+            qstor(icomp) = qstor(icomp) + effcp(ir,i)*avir(ir,i)*0.5*
+     +      ((tcond3(ir+1,i,icomp)+tcond3(ir,i,icomp)) - (tcnd03(ir +1,
+     +      i,icomp)+ tcnd03(ir,i,icomp)) )*nsigl(icomp)
+            qedt(icomp)=qedt(icomp)+effgen(ir,i)*avir(ir,i)*dt* nsigl
+     +      (icomp)
+  210     continue
+          qodt(icomp) = qodt(icomp) + (oxdhcc(i,icomp)+oxdhfc(i,icomp) +
+     +    oxdhss(i,icomp)+oxdhab(i,icomp)+dhmsszr(i,icomp))*dt*
+     +    nsigl(icomp)*dzcond(mz+i-1)
+          qndt(icomp) = 0.0
+          qsdt(icomp) = qodt(icomp) + qndt(icomp)
+  220   continue
+        if (qstor0(icomp) .eq. 0.0) then
+c calculate initial stored energy.
+          do i=1,naz
+            do ir=1,numelm(mz+i-1)
+              qstor0(icomp) = qstor0(icomp) + effcp(ir,i) * avir
+     &        (ir,i) * (tcnd03(ir+1,i,icomp) + tcnd03(ir,i,icomp) )
+            enddo
+          enddo
+          qstor0(icomp) = qstor0(icomp) * 0. 5* nsigl(icomp)
+        end if
+c remove grid spacers which are above melt temperature.
+        call gridsc
+        timec = timec + dt
+c compute average thermal properties and stored energy for component.
+      call efprop (effcp,effk,effgen,naz,ngeom(icomp),numelm(mz),
+     +tcond(n),xcond(n),6,10,ifrag(mz),efrcpa(1,icomp),effka(1,icomp),
+     +efgena(1,icomp), efstor(1,icomp), efstr0(1,icomp), tcond0(n) )
+      return
+      end
+*endif

@@ -1,0 +1,153 @@
+*mlist
+       subroutine isngj (i)
+c
+c
+c  Checks and sets to-from pointers for single junctions, time
+c  dependent junctions, pumps, branches, separators, turbines and
+c  multiple junction components.
+c
+c  Cognizant engineer: rjw.
+c
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer i,ipc,ish,ix1,ix2,ix3,ix4,ix5,ix6,ix7,j,k,l,lv(2),
+     & ltyp(2),nc,nx,ny,nz,n3d
+       external fabend,icmpf
+       logical err
+       character ms(2)*4
+c  Data statements
+       data ms/'From','To'/
+c
+       nc = cmpnum(i)
+       j = njco(i) + filndx(5)
+       if (njc(i) .eq. 0) return
+c  Loop for each junction.
+       do 100 l = 1,njc(i)
+c  Loop for volumes on each side of junction.
+         junftl(j) = 0
+         junftl(j+1) = 0
+         ish = 12
+         do 50 k = 1,2
+           lv(k) = 0
+           if (ij1(j+k-1) .eq. 0) go to 51
+           ix1 = ij1(j+k-1)/1000000
+           call icmpf (ix1,ipc,err)
+           if (err) then
+             write (output,2001) ms(k),nc
+ 2001  format ('0******** ',a4,' volume pointer for component,',i4,
+     & ', refers to nonexistent component.')
+             go to 46
+           endif
+           lv(k) = nvcn(ipc)
+           ix1 = ix1*1000000
+           ix4 = ij1(j+k-1) - ix1
+           ix2 = ix4/10000
+           ix4 = ix4 - ix2*10000
+           ix3 = ix4/10
+           ix4 = ix4 - ix3*10
+           ltyp(k) = cmptyp(ipc)
+           if (cmptyp(ipc) .eq. 0) go to 47
+           go to (21,22,30,30,30,30,21,30,39,30,39,39,30,30,30,39,21),
+     &     cmptyp(ipc)
+           call fabend
+c  Connection to pipe.
+   21      if (ix3 .ne. 0) go to 48
+           if (ix4 .eq. 0) then
+             if (ix2 .gt. 1) go to 48
+             if (ix2 .eq. 0) then
+               ix2 = 1
+               ix4 = 1
+             else
+               ix2 = nvc(ipc)
+               ix4 = 2
+               lv(k) = lv(k) + ix2 - 1
+             endif
+           else
+             if (ix2.eq.0 .or. ix2.gt.nvc(ipc) .or. ix4.gt.6) go to 48
+             lv(k) = lv(k) + ix2 - 1
+           endif
+           go to 42
+c  Connection to time dependent volume.
+   22      if (ix3 .ne. 0) go to 48
+           if (ix4 .eq. 0) then
+             if (ix2 .gt. 1) go to 48
+             if (ix2 .eq. 0) then
+               ix2 = 1
+               ix4 = 1
+             else
+               ix4 = 2
+             endif
+           else
+             if (ix2.ne.1 .or. ix4.gt.2) go to 48
+           endif
+           go to 40
+c  Connection to three dimensional component.
+   40      jcex(j) = ior(jcex(j),ishft(ix4-1,ish))
+           if (k .eq. 1) then
+             if (iand(ix4,1) .ne. 0) jc(j) = ior(jc(j),4)
+           else
+             if (iand(ix4,1) .eq. 0) jc(j) = ior(jc(j),8)
+           endif
+           go to 49
+c  Connection to single volume.
+   30      if (ix3 .ne. 0) go to 48
+           if (ix4 .eq. 0) then
+             if (ix2 .gt. 1) go to 48
+             if (ix2 .eq. 0) then
+               ix2 = 1
+               ix4 = 1
+             else
+               ix4 = 2
+             endif
+           else
+             if (ix2.ne.1 .or. ix4.gt.6) go to 48
+           endif
+   42      jcex(j) = ior(jcex(j),ishft(ix4-1,ish))
+           if (k .eq. 1) then
+             if (iand(ix4,1) .ne. 0) jc(j) = ior(jc(j),4)
+           else
+             if (iand(ix4,1) .eq. 0) jc(j) = ior(jc(j),8)
+           endif
+   49      ij1vn(j+k-1) = lv(k)
+           junftl(j+k-1) = ix1 + ix2*10000 + ix3*10 + ix4
+           go to 51
+   48      write (output,2002) ms(k),nc
+ 2002  format ('0******** ',a4,' volume pointer for component,',i4,
+     & ', has incorrect code.')
+           go to 46
+c  Illegal component for connection.
+   39      write (output,2003) ms(k),nc
+ 2003  format ('0******** ',a4,' volume pointer for component,',i4,
+     & ', refers to improper component.')
+   46      ij1(j+k-1) = 0
+           ij1vn(j+k-1) = 0
+   47      fail = .true.
+           lv(k) = 0
+   51      ish = 9
+   50    continue
+c  Check for same volume connection and apply initial conditions.
+         if (lv(1).eq.0 .or. lv(2).eq.0) then
+           ajun(j) = 1.0
+           athrot(j) = 1.0
+         elseif (lv(1) .eq. lv(2)) then
+           write (output,2005) nc
+ 2005  format ('0******** Component,',i4,', joins a volume to itself.')
+           fail = .true.
+         elseif (ltyp(1).eq.2 .and. ltyp(2).eq.2) then
+           write (output,2007) nc
+ 2007  format ('0******** Component,',i4,', connects two time dependent
+     &volumes.')
+           fail = .true.
+         endif
+         j = j + ijskp
+  100  continue
+       return
+       end

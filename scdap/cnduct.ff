@@ -1,0 +1,355 @@
+*mlist
+*if def,selap
+       subroutine cnduct (ix,beta,tz,tsm,r,z,ee,nadt,ft,tlast,b,ngnm,
+     & vrd,vzd,ifel, pore,dimpe,afz,afu,afs,afa1,afa2,afux2,
+     & afzx2, afalum, aflith, afcadm, afsoil, volume,
+     & rhg, cpg, tkg, zcaprw, keffz, keffr, tmltel, fmltdt, fracml,
+     & hfusrl, genz, vole, imin, imax, ielem, jelem, elemij, imme,
+     & hnatcr,tmpdot,pgas,ncslp)
+c
+c
+c
+c  Calculates thermal conductivity of liquified material.
+c
+c  Cognizant engineer: ljs.
+c
+c This is a COUPLE ROUTINE
+*in32 ix
+*in32 nadt
+*in32 ngnm
+*in32 ifel
+*in32 imin
+*in32 imax
+*in32 ielem
+*in32 jelem
+*in32 elemij
+*in32 imme
+*in32end
+c      keffz(n)=effective thermal conductivity in z direction of
+c               element n (w/m.k).
+c      keffr(n)=conductivity in r-direction.
+c      tmltel(n)=melting temperature of element n (K)[output]
+c      fmltdt(n)=start of time step thickness of element n (m).
+c      fracml(n)=fraction of element n that is melted.
+c      hfusrl(n)=heat of fusion of element n (j/kg).
+c      genz(i,n)=heat generation in i-th quadrant of element n (w).
+c      vole(i,n)=volume of i-th quadrant of element n (m**3).
+c      imin(j)=minimum value of i coordinate at j-th coordinate.
+c      imax(j)=maximum value of i coordinate at j-th coordinate.
+c      ielem(n)=value of i coordinate for lower left corner of
+c               element n.
+c      jelem(n)=value of j coordinate for lower left corner of
+c               element n.
+c  elemij((maxj-1)*i+j)=element whose lower left corner is located
+c                           in i-j space at i,j coordinates.
+c
+c      imme(n)=indicator of how full element is with debris:
+c              0=empty; 1=partially full; 2=completely full.
+c
+       implicit none
+c
+       include 'cons.h'
+       include 'contrl.h'
+       include 'iparm.h'
+       include 'parm.h'
+       include 'stcblk.h'
+       include 'ufiles.h'
+c  Local variables.
+       integer i,iev,ii,ij,izk,j,jj,k,l,mtl,n,nswlsi
+       integer ncslp
+       integer loca
+       external loca
+       real pgas,ala,bla,cla
+       real area,betam,cap1,cap2,cap3,cap4,capc,capcf,caprhf,caprho,cc,
+     & condr,condrf,condz,condzf,conrrg,conrsg,conzrg,conzsg,cpg,
+     & dp,flupor,genz,p1,p2,phi1,phi2,rhg,rkrp,rho,rhof,tbar,tkg,v,
+     & vole,vr,vz,znu1,znu2,tmin,tmax,sbcon
+       real hnatcr(*),tmpdot(*)
+       integer ix(5,*),nadt(3,*),ngnm(*),ifel(*),elemij(*),imme(*),
+     & imin(*),imax(*),ielem(*),jelem(*)
+       real beta(*),tz(*),r(*),z(*),ee(9,*),ft(2,*),tlast(*),b(*),
+     & tsm(*),rrr(5),zzz(5),volump(4),ak(5,5),vrd(*),vzd(*),pore(*),
+     & dimpe(*),afu(*),afs(*),afa1(*),afa2(*),afux2(*),afzx2(*),afz(*),
+     & volume(*),zcaprw(4,*),afalum(*),aflith(*),afcadm(*),afsoil(*),
+     & keffz(*),keffr(*),tmltel(*),fmltdt(*),fracml(*),hfusrl(*)
+       dimension genz(4,*), vole(4,*)
+       external flunv,inpol,tri,userp,volndq,volndt
+       external zutco1
+       real zutco1
+       real polate
+       external polate
+c  cpcs(i) = heat capacity of carbon steel at temperature of cpcs(i+1)
+c            J/kg.K versus K.
+       integer npcpcs,iucpcs
+       data npcpcs /24/
+       data iucpcs /1/
+       real cpcs(48)
+       data cpcs/ 500.0, 200.0, 500.0, 400.0, 275.0, 400.01,
+     #           275.0, 600.0, 300.0, 600.01,  300.0, 800.0,
+     #          325.0, 800.01, 325.0, 1000.0, 350.0, 1000.01,
+     #          350.0, 1200.0, 400.0, 1200.01, 400.0, 1400.0,
+     #          500.0, 1400.01, 500.0, 1600.0, 429.29, 1600.01,
+     #          429.29, 1700.0, 6000.0, 1700.01, 6000.0, 1750.0,
+     #          720.0, 1750.01, 720.0, 1800.0, 180.0, 1800.01,
+     #          180.0, 2000.0,  350.0, 2000.01, 350.0, 6000.0 /
+c  sbcon = Stefan-Boltzmann constant (W/m2.K4).
+       data sbcon /5.6680e-8/
+c  sigf = maximum error in temperature on solidified side of element
+c         with liquid-solid interface (K). If this value is greater
+c         than a defined tolerance, then another iteration is made.
+c         These values are computed n KPOOL and used in COUPLE.
+c  maxe = number of element with sigf.
+c
+       sigf = 0.0
+       maxe = 0
+       do n = 1,numel
+         hnatcr(n) = 0.0
+         keffr(n) = 0.0
+         keffz(n) = 0.0
+         fracml(n) = 0.0
+       enddo
+       do i = 1,numnp
+         b(i) = 0.0
+       enddo
+       do l=1,mcond
+         tsm(l) = 0.0
+       enddo
+       do 100 n = 1,numel
+         ak = 0.0
+         betam = beta(n)
+c sb.
+         tmax = 0.0
+         tmin = 5000.
+c  nswlsi = 1 = liquid-solid interface of molten pool in element.
+      nswlsi=0
+      i=ix(1,n)
+      j=ix(2,n)
+      k=ix(3,n)
+      l=ix(4,n)
+      if(tz(i).gt.tmax)tmax=tz(i)
+      if(tz(i).lt.tmin)tmin=tz(i)
+      if(tz(j).gt.tmax)tmax=tz(j)
+      if(tz(j).lt.tmin)tmin=tz(j)
+      if(tz(k).gt.tmax)tmax=tz(k)
+      if(tz(k).lt.tmin)tmin=tz(k)
+      if(tz(l).gt.tmax)tmax=tz(l)
+      if(tz(l).lt.tmin)tmin=tz(l)
+      tbar=0.25*(tz(i)+tz(j)+tz(k)+tz(l))
+      mtl=ix(5,n)
+      iev=0
+      if(ifluid.ne.0) iev=ifel(n)
+      rrr(1)=r(i)
+      rrr(2)=r(j)
+      rrr(3)=r(k)
+      rrr(4)=r(l)
+      rrr(5)=0.25*(r(i)+r(j)+r(k)+r(l))
+      zzz(1)=z(i)
+      zzz(2)=z(j)
+      zzz(3)=z(k)
+      zzz(4)=z(l)
+      zzz(5)=0.25*(z(i)+z(j)+z(k)+z(l))
+      rho=0.
+      condr=0.
+      condz=0.
+      capc=0.
+      caprho=0.
+      if(mtl.eq.0) go to 111
+      rho = ee(2,mtl)
+      condr= ee(3,mtl)
+      condz= ee(4,mtl)
+      if (mtl .eq. 10) condz = condr
+      capc = ee(5,mtl)
+      if(mtl.eq.4)then
+c   material is carbon steel; obtain heat capacity as function of
+c   temperature from table.
+      tbar=0.25*(tz(i)+tz(j)+tz(k)+tz(l))
+      capc=polate(cpcs,tbar,npcpcs,iucpcs)
+      endif
+      caprho = capc*rho
+  111 continue
+      if(itran.eq.0) go to 195
+c  Set up variable material properties.
+      flupor = pore(n)
+      dp = dimpe(n)
+      tbar=0.25*(tz(i)+tz(j)+tz(k)+tz(l))
+      if(k.eq.l) tbar=(tz(i)+tz(j)+tz(k))/3.0
+      if(mtl.eq.0) go to 112
+  195  if(flupor.ge.(1.-1.e-10))go to 112
+c    Note.  fmltdt(n) = start of time step thickness of element n. (m)
+      call userp(n,i,j,k,l,mtl,condr,condz,caprho,r,z,tz,
+     # afz, afu, afs, afa1, afa2, afux2, afzx2,
+     # afalum, aflith, afcadm, afsoil, tbar, ee, imme,
+     # hnatcr,tmpdot,tmltel,fracml,fmltdt,keffz,keffr,pore,
+     # ix,imin,imax,ielem,jelem,elemij,ncslp)
+c  Set effective thermal conductivity array to values returned by
+c  userp.
+c      nswlsi = 1 = liquid-solid interface of molten pool in element.
+       if(mtl.eq.1)then
+         if(keffr(n).ge.0.001)then       
+         nswlsi=1
+c    Since effective conductivity already calculated for case of
+c    liquid-solid interface in element, delete effective conductivity
+c    calculation by setting porosity to 1.e-6.        
+         flupor = 1.e-6
+         endif
+       keffr(n)=condr
+       keffz(n)=condz
+       endif
+  112 continue
+       if(flupor.lt.1.001e-3)go to 113
+      rhof = rhg
+c sb  thermal heat conductivity of steam as function of temperature
+c     and pressure.
+cj**  temporary.
+cj**  This correlation should eventually be replaced by RELAP5 correlati
+cj**  for thermal conductivity.
+      ala=5.10e-8+1.751e-14*pgas
+      bla=7.310e-5-1.87e-11*pgas
+      cla=1.7e-2+6.10e-9*pgas
+      condrf=ala*(tbar-273.15)**2+bla*(tbar-273.15)+cla
+      condzf = condrf
+      capcf = cpg
+      caprhf = rhof*capcf
+crmm  added next line 10-23-86
+       if(flupor.ge.(1.-1.e-10))then
+      caprho = flupor*caprhf + ( 1.0-flupor)*caprho
+       endif
+c     if debris element has not yet had any debris added to it, set
+c     thermal conductivity to null value.
+      if(mtl.eq.1.and.imme(n).eq.0)then
+      condrf=1.e-6
+      condzf = condrf
+      condr=1.e-6
+      condz=1.e-6
+      endif
+      if(mtl.eq.1) go to 265
+      condr =flupor*condrf +(1.-flupor)*condr
+      condz =flupor*condzf +(1.-flupor)*condz
+  265 continue
+      conrsg = 0.0
+      conzsg = 0.0
+      conrrg = 0.0
+      conzrg = 0.0
+      if(mtl.ne.1) go to 264
+      if(imme(n).eq.0)go to 264
+      if(flupor.le.1.001e-3)go to 264               
+      znu1 = condr/condrf
+      znu2 = condz/condzf
+      phi1 = 0.3*(flupor**1.6)*(1.0/znu1**0.0444)
+c***  phi2 = 0.3*(flupor**1.6)*(1.0/znu2**0.0444)
+      p1   = (flupor - phi1)/(1. - phi1)
+c***  p2   = (flupor - phi2)/(1. - phi2)
+      conrsg=condrf*(p1+(1.-p1)/(phi1+(1.-phi1)/znu1))
+c***  conzsg=(p2+(1.-p2)/(phi2+(1.-phi2)/znu2))
+      conzsg=conrsg
+      conrrg=0.0
+       if(flupor.ge.0.9999)go to 263
+      if(dp.eq.0.0) go to 263
+c***  rkrp = (pi/4.0)*dp*(0.277/((2.0/emissm)-.264))*((
+c*** *tbar/100.0)**3)*1.0e-6
+c***  conrrg=(1.-emissm)/(1./conrsg + condrf/rkrp) + emissm*rkrp
+c***  conzrg=(1.-emissm)/(1./conzsg + condzf/rkrp) + emissm*rkrp
+      conrrg=4.*emissm*sbcon*dp*tbar**3
+  263 continue
+c***  condr = condrf*(conrsg + conrrg)
+c***  condz = condzf*(conzsg + conzrg)
+      condr=conrsg+conrrg
+      condz=condr
+c       calculate volumetric heat capacity for mixture of relocated
+c       material and fluid.
+  264 continue
+  113 continue
+c
+cj
+cj    printout to check conductivities
+cj    of element near structure
+cj
+c     if(timehy.gt.350.) then
+c     if(n.ge.69.and.n.lt.77.or.n.ge.84.and.n.lt.106) then
+c       write(output,9005) timehy,condz,condr,n
+c9005   format(' from cnduct, timehy = ',es11.6,' condz = ',
+c    &  es11.4, 'condr = ',es11.4,' at element ',i5)
+c     endif
+c     endif
+cj
+      zcaprw(1,n) = caprho
+      zcaprw(2,n) = caprho
+      zcaprw(3,n) = caprho
+      zcaprw(4,n) = caprho
+      do 10 izk=1,4
+   10 volump(izk)=0.
+      if(k.eq.l) go to 200
+      area=0.
+      call tri(n,1,2,5,rrr,zzz,betam,condr,condz,ak,volump,area)
+      call tri(n,2,3,5,rrr,zzz,betam,condr,condz,ak,volump,area)
+      call tri(n,3,4,5,rrr,zzz,betam,condr,condz,ak,volump,area)
+      call tri(n,4,1,5,rrr,zzz,betam,condr,condz,ak,volump,area)
+      if(area.eq.0.0) go to 100
+c***********************************************************************
+c     eliminate the center point of the quadrangle
+c***********************************************************************
+      if(condr.le.0.0.and.condz.le.0.0) go to 509
+      do 120 ii=1,4
+      cc=ak(ii,5)/ak(5,5)
+      do 120 jj=1,4
+  120 ak(ii,jj)=ak(ii,jj)-cc*ak(5,jj)
+  509 continue
+      caprho = caprho / dtcpl
+      cap1=caprho*volump(1)
+      cap2=caprho*volump(2)
+      cap3=caprho*volump(3)
+      cap4=caprho*volump(4)
+      ak(1,1)=ak(1,1)+cap1
+      ak(2,2)=ak(2,2)+cap2
+      ak(3,3)=ak(3,3)+cap3
+      ak(4,4)=ak(4,4)+cap4
+      b(i)=b(i)+cap1*tlast(i)
+      b(j)=b(j)+cap2*tlast(j)
+      b(k)=b(k)+cap3*tlast(k)
+      b(l)=b(l)+cap4*tlast(l)
+   13 continue
+      if(iev.eq.0) go to 140
+      vr=vrd(n)
+      vz=vzd(n)
+      v=vr*vr+vz*vz
+      if(v.eq.0.0) go to 140
+      call volndq(i,j,k,l,volume,volump)
+      call flunv(iupwnd,4,npp,rrr,zzz,caprhf,condr,condz,vr,vz,area,
+     *           volump,ak,mnpo)
+      go to 140
+  200 continue
+      call tri(n,1,2,3,rrr,zzz,betam,condr,condz,ak,volump,area)
+      if(area.eq.0.0) go to 100
+      caprho = caprho / dtcpl
+      cap1=caprho*volump(1)
+      cap2=caprho*volump(2)
+      cap3=caprho*volump(3)
+      ak(1,1)=ak(1,1)+cap1
+      ak(2,2)=ak(2,2)+cap2
+      ak(3,3)=ak(3,3)+cap3
+      b(i)=b(i)+cap1*tlast(i)
+      b(j)=b(j)+cap2*tlast(j)
+      b(k)=b(k)+cap3*tlast(k)
+   14 continue
+      if(iev.eq.0) go to 140
+      vr=vrd(n)
+      vz=vzd(n)
+      v=vr*vr+vz*vz
+         if (v.eq.0.0) go to 140
+         call volndt (i,j,k,volume,volump)
+         call flunv (iupwnd,3,npp,rrr,zzz,caprhf,condr,condz,vr,vz,area,
+     &   volump,ak,mnpo)
+  140    ij = 4
+         if (k .eq. l) ij = 3
+         do ii = 1,ij
+           i = ix(ii,n)
+           do jj = 1,ij
+             j = ix(jj,n)
+             l = loca(i,j)
+             tsm(l) = tsm(l) + ak(ii,jj)
+           enddo
+         enddo
+  100  continue
+       return
+       end
+*endif

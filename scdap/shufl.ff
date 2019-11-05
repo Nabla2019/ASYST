@@ -1,0 +1,308 @@
+*mlist
+*if def,selap
+       subroutine shufl (dzcond,dzfrac,dzfrc0,fgrj,fpivrt,
+     # fpivy,movesw,naz,ndisrp,tfgrj,
+     # tfpivr,tfpivy,zcond,cik,acaen,prfk
+     #      ,gsgen    ,gout     ,dist     ,savg     ,taca     ,tprf
+     #      ,tgsg     ,tgou     ,tdis     ,tsav     ,tcik     ,itrflg )
+c
+c  shufl accounts for the effect of fuel axial movement on gas storage
+c  and release
+c
+c  Cognizant engineer: gab tmh.
+c
+c     calling subroutines:  fuelan
+c     engineer/programmer:  t.m.howe/g.a.berna
+c
+c     input variables                  description
+c        dzcond         height of heat conduction axial node  (m)
+c        dzfrac         fractional height of void in axial zone
+c        dzfrc0         previous time step value of dzfrac
+c        movesw         flag which indicates whether or not movement of
+c                         fuel occured in a zone
+c        naz            number of heat conduction axial zones
+c        zcond          elevation to midplane of heat conduction axial
+c                         zone  (m)
+c
+c     i/o variables                    description
+c        fgrj           ratio of fission gas released to fission gas
+c                         generated in axial zone
+c        fpivrt         ratio of fission gas stored intragrainular to
+c                         fission gas generated
+c        fpivy          fission product inventory within fuel matrix at
+c                         axial node j,1=xe,2=kr,3=cs,4=i (kg)
+c        tfgrj          temporary storage of fgrj array values
+c        tfpivr         temporary storage for fpivrt array values
+c        tfpivy         temporary storate of fpivy array values
+c
+c     local variables                  description
+c        boti           bottom elevation of the fuel zone before
+c                         slippage occurs
+c        botk           bottom elevation of the fuel zone after slippage
+c                         occurs
+c        deltz          distance in a fuel stack that the stack has
+c                         slipped
+c        topi           top elevation of the fuel zone before slippage
+c                         occurs
+c        topk           top elevation of the fuel zone after slippage
+c                         occurs
+c
+       implicit none
+*call scddat
+c
+       integer movesw,naz,ndisrp,itrflg
+       real dzcond,dzfrac,dzfrc0,fgrj,fpivrt,fpivy,tfgrj,tfpivr,tfpivy,
+     * zcond,cik,acaen,prfk,gsgen,gout,dist,savg,taca,tprf,tgsg,
+     * tgou,tdis,tsav,tcik,cbarc
+      dimension ndisrp(ndax),movesw(ndax),dzfrac(ndax),dzcond(ndax)
+     +,fgrj(5,ndax),fpivrt(5,ndax),tfgrj(5,ndax),zcond(ndax)
+     +,tfpivr(5,ndax),fpivy(ndax,16),tfpivy(ndax,5),dzfrc0(ndax)
+     +,gs(5),ggi(5),gri(5),gti(5)
+c
+      dimension cik(15,ndax),acaen(ndax),prfk(ndax),gsgen(5,ndax)
+     +,gout(6,ndax),dist(16,ndax),savg(4,ndax),taca(ndax)
+     +,tgsg(5,ndax),tgou(6,ndax),tdis(16,ndax),tsav(4,ndax)
+     +,tprf(ndax),tcik(16,ndax),cbarc(3)
+*call fginvc
+*call ufiles
+c
+c  Local variables.
+       integer i,ii,ip,isp,istop,j,jbot,jj,jtop,k,kk,n,naz1,ndebug
+       real boti,botk,denom,deltz,diff,fki,ggi,ggimin,gri,gs,gti,topi,
+     * topk
+c
+c  Data statements.
+      data cbarc/.310315,.234786,.454899/
+c
+       isp=4
+       ndebug = 0
+      if (ndebug .eq. 1)   then
+          write (output,'(2x,a,20i5)')
+     #                    'movesw = ',(movesw(i),i=1,naz)
+          write (output,'(2x,a,20i5)')
+     #                    'ndisrp = ',(ndisrp(i),i=1,naz)
+          write (output,3001) 'dzfrac = ',(dzfrac(i),i=1,naz)
+ 3001  format (2x,a,10e12.5/9(11x,10e12.5/))
+          write (output,3001) 'dzfrc0 = ',(dzfrc0(i),i=1,naz)
+          write (output,3001) 'gsgen = ',(gsgen(isp,i),i=1,naz)
+          write (output,3001) ' gout = ',(gout(isp,i),i=1,naz)
+          write (output,3001) ' dist1 = ',(dist(1,i),i=1,naz)
+          write (output,3001) '  cik1 = ',(cik(1,i),i=1,naz)
+         write (output,3002) ' fpivy = ',((fpivy(k,n),k=1,naz),n=1,16)
+ 3002  format (2x,a,2(8e12.5/),9(11x,2(8e12.5/)))
+      end if
+c
+c     if itrflg=2 then fuelan has just converged so the permanent
+c      arrays are now set to the final temporary values
+      if (itrflg .eq. 2)  go to 1100
+c     initialize variables
+      jtop = naz
+      deltz = 0.0
+      naz1 = naz + 1
+c
+      do 30 j = 1,naz
+         taca(j) = acaen(j)
+         tprf(j) = prfk(j)
+      do 35 isp=1,5
+         tfgrj(isp,j)=fgrj(isp,j)
+         tfpivr(isp,j)=fpivrt(isp,j)
+         tgsg(isp,j)=gsgen(isp,j)
+         tgou(isp,j)=gout(isp,j)
+   35    continue
+c
+      do 10 n=1,15
+            tcik(n,j) = cik(n,j)
+   10    continue
+      do 11 n=1,16
+         tdis(n,j)=dist(n,j)
+   11  continue
+c
+         do 20 isp = 1,4
+            tsav(isp,j) = savg(isp,j)
+            tfpivy(j,isp) = fpivy(j,isp)
+   20    continue
+   30 continue
+c
+c     begin fuel shuffle and averaging at top of component
+      do 1000 jj = 1,naz
+           j = naz1 - jj
+           if( dzfrc0(j) .eq. 0.0 .and. ndisrp(j) .eq. 0 )
+     #          jtop = j - 1
+c
+c          if axial zone is not disrupted, then check to see if
+c          fuel has relocated axially. if so, calculate slip distance.
+           if( ndisrp(j) .eq. 0 ) then
+                if( movesw(j) .gt. 0 ) then
+                     deltz = deltz + dzcond(j) * (dzfrc0(j) - dzfrac(j))
+c
+c                    if not disrupted and slippage occurs, proceed to
+c                    next zone
+                     if(j.gt.1) go to 1000
+                     j=0
+                endif
+           endif
+c
+c          zone found without slippage or disrupted. if slippage in
+c          zones above this zone, then find new average fuel for zones
+              if( deltz .gt. 0.0 ) then
+c  calculate bottom zone of interest.
+                jbot = j + 1
+c
+c               calculate average fuel for nodes from jbot to jtop
+                ip = jtop + 1
+                istop = ip - jbot
+                do 250 ii = 1,istop
+                     i = ip - ii
+c
+c                    calculate top and bottom elevations of fixed zone
+                     boti = zcond(i) - 0.5 * dzcond(i)
+                     topi = boti + dzcond(i)
+c
+c                    initialize fission gas variables
+            do 1001 isp=1,5
+               ggi(isp)=0.
+               gri(isp)=0.
+               gti(isp)=0.
+ 1001       continue
+                     taca(i)=0.
+                     tprf(i)=0.
+      do 252 isp=1,5
+         tgsg(isp,i)=0.
+         tgou(isp,i)=0.
+ 252  continue
+c
+                     do 60 n=1,4
+                        tsav(n,i)=0.
+   60                continue
+         do 209 isp=1,16
+ 209        tdis(isp,i)=0.
+c
+                     do 200 kk = 1,istop
+                          k = ip - kk
+c
+c                         calculate top and bottom elevation of
+c                         slipped fuel zone
+                          botk = zcond(k)-dzcond(k)*0.5-deltz
+                          topk = botk + dzcond(k)
+                          denom = dzfrc0(k) * dzcond(k)
+c
+c                         determine fraction of slipped fuel zone k
+c                         in fixed zone i
+                          if(botk.lt.topi.and.topk.gt.boti) go to 90
+                          if(kk.gt.1.or.topk.gt.boti) go to 200
+                          go to 205
+   90                     if(topk.gt.topi.or.botk.lt.boti) go to 100
+                          fki=1.
+                          go to 140
+  100                     if(topk.le.topi.or.botk.ge.boti) go to 110
+                          diff=min(dzcond(i),botk-boti+denom)
+                          go to 130
+  110                     if(topk.gt.topi.and.botk.lt.topi) go to 120
+                          diff=min(topk-boti,botk-boti+denom)
+                          go to 130
+  120                     diff=min(topi-botk,denom)
+  130                     if(diff.le.0.) go to 200
+                          fki=diff/denom
+ 140         continue
+         do 204 isp=1,5
+            gs(isp)=fki*fpivy(k,isp)/(con(isp)*max(1.e-8,
+     +                 1.-fgrj(isp,k)))
+            ggi(isp)=ggi(isp)+gs(isp)
+            gri(isp)=gri(isp)+gs(isp)*fgrj(isp,k)
+            gti(isp)=gti(isp)+gs(isp)*fpivrt(isp,k)
+         tgsg(isp,i)=tgsg(isp,i)+fki*gsgen(isp,k)
+         tgou(isp,i)=tgou(isp,i)+fki*gout(isp,k)
+ 204     continue
+                          taca(i)=taca(i)+fki*acaen(k)
+                          tprf(i)=tprf(i)+fki*prfk(k)
+                          do 150 n=2,4
+  150                     tsav(n,i)=tsav(n,i)+fki*dist(n,k)*savg(n,k)
+            do 160 n=1,16
+  160                     tdis(n,i)=tdis(n,i)+fki*dist(n,k)
+  200                continue
+c
+c                    store data in temporary array
+         ggimin=min(ggi(1),ggi(3))
+         ggimin=min(ggimin,ggi(4))
+         ggimin=min(ggimin,ggi(5))
+         if(ggimin.gt.0.)goto 220
+ 205        continue
+         do 206 isp=1,5
+ 206        tfgrj(isp,i)=1.
+                     do 215 n=2,4
+  215                tsav(n,i)=2.
+                     go to 250
+ 220       continue
+      do 224 isp=1,5
+      tfgrj(isp,i)=tgou(isp,i)/tgsg(isp,i)
+      tfpivr(isp,i)=gti(isp)/ggi(isp)
+ 224   continue
+                     do 230 n=2,4
+  230                tsav(n,i)=tsav(n,i)/tdis(n,i)
+                     k=0
+                     do 240 n=1,2
+                     do 240 kk=1,3
+                     k=k+1
+  240                tcik(k,i)=tdis(n,i)*cbarc(kk)
+        do 226 isp=1,5
+           gs(isp)=ggi(isp)-gri(isp)
+           tfpivy(i,isp)=gs(isp)*con(isp)
+ 226    continue
+  250           continue
+c
+c               reset deltz
+                deltz = 0.0
+              endif
+c
+c             reset top zone number
+              jtop = j - 1
+ 1000 continue
+c
+c     if itrflg=1 then fuelan is iterating so do not set permanent
+c      arrays to temporary values
+      if (itrflg .eq. 1) go to 2100
+ 1100 continue
+c
+c     store data in permanent array
+      do 2000 j = 1,naz
+           if( ndisrp(j) .eq. 0 ) then
+              if( movesw(j) .gt. 0 ) then
+               do 2001 isp=1,5
+                  fpivrt(isp,j)=tfpivr(isp,j)
+ 2001             fgrj(isp,j)=tfgrj(isp,j)
+                acaen(j)=taca(j)
+                prfk(j) =tprf(j)
+      do 2002 isp=1,5
+         gsgen(isp,j)=tgsg(isp,j)
+         gout(isp,j)=tgou(isp,j)
+ 2002 continue
+                do 1300 n = 1,6
+                     cik(n,j) = tcik(n,j)
+ 1300           continue
+                do 1400 n = 2,4
+                     savg(n,j)=tsav(n,j)
+ 1400           continue
+              do 1500 isp=1,16
+                     dist(isp,j)=tdis(isp,j)
+ 1500           continue
+         do 2006 isp=1,5
+ 2006       fpivy(j,isp)=tfpivy(j,isp)
+              endif
+           endif
+ 2000 continue
+c
+      if (ndebug .eq. 1)  then
+          write (output,'(2x,a,20i5)')
+     #                    'movesw = ',(movesw(i),i=1,naz)
+          write (output,'(2x,a,20i5)')
+     #                    'ndisrp = ',(ndisrp(i),i=1,naz)
+          write (output,3001) 'gsgen = ',(gsgen(isp,i),i=1,naz)
+          write (output,3001) ' gout = ',(gout(isp,i),i=1,naz)
+          write (output,3001) ' dist1 = ',(dist(1,i),i=1,naz)
+          write (output,3001) '  cik1 = ',(cik(1,i),i=1,naz)
+          write (output,3002) ' fpivy = ',((fpivy(k,n),k=1,naz),n=1,16)
+      end if
+ 2100 continue
+      return
+      end
+*endif

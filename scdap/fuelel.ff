@@ -1,0 +1,572 @@
+*mlist
+*if def,selap
+      subroutine fuelel
+c
+c  fuelel is the driver for the scdap fuel element component
+c  analysis.
+c
+c  Cognizant engineer: ewc.
+c
+      implicit none
+      integer j,mz,n
+*call comctl
+*call contrl
+*call fast
+*call scddat
+*call cpmdat
+*call slpcom
+*call plndat
+*call matdat
+*call solcom
+*call nbtim
+*call cmptim
+*call iocom
+*call trnot1
+*call ptscom
+*call cons
+*call nrcom
+*call miscon
+*call effprp
+*call tblsp
+*call debout
+*call intcom
+*call ndxara
+*call nhtara
+*call fpdkht
+*call scdads
+*call scdcom
+*call scdout
+*call trnot2
+*call fecom
+*call uoxcom
+*call ufiles
+*call slumpv
+*call voldat
+*call srpdat
+c   local variables
+      integer i, ib, icld, icldi, icldo, ifmelt, iful, il1, in1,
+     +in2, ir, k, mflag, mo, nelm,
+     +nfirst, nlow, nr, nsj, ntop
+      integer mtnode(ndax), node1(ndax)
+c
+      real c, cm, cpal, cpalo, dtms, dum,
+     +dvp1, dvp2, estimd, hcm, rat1, rat2,
+     +ratm1, ratm2, ratm3, rfwddz, rhoma, rhomx, rowddz, tci,
+     +tco, tfc, timdbf, tinner, tnew, touter, ucpnr
+      real oxdhc(ndax), tual(ndax), tzr(ndax),
+     #  tzro(ndax), tzr0(ndax),tzro0(ndax)
+      real macai0(ndax), macoi0(ndax), macao0(ndax), masoo0(ndax),
+     +masfa0(ndax), masao0(ndax), masfu0(ndax), mafuo0(ndax), dtaoxi
+     +(ndax), dtaoxo(ndax), dtuoxi(ndax), dtuoxo(ndax)
+      real qaoxt(ndax,ndcomp), qfoxt(ndax,ndcomp), quoxt(ndax,ndcomp),
+     +tfcl(ndax,ndcomp)
+      real avir(ndrd,ndax), effcp(ndrd,ndax), effgen(ndrd,ndax), effk
+     +(ndrd,ndax), xd(ndrd,ndax)
+      external atrmlc,atrmlt,atrsso,cpal,cpalo,csdata,drpful,
+     +efprop,heatc2,nheat,trate,tspowr,ucpnr
+c
+      data node1/ ndax*1 /
+c
+      j = icomp
+      mz = ndax * ( icomp - 1 ) + 1
+      n = ndrd * ndax * ( icomp - 1 ) + 1
+c initialize variables that store mass of material slumping below
+c component during current time step.
+      wuoslc(j)=0.0
+      wurslc(j)=0.0
+      wzrslc(j)=0.0
+      wzoslc(j)=0.0
+      wbcslc(j)=0.0
+      wssslc(j)=0.0
+      wagslc(j)=0.0
+      walslc(j)=0.0
+      wcdslc(j)=0.0
+      wlislc(j)=0.0
+      engslc(j)=0.0
+      powslc(j)=0.0
+      wdtqlp(j) = 0.0
+      if (naz1(j).lt.1)  return
+      naxpz(j) = naz
+c override fragmentation due to quench until debris models are
+c implemented in scdsimp
+      do 10 i=1,naz1(j)
+   10 ifrag(mz-1+i) = 0
+      idsrup(j) = 0
+      estimd = 0.0
+      timdbf = timdb + deltdb
+      timec = timdb
+      if((timdbf-timec).gt.0.0)then
+c set flag to indicated first iteration this timestep
+         nfirst = 0
+         nsj = nsout(j)
+         ib = (nsj-1)*ndax + 1
+         if (nvirn.eq.4) then
+            do 50 i = 1,naz1(j)
+               in1 = nvad((j-1)*ndax+i)+filndx(4)
+               in2 = nvad((ndcomp+nsj-1)*ndax+i) + filndx(4)
+               tinner = satt(in1)
+               if (voidg(in1).le.0.0001) tinner = tempf(in1)
+               if (voidg(in1).ge.0.9999) tinner = tempg(in1)
+               touter = satt(in2)
+               if (voidg(in2).le.0.0001) touter = tempf(in2)
+               if (voidg(in2).le.0.9999) touter = tempg(in2)
+               ratm1 = mascdi(i,j)/cdimas(i,j)
+               ratm2 = masful(i,j)/fulmas(i,j)
+               ratm3 = mascdo(i,j)/cdomas(i,j)
+               if(ratm1.le.0.01.and.ratm2.le.0.01.and.ratm3.le.0.01)then
+                  wciblw(j) = wciblw(j) + mascdi(i,j)
+                  wcoblw(j) = wcoblw(j) + mascdo(i,j)
+                  wfblw(j) = wfblw(j) + masful(i,j)
+                  mascdo(i,j) = 0.0
+                  masful(i,j) = 0.0
+                  mascdi(i,j) = 0.0
+                  mascai(i,j) = 0.0
+                  mascoi(i,j) = 0.0
+                  mascao(i,j) = 0.0
+                  mascoo(i,j) = 0.0
+                  masfa(i,j) = 0.0
+                  masfao(i,j) = 0.0
+                  masfu(i,j) = 0.0
+                  masfuo(i,j) = 0.0
+                  mscdmo(i,j) = 0.0
+                  mscdmi(i,j) = 0.0
+                  msfulm(i,j) = 0.0
+                  uthick(i,j) = 0.0
+                  oxdeoo(i,j) = 0.0
+                  oxdeo(mz+i-1) = 0.0
+                  tzro(i) = 0.0
+                  tzr(i) = 0.0
+                  oxdwc(mz+i-1) = 0.0
+                  oxdwco(i,j) = 0.0
+                  oxdwai(i,j) = 0.0
+                  oxdwao(i,j) = 0.0
+                  uwgi(i,j) = 0.0
+                  uwgo(i,j) = 0.0
+                  oxdhco(i,j) = 0.0
+                  oxdhc(i) = 0.0
+                  qfoxt(i,j) = 0.0
+                  unuc(i) = 0.0
+                  uoxfi(i,j) = 0.0
+                  uoxfo(i,j) = 0.0
+                  sroxd(mz+i-1) = 0.0
+                  sroxdo(i,j) = 0.0
+                  h2oxd(mz+i-1) = 0.0
+                  h2oxdo(i,j) = 0.0
+                  afuel(mz+i-1) = 0.0
+                  do 20 ir = 1,numelm(mz+i-1)
+                     effgen(ir,i) = 0.0
+                     effk(ir,i) = 0.0
+   20             effcp(ir,i) = 0.0
+                  do 30 ir = 1,numelm(mz+i-1)+1
+   30             xcond3(ir,i,j) = 0.0
+                  tcond3(1,i,j) = touter
+                  tcond3(2,i,j) = tcond3(1,i,j)
+                  tcond3(5,i,j) = tinner
+                  tcond3(4,i,j) = tcond3(5,i,j)
+                  tcond3(3,i,j) = 0.5*(tcond3(2,i,j)+tcond3(4,i,j))
+               else if (ratm3.le.0.01) then
+                  wcoblw(j) = wcoblw(j) + mascdo(i,j)
+                  mascdo(i,j) = 0.0
+                  mascao(i,j) = 0.0
+                  mascoo(i,j) = 0.0
+                  mscdmo(i,j) = 0.0
+                  oxdeoo(i,j) = 0.0
+                  tzro(i) = 0.0
+                  oxdwco(i,j) = 0.0
+                  oxdhco(i,j) = 0.0
+                  effgen(1,i) = 0.0
+                  effk(1,i) = 0.0
+                  effcp(1,i) = 0.0
+                  xcond3(2,i,j) = xcond3(1,i,j)
+                  tcond3(1,i,j) = touter
+               else if (ratm2.le.0.01) then
+                  wfblw(j) = wfblw(j) + masful(i,j)
+                  masful(i,j) = 0.0
+                  masfa(i,j) = 0.0
+                  masfao(i,j) = 0.0
+                  masfu(i,j) = 0.0
+                  masfuo(i,j) = 0.0
+                  msfulm(i,j) = 0.0
+                  uthick(i,j) = 0.0
+                  oxdwai(i,j) = 0.0
+                  oxdwao(i,j) = 0.0
+                  uwgi(i,j) = 0.0
+                  uwgo(i,j) = 0.0
+                  qfoxt(i,j) = 0.0
+                  unuc(i) = 0.0
+                  uoxfi(i,j) = 0.0
+                  uoxfo(i,j) = 0.0
+                  afuel(mz+i-1) = 0.0
+                  do 40 ir = 2,3
+                     effgen(ir,i) = 0.0
+                     effk(ir,i) = 0.0
+   40             effcp(ir,i) = 0.0
+                  if (mascdo(i,j).le.0.0) tcond3(2,i,j) = touter
+                  tcond3(3,i,j) = touter
+                  xcond3(3,i,j) = xcond3(2,i,j)
+                  xcond3(4,i,j) = xcond3(2,i,j)
+               else if (ratm1.le.0.01) then
+                  wciblw(j) = wciblw(j) + mascdi(i,j)
+                  mascdi(i,j) = 0.0
+                  mascai(i,j) = 0.0
+                  mascoi(i,j) = 0.0
+                  mscdmi(i,j) = 0.0
+                  oxdeo(mz+i-1) = 0.0
+                  tzr(i) = 0.0
+                  oxdwc(mz+i-1) = 0.0
+                  oxdhc(i) = 0.0
+                  effgen(4,i) = 0.0
+                  effk(4,i) = 0.0
+                  effcp(4,i) = 0.0
+                  xcond3(5,i,j) = xcond3(4,i,j)
+                  tcond3(5,i,j) = tinner
+                  if (masful(i,j).le.0.0) tcond3(4,i,j) = tinner
+               endif
+   50       continue
+            do 60 i = 1,naz
+               do 60 k = 1,nrodes(mz+i-1)
+   60       xd(k,i) = xcond3(k,i,j)
+            do 70 i = 1,naz1(j)
+               oxdai0(i,j) = oxdwai(i,j)
+               oxdao0(i,j) = oxdwao(i,j)
+               tzr0(i) = xd(5,i) - xd(4,i) - oxdeo2(i,j)
+               tzro0(i) = xd(2,i) - oxdeoo(i,j)
+               tual(i) = uthick(i,j)
+               macai0(i) = mascai(i,j)
+               macoi0(i) = mascoi(i,j)
+               macao0(i) = mascao(i,j)
+               masoo0(i) = mascoo(i,j)
+               masfa0(i) = masfa(i,j)
+               masfu0(i) = masfu(i,j)
+               masao0(i) = masfao(i,j)
+   70       mafuo0(i) = masfuo(i,j)
+         endif
+         call csdata
+c get power for this scdap component.
+         call tspowr
+c calculate nuclear heat generation
+         call nheat (afuel(mz),ncrust(j),dum)
+c compute oxidation of fuel element inner surface.
+         if (idcomp(icomp).eq.5.or.idcomp(icomp).eq.7) then
+            call atrsso( dt,dzcond,slbwd(j),naz1(j),nrodes(mz),
+     +      flstm0(mz),tcond(n),tfcl(1,j),tual,tzr0,oxdwc0,oxdai0(1, j),
+     +      uwgi0(1,j),oxdwc(mz),oxdhc,h2oxd(mz),sroxd(mz),oxdwai(1,j),
+     +      qaoxi(1,j),h2aoxi(1,j),sraoxi(1,j),quoxi(1,j),h2uoxi(1,j),
+     +      sruoxi(1,j),noxide(mz),macai0,mascai(1,j),macoi0,
+     #      mascoi(1,j),masfa0,dtaoxi,masfu0,dtuoxi, 0)
+c compute oxidation of fuel element outer surface
+            mo = (ndcomp+nsj-1)*ndax + 1
+            call atrsso( dt,dzcond,slbwd(j),naz1(j),nrodes(mz),
+     +      flstm0(mo),tcond(n),tfcl(1,j),tual,tzro0,oxwco0(1,j),
+     #      oxdao0(1,j),uwgo0(1,j),oxdwco(1,j),oxdhco(1,j),h2oxdo(1,j),
+     #      sroxdo(1,j),oxdwao(1,j),qaoxo(1,j),h2aoxo(1,j),sraoxo(1,j),
+     #      quoxo(1,j),h2uoxo(1,j),sruoxo(1,j),noxido(1,j),macao0,
+     #      mascao(1,j),masoo0,mascoo(1,j),masfa0,dtaoxo, masfu0,dtuoxo,
+     #      1)
+            do 100 i = 1,naz1(j)
+               masfa(i,j) = max( 0.0, masfa0(i)-(dtaoxi(i)+dtaoxo(i))*
+     +         dzcnd2(i,j)*slbwd(j) )
+               masfao(i,j) = masao0(i) + 1.888889*(dtaoxi(i)+dtaoxo(i))*
+     +         dzcnd2(i,j)*slbwd(j)
+               masfu(i,j) = max( 0.0, masfu0(i)-(dtuoxi(i)+dtuoxo(i))*
+     +         dzcnd2(i,j)*slbwd(j) )
+               masfuo(i,j) = mafuo0(i) + 1.134453*(dtuoxi(i)+dtuoxo(i))*
+     +         dzcnd2(i,j)*slbwd(j)
+               mascdo(i,j) = mascao(i,j) + mascoo(i,j)
+               mascdi(i,j) = mascai(i,j) + mascoi(i,j)
+               masful(i,j) = masfa(i,j)+masfao(i,j)+masfu(i,j)+masfuo
+     +         (i,j)
+  100       continue
+         endif
+c add inner and outer uranium oxidation heat generation rates.
+         do 110 i=1,naz1(j)
+            quoxt(i,j) = quoxi(i,j) + quoxo(i,j)
+            oxdhcc(i,icomp)=oxdhc(i)
+  110    oxdhfc(i,icomp)=0.0
+         do 120 i = 1,naz1(j)
+            qaoxt(i,j) = 0.0
+  120    qfoxt(i,j) = 0.0
+         if (idcomp(icomp).eq.5.or.idcomp(icomp).eq.7) then
+            do 130 i = 1,naz1(j)
+               qaoxt(i,j) = qaoxi(i,j) + qaoxo(i,j)
+  130       qfoxt(i,j) = quoxt(i,j) + qaoxt(i,j)
+         endif
+         if (idcomp(icomp).eq.5.or.idcomp(icomp).eq.7) then
+            call atrmlc( j,unuc,qfoxt(1,j),oxdhc,tzr,tzro, cldthi(1,j),
+     +      cldtho(1,j),uthick(1,j),effcp,effk,effgen )
+c perform 2d or 1d conduction solution
+            if (lflag(j).eq.0) then
+               call heatc2( j,effk,effcp,effgen,nvirn )
+            endif
+         endif
+         icldo = 0
+         icldi = 0
+         iful = 0
+         ifmelt = 0
+         icld = naz1(j)
+         do 160 i=naz1(j),1,-1
+            ratm1 = mascdo(i,j)/cdomas(i,j)
+            tco = 0. 5* ( tcond3(1,i,j) + tcond3(2,i,j) )
+            if (tco.ge.tcldm .and. ratm1.gt.0.01) then
+               icldo = i
+               go to 170
+            endif
+  160    continue
+  170    do 180 i=naz1(j),1,-1
+            nr = nrods2(i,j)
+            ratm1 = mascdi(i,j)/cdimas(i,j)
+            tci = 0. 5* ( tcond3(nr,i,j) + tcond3(nr-1,i,j) )
+            if (tci.ge.tcldm .and. ratm1.gt.0.01) then
+               icldi = i
+               go to 190
+            endif
+  180    continue
+  190    do 200 i=naz1(j),1,-1
+            ratm1 = masful(i,j)/fulmas(i,j)
+            if (tcond3(3,i,j).ge.tfulm .and. ratm1.gt.0.01) then
+               iful = i
+               go to 210
+            endif
+  200    continue
+  210    continue
+         if (icldo.ne.0) then
+            mflag = 0
+            do 230 i=icldo,1,-1
+               if (mascdo(i,j).le.0.0) go to 220
+               tco = 0. 5* ( tcond3(1,i,j) + tcond3(2,i,j) )
+               c=(cpal(tco)*mascao(i,j)+cpalo(tco)*mascoo(i,j))/mascdo
+     +         (i,j)
+               cm=(cpal(tcldm)*mascao(i,j)+cpalo(tcldm)*mascoo(i,j))/
+     +         mascdo(i,j)
+               call atrmlt(1,mflag,hfscld,viscal,dt,slbwd(j),
+     #         dzcond(mz+i-1),dtms,hcm,rat1,rat2,c,tco,cm,tcldm,tnew,
+     #         mascdo(i,j),mascao(i,j),mascoo(i,j),mscdmo(i,j),
+     #         mscamo(i,j),mscomo(i,j),rhoma,1,timlto(i,j) )
+               tcond3(1,i,j) = tcond3(1,i,j) * tnew / tco
+               tcond3(2,i,j) = tcond3(2,i,j) * tnew / tco
+               rowddz = rhoal*dzcnd2(i,j)*slbwd(j)
+               tzro(i) = mascao(i,j)/rowddz
+               rowddz = rhoao*dzcnd2(i,j)*slbwd(j)
+               oxdeoo(i,j) = mascoo(i,j)/rowddz
+               oxdwco(i,j) = 0.529412*mascoo(i,j)/dzcnd2(i,j)*slbwd(j)
+  220          continue
+               if (i.eq.1) then
+                  wcoblw(j) = wcoblw(j) + dtms
+                  wdtqlp(j) = dtms*(hcm-c*satt(inv+filndx(4)))*nsigl(j)
+c left side of meat
+c store masses of each type of material that have slumped below
+c component during time step.
+                  walslc(j)=dtms+walslc(j)
+c cladding has no decay heat, so powslc(j) is not updated.
+                  engslc(j)=dtms*hcm+engslc(j)
+               endif
+  230       continue
+         endif
+         if (icldi.ne.0) then
+            mflag = 0
+            do 250 i=icldi,1,-1
+               if (mascdi(i,j).le.0.0) go to 240
+               tci = 0. 5* ( tcond3(nr,i,j) + tcond3(nr-1,i,j) )
+               nr = nrods2(i,j)
+               c = ( cpal(tci)*mascai(i,j) + cpalo(tci)*mascoi(i,j) ) /
+     +         mascdi(i,j)
+               cm = ( cpal(tcldm)*mascai(i,j)+cpalo(tcldm)*mascoi(i,j) )
+     +         / mascdi(i,j)
+               call atrmlt(1,mflag,hfscld,viscal,dt,slbwd(j),
+     #         dzcond(mz+i-1),dtms,hcm,rat1,rat2,c,tci,cm,tcldm,tnew,
+     #         mascdi(i,j),mascai(i,j),mascoi(i,j),mscdmi(i,j),
+     #         mscami(i,j),mscomi(i,j),rhoma,1,timlti(i,j) )
+               tcond3(nr,i,j) = tcond3(nr,i,j) * tnew / tci
+               tcond3(nr-1,i,j) = tcond3(nr-1,i,j) * tnew / tci
+               rowddz = rhoal*dzcnd2(i,j)*slbwd(j)
+               tzr(i) = mascai(i,j) / rowddz
+               rowddz = rhoao*dzcnd2(i,j)*slbwd(j)
+               oxdeo(mz+i-1) = mascoi(i,j) / rowddz
+               oxdwc(mz+i-1) = 0.529412*mascoi(i,j)/dzcnd2(i,j)*slbwd(j)
+  240          continue
+               if (i.eq.1) then
+                  wciblw(j) = wciblw(j) + dtms
+                  wdtqlp(j) = wdtqlp(j)+dtms*(hcm-c*satt(inv+filndx(4)))
+     +            * nsigl(j)
+c right side of meat.
+                  walslc(j)=walslc(j)+dtms
+c no power in cladding, so powslc(j) is not updated.
+                  engslc(j)=engslc(j)+dtms*hcm
+               endif
+  250       continue
+         endif
+         icld = max(icldi,icldo)
+         if (iful.ne.0) then
+            mflag = 0
+            if (iful.ge.icld .and. icld.gt.0) ifmelt = 1
+            do 270 i = iful,1,-1
+               if (masful(i,j).le.0.0) go to 260
+               tfc = tcond3(3,i,j)
+               c = ( cpal(tfc)*masfa(i,j)+cpalo(tfc)*masfao(i,j)+ ucpnr
+     +         (tfc)*(masfu(i,j)+masfuo(i,j)) ) / masful(i,j)
+               cm = ( cpal(tfulm)*masfa(i,j)+cpalo(tfulm)*masfao(i,j)+
+     +         ucpnr(tfulm)*(masfu(i,j)+masfuo(i,j)) ) / masful(i,j)
+c
+               call atrmlt(2,mflag,hfsful,viscul,dt,slbwd(j),
+     #         dzcond(mz+i-1),dtms,hcm,rat1,rat2,          c,tfc,cm,
+     #         tfulm,tnew,masful(i,j),masfa(i,j),            masfu(i,j),
+     #                     msfulm(i,j),msfam(i,j),
+     #         msfum(i,j),            rhomx,ifmelt, timltf(i,j) )
+               tcond3(3,i,j) = tcond3(3,i,j) *tnew/tfc
+               rfwddz = rhomx*dzcnd2(i,j)*slbwd(j)
+               uthick(i,j) = masful(i,j)/rfwddz
+               if (uthick(i,j).lt.1.0e-10) then
+                  oxdwai(i,j) = 0.0
+                  uwgi(i,j) = 0.0
+               else
+                  oxdwai(i,j)=masfao(i,j)*0.264706/dzcnd2(i,j)*slbwd(j)
+                  uwgi(i,j)=masfuo(i,j)*5.925925e-2/dzcnd2(i,j)*slbwd(j)
+               endif
+               oxdwao(i,j) = oxdwai(i,j)
+               uwgo(i,j) = uwgi(i,j)
+  260          continue
+               if (i.eq.1) then
+                  wfblw(j) = wfblw(j) + dtms
+                  wdtqlp(j) = wdtqlp(j)+dtms*(hcm-c*satt(inv+filndx(4)))
+     +            * nsigl(j)
+c meat of element.
+                  walslc(j)=walslc(j)+(rat1+rat2)*dtms
+c rat3 & 4 now undefined
+c                 wurslc(j)=(rat3+rat4)*dtms
+c meat part of element has two finite elements and 3 nodes.
+                  dvp1=(xcond3(3,i,j)-xcond3(2,i,j))*dzcond(mz+i-1)
+     +            *slbwd(j) *effgen(2,i)
+                  dvp2=(xcond3(4,i,j)-xcond3(3,i,j))*dzcond(mz+i-1)
+     +            *slbwd(j) *effgen(3,i)
+                  powslc(j)=dvp1+dvp2
+                  engslc(j)=engslc(j)+dtms*hcm
+               endif
+  270       continue
+         endif
+         if (idcomp(j) .eq. 7) then
+c prepare to drop fuel element if volume is voided
+  280       do 290 i=naz1(j),1,-1
+               if (mascdi(i,j)/cdimas(i,j) .lt. 0. 01.and. mascdo(i,j)
+     +         /cdomas(i,j) .lt. 0. 01.and. uthick(i,j) .lt. 1.0e-10)
+     +         then
+                  mtnode(i)=0
+               else
+                  mtnode(i)=1
+               endif
+  290       continue
+c ntop = highest node with material
+c nlow = highest node below ntop without material
+            ntop=0
+            nlow=0
+            do 300 i=naz1(j),1,-1
+               if (ntop.eq.0) then
+                  if (mtnode(i).eq.1)ntop=i
+               else
+                  if (mtnode(i).eq.0)then
+                     nlow=i
+                     goto 310
+                  endif
+               endif
+  300       continue
+  310       if (ntop.gt. 1.and. nlow.ne.0)then
+               do 320 i=1,naz1(j)
+                  if (srhist(j,i,1) .le. 0.0)goto 330
+  320          continue
+  330          continue
+               srhist(j,i,1)=timec
+               srhist(j,i,2)=nlow+1
+               srhist(j,i,3)=ntop
+               srhist(j,i,4)=nlow
+               call drpful (ntop,nlow,j,mz,tzr,tzro,oxdhc,qfoxt,unuc,
+     +         effgen,effk,effcp)
+               goto 280
+            endif
+         endif
+         if (icldi.ne. 0.or. icldo.ne. 0.or. (iful.ne. 0.and. ifmelt.eq.
+     +   1)) then
+            do 340 i = 1,naz1(j)
+               xcond3(2,i,j) = oxdeoo(i,j) + tzro(i)
+               xcond3(3,i,j) = xcond3(2,i,j) + 0.5*uthick(i,j)
+               xcond3(4,i,j) = xcond3(2,i,j) + uthick(i,j)
+               xcond3(5,i,j) = xcond3(4,i,j) + oxdeo(mz+i-1) + tzr(i)
+               afuel(mz+i-1) = uthick(i,j)*slbwd(j)
+  340       continue
+         endif
+         do 350 i = 1,naz1(j)
+            if (tcond3(1,i,j).lt.tcldm) then
+               mscdmo(i,j) = 0.0
+               mscamo(i,j) = 0.0
+               mscomo(i,j) = 0.0
+            endif
+            if (tcond3(5,i,j).lt.tcldm) then
+               mscdmi(i,j) = 0.0
+               mscami(i,j) = 0.0
+               mscomi(i,j) = 0.0
+            endif
+            if (tcond3(3,i,j).lt.tfulm) then
+               msfulm(i,j) = 0.0
+               msfam(i,j) = 0.0
+               msfaom(i,j) = 0.0
+               msfum(i,j) = 0.0
+               msfuom(i,j) = 0.0
+            endif
+  350    continue
+         if (lflag(j).eq.0) then
+            do 360 i = 1,naz1(j)
+               ratm1 = mascdo(i,j)/cdomas(i,j)
+               ratm2 = masful(i,j)/fulmas(i,j)
+               ratm3 = mascdi(i,j)/cdimas(i,j)
+               if(ratm1.le.0.01.or.ratm2.le.0.01.or.ratm3.le.0.01)then
+                  lflag(j) = 1
+                  go to 370
+               endif
+  360       continue
+  370       continue
+         endif
+         do 380 i=1,naz1(j)
+            nelm = numelm(mz+i-1)
+            do 380 ir = 1,nelm
+  380    avir(ir,i) = slbwd(j)*( xcond3(ir+1,i,j)-xcond3(ir,i,j) )
+     +   *dzcond(mz+i-1)
+         do 400 i=1,naz1(j)
+            nelm = numelm(mz+i-1)
+            do 390 ir = 1, nelm
+               qstor(j) = qstor(j) + effcp(ir,i)*avir(ir,i)*0.5* (
+     +         (tcond3(ir+1,i,j)+tcond3(ir,i,j)) - (tcnd03(ir+1,i,j)+
+     +         tcnd03(ir,i,j)) )*nsigl(j)
+               qedt(j) = qedt(j) + effgen(ir,i)*avir(ir,i)*dt*nsigl(j)
+  390       continue
+            qodt(j) = qodt(j) + (oxdhc(i)+oxdhco(i,j)+qfoxt(i,j))*
+     +      dzcond(mz+i-1)*dt*nsigl(j)
+            qndt(j) = qndt(j) + unuc(i)*dzcond(mz+i-1)*dt*nsigl(j)
+            qsdt(j) = qodt(j) + qndt(j)
+  400    continue
+          if (qstor0(j) .eq. 0.0) then
+c calculate initial stored energy.
+            do i=1,naz
+              do ir=1,numelm(mz+i-1)
+                qstor0(j) = qstor0(j) + effcp(ir,i) * avir(ir,i) *
+     &          (tcnd03(ir+1,i,j) + tcnd03(ir,i,j))
+              enddo
+            enddo
+            qstor0(j) = qstor0(j) * 0. 5* nsigl(j)
+          endif
+c
+         timec = timec + dt
+      endif
+      if (idcomp(icomp).eq.5.or.idcomp(icomp).eq.7) go to 420
+c compute average thermal properties and stored energy for component.
+      call efprop (effcp,effk,effgen,naz,ngeom(j),numelm(mz),
+     *tcond(n),xcond(n),6,10,ifrag(mz),efrcpa(1,icomp), effka(1,icomp),
+     *efgena(1,icomp), efstor(1,icomp), efstr0(1,icomp), tcond0(n) )
+  420 continue
+      do 430 i = 1,naz
+         if (imelt(i,icomp).eq.0) then
+            dro(i,icomp) = xcond3(3,i,j) - xd(3,i)
+            dri(i,icomp) = (xcond3(5,i,j)-xcond3(3,i,j)) - (xd(5,i)-xd
+     +      (3,i))
+         endif
+  430 continue
+      return
+      end
+*endif

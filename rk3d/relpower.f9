@@ -1,0 +1,115 @@
+      SUBROUTINE RELPOWER(SCALE,
+     &  PWRDN,RELPWR,ZETA,DI,ALPHAT,VOLU,SW,TPF,NCOLXY,
+     &  NCOLZ,FRACTB,RELPWRS,SWS,TPFS)
+C     
+C     THIS SUBROUTINE DETERMINES THE TOTAL CORE POWER LEVEL ACCOUNTING
+C     FOR DECAY HEAT AND SCALES THE POWER DENSITY TO A RELATIVE CORE
+C     POWER LEVEL = 1.
+C     
+      include 'param.fcb'
+      include 'veloc.fcb'
+      include 'nonfue.fcb'
+      include 'power.fcb'
+      include 'start.fcb'
+      include 'xsec1.fcb'
+      include 'geom.fcb'
+      include 'cntl.fcb'
+      
+      DIMENSION
+     &  NCOLXY(NXYLMAX,*)                ,NCOLZ(*)              ,
+     &  TPF(NXYL,NZ,*)                   ,
+     &  VOLU(NXYL,*)                     ,SW(NXYL,NZ,*)         ,
+     &  PWRDN(NXYL,*)                    ,
+     &  RELPWR(NXYL,*)                   ,ZETA(*)               ,
+     &  DI(NXYL,NZ,*)                    ,ALPHAT(NXYL,NZ,*)     ,
+     &  FRACTB(*),
+     &  RELPWRS(6,NXYL,NZ),SWS(6,NXYL,NZ,NG),TPFS(6,NXYL,NZ,NG)
+
+C     
+C...  POWERFRAC   = OPERATING POWER FRACTION
+C...  TOTPOWER    = TOTAL CORE POWER                 [ MEV/SEC ]
+C...  PWRDN       = TOTAL POWER DENSITY              [ MEV/CM**3 SEC ]
+C...  PWRDNOLD    = TOTAL POWER DENSITY (PREVIOUS TIME STEP)
+C     [ MEV/CM**3 SEC ]
+C...  PWRDNP = ( PROMPT/[S.S] ) POWER DENSITY     [ MEV/CM**3 SEC ]
+C     
+C     
+C     COMPUTING TOTAL POWER & POWER DENSITY FOR TIME STEP { T_N+1 }
+C==============================================================
+C     
+      TOTPOWER = 0.D0
+      DO 141 IZ=1,NZ
+       DO 140 IXY=1,NXYL
+        PWRDN(IXY,IZ) = 0.00
+        RELPWR(IXY,IZ)= 0.00
+ 140   CONTINUE
+ 141  CONTINUE
+      SUMVOLU = 0.D0
+      DO 41 IZ=1,NZ
+       DO 40 IXY=1,NXYL
+        ICOL=NCOLXY(IXY,NCOLZ(IZ))
+        IF(ICOL.LE.NFUEXY)GO TO 40
+        SUMVOLU = SUMVOLU + VOLU(IXY,IZ)*FRACTB(IXY)
+        DECAYFRAC = 0.D0
+        IF(ITRAN.EQ.'Y') THEN
+         DO 30 I=1,NDECAY
+          DECAYFRAC = DECAYFRAC + ZETA(I) * DI(IXY,IZ,I)
+ 30      CONTINUE
+        ENDIF
+        PWRDNP = 0.0
+        DO 35 IG =1, NG
+         PWRDNP = PWRDNP + SCALE*(1-ALPHAT(IXY,IZ,IG))
+     &     *( SW(IXY,IZ,IG) * TPF(IXY,IZ,IG) )
+ 35     CONTINUE
+        PWRDN(IXY,IZ) = PWRDNP + DECAYFRAC
+        
+        TOTPOWER = TOTPOWER+PWRDN(IXY,IZ)*VOLU(IXY,IZ)*FRACTB(IXY)
+
+ 40    CONTINUE
+ 41   CONTINUE
+C     
+C.... COMPUTING CORE RELATIVE POWER & CORE POWER FRACTION
+C=======================================================
+C     
+      
+      POWERFRAC = PR
+      IF(ITYPE.EQ.'EVP'.AND.ITRANSIT.EQ.0) GOTO 1200
+      POWERFRAC = TOTPOWER / (QT *SUMVOLU)
+ 1200 CONTINUE
+      
+      DO 91 IZ=1,NZ
+       DO 90 IXY=1,NXYL
+        III = NCOLXY(IXY,NCOLZ(IZ))
+        IF (III.LE.NFUEXY)GO TO 90
+        RELPWR(IXY,IZ) = PWRDN(IXY,IZ) * SUMVOLU
+     &    / TOTPOWER
+ 90    CONTINUE
+ 91   CONTINUE
+
+C
+C-----CALCULATE SURFACE RELATIVE POWERS
+C
+C !vmq no hexa      IF(NSHAP.EQ.'HEXA'.AND.HEXBUGRAD.EQ.'Y')THEN
+C !vmq no hexa       DO 200 IZ=1,NZ
+C !vmq no hexa        DO 201 IXY=1,NXYL
+C !vmq no hexa         ICOL=NCOLXY(IXY,NCOLZ(IZ))
+C !vmq no hexa         IF(ICOL.LE.NFUEXY)GOTO 201
+C !vmq no hexa         RELPWRNODE=0.0
+C !vmq no hexa         DO 205 IG=1,NG
+C !vmq no hexa          RELPWRNODE=RELPWRNODE+SW(IXY,IZ,IG)*TPF(IXY,IZ,IG)
+C !vmq no hexa 205     CONTINUE
+C !vmq no hexa         DO 202 ISUR=1,6
+C !vmq no hexa          RELPWRS(ISUR,IXY,IZ)=0.
+C !vmq no hexa          DO 203 IG=1,NG
+C !vmq no hexa           RELPWRS(ISUR,IXY,IZ)=RELPWRS(ISUR,IXY,IZ)+
+C !vmq no hexa     $       SWS(ISUR,IXY,IZ,IG)*TPFS(ISUR,IXY,IZ,IG)
+C !vmq no hexa 203      CONTINUE
+C !vmq no hexa          RELPWRS(ISUR,IXY,IZ)=RELPWRS(ISUR,IXY,IZ)
+C !vmq no hexa     $      *RELPWR(IXY,IZ)/RELPWRNODE
+C !vmq no hexa 202     CONTINUE
+C !vmq no hexa 201    CONTINUE
+C !vmq no hexa 200   CONTINUE
+C !vmq no hexa      ENDIF
+      
+      RETURN
+      END

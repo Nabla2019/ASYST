@@ -1,0 +1,165 @@
+      SUBROUTINE THFDBKS
+     &  (  PWRDN,RELPWR,GGMK,AREA,WTFR,VOLU,RHOW,TAVF,HEFF,DOPL,
+     &  NCOLXY,NCOLZ,TCOLC,TFREF,UNEW)  
+C     
+C     THIS SUBROUTINE CALCULATES COOLANT INTERNAL ENERGY, COOLANT DENSITY
+C     AND FUEL TEMPERATURES FOR THE STEADY-STATE PROBLEM
+C     
+      include 'param.fcb'
+      include 'thermk.fcb'
+      include 'power.fcb'
+      include 'geom.fcb'
+      include 'thermo.fcb'
+      include 'soln2.fcb'
+      include 'start.fcb'
+      include 'cntl.fcb'
+      include 'crit.fcb'
+      include 'extsor.fcb'
+      include 'nonfue.fcb'
+      include 'bpitch.fcb'
+      include 'thcoef.fcb'
+      include 'th_cof.fcb'
+      include 'varlen.fcb'
+      include 'array.fcb'
+      
+      DIMENSION
+     &  NCOLXY(NXYLMAX,*)                       ,NCOLZ(*)           ,
+     &  PWRDN(NXYL,*)                           ,RELPWR(NXYL,*)     ,
+     &  VOLU(NXYL,*)                            ,
+     &  AREA(*)                                 ,GGMK(NXYL,*)       ,
+     &  WTFR(*)                                 ,RHOW(NXYL,*)       ,
+     &  TAVF(NXYL,*)                            ,HEFF(NXYL,*)       ,
+     &  DOPL(NXYL,*)                            ,
+     &  UNEW(NXYL,*)                            ,
+     &  TCOLC(NXYL,*)                           ,TFREF(*)
+C     
+C     
+C---- IF NO-TEMPERATURE-FEEDBACK THEN RETURN
+C     
+      IF(ANFDBK .NE. 'Y') RETURN
+C     
+C---- IF ITYPE='EVP' THEN CALCULATE THE LOCALIZED POWER DENSITY
+C     
+      IF(ITYPE.EQ.'EVP')THEN
+       DO 668 IZ=1,NZ
+        DO 667 IXY=1,NXYL
+         PWRDN(IXY,IZ) = PR*QT*RELPWR(IXY,IZ)
+ 667    CONTINUE
+ 668   CONTINUE
+      ENDIF
+C     
+C---- IF ITYPE='FSP' AND THE POWER SEARCH IS ON THEN SET THE POWER DEN
+C     TO THE TARGET POWER FRACTION
+C     
+      IF(ITYPE.EQ.'FSP'.AND.ASRCH.EQ.'Y')THEN
+       DO 768 IZ=1,NZ
+        DO 767 IXY=1,NXYL
+         PWRDN(IXY,IZ) = PR*QT*RELPWR(IXY,IZ)
+ 767    CONTINUE
+ 768   CONTINUE
+      ENDIF
+C     
+C---- CONVERT PRESSURE FROM PSIA TO MEV/CM**3
+C     
+      PINDY=4.30336E+10*PIN
+C     
+      UCOLIN = PROPPOLY(NPOLUCOL,COF_UCOL,TCOLIN,
+     &  SC0_UCOL,SC1_UCOL)
+      RHOWR = PROPPOLY(NPOLRHOWC,COF_RHOWC,UCOLIN,
+     &  SC0_RHOWC,SC1_RHOWC)
+C     
+C---- CALCULATING THE FOLLOWING :
+C---- CALCULATE TEMPERATURE DISTRIBUTION
+C---- AND CORRESPONDING COOLANT HEAT CAPACITY AND DENSITY
+C     
+      DO 12 IXY=1,NXYL
+       DO 11 IZ=1,NZ
+        IZP=IZ+1
+        IF(IZ.EQ.1) THEN
+         UCOLBOT=UCOLIN
+         RHOWBOT=RHOWR
+        ELSE
+         UCOLBOT=UNEW(IXY,IZ-1)
+         RHOWBOT=RHOWBOTOLD
+        ENDIF
+        IF(IZ.EQ.NZ)IZP=IZ
+        IZZ = IZ
+        IF(NZ.EQ.1)IZZ=IZCOLS
+        I = NCOLXY(IXY,NCOLZ(IZ))
+        II = NCOLXY(IXY,NCOLZ(IZP))
+        III = NCOLXY(IXY,NCOLZ(IZCOLS))
+        IF(I.LE.NFUEXY) GO TO 19
+        
+        ZZZ = GGMK(IXY,IZP)*AREA(IXY)*WTFR(II)
+        
+        UNEW(IXY,IZ) =
+     &    UCOLBOT *( ( WTFR(I)*GGMK(IXY,IZ) )
+     &    /( WTFR(II)*GGMK(IXY,IZP)))
+     &    + ( PWRDN(IXY,IZ) * VOLU(IXY,IZZ)
+     &    -( (1.0/RHOW(IXY,IZ))*WTFR(II)*GGMK(IXY,IZP)*AREA(IXY)
+     &    -(1.0/RHOWBOT)*WTFR(I)*GGMK(IXY,IZ)*AREA(IXY))
+     &    *PINDY )/ZZZ
+        
+        GO TO 20
+ 19     CONTINUE
+        UNEW(IXY,IZ)=UCOLIN
+ 20     CONTINUE
+        
+        RHOWBOTOLD=RHOW(IXY,IZ)
+        CALL FLUIDCON(IXY,IZ,TCOLIN,TCOLC,RHOW,UNEW)
+        
+ 11    CONTINUE
+ 12   CONTINUE
+      
+C---- CALCULATING THE FOLLOWING :
+C---- AVERAGE FUEL TEMPERATURE AND FUEL SURFACE TEMPERATURE
+C---- CORRESPONDING TO THE POINT-WISE AVERAGE LINEAR POWER
+C---- DENSITY (ONLY FOR THE FUEL REGION) BY INTERPOLATION
+C---- AND CALCULATE THE DOPPLER FEEDBACK :
+C     
+      DO 110 IZ=IZCOLS,IZCOLE
+       DO 100 IXY=1,NXYL
+        I=NCOLXY(IXY,NCOLZ(IZ))
+        IF(I .LE. NFUEXY) GOTO 100
+C     
+C     CORRECTING FOR FACT NFRODS NOW GIVEN BASED UPON A FUEL ASSEMBLY
+C     
+C...  ADJUSTING NFRODS TO REFLECT NO.OF FUEL RODS PER NODE.
+        
+        FNFRODS = NFRODS * (AREA(IXY)/BAREA)
+        
+        AVKWFT = ( AREA(IXY)/FNFRODS )*PWRDN(IXY,IZ)*CONVKWFT
+        
+        DELTEMP = TCOLC(IXY,IZ) - COF_TSF(0)
+        
+        TAVTFD = TAVF(IXY,IZ)
+        
+        TAVFRANG = COF_TAF(0)
+        IF(TAVTFD.LT.TAVFRANG) TAVTFD=TAVFRANG
+        
+        HEFF(IXY,IZ) =  PROPPOLY(NPOLHFF,COF_HFF,TAVTFD,
+     &    SC0_HFF,SC1_HFF)
+        
+        TAVF(IXY,IZ) =((AVKWFT/CONVKWFT)*DEPF)/
+     &    (HEFF(IXY,IZ)*SRFF)+TCOLC(IXY,IZ)
+        
+        SURFTF= PROPPOLY(NPOLTSF,COF_TSF,AVKWFT,
+     &    SC0_TSF,SC1_TSF)
+        
+C     NEAERA           PEAKTF=1.7970+4.3085E-4*TAVF(IXY,IZ)
+C     NEAERA     &      -1.4366E-7*(TAVF(IXY,IZ)**2)+1.6475E-11*(TAVF(IXY,IZ)**3)
+        AVTFF=TAVF(IXY,IZ)+460.
+        SURFTF=SURFTF+DELTEMP+460.
+        TKMOD=TCOLC(IXY,IZ)+460.
+C     NEAERA           TCLTFF=SURFTF+PEAKTF*(AVTFF-SURFTF)
+C     NEAERA           TEFF=TKMOD+WC*(WP*TCLTFF+(1.-WP)*SURFTF-TKMOD)
+C     NEAERA  REMOVE LINES: START            
+        TEFF=TKMOD+WC*(WP*AVTFF+(1.-WP)*SURFTF-TKMOD)
+C     NEAERA  REMOVE LINES: END            
+        DOPL(IXY,IZ)=(TEFF**0.5-(TFREF(I)+460.)**0.5)
+        
+ 100   CONTINUE
+ 110  CONTINUE
+      
+      RETURN
+      END

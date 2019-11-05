@@ -1,0 +1,1397 @@
+*mlist
+       subroutine rconvr
+c
+c  Processess control component data.
+c
+c  Cognizant engineer: rjw.
+*in32 init
+*in32end
+c
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'convarc.h'
+       include 'ufiles.h'
+c
+c  Local variables.
+       include 'cnvtpa.h'
+       real xinit(61)
+       integer(8) init8(61)
+       integer l3a(14),l3b(11),l3c(9),l3d(8),l3e(10),l3f(9),l3g(10),
+     & l3h(7),l3i(9),l3j(9),l3k(9),l3l(10),l3m(9),l3n(12),l3o(8)
+$if -def,hydrolod,1
+       integer l3p(12),l3q(13),l3r(18),init(61)
+$if def,hydrolod,1
+       integer l3p(12),l3q(13),l3r(18),l3s(11),init(61)
+       integer i,ihld,ii,inp10,inp9,isfdes,ix,j,l,k,k1,
+     & k2,k3,lcntgs,lcontg,len,m,n3,n4,nc,nc1,ncinb,ncinc,ncmax,nnv
+       real cinrt,cmax,crpm,ctorq,deflt,ftbnid
+       logical lhed,cmpsrc,tfail,tfail2,del,ovrfl
+       equivalence (init(1),init8(1),xinit(1))
+       character ilabl(2)*4,lunit(2)*7,sftyp(10)*4,lcmpn(3)*8,chwrd*8,
+     & chwrd2*8
+c
+       data sftyp/'abs','sqrt','exp','log','sin','cos','tan','atan',
+     & 'min','max'/
+       data ilabl/' off',' on'/
+       data lunit/'nounits','units'/
+       data lcmpn/'pump','turbine','generatr'/
+$if def,cdccra,1
+       data cmax/1.0e200/
+$if -def,cdccra,1
+       data cmax/1.0e75/
+       data l3a/2*0,2,8,0,1,-1,-1,1,1,0,0,1,1/
+       data l3b/2*0,4,61,0,1,1,3,1,-1,0/
+       data l3c/2*0,2,40,0,1,2,-1,0/
+       data l3d/2*0,2,2,0,1,-1,0/
+       data l3e/2*0,2*4,0,1,-1,0,1,0/
+       data l3f/2*0,3,3,0,1,-1,0,0/
+       data l3g/2*0,3,41,0,1,-1,2,-1,0/
+       data l3h/2*0,1,1,0,1,0/
+       data l3i/2*0,3,3,0,1,-1,0,0/
+       data l3j/2*0,3,3,0,1,-1,0,1/
+       data l3k/2*0,4,4,0,1,2,-1,0/
+       data l3l/2*0,4,4,0,1,1,1,-1,0/
+       data l3m/2*0,3,3,0,1,1,-1,0/
+       data l3n/2*0,5,43,0,1,0,1,1,2,-1,0/
+       data l3o/20500000,0,0,2,0,1,0,-1/
+       data l3p/0,0,0,6,0,1,4*1,2*0/
+       data l3q/2*0,5,7,0,1,-1,0,-1,0,2,1,1/
+       data l3r/2*0,10,12,0,1,-1,0,-1,0,1,-1,0,-1,0,2,1,1/
+$if def,hydrolod,1
+       data l3s/2*0,4,61,0,1,1,3,1,-1,0/
+       data crpm/0.10471975512/,cinrt/0.04214011009/,ctorq/1.355817948/
+c
+       lhed = .false.
+       ovrfl = .false.
+c  Determine if control component already exists.
+       if (filid(27) .ne. 0.0) then
+c  Set for possible changes.
+         cmpsrc = .false.
+c  Clear initialization flags.
+         i = filndx(27)
+         do j = 1,cnvnum(i)
+           cnvnop(i) = iand(cnvnop(i),not(1))
+           i = i + cnvlen(i)
+         enddo
+         l = lcntgs(filid(27),1) - 11
+         call ftbsft (filid(27),l,2,filndx(27))
+       else
+         cmpsrc = .true.
+         filid(27) = ftbnid(1)
+         l = lcontg(1) - 11
+         call ftbrsv (filid(27),l,1,filndx(27))
+         cnvnum(filndx(27)) = 0
+         cnvopt(filndx(27)) = 0
+         filsiz(27) = 2
+       endif
+       i = filndx(27) + filsiz(27) - 2
+       nc = 1
+c  Process card 20500000.
+       l3o(6) = 1
+       call inp2 (fa(filndx(1)),init,l3o)
+       if (l3o(6)) 42,43,44
+   42  fail = .true.
+       if (cnvnum(filndx(27)) .eq. 0) go to 45
+   46  write (output,2058)
+ 2058  format ('0******** Card 20500000 is not allowed when control comp
+     &onents exist from the restart file.')
+   45  write (output,2059)
+ 2059  format ('0******** Control component input data cannot be process
+     &ed.')
+       go to 93
+   43  if (cnvnum(filndx(27)) .ne. 0) go to 61
+       cnvopt(filndx(27)) = 0
+       go to 71
+   61  if (iand(cnvopt(filndx(27)),2) .ne. 0) go to 62
+   71  ncinc = 100
+       ncmax = 999
+       go to 73
+   62  ncinc = 10
+       ncmax = 9999
+   73  ncinb = ncinc - 3
+       go to 13
+   44  if (cnvnum(filndx(27)) .eq. 0) go to 47
+       fail = .true.
+       go to 46
+   47  if (init(1).eq.999 .or. init(1).eq.4095 .or. init(1).eq.9999)
+     & go to 48
+       write (output,2060)
+ 2060  format ('0******** Word 1 of card 20500000 is incorrect, control
+     &component input data cannot be processed.')
+       fail = .true.
+       go to 93
+   48  if (init(1).ne.4095 .and. init(1).ne.9999) then
+         ncinc = 100
+         ncmax = 999
+       else
+         cnvopt(filndx(27)) = 2
+         ncinc = 10
+         ncmax = 9999
+       endif
+       ncinb = ncinc - 3
+       if (l3o(6) .eq. 1) go to 13
+       write (chwrd,'(a8)') xinit(2)
+       if (chwrd.ne.lunit(1) .and. chwrd.ne.lunit(2)) then
+         write (output,2061)
+ 2061  format ('0******** Word 2 of card 20500000 is incorrect, nounits
+     &option is assumed.')
+         fail = .true.
+       else
+         if (chwrd .ne. lunit(1)) cnvopt(filndx(27)) =
+     &   ior(cnvopt(filndx(27)),1)
+       endif
+c  See if control component nc entered.
+   13  l3a(1) = nc*ncinc + 20500000
+       call inplnk (l3a(1),ix,n3,n4,fa(filndx(1)))
+       if (n4 .ne. 0) go to 17
+c  See if first card missing but other cards entered.
+       if (ix .eq. -1) go to 32
+       ix = (ix - 20500000)/ncinc
+       if (ix .ne. nc) go to 14
+       if (lhed) go to 15
+       lhed = .true.
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2000)
+ 2000  format ('1',40x,'Edit of control component input data')
+   15  write (output,2001) l3a(1)
+ 2001  format ('0******** Card',i9,' is missing.')
+       go to 24
+   14  nc = ix
+       go to 31
+   17  cnvnum(filndx(27)) = cnvnum(filndx(27)) + 1
+       if (lhed) go to 18
+       lhed = .true.
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2000)
+c  Get control component card 205nnn00.
+   18  l3a(6) = 1
+       iextra = ior(iextra,64)
+       call inp2 (fa(filndx(1)),init,l3a)
+       if (l3a(6) .gt. 0) go to 19
+       chwrd = ' '
+       read (chwrd,'(a8)') xinit(1)
+       go to 16
+c  Check type and transfer to appropriate processing.
+   19  del = .false.
+       write (chwrd,'(a8)') xinit(2)
+       do j = 1,cnvtpn
+         if (chwrd .eq. cnvtpa(j)) go to 22
+       enddo
+       if (chwrd .eq. 'delete') go to 20
+       write (output,2002) init(2),l3a(1)
+ 2002  format ('0******** Component type, ',a10,', on card',i9,' is ille
+     &gal.')
+   16  write (output,2003) nc
+ 2003  format ('0******** Data for control component',i5,' cannot be pro
+     &cessed.')
+       cnvlen(i) = 10
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 92
+       cnvtyp(i) = 0
+       cnvnam(i) = xinit(1)
+       cnvarn(i) = 0.0
+       cnvaro(i) = 1.0
+       cnvpnm(i) = nc
+       cnvnpa(i) = 0
+   24  j = l3a(1) + ncinb + 2
+       init(1) = inp10(fa(filndx(1)),l3a(1),j)
+       fail = .true.
+       go to 30
+   20  if (.not.cmpsrc) go to 23
+   26  write (output,2004) nc
+ 2004  format ('0******** Delete command for control component',i5,
+     &  'is illegal, either new problem or component not defined.')
+       fail = .true.
+       cnvnum(filndx(27)) = cnvnum(filndx(27))- 1
+       go to 33
+   23  cnvlen(i) = 0
+       del = .true.
+       go to 1000
+   22  cnvtyp(i) = j
+       if (l3a(6) .ge. 3) go to 39
+   41  write (output,2036) l3a(1)
+       go to 16
+   39  cnvnam(i) = xinit(1)
+       cnvscl(i) = xinit(3)
+       if (cnvtyp(i) .ne. 18) go to 40
+       cnvarn(i) = xinit(3)
+       cnvaro(i) = 1.0
+       cnvlen(i) = 10
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 91
+       cnvpnm(i) = nc
+       cnvnpa(i) = 0
+       cnvnop(i) = 0
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+       write (output,2057) cnvarn(i)
+       endif
+ 2057  format ('0',10x,'y =',1p,g14.6)
+       go to 1000
+   40  if (xinit(3) .ne. 0.0) go to 25
+       write (output,2008) nc
+ 2008  format ('0******** Scaling factor in control component'
+     & ,i5,' is zero.')
+       fail = .true.
+   25  if (l3a(6) .lt. 5) go to 41
+       cnvarn(i) = xinit(4)
+       cnvaro(i) = 1.0
+       if (init(5).eq.0 .or. init(5).eq.1) go to 27
+       write (output,2026) nc
+ 2026  format ('0******** Incorrect initialization control in control co
+     &ntrol component',i5,'.')
+       init(5) = 0
+   27  ihld = init(5)
+       cnvnop(i) = 2*init(5) + 1
+       cnvmax(i) = cmax
+       cnvmin(i) = -cmax
+       if (l3a(6) .lt. 6) go to 28
+       if (init(6).ge.0 .and. init(6).le.3) go to 29
+       write (output,2035)
+ 2035  format ('0******** Limit control incorrect, limits ignored.')
+       fail = .true.
+       go to 28
+   29  if (init(6) .ne. 0) go to 34
+       if (l3a(6) .eq. 6) go to 28
+   35  write (output,2036) l3a(1)
+ 2036  format ('0******** Incorrect number of words on card',i9,
+     &  ', limits ignored.')
+       fail = .true.
+       go to 28
+   34  if (init(6) .eq. 3) go to 36
+       if (l3a(6) .ne. 7) go to 35
+       if (init(6) .eq. 2) go to 37
+       cnvnop(i) = ior(cnvnop(i),4)
+       cnvmin(i) = xinit(7)
+       go to 38
+   37  cnvnop(i) = ior(cnvnop(i),8)
+       cnvmax(i) = xinit(7)
+       go to 38
+   36  if (l3a(6) .ne. 8) go to 35
+       cnvnop(i) = ior(cnvnop(i),12)
+       cnvmin(i) = xinit(7)
+       cnvmax(i) = xinit(8)
+       if (xinit(8) .gt. xinit(7)) go to 38
+       write (output,2040) l3a(1)
+ 2040  format ('0******** Upper limit is not greater than lower limit on
+     & card',i9,'.')
+       fail = .true.
+   38  if (cnvarn(i).ge.cnvmin(i) .and. cnvarn(i).le.cnvmax(i)) go to 28
+       write (output,2037) l3a(1)
+ 2037  format ('0******** Initial value is outside limits on card',i9,
+     & '.')
+       fail  = .true.
+   28  go to (100,200,300,400,400,400,600,700,720,740,740,780,
+$if -def,hydrolod,1
+     & 800,820,840,860,880,900,920,930,930,940,820), cnvtyp(i)
+$if def,hydrolod,1
+     & 800,820,840,860,880,900,920,930,930,940,820,960), cnvtyp(i)
+  900  call fabend
+c  Process sum-difference component.
+  100  l3b(1) = l3a(1) + 1
+       l3b(2) = -l3b(1) - ncinb
+       l3b(6) = 1
+       call inp2 (fa(filndx(1)),init,l3b)
+       l3b(2) = -l3b(2)
+       if (l3b(6) .le. 0) go to 16
+       cnvnpa(i) = l3b(6)/3
+       if (l3b(6) -3*cnvnpa(i) .eq. 1) go to 101
+       write (output,2005) l3b(1),l3b(2)
+ 2005  format ('0******** Number of words on cards',i9,'-',i8,' is not e
+     &qual to a multiple of 3 plus 1.')
+       go to 16
+  101  cnvlen(i) = 12 + 5*cnvnpa(i)
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 92
+       cnvpnm(i) = nc
+       ii = i - 4
+       cnvsan(ii) = xinit(1)
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+ 2016  format ('0Control component',i5,a12,10x,'type = ',a10)
+       write (output,2010) cnvscl(i),xinit(1)
+ 2010  format ('0',10x,'y =',1p,g14.6,'*(',g15.6)
+       endif
+       m = 2
+       tfail = .false.
+       tfail2 = .false.
+       do j = 1,cnvnpa(i)
+         ii = ii + 5
+         tfail2 = tfail2 .or. xinit(m).eq.0.0
+         cnvsan(ii) = xinit(m)
+         cnvalf(ii) = xinit(m+1)
+         if (init(m+2) .gt. 1000000000) then
+           init(m+2) = 0
+           tfail = .true.
+         endif
+         cnvint(ii) = init(m+2)
+         cnvpck(ii) = 0
+         cnvpck(ii+1) = 0
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2011) xinit(m),xinit(m+1),init(m+2)
+ 2011  format (29x,'+',1p,g14.6,'*(',a8,i11,')')
+         m = m + 3
+       enddo
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2012)
+ 2012  format ('+',67x,')')
+       if (.not.tfail2) go to 105
+       write (output,2052) l3b(1),l3b(2)
+ 2052  format ('0******** One or more constant factors on cards',i9,
+     & '-',i8,' are zero.')
+       fail = .true.
+  105  if (.not.tfail) go to 104
+       write (output,2006) l3b(1),l3b(2)
+ 2006  format ('0******** One or more integer parts of variable request
+     &code on cards',i9,'-',i8,' were out of range, set to zero.')
+       fail = .true.
+  104  if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2027) ilabl(ihld+1),cnvarn(i)*cnvaro(i)
+ 2027  format (' initialization flag is',a4,', input initial value is'
+     &  ,1p,g15.6)
+       go to 998
+c  Process multiplier component.
+  200  l3c(1) = l3a(1) + 1
+       l3c(2) = -l3c(1) - ncinb
+       l3c(6) = 1
+       call inp2 (fa(filndx(1)),init,l3c)
+       l3c(2) = -l3c(2)
+       if (l3c(6) .le. 0) go to 16
+       cnvnpa(i) = l3c(6)/2
+       if (l3c(6) - 2*cnvnpa(i) .eq. 0) go to 201
+  210  write (output,2007) l3c(1),l3c(2)
+ 2007  format ('0******** Number of words on cards',i9,'-',i8,' is not e
+     &qual to a multiple of 2.')
+       go to 16
+  201  cnvlen(i) = 11 + 4*cnvnpa(i)
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 91
+       cnvpnm(i) = nc
+       ii = i
+       m = 1
+       tfail = .false.
+       do j = 1,cnvnpa(i)
+         cnvalf(ii) = xinit(m)
+         if (init(m+1) .gt. 1000000000) then
+           init(m+1) = 0
+           tfail = .true.
+         endif
+         cnvint(ii) = init(m+1)
+         cnvpck(ii) = 0
+         cnvpck(ii+1) = 0
+         if (j .eq. 1) then
+           if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+           write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+           write (output,2013) cnvscl(i),xinit(1),init(2)
+           endif
+ 2013  format ('0',10x,'y =',1p,g14.6,'*(',a8,i11,')')
+         else
+           if (iand(ihlppr(2),ishft(1,22)).ne.0)
+     &     write (output,2014) xinit(m),init(m+1)
+ 2014  format (28x,'*(',a8,i11,')')
+         endif
+         m = m + 2
+         ii = ii + 4
+       enddo
+  211  if (.not.tfail) go to 104
+       write (output,2006) l3c(1),l3c(2)
+       fail = .true.
+       go to 104
+c  Process divider component.
+  300  l3c(1) = l3a(1) + 1
+       l3c(2) = -l3c(1) - ncinb
+       l3c(6) = 1
+       call inp2 (fa(filndx(1)),init,l3c)
+       l3c(2) = -l3c(2)
+       if (l3c(6) .le. 0) go to 16
+       cnvnpa(i) = l3c(6)/2
+       if (l3c(6) -  2*cnvnpa(i) .ne. 0) go to 210
+       if (cnvnpa(i) .le. 2) go to 301
+       write (output,2015) l3c(1),l3c(2)
+ 2015  format ('0******** Number of factors on cards',i9,'-',i8,
+     &   'for a divide component is not 1 or 2.')
+       go to 16
+  301  cnvlen(i) = 11 + 4*cnvnpa(i)
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 91
+       cnvpnm(i) = nc
+       m = 1
+       ii = i
+       tfail = .false.
+       do j = 1,cnvnpa(i)
+         cnvalf(ii) = xinit(m)
+         if (init(m+1) .gt. 1000000000) then
+           init(m+1) = 0
+           tfail =  .true.
+         endif
+         cnvint(ii) = init(m+1)
+         cnvpck(ii) = 0
+         cnvpck(ii+1) = 0
+         m = m + 2
+         ii = ii + 4
+       enddo
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+       if (cnvnpa(i) .eq. 2) go to 304
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2017) cnvscl(i),xinit(1),init(2)
+ 2017  format ('0',10x,'y =',1p,g14.6,'/(',a8,i11,')')
+       go to 211
+  304  if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2018) cnvscl(i),(xinit(j),init(j+1),j=1,4,2)
+ 2018  format ('0',10x,'y =',1p,g14.6,'/(',a8,i11,')*(',a8,i11,')')
+       go to 211
+c  Process differentiating or integrating component.
+  400  l3d(1) = l3a(1) + 1
+       l3d(2) = -l3d(1) - ncinb
+       l3d(6) = 1
+       call inp2 (fa(filndx(1)),init,l3d)
+       l3d(2) = -l3d(2)
+       if (l3d(6) .le. 0) go to 16
+       cnvlen(i) = 16
+       cnvnpa(i) = 1
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 91
+       cnvpnm(i) = nc
+       cnvalf(i) = xinit(1)
+       tfail = .false.
+       if (init(2) .gt. 1000000000) then
+         init(2) = 0
+         tfail = .true.
+       endif
+       cnvint(i) = init(2)
+       cnvpck(i) = 0
+       cnvpck(i+1) = 0
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+       if (cnvtyp(i) .ne. 6) then
+         if (iand(ihlppr(2),ishft(1,22)) .ne. 0)
+     & write (output,2019) cnvscl(i),xinit(1),init(2),cnvarn(i)
+ 2019  format ('0',10x,'y =',1p,g14.6,'*diff(',a8,i11,')'/
+     & 14x,'initial value of derivitive of y =',g14.6)
+       else
+         if (iand(ihlppr(2),ishft(1,22)) .ne. 0)
+     &   write (output,2020) cnvscl(i),xinit(1),init(2),cnvarn(i)
+ 2020  format ('0',10x,'y =',1p,g14.6,'*int(',a8,i11,')'/
+     & 14x,'initial value of integral of y =',g14.6)
+       endif
+       if (.not.tfail) go to 998
+       write (output,2006) l3d(1),l3d(2)
+       go to 999
+c  Process delay component.
+  600  l3e(1) = l3a(1) + 1
+       l3e(2) = -l3e(1) - ncinb
+       l3e(6) = 1
+       call inp2 (fa(filndx(1)),init,l3e)
+       l3e(2) = -l3e(2)
+       if (l3e(6) .le. 0) go to 16
+       if (init(4).le.0 .or. init(4).gt.100) then
+         write (output,2046) nc
+ 2046  format ('0******** Hold number for delay control component',i5,
+     & ' is incorrect, 1 substituted for checking.')
+         fail = .true.
+         init(4) = 1
+       endif
+       init(5) = 2*(init(4) + 2)
+       cnvlen(i) = 22 + init(5)
+       cnvnpa(i) = 1
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 91
+       cnvpnm(i) = nc
+       cnvalf(i) = xinit(1)
+       tfail = .false.
+       if (init(2) .gt. 1000000000) then
+         init(2) = 0
+         tfail = .true.
+       endif
+       cnvint(i) = init(2)
+       cnvpck(i) = 0
+       cnvpck(i+1) = 0
+       if (xinit(3) .le. 0.0) then
+         write (output,2047) nc
+ 2047  format ('0******** Delay in control component',i5,' is not greate
+     &r than zero.')
+         fail = .true.
+       endif
+       cnvdla(i) = xinit(3)
+       cnvdli(i) = xinit(3)/init(4)
+       cnvdct(i) = 0
+       cnvdct(i+1) = init(5)
+       cnvdct(i+2) = 0
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+       write (output,2021) cnvscl(i),xinit(1),init(2),xinit(3),init(4)
+       endif
+ 2021  format ('0',10x,'y =',1p,g14.6,'*delay(',a8,i11,' by',g14.6,' sec
+     &) using',i4,' saved values')
+       if (tfail) then
+         write (output,2006) l3e(1),l3e(2)
+         fail = .true.
+       endif
+       go to 104
+c  Process functional component.
+  700  l3f(1) = l3a(1) + 1
+       l3f(2) = -l3f(1) - ncinb
+       l3f(6) = 1
+       call inp2 (fa(filndx(1)),init,l3f)
+       l3f(2) = -l3f(2)
+       if (l3f(6) .le. 0) go to 16
+       cnvlen(i) = 17
+       cnvnpa(i) = 1
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 91
+       cnvpnm(i) = nc
+       cnvalf(i) = xinit(1)
+       tfail = .false.
+       tfail2 = .false.
+       if (init(2) .le. 1000000000) go to 703
+       init(2) = 0
+       tfail = .true.
+  703  cnvint(i) = init(2)
+       cnvpck(i) = 0
+       cnvpck(i+1) = 0
+       if (init(3).gt.0 .and. init(3).lt.1000) go to 704
+       tfail2 = .true.
+       init(3) = 0
+  704  cnvgen(i) = init(3)
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+       write (output,2022) cnvscl(i),xinit(1),(init(j),j=2,3)
+       endif
+ 2022  format ('0',10x,'y =',1p,g14.6,'*function (',a8,i11,')'/
+     &     14x,'function is defined by general table',i4)
+       if (.not.tfail) go to 710
+       write (output,2006) l3f(1),l3f(2)
+       fail = .true.
+  710  if (.not.tfail2) go to 104
+       write (output,2023) l3f(1),l3f(2)
+ 2023  format ('0******** General table reference on cards',i9,'-',i8,
+     &   '.')
+       fail = .true.
+       go to 104
+c  Process standard function component.
+  720  l3g(1) = l3a(1) + 1
+       l3g(2) = -l3g(1) - ncinb
+       l3g(6) = 1
+       call inp2 (fa(filndx(1)),init,l3g)
+       l3g(2) = -l3g(2)
+       if (l3g(6) .le. 0) go to 16
+       cnvnpa(i) = l3g(6)/2
+       if (l3g(6) - 2*cnvnpa(i) .eq. 1) go to 220
+       write (output,2041) l3g(1),l3g(2)
+ 2041  format ('0******** Number of words on cards',i9,'-',i8,' is not e
+     &qual to a multiple of 2 plus 1.')
+       go to 16
+  220  cnvlen(i) = 11 + 4*cnvnpa(i)
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 91
+       cnvpnm(i) = nc
+       tfail = .false.
+       ii = i
+       m = 2
+       do j = 1,cnvnpa(i)
+         cnvalf(ii) = xinit(m)
+         if (init(m+1) .le. 1000000000) go to 223
+         init(m+1) = 0
+         tfail = .true.
+  223    cnvint(ii) = init(m+1)
+         cnvpck(ii) = 0
+         cnvpck(ii+1) = 0
+         if (j .ne. 1) go to 224
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+         write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+         write (output,2042) cnvscl(i),xinit(1),xinit(2),init(3)
+         endif
+ 2042  format ('0',10x,'y =',1p,g14.6,'*',a10,'( (',a8,i11,')')
+         go to 225
+  224    if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2043) xinit(m),init(m+1)
+ 2043  format ('+',64x,','/' ',39x,'(',a8,i11,')')
+  225    m = m + 2
+         ii = ii + 4
+       enddo
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2044)
+ 2044  format  ('+',64x,')')
+       if (.not.tfail) go to 706
+       write (output,2006) l3g(1),l3g(2)
+       fail = .true.
+  706  write (chwrd,'(a8)') xinit(1)
+       do 721 j = 1,10
+         if (chwrd .eq. sftyp(j)) go to 722
+  721  continue
+       write (output,2030) l3g(1),l3g(2)
+ 2030  format ('0******** Illegal function reference on cards',i9,'-',i8
+     &,  '.')
+       fail = .true.
+       go to 104
+  722  cnvnop(i) = ior(cnvnop(i),ishft(j,24))
+       if (j .ge. 9) go to 723
+       if (cnvnpa(i) .eq. 1) go to 104
+       write (output,2045)
+ 2045  format ('0******** Too many arguments for function type.')
+       fail = .true.
+       go to 104
+  723  if (cnvnpa(i) .gt. 1) go to 104
+       write (output,2029)
+ 2029  format ('0******** Function type requires two or more arguments.'
+     & )
+       fail = .true.
+       go to 104
+c  Process trip unit step function or trip delay component.
+  740  l3h(1) = l3a(1) + 1
+       l3h(2) = -l3h(1) - ncinb
+       l3h(6) = 1
+       call inp2 (fa(filndx(1)),init,l3h)
+       l3h(2) = -l3h(2)
+       if (l3h(6) .le. 0) go to 16
+       cnvlen(i) = 13
+       cnvnpa(i) = 0
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 91
+       cnvpnm(i) = nc
+       init(2) = abs(init(1))
+       tfail = init(2).gt.0 .and. init(2).le.2000
+       if (.not.tfail) init(2) = 0
+       tfail = tfail .and. (j.eq.10 .or. init(1).ge.0)
+       cnvtrp(i) = init(2)
+       cnvtrp(i+1) = 0
+       if (init(1) .lt. 0) cnvnop(i) = ior(cnvnop(i),64)
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+       if (j .ne. 10) go to 742
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2024) cnvscl(i),init(1)
+ 2024  format ('0',10x,'y =',1p,g14.6,'*unittrip(',i5,')')
+       go to 743
+  742  if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2028) cnvscl(i),init(1)
+ 2028  format ('0',10x,'y =',1p,g14.6,'*triptime(',i5,')')
+  743  if (tfail) go to 104
+       write(output,2025) l3h(1),l3h(2)
+ 2025  format ('0******** Trip reference on cards',i9,'-',i8,
+     &    ' is illegal, set to zero or complement sign ignored.')
+       fail = .true.
+       go to 104
+c  Process real number to integer power component.
+  780  l3i(1) = l3a(1) + 1
+       l3i(2) = -l3i(1) - ncinb
+       l3i(6)  = 1
+       call inp2 (fa(filndx(1)),init,l3i)
+       l3i(2) = -l3i(2)
+       if (l3i(6)  .le. 0) go to 16
+       cnvlen(i)  = 16
+       cnvnpa(i) = 1
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 91
+       cnvpnm(i) = nc
+       cnvalf(i) = xinit(1)
+       tfail = .false.
+       if (init(2) .le. 1000000000) go to 781
+       init(2) = 0
+       tfail = .true.
+  781  cnvint(i) = init(2)
+       cnvpck(i) = 0
+       cnvpck(i+1) = 0
+       cnvgen(i) = init(3)
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+       write (output,2032) cnvscl(i),xinit(1),(init(j),j=2,3)
+       endif
+ 2032  format ('0',10x,'y =',1p,g14.6,'*(',a8,i11,')**(',i10,')')
+       if (.not.tfail) go to 104
+       write (output,2006) l3i(1),l3i(2)
+       fail = .true.
+       go to 104
+c  Process real number to real power component.
+  800  l3j(1) = l3a(1) + 1
+       l3j(2) = -l3j(1) - ncinb
+       l3j(6)  = 1
+       call inp2 (fa(filndx(1)),init,l3j)
+       l3j(2) = -l3j(2)
+       if (l3j(6)  .le. 0) go to 16
+       cnvlen(i) = 16
+       cnvnpa(i) = 1
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 91
+       cnvpnm(i) = nc
+       cnvalf(i) = xinit(1)
+       tfail = .false.
+       if (init(2) .le. 1000000000) go to 801
+       init(2) = 0
+       tfail = .true.
+  801  cnvint(i) = init(2)
+       cnvpck(i) = 0
+       cnvpck(i+1) = 0
+       cnvsan(i) = xinit(3)
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+       write (output,2033) cnvscl(i),xinit(1),init(2),xinit(3)
+       endif
+ 2033  format ('0',10x,'y =',1p,g14.6,'*(',a8,i11,')**(',g14.6,')')
+       if (.not.tfail) go to 104
+       write (output,2006) l3j(1),l3j(2)
+       fail = .true.
+       go to 104
+!  Process the real number to variable power component or the 
+!  comparison component (same input format).
+  820  l3k(1) = l3a(1) + 1
+       l3k(2) = -l3k(1) - ncinb
+       l3k(6)  = 1
+       call inp2 (fa(filndx(1)),init,l3k)
+       l3k(2) = -l3k(2)
+       if (l3k(6)  .le. 0) go to 16
+       cnvlen(i) = 19
+       cnvnpa(i) = 2
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 91
+       cnvpnm(i) = nc
+       ii = i
+       m = 1
+       tfail = .false.
+       do j = 1,2
+         cnvalf(ii) = xinit(m)
+         if (init(m+1) .gt. 1000000000) then
+           init(m+1) = 0
+           tfail = .true.
+         endif
+         cnvint(ii) = init(m+1)
+         cnvpck(ii) = 0
+         cnvpck(ii+1) = 0
+         m = m + 2
+         ii = ii + 4
+       enddo
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+       write (output,2034) cnvscl(i),(xinit(j),init(j+1),j=1,4,2)
+       endif
+ 2034  format ('0',10x,'y =',1p,g14.6,'*(',a8,i11,')**(',a8,i11,')')
+       if (.not.tfail) go to 104
+       write (output,2006) l3k(1),l3k(2)
+       fail = .true.
+       go to 104
+c  Process proportional-integral component.
+  840  l3l(1) = l3a(1) + 1
+       l3l(2) = -l3l(1) - ncinb
+       l3l(6) = 1
+       call inp2 (fa(filndx(1)),init,l3l)
+       l3l(2) = -l3l(2)
+       if (l3l(6) .le. 0) go to 16
+       cnvlen(i) = 19
+       cnvnpa(i) = 1
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 92
+       cnvpnm(i) = nc
+       cnvsan(i) = xinit(1)
+       cnvsan(i+1) = xinit(2)
+       cnvalf(i) = xinit(3)
+       tfail = .false.
+       if (init(4) .le. 1000000000) go to 841
+       init(4) = 0
+       tfail = .true.
+  841  cnvint(i) = init(4)
+       cnvpck(i) = 0
+       cnvpck(i+1) = 0
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+       write (output,2053) cnvscl(i),xinit(1),xinit(3),init(4),xinit(2),
+     & xinit(3),init(4)
+       endif
+ 2053  format ('0',10x,'y =',1p,g14.6,'*(',g15.6,'*(',a8,i11,') +',
+     & g15.6,'*int(',a8,i11,') )')
+       if (xinit(1).ne.0.0 .and. xinit(2).ne.0.0) go to 842
+       write (output,2052) l3l(1),l3l(2)
+       fail = .true.
+  842  if (.not.tfail) go to 104
+       write (output,2006) l3l(1),l3l(2)
+       fail = .true.
+       go to 104
+c  Process lag component.
+  860  l3m(1) = l3a(1) + 1
+       l3m(2) = -l3m(1) - ncinb
+       l3m(6) = 1
+       call inp2 (fa(filndx(1)),init,l3m)
+       l3m(2) = -l3m(2)
+       if (l3m(6) .le. 0) go to 16
+       cnvlen(i) = 17
+       cnvnpa(i) = 1
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 92
+       cnvpnm(i) = nc
+       cnvsan(i) = xinit(1)
+       cnvalf(i) = xinit(2)
+       tfail = .false.
+       if (init(3) .le. 1000000000) go to 861
+       init(3) = 0
+       tfail = .true.
+  861  cnvint(i) = init(3)
+       cnvpck(i) = 0
+       cnvpck(i+1) = 0
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+       write (output,2054) cnvscl(i),xinit(1),xinit(2),init(3)
+       endif
+ 2054  format ('0',10x,'y(s) =',1p,g14.6,'*(1.0/(1.0 +',g15.6,'*s))*(',
+     & a8,i11,'),')
+       tfail2 = xinit(1) .eq. 0.0
+       if (.not.tfail2) go to 862
+       write (output,2052) l3m(1),l3m(2)
+       fail = .true.
+  862  if (.not.tfail) go to 104
+       write (output,2006) l3m(1),l3m(2)
+       fail = .true.
+       go to 104
+c  Process lead-lag component.
+  880  l3l(1) = l3a(1) + 1
+       l3l(2) = -l3l(1) - ncinb
+       l3l(6) = 1
+       call inp2 (fa(filndx(1)),init,l3l)
+       l3l(2) = -l3l(2)
+       if (l3l(6) .le. 0) go to 16
+       cnvlen(i) = 19
+       cnvnpa(i) = 1
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 92
+       cnvpnm(i) = nc
+       cnvsan(i) = xinit(1)
+       cnvsan(i+1) = xinit(2)
+       cnvalf(i) = xinit(3)
+       tfail = .false.
+       if (init(4) .le. 1000000000) go to 881
+       init(4) = 0
+       tfail = .true.
+  881  cnvint(i) = init(4)
+       cnvpck(i) = 0
+       cnvpck(i+1) = 0
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+       write (output,2055) cnvscl(i),xinit(1),xinit(2),xinit(3),init(4)
+       endif
+ 2055  format ('0',10x,'y(s)=',1p,g14.6,'*((1.0 +',g15.6,'*s)/(1.0 +',
+     & g15.6,'*s) )*(',a8,i11,')')
+       if (xinit(1).ne.0.0 .and. xinit(2).ne.0.0) go to 883
+       write (output,2052) l3l(1),l3l(2)
+       fail = .true.
+  883  if (xinit(1) .ne. xinit(2)) go to 882
+       write (output,2056) l3l(1),l3l(2)
+ 2056  format ('0******** Time constants in lead-lag component on cards'
+     & ,i9,'-',i8,' are equal.')
+       fail = .true.
+  882  if (.not.tfail) go to 104
+       write (output,2006) l3l(1),l3l(2)
+       fail = .true.
+       go to 104
+c  Process pumpctl or steamctl component.
+  930  l3q(1) = l3a(1) + 1
+       l3q(2) = -l3q(1) - ncinb
+       l3q(6) = 1
+       call inp2 (fa(filndx(1)),init,l3q)
+       l3q(2) = -l3q(2)
+       if (l3q(6) .le. 0) go to 16
+       cnvlen(i) = 23
+       cnvnpa(i) = 2
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 92
+       cnvpnm(i) = nc
+       tfail = .false.
+       tfail2 = .false.
+       ii = i
+       j = 1
+       do m = 1,2
+         cnvalf(ii) = xinit(j)
+         if (init(j+1) .gt. 1000000000) then
+           init(j+1) = 0
+           tfail = .true.
+         endif
+         cnvint(ii) = init(j+1)
+         cnvpck(ii) = 0
+         cnvpck(ii+1) = 0
+         ii = ii + 4
+         j = j + 2
+       enddo
+       if (xinit(5) .eq. 0.0) then
+         xinit(5) = 1.0
+         tfail2 = .true.
+       endif
+       if (cnvtyp(i) .eq. 20) then
+         deflt = 5.0
+       else
+         deflt = 7.5
+       endif
+       if (l3q(6) .lt. 6) xinit(6) = deflt
+       if (xinit(6) .lt. 0.0) tfail2 = .true.
+       if (xinit(6) .le. 0.0) xinit(6) = deflt
+       cnvsan(i+4) = cnvscl(i)/(xinit(5)*xinit(6))
+       if (l3q(6) .lt. 7) xinit(7) = xinit(6)
+       if (xinit(7) .lt. 0.0) then
+         tfail2 = .true.
+         xinit(7) = xinit(6)
+       endif
+       if (xinit(7) .eq. 0.0) then
+         cnvsan(i+5) = 0.0
+       else
+         cnvsan(i+5) = cnvscl(i)/(xinit(5)*xinit(7))
+       endif
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+       write (output,2082) xinit(1),init(2),xinit(3),init(4),xinit(5),
+     & cnvscl(i),(xinit(j),j=6,7)
+       endif
+ 2082  format (11x,'normalized error signal =  (',a8,i11,') - (',a8,i11,
+     & ') )/',1p,g15.6/
+     & 13x,'output scaling factor =',g15.6/
+     & 21x,'time constant =',g15.6/
+     & 13x,'proportional constant =',g15.6)
+       if (tfail2) then
+         write (output,2083) l3q(1),l3q(2)
+ 2083  format ('0******** One or more real numbers on cards',i9,'-',i9,
+     & ' are incorrect, set to default values.')
+         fail = .true.
+       endif
+       if (tfail) then
+         write (output,2006) l3q(1),l3q(2)
+         fail = .true.
+       endif
+      go to 104
+c  Process feedctl component.
+  940  l3r(1) = l3a(1) + 1
+       l3r(2) = -l3r(1) - ncinb
+       l3r(6) = 1
+       call inp2 (fa(filndx(1)),init,l3r)
+       l3r(2) = -l3r(2)
+       if (l3r(6) .le. 0) go to 16
+       cnvlen(i) = 33
+       cnvnpa(i) = 4
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 92
+       cnvpnm(i) = nc
+       tfail = .false.
+       tfail2 = .false.
+       ii = i
+       j = 1
+       do m = 1,4
+         cnvalf(ii) = xinit(j)
+         if (init(j+1) .gt. 1000000000) then
+           init(j+1) = 0
+           tfail = .true.
+         endif
+         cnvint(ii) = init(j+1)
+         cnvpck(ii) = 0
+         cnvpck(ii+1) = 0
+         ii = ii + 4
+         j = j + 2
+         if (j .eq. 5) j = 6
+       enddo
+       j = 5
+       do m = 1,2
+         if (xinit(j) .eq. 0.0) then
+           xinit(j) = 1.0
+           tfail2 = .true.
+         endif
+         cnvsan(i+m+11) = 1.0/xinit(j)
+         j = j + 5
+       enddo
+       if (l3r(6) .lt. 11) xinit(11) = 10.0
+       if (xinit(11) .lt. 0.0) tfail2 = .true.
+       if (xinit(11) .le. 0.0) xinit(11) = 10.0
+       cnvsan(i+14) = cnvscl(i)/xinit(11)
+       if (l3r(6) .lt. 12) xinit(12) = xinit(11)
+       if (xinit(12) .lt. 0.0) then
+         tfail2 = .true.
+         xinit(12) = xinit(11)
+       endif
+       if (xinit(12) .eq. 0.0) then
+         cnvsan(i+15) = 0.0
+       else
+         cnvsan(i+15) = cnvscl(i)/xinit(12)
+       endif
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 ) then
+       write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+       write (output,2084) xinit(1),init(2),xinit(3),init(4),xinit(5),
+     & xinit(6),init(7),xinit(8),init(9),xinit(10),cnvscl(i),
+     & (xinit(j),j=11,12)
+       endif
+ 2084  format (16x,'normalized level signal = ( (',a8,i11,') - (',
+     & a8,i11,') )/',1p,g15.6/
+     & 11x,'normalized steam-feed signal = ( (',a8,i11,') - (',
+     & a8,i11,') )/',g15.6/
+     & 18x,'output scaling factor =',g15.6/
+     & 26x,'time constant =',g15.6/
+     & 18x,'proportional constant =',g15.6)
+       if (tfail2) then
+         write (output,2083) l3r(1),l3r(2)
+         fail = .true.
+       endif
+       if (tfail) then
+         write (output,2006) l3r(1),l3r(2)
+         fail = .true.
+       endif
+       go to 104
+$if def,hydrolod
+!  Process force sum component.
+  960  l3s(1) = l3a(1) + 1
+       l3s(2) = -l3s(1) - ncinb
+       l3s(6) = 1
+       call inp2 (fa(filndx(1)),init,l3s)
+       l3s(2) = -l3s(2)
+       if (l3s(6) .le. 0) then
+         go to 16
+       else
+         cnvnpa(i) = l3s(6)/3
+         if (l3s(6) - 3*cnvnpa(i) .ne. 1) then
+           write (output,"('0******** Number of words on cards',
+     &i9,'-',i8,' is not equal to a multiple of 3 plus 1.')")
+     &             l3s(1),l3s(2)
+           go to 16
+         else
+           cnvlen(i) = 12 + 5*cnvnpa(i)
+           filsiz(27) = filsiz(27) + cnvlen(i)
+           if (filsiz(27) .gt. l) go to 92
+           cnvpnm(i) = nc
+           ii = i - 4
+           cnvsan(ii) = xinit(1)
+           if (iand(ihlppr(2),ishft(1,22)) .ne. 0) then
+             write (output,"('0Control component',i5,a12,10x,'ty
+     &pe = ',a10)") nc,cnvnam(i),cnvtpa(cnvtyp(i))
+           write (output,"('0',10x,'y =',1p,g14.6,'*(',g15.6)"
+     &)              cnvscl(i),xinit(1)
+           endif
+           m = 2
+           tfail = .false.
+           tfail2 = .false.
+           do j = 1,cnvnpa(i)
+             ii = ii + 5
+             tfail2 = tfail2 .or. xinit(m).eq.0.0
+             cnvsan(ii) = xinit(m)
+             cnvalf(ii) = xinit(m+1)
+             if (init(m+2) .gt. 1000000000) then
+               init(m+2) = 0
+               tfail = .true.
+             endif
+             cnvint(ii) = init(m+2)
+             cnvpck(ii) = 0
+             cnvpck(ii+1) = 0
+             if (iand(ihlppr(2),ishft(1,22)) .ne. 0) 
+     &               write (output,"(29x,'+',1p,g14.6,'*(',a8,i11,')')")
+     &               xinit(m),xinit(m+1),init(m+2)
+             m = m + 3
+           enddo
+           if (iand(ihlppr(2),ishft(1,22)) .ne. 0) write (output
+     &,"('+',67x,')')")
+           if (tfail2) then
+             write (output,"('0******** One or more constant fac
+     &tors on cards',i9,'-',i8,' are zero.')") l3s(1:2)
+             fail = .true.
+           endif
+           if (tfail) then
+             write (output,"('0******** One or more integer part
+     &s of variable request code on cards',i9,'-',i8,' were out of range
+     &, set to zero.')") l3s(1:2)
+             fail = .true.
+           endif
+         endif
+       endif
+       go to 104
+$endif
+c  Process shaft component.
+  920  if (cnvscl(i) .eq. 1.0) go to 56
+       write (output,2065) nc
+ 2065  format ('0******** Scale factor for shaft control component',i5,
+     & ' is not equal to 1.0.')
+       fail = .true.
+   56  l3n(1) = l3a(1) + 1
+       l3n(2) = -l3n(1) - 4
+       l3n(6) = 1
+       call inp2 (fa(filndx(1)),init,l3n)
+       l3n(2) = -l3n(2)
+       if (l3n(6) .le. 0) go to 16
+       if (mod(l3n(6),2) .ne. 0) go to 52
+       write (output,2062) l3n(1),l3n(2)
+ 2062  format ('0******** Number of words on cards',i9,'-',i8,' is not o
+     &dd.')
+       fail = .true.
+       go to 16
+   52  cnvnpa(i) = (l3n(6)-3)/2
+       cnvlen(i) = 14 + 4*cnvnpa(i)
+       filsiz(27) = filsiz(27) + cnvlen(i)
+       if (filsiz(27) .gt. l) go to 92
+       cnvpnm(i) = nc
+       if (init(1).ge.0 .and. init(1).le.9999) go to 60
+       write (output,2069) nc
+ 2069  format ('0******** Control variable for torque in shaft conponent
+     &',i5,' is out of range, set to zero.')
+       fail = .true.
+       init(1) = 0
+   60  if (init(1) .ne. nc) go to 63
+       write (output,2070) nc
+ 2070  format ('0******** Control variable for torque in shaft component
+     &',i5,' refers to itself.')
+       fail = .true.
+   63  if (xinit(2) .ge. 0.0) go to 53
+       write (output,2063) nc
+ 2063  format ('0******** Inertia for control component',i5,' is negativ
+     &e.')
+       fail = .true.
+       xinit(2) = 1.0
+   53  if (xinit(3) .ge. 0.0) go to 54
+       write (output,2064) nc
+ 2064  format ('0******** Friction factor for control component',i5,' is
+     & negative.')
+       fail = .true.
+       xinit(3) = 0.0
+   54  cnvsct(i) = init(1)
+       cnvsin(i) = xinit(2)
+       cnvsfr(i) = xinit(3)
+       if (uniti) go to 70
+       cnvarn(i) = cnvarn(i)*crpm
+       if (iand(cnvnop(i),4) .ne. 0) cnvmin(i) = cnvmin(i)*crpm
+       if (iand(cnvnop(i),8) .ne. 0) cnvmax(i) = cnvmax(i)*crpm
+       cnvsin(i) = cnvsin(i)*cinrt
+       cnvsfr(i) = cnvsfr(i)*ctorq
+   70  if (.not.unito) cnvaro(i) = 1.0/crpm
+       if (uniti.neqv.unito) then
+         xinit(2) = cnvsin(i)
+         xinit(3) = cnvsfr(i)
+         if (.not.unito) then
+           xinit(2) = xinit(2)/cinrt
+           xinit(3) = xinit(3)/ctorq
+         endif
+       endif
+       tfail = .false.
+       tfail2 = .false.
+       ii = i
+       k2 = 3 + 2*cnvnpa(i)
+       do j = 4,k2,2
+         write (chwrd,'(a8)') xinit(j)
+         do k1 = 1,3
+           if (chwrd .eq. lcmpn(k1)) go to 57
+         enddo
+         tfail = .true.
+         k1 = 0
+   57    if (init(j+1).lt.0 .or. init(j+1).ge.9999) then
+           init(j+1) = 0
+           tfail2 = .false.
+         endif
+         cnvscp(ii) = k1
+         cnvscp(ii+1) = init(j+1)
+         ii = ii + 4
+       enddo
+       if (tfail) write (output,2066)
+ 2066  format ('0******** Connected component name is not pump, turbine,
+     & or generatr.')
+       if (tfail2) write (output,2067)
+ 2067  format ('0******** Connected component number is out of range.')
+       fail = fail .or. tfail .or. tfail2
+       if (iand(ihlppr(2),ishft(1,22)) .ne. 0) then
+       write (output,2016) nc,cnvnam(i),cnvtpa(cnvtyp(i))
+       if (.not.unito) go to 80
+       write (output,2068) init(1),xinit(2),xinit(3),
+     & (init8(j),init(j+1),j=4,k2,2)
+ 2068  format ('0',10x,'y = rotational velocity of shaft',9x,
+     & 'component no.     moment of',8x,'friction'/
+     & 52x,'for torque',8x,'inertia',10x,'factor'/
+     & 70x,'(kg-m2)',10x,'(n-m-sec)'/48x,i17,1p,2g17.6/14x,' connecting
+     &'/(10x,6(6x,a9,i5)))
+       go to 81
+   80  write (output,2072) init(1),xinit(2),xinit(3),
+     & (init8(j),init(j+1),j=4,k2,2)
+ 2072  format ('0',10x,'y = rotational velocity of shaft',9x,
+     & 'component no.     moment of',8x,'friction'/
+     & 52x,'for torque',8x,'inertia',10x,'factor'/
+     & 70x,'(lb-ft2)',9x,'(lbf-ft-min)'/48x,i17,1p,2g17.6/14x,
+     & ' connecting'/(10x,6(6x,a9,i5)))
+   81  continue
+       endif
+       l3n(6) = 0
+       tfail2 = .false.
+       do j = 4,k2,2
+         write (chwrd,'(a8)') xinit(j)
+         if (chwrd .eq. lcmpn(3)) l3n(6) = l3n(6) + 1
+         k3 = j + 2
+         if (k3 .ge. k2) cycle
+         do k1 = k3,k2,2
+           write (chwrd2,'(a8)') xinit(k1)
+           if (chwrd.eq.chwrd2 .and. init(j+1).eq.init(k1+1)) tfail
+     &     = .true.
+         enddo
+       enddo
+       if (l3n(6) .gt. 1) then
+         write (output,2080)
+ 2080  format ('0******** More than one generator connected to a shaft c
+     &omponent.')
+         fail = .true.
+       endif
+       if (tfail2) then
+         write (output,2081)
+ 2081  format ('0******** Duplicated components are connected to the avo
+     &ve shaft.')
+         fail = .true.
+       endif
+       l3p(1) = l3n(1) + 5
+       l3p(6) = 1
+       call inp2  (fa(filndx(1)),xinit,l3p)
+       if (l3p(6) .le. 0) go to 104
+       if (l3p(6) .eq. 6) go to 64
+       write (output,2071) l3p(1)
+ 2071  format ('0******** Insufficient number of words on card',i9,'.')
+       fail = .true.
+       go to 104
+   64  cnvlen(i) = cnvlen(i) + 10
+       filsiz(27) = filsiz(27) + 10
+       if (filsiz(27) .gt. l) go to 92
+       cnvnop(i) = ior(cnvnop(i),16)
+       if (xinit(2) .gt. 0.0) go to 65
+       write (output,2079) nc
+ 2079  format ('0******** Generator',i5,' syncrhonous speed is less than
+     & or equal to zero.')
+       fail = .true.
+   65  if (xinit(3) .gt. 0.0) go to 66
+       write (output,2073) nc
+ 2073  format ('0******** Generator',i5,' moment of inertia is less than
+     & or equal to zero.')
+       fail = .true.
+   66  if (xinit(4) .ge. 0.0) go to 67
+       write (output,2074) nc
+ 2074  format ('0******** Generator',i5,' friction factor is less than z
+     &ero.')
+       fail = .true.
+   67  if (init(5).ge.0 .and. init(5).le.2000) go to 68
+       write (output,2075) nc
+ 2075  format ('0******** Generator',i5,' trip is not within range, set
+     &to zero for continued checking.')
+       fail = .true.
+       init(5) = 0
+   68  if (init(6).ge.0 .and. init(6).le.2000) go to 69
+       write (output,2076) nc
+ 2076  format ('0******** Generator',i5,' trip is not within range, set
+     &to zero for continued checking.')
+       init(6) = 0
+   69  gentrp(ii) = init(5)
+       gendtr(ii) = init(6)
+       genvel(ii) = xinit(1)
+       gensvl(ii) = xinit(2)
+       genint(ii) = xinit(3)
+       genfr(ii) = xinit(4)
+       gentrq(ii) = 0.0
+       genpow(ii) = 0.0
+       if (.not.uniti) then
+         genvel(ii) = genvel(ii)*crpm
+         gensvl(ii) = gensvl(ii)*crpm
+         genint(ii) = genint(ii)*cinrt
+         genfr(ii) = genfr(ii)*ctorq
+       endif
+       if (uniti.neqv.unito) then
+         xinit(1) =  genvel(ii)
+         xinit(2) =  gensvl(ii)
+         xinit(3) =  genint(ii)
+         xinit(4) =  genfr(ii)
+         if (.not.unito) then
+           xinit(1) = xinit(1)/crpm
+           xinit(2) = xinit(2)/crpm
+           xinit(3) = xinit(3)/cinrt
+           xinit(4) = xinit(4)/ctorq
+         endif
+       endif
+       if (.not.unito) go to 74
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2077) (xinit(k1),k1=1,4),init(5),init(6)
+ 2077  format (' Associated generator   initial rot.',5x,'synchronous',
+     & 6x,'moment of',8x,'friction',12x,'generator',7x,'disconect'/
+     & 24x,'velocity',9x,'rot.velocity',5x,'inertia',10x,'factor',12x,
+     & 'trip number',6x,'trip number'/
+     & 24x,'(rad/sec)',8x,'(rad/sec)',8x,'(kg-m2)',10x,'(n-m-sec)'/
+     & 19x,1p,4g17.6,2i17)
+       go to 104
+   74  if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2078) (xinit(k1),k1=1,4),init(5),init(6)
+ 2078  format (' Associated generator   initial rot.',5x,'synchronous',
+     & 6x,'moment of',8x,'friction',12x,'generator',7x,'disconnect'/
+     & 24x,'velocity',9x,'rot.velocity',5x,'inertia',10x,'factor',12x,
+     & 'trip number',6x,'trip number'/
+     & 24x,'(rev/min)',8x,'(rev/min)',8x,'(lb-ft2)',9x,'(lbf-ft-min)'/
+     & 19x,1p,4g17.6,2i17)
+       go to 104
+  999  fail = .true.
+  998  if (iand(cnvnop(i),4) .ne. 0) then
+         if (iand(ihlppr(2),ishft(1,22)) .ne. 0)
+     &   write (output,2038) cnvmin(i)*cnvaro(i)
+       endif
+ 2038  format (' lower limit is',1p,g17.6)
+       if (iand(cnvnop(i),8) .ne. 0) then
+         if (iand(ihlppr(2),ishft(1,22)) .ne. 0)
+     &   write (output,2039) cnvmax(i)*cnvaro(i)
+       endif
+ 2039  format (' upper limit is',1p,g17.6)
+c  Check if deletion, replacement, or insertion.
+ 1000  if (cmpsrc) go to 30
+       ii = filndx(27)
+       nnv = cnvnum(ii) - 1
+       if (nnv .eq. 0) go to 1007
+       do k = 1,nnv
+         nc1 = cnvlen(ii)
+         if (cnvpnm(ii) - nc) 1003,1004,1005
+ 1003    ii = ii + nc1
+       enddo
+ 1007  cmpsrc = .true.
+       if (del) go to 26
+       go to 30
+ 1004  cnvnum(filndx(27)) = nnv
+       if (.not.del) go to 1001
+       cnvnum(filndx(27)) = cnvnum(filndx(27)) - 1
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2009) nc
+ 2009  format ('0Control component',i5,' has been deleted.')
+       go to 1001
+ 1005  if (del) go to 26
+       nc1 = 0
+ 1001  len = cnvlen(i)
+       k2 = len - nc1
+       n3 = ii + nc1
+       n4 = ii + len
+       k1 = i + len - n3
+       if (k2) 1013,1012,1014
+ 1014  k1 = -k1
+ 1013  call ftbmov (fa(n3+2),fa(n4+2),k1)
+ 1012  i = i + k2
+       call ftbmov (fa(i+2),fa(ii+2),len)
+       filsiz(27) = filsiz(27) + k2 - len
+c  End of component processing, test if possibly more components.
+   30  i = filndx(27) + filsiz(27) - 2
+   33  nc = nc + 1
+   31  if (nc .le. ncmax) go to 13
+c  Check if any components entered.
+   32  filsiz(1) = inp9(fa(filndx(1)))
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+       if (cnvnum(filndx(27)) .ne. 0) go to 1020
+       if (isfdes(filid(27)) .ne. 0) call ftbdel (filid(27))
+       filid(27) = 0.0
+       filsiz(27) = 0
+       return
+c  Write control component file to disk.
+ 1020  i = filndx(27)
+       cnvopt(i) = iand(cnvopt(i),not(4))
+       do k1 = 1,cnvnum(i)
+         if (iand(cnvnop(i),16) .ne. 0) go to 1022
+         i = i + cnvlen(i)
+       enddo
+       go to 1023
+ 1022  cnvopt(filndx(27)) = ior(cnvopt(filndx(27)),4)
+ 1023  call ftbsft (filid(27),filsiz(27),2,filndx(27))
+       call fmvlwr
+       return
+c  Insufficient space errors.
+   91  write (output,2050)
+ 2050  format ('0******** Insufficient space to process control componen
+     &t data, remaining control component data deleted.')
+   93  filsiz(1) = inp10(fa(filndx(1)),20500001,20540959)
+       go to 32
+   92  if (ovrfl) go to 33
+       ovrfl = .true.
+       write (output,2051)
+ 2051  format ('0******** Insufficient space to complete processing cont
+     &rol components, input checking will continue.')
+       fail = .true.
+       go to 33
+       end

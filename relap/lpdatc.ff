@@ -1,0 +1,425 @@
+       module lpdatc
+!  Hydrodynamic systems and matrix control block.
+!
+!  Cognizant engineer: rjw.
+!
+!  Any changes to this database will probably require changes to the
+!  contained subroutines that read and write this data to the rstplt
+!  file.
+!
+       implicit none
+       integer, parameter, private :: kr=selected_real_kind(12,200)
+$if def,dll,1
+!dec$ attributes dllexport :: gerr
+!
+       type lpdats
+         real(kr) gerrs(2),sysdtc,sysebt,sysmer,systmc,systmo,systms,
+     &   systmu,systuc
+         integer levstk,lic,licn,lij,lijn,lijne,lijnn,lirn(3),liv,livn,
+     &   livne,livnn,llicn(3),llvect,lnoncn,lnonmf,lpackr,lsuces,nivrn,
+     &   nnz(2),nnz2(2),nvjsq,nvr(2),nvrp(2)
+         logical mflag(3),sflag(2)
+         character*8 lsysnm
+       end type lpdats
+!  gerrs   Error at which scaling and solution order will be
+!          reevaluated.
+!  sysdtc  System courant limit.
+!  sysebt  System error measure.
+!  sysmer  System mass error.
+!  systmc  System mass from conservation law applied to system, new time
+!          value.
+!  systmo  Same as systmc but old time value.
+!  systms  System mass from sum of densities times volumes.
+!  systmu  System energy from sum of energies times volumes.
+!  systuc  System energy from conservation law applied to system, new
+!          time value.
+!  levstk  Offset(input)/index(transient) to the level stack data for
+!          this system
+!  lic     Offset(input)/index(transient) to first hydrodynamic
+!          component in a system.
+!  licn    Number of hydrodynamic components in a system.
+!  lij     Offset(input)/index(transient) to first junction in a system.
+!  lijn    Number of junctions in a system.
+!  lirn    Length of space needed to hold row indexes and also for
+!          scratch space.
+!  liv     Offset(input)/index(transient) to first volume in a system.
+!  livn    Number of volumes in a system.
+!  livnn   The number of the first volume in a system.
+!  llicn   Length of space available for matrix after it has been 
+!          factored.
+!  llvect  Index to list vector for system.
+!  lnoncn  Number of noncondensible gasses in system.
+!  lnonmf  Number of molten metal species in system.
+!  lpackr  Packing flag from packer subroutine.
+!  lsuces  For each system: 0 if no need to repeat advancement with
+!          reduced time step, 1 if excessive truncation error,
+!          2 if water property error, 3 if non-diagonal matrix,
+!          -1 if repeat advancement after success on previous
+!          advancement attempt.
+!  nnz     Number of nonzero elements in solution matrix.
+!  nnz2    Number of matrix elements allowed during solution.
+!  nvr     Order of matrix.
+!  nvrp    Order of matrix plus one.
+!  mflag   False means to use ma28ad entry, true means to u;se ma28d
+!          entry.
+!  sflag   Indicates whether new scaling and solution order needed.
+!  lsysnm  System name.
+!
+       type lpdattptr
+         integer, pointer :: ip(:,:),ipr(:),irn(:),irnr(:)
+       end type lpdattptr
+!  ip    Row information similar to ipr but after factoring.
+!  ipr   Original row information. Indicates first nonzero in row of
+!        solution matrix.
+!  irn   Array holding column position of nonzeros and other
+!        information  for matrix after factoring by pminvd.
+!  irnr  Array holding column position of nonzeros for matrix.
+!
+       type lpdattpts
+         integer, pointer :: ivrn(:)
+       end type lpdattpts
+!  ivrn  Index data for volume-junction**2 loop.
+!
+       type cvelfgs
+         real(kr) f,g
+       end type cvelfgs
+!  f   liquid term.
+!  g   vapor term.
+!
+$if def,ma28
+       type ma28syp
+         integer, pointer :: icn(:),ikeep(:,:)
+       end type ma28syp
+!  icn     Array to hold column indexes.
+!  ikeep   Array to hold miscellaneous indexes used in matrix factoring.
+$endif
+!
+       integer nloops
+       logical ma28tsp,ma28used
+!  nloops  Number of hydrodynamic systems.
+!  ma28tsp True if nearly implicit can be used.
+!  ma28used Set to chngno(33)
+       type (lpdats), allocatable :: lpdat(:)
+!  lpdat   Block holding system data.
+!
+$if def,ma28
+       type (ma28syp), allocatable :: ma28p(:,:)
+       type (lpdattptr), allocatable :: lpr(:,:)
+       type (lpdattpts), allocatable :: lps(:)
+       type (cvelfgs), allocatable :: cvelfg(:)
+       real(kr), allocatable,target :: coefp(:),coefx(:)
+       real(kr), pointer :: coefpx(:)
+       real(kr), allocatable :: ma28as(:),ma28w(:),sourcp(:)
+       integer, allocatable :: irnx(:,:),maipx(:,:),ma28idisp(:,:,:),
+     & ma28irn(:),ma28iw(:,:),ma28jvect(:)
+!  coefp   Holds array to be inverted.
+!  coefpx  Holds array for pminvr and momentum flux information for
+!          nearly implicit advancement.
+!  coefx   Holds array to be inverted.
+!  cwefpx  Set to either coefp or coefx when using pminv matrix routines
+!          to do matrix solution.
+!  cvelfg  Holds momentum flux terms when using nearly implicit
+!          advancement.
+!  ma28as  Hold copy of matrix in case new strategy is needed.
+!  ma28w   Working space.
+!  irnx    Holds column positions of matrix during factoring by pminvd.
+!  maipx   Row information during factoring.
+!  ma28irn Working space.
+!  ma28iw  Working space.
+!  ma28idisp  Hold information unique to each matrix from one solution
+!             to the next.
+!  ma28jvect  Working space.
+$endif
+!
+!  The following quantities do not need saved on the restart file.
+!
+!  The quantities below are mostly used for loop control during
+!  transient advancement.
+       real(kr) gerr
+       integer issys,ixpc,ixjff,ixvf,ixvff,lhtsol,matrix,mtype
+!  gerr    Estimated error in inversion process.
+!  issys   Index for system quantities.
+!  ixpc    Start of scratch space used for minor edits, plot records,
+!          reflood model, reactor kinetics.
+!  ixjff   Holds start of scratch space for hydrodynamic junctions for
+!          a hydrodynamic system.
+!  ixvf    Start of scratch space for hydrodynamic volumes and
+!          junctions for all systems.
+!  ixvff   Holds start of scratch space for hydrodynamic volumes for a
+!          hydrodynamic system.
+!  lhtsol  Used to determine scratch storage lengths in trnset.
+!  matrix  Index for matrix type.
+!  mtype   Type of matrix multiply, needed in call to matrix product
+!          routine.
+!
+!  The quantities below are used in mass error analysis.
+       common /once/ dtmass,totvol,totvsq,emassx,emassq,totnum,tmassq
+       real(kr) dtmass,emassq,emassx,tmassq,totnum,totvol,totvsq
+!
+       contains
+!
+       subroutine lpdatclear (fl)
+       implicit none
+       logical fl
+       integer dd
+!
+       if (allocated(lpr)) then
+         dd = size(lpr,2)
+         do issys = 1,size(lpr,1)
+           deallocate (lpr(issys,1)%ipr,lpr(issys,1)%irnr)
+           if (dd .eq. 2) then
+             if (associated(lpr(issys,2)%ipr)) then
+               deallocate (lpr(issys,2)%ipr)
+               deallocate (lpr(issys,2)%irnr)
+             endif
+             if (allocated(lps)) then
+               if (associated(lps(issys)%ivrn))
+     &         deallocate (lps(issys)%ivrn)
+             endif
+           endif
+           if (.not.ma28used) then
+             deallocate (lpr(issys,1)%ip,lpr(issys,1)%irn)
+             if (dd .eq. 2) then
+               if (associated(lpr(issys,2)%ip))
+     &         deallocate (lpr(issys,2)%ip,lpr(issys,2)%irn)
+             endif
+           else
+             deallocate (ma28p(issys,1)%icn,ma28p(issys,1)%ikeep)
+             if (dd .eq. 2) then
+               if (associated(ma28p(issys,2)%icn))
+     &         deallocate (ma28p(issys,2)%icn,ma28p(issys,3)%icn,
+     &         ma28p(issys,2)%ikeep,ma28p(issys,3)%ikeep)
+             endif
+           endif
+         enddo
+         deallocate (lpr)
+         if (allocated(lps)) deallocate (lps)
+         if (ma28used) deallocate (ma28p,ma28idisp)
+       endif
+       if (allocated(coefp)) deallocate (coefp)
+       if (allocated(coefx)) deallocate (coefx)
+       if (allocated(sourcp)) deallocate (sourcp)
+       if (allocated(maipx)) deallocate (maipx)
+       if (allocated(ma28w)) deallocate (ma28w)
+       if (allocated(irnx)) deallocate (irnx)
+       if (allocated(cvelfg)) deallocate (cvelfg)
+       if (allocated(ma28as)) deallocate (ma28as)
+       if (allocated(ma28irn)) deallocate (ma28irn)
+       if (allocated(ma28jvect)) deallocate (ma28jvect)
+       if (allocated(ma28iw)) deallocate (ma28iw)
+       if (fl) then
+         if (allocated(lpdat)) deallocate (lpdat)
+       endif
+       return
+       end subroutine lpdatclear
+!
+       subroutine lpdatread (fl)
+       implicit none
+       logical fl
+       include 'ufiles.h'
+!
+       integer iwrd,len,lent
+!
+       read (rstplt) len,iwrd
+       inquire (iolength=lent) nloops,ma28tsp,ma28used
+c      write (12,"('lpdatread00',3i10)") len,iwrd,lent
+       if (len .ne. lent) go to 200
+       read (rstplt) nloops,ma28tsp,ma28used
+       if (nloops .ne. 0) then
+         if (fl) then
+           call lpdatclear (.true.)
+           allocate (lpdat(nloops))
+           if (ma28used) allocate (ma28p(nloops,3),
+     &     ma28idisp(2,nloops,3))
+         endif
+         read (rstplt) len,iwrd
+         inquire (iolength=lent) lpdat
+c      write (12,"('lpdatread01',3i10)") len,iwrd,lent
+         if (len .ne. lent) go to 200
+         read (rstplt) lpdat
+         if (ma28used) then
+           read (rstplt) len,iwrd
+           inquire (iolength=lent) ma28idisp
+c      write (12,"('lpdatread02',3i10)") len,iwrd,lent
+           if (len .ne. lent) go to 200
+           read (rstplt) ma28idisp
+         endif
+         if (fl) then
+           if (.not.ma28tsp) then
+             allocate (lpr(nloops,1))
+           else
+             allocate (lpr(nloops,2),lps(nloops))
+           endif
+           do issys = 1,nloops
+             nullify (lpr(issys,1)%ip,lpr(issys,1)%ipr,lpr(issys,1)%irn,
+     &       lpr(issys,1)%irnr)
+             if (ma28tsp) nullify (lpr(issys,2)%ip,lpr(issys,2)%ipr,
+     &       lpr(issys,2)%irn,lpr(issys,2)%irnr,lps(issys)%ivrn)
+           enddo
+           do issys = 1,nloops
+             allocate (lpr(issys,1)%ipr(lpdat(issys)%nvrp(1)),
+     &       lpr(issys,1)%irnr(lpdat(issys)%nnz(1)))
+             if (ma28tsp) allocate (
+     &       lpr(issys,2)%ipr(lpdat(issys)%nvrp(2)),
+     &       lpr(issys,2)%irnr(lpdat(issys)%nnz(2)),
+     &       lps(issys)%ivrn(lpdat(issys)%nivrn))
+             if (.not.ma28used) then
+               allocate (lpr(issys,1)%ip(lpdat(issys)%nvrp(1),5),
+     &         lpr(issys,1)%irn(lpdat(issys)%nnz2(1)))
+               if (ma28tsp) allocate (
+     &         lpr(issys,2)%ip(lpdat(issys)%nvrp(2),5),
+     &         lpr(issys,2)%irn(lpdat(issys)%nnz2(2)))
+             else
+               allocate (ma28p(issys,1)%icn(lpdat(issys)%llicn(1)),
+     &         ma28p(issys,1)%ikeep(lpdat(issys)%nvr(1),5))
+               if (ma28tsp) allocate
+     &         (ma28p(issys,3)%icn(lpdat(issys)%llicn(3)),
+     &         ma28p(issys,3)%ikeep(lpdat(issys)%nvr(1),5),
+     &         ma28p(issys,2)%icn(lpdat(issys)%llicn(2)),
+     &         ma28p(issys,2)%ikeep(lpdat(issys)%nvr(2),5))
+             endif
+           enddo
+         endif
+         do issys = 1,nloops
+           read (rstplt) len,iwrd
+           inquire (iolength=lent) lpr(issys,1)%ipr,lpr(issys,1)%irnr
+c      write (12,"('lpdatread03',3i10)") len,iwrd,lent
+           if (len .ne. lent) go to 200
+           read (rstplt) lpr(issys,1)%ipr,lpr(issys,1)%irnr
+c      write (12,"('lpdatread04',i8/(10i10))") lpdat(issys)%nvrp(1),
+c    & lpr(issys,1)%ipr
+c      write (12,"('lpdatread05',i8/(10i10))") lpdat(issys)%nnz(1),
+c    & lpr(issys,1)%irnr
+           if (ma28tsp) then
+             read (rstplt) len,iwrd
+             inquire (iolength=lent) lpr(issys,2)%ipr,
+     &       lpr(issys,2)%irnr,lps(issys)%ivrn
+c      write (12,"('lpdatread06',5i10)") len,lent,
+c    & size(lpr(issys,2)%ipr),size(lpr(issys,2)%irnr),
+c    & size(lps(issys)%ivrn)
+             if (len .ne. lent) go to 200
+             read (rstplt) lpr(issys,2)%ipr,
+     &       lpr(issys,2)%irnr,lps(issys)%ivrn
+c      write (12,"('lpdatread07',i8/(10i10))") lpdat(issys)%nvrp(2),
+c    & lpr(issys,2)%ipr
+c      write (12,"('lpdatread08',i8/(10i10))") lpdat(issys)%nnz(2),
+c    & lpr(issys,2)%irnr
+c      write (12,"('lpdatread09',i8/(10i10))") lpdat(issys)%nivrn,
+c    & lps(issys)%ivrn
+           endif
+           if (.not.ma28used) then
+             read (rstplt) len,iwrd
+             inquire (iolength=lent) lpr(issys,1)%ip,lpr(issys,1)%irn
+             if (len .ne. lent) go to 200
+             read (rstplt) lpr(issys,1)%ip,lpr(issys,1)%irn
+             if (ma28tsp) then
+               read (rstplt) len,iwrd
+               inquire (iolength=lent) lpr(issys,2)%ip,lpr(issys,2)%irn
+               if (len .ne. lent) go to 200
+               read (rstplt) lpr(issys,2)%ip,lpr(issys,2)%irn
+             endif
+           else
+             read (rstplt) len,iwrd
+             inquire (iolength=lent) ma28p(issys,1)%icn,
+     &       ma28p(issys,1)%ikeep
+             if (len .ne. lent) go to 200
+             read (rstplt) ma28p(issys,1)%icn,ma28p(issys,1)%ikeep
+             if (ma28tsp) then
+               read (rstplt) len,iwrd
+               inquire (iolength=lent) ma28p(issys,2)%icn,
+     &         ma28p(issys,3)%icn,
+     &         ma28p(issys,2)%ikeep,ma28p(issys,3)%ikeep
+               if (len .ne. lent) go to 200
+               read (rstplt) ma28p(issys,2)%icn,ma28p(issys,3)%icn,
+     &         ma28p(issys,2)%ikeep,ma28p(issys,3)%ikeep
+             endif
+           endif
+         enddo
+       endif
+       return
+!
+  200  write (output,"('0******** Programming error, incorrect record le
+     &ngth when reading restart-plot file.')")
+       stop 'lpdatc-1, programming error.'
+       end subroutine lpdatread
+!
+       subroutine lpdatwrite
+       implicit none
+       include 'ufiles.h'
+!
+       integer, parameter :: iwrd=1
+       integer len
+!
+       inquire (iolength=len) nloops,ma28tsp,ma28used
+       write (rstplt) len,iwrd
+       write (rstplt) nloops,ma28tsp,ma28used
+c      write (12,"('lpdatwrite00',2i10)") len,iwrd
+       if (nloops .ne. 0) then
+         inquire (iolength=len) lpdat
+         write (rstplt) len,iwrd
+         write (rstplt) lpdat
+c      write (12,"('lpdatwrite01',2i10)") len,iwrd
+         if (ma28used) then
+           inquire (iolength=len) ma28idisp
+           write (rstplt) len,iwrd
+           write (rstplt) ma28idisp
+c      write (12,"('lpdatwrite02',2i10)") len,iwrd
+         endif
+         do issys = 1,nloops
+           inquire (iolength=len) lpr(issys,1)%ipr,lpr(issys,1)%irnr
+           write (rstplt) len,iwrd
+c      write (12,"('lpdatwrite03',6i10)") len,iwrd,
+c    & lpdat(issys)%nvrp(1),lpdat(issys)%nnz(1),
+c    & size(lpr(issys,1)%ipr),size(lpr(issys,1)%irnr)
+           write (rstplt) lpr(issys,1)%ipr,lpr(issys,1)%irnr
+c      write (12,"('lpdatwrite04',i8/(10i10))") lpdat(issys)%nvrp(1),
+c    & lpr(issys,1)%ipr
+c      write (12,"('lpdatwrite05',i8/(10i10))") lpdat(issys)%nnz(1),
+c    & lpr(issys,1)%irnr
+           if (ma28tsp) then
+             inquire (iolength=len) lpr(issys,2)%ipr,lpr(issys,2)%irnr,
+     &       lps(issys)%ivrn
+             write (rstplt) len,iwrd
+             write (rstplt) lpr(issys,2)%ipr,lpr(issys,2)%irnr,
+     &       lps(issys)%ivrn
+c      write (12,"('lpdatwrite06',6i10)") len,iwrd,
+c    & lpdat(issys)%nvrp(1),lpdat(issys)%nnz(1),lpdat(issys)%nivrn,
+c    & size(lpr(issys,1)%ipr),size(lpr(issys,1)%irnr),
+c    & size(lps(issys)%ivrn)
+c      write (12,"('lpdatwrite07',i8/(10i10))") lpdat(issys)%nvrp(2),
+c    & lpr(issys,2)%ipr
+c      write (12,"('lpdatwrite08',i8/(10i10))") lpdat(issys)%nnz(2),
+c    & lpr(issys,2)%irnr
+c      write (12,"('lpdatwrite09',i8/(10i10))") lpdat(issys)%nivrn,
+c    & lps(issys)%ivrn
+           endif
+           if (.not.ma28used) then
+             inquire (iolength=len) lpr(issys,1)%ip,lpr(issys,1)%irn
+             write (rstplt) len,iwrd
+             write (rstplt) lpr(issys,1)%ip,lpr(issys,1)%irn
+             if (ma28tsp) then
+               inquire (iolength=len) lpr(issys,2)%ip,lpr(issys,2)%irn
+               write (rstplt) len,iwrd
+               write (rstplt) lpr(issys,2)%ip,lpr(issys,2)%irn
+             endif
+           else
+             inquire (iolength=len) 
+     &       ma28p(issys,1)%icn,ma28p(issys,1)%ikeep
+             write (rstplt) len,iwrd
+             write (rstplt) ma28p(issys,1)%icn,ma28p(issys,1)%ikeep
+             if (ma28tsp) then
+               inquire (iolength=len) ma28p(issys,2)%icn,
+     &         ma28p(issys,3)%icn,ma28p(issys,2)%ikeep,
+     &         ma28p(issys,3)%ikeep
+               write (rstplt) len,iwrd
+               write (rstplt) ma28p(issys,2)%icn,
+     &         ma28p(issys,3)%icn,ma28p(issys,2)%ikeep,
+     &         ma28p(issys,3)%ikeep
+             endif
+           endif
+         enddo
+       endif
+       return
+       end subroutine lpdatwrite
+!
+       end module lpdatc

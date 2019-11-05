@@ -1,0 +1,190 @@
+*mlist
+*if def,selap
+       subroutine ifuele
+c
+c  subroutine felein reads and initializes the data for a
+c  fuel element component.
+c
+c  Cognizant engineer: ewc.
+c
+       implicit none
+       include 'scddat.h'
+       include 'scdout.h'
+       include 'scdcom.h'
+       include 'ndxara.h'
+       include 'tblsp.h'
+       include 'trnot2.h'
+       include 'nrcom.h'
+       include 'debout.h'
+       include 'ufiles.h'
+       include 'uoxcom.h'
+       include 'intcom.h'
+       include 'srpdat.h'
+c  Local variables.
+      integer i,j,k,ktr,jj,
+     * kb1,ke1,kl,kz,kz2,nrd,ifmat
+      real rad,rcwdrz,rfwdrz,fnro,area
+      external rnodes,fnro
+c     initialize number of radial nodes for each axial segment
+      do 6 k = 2,naz
+    6 nrods2(k,icomp) = nrods2(1,icomp)
+        if (idcomp(icomp).eq.7)then
+          tcldm = 933.4
+          hfscld = 397800.
+          viscal = 3.0e-3
+          viscul = 3.0e-3
+          if (imater(2,icomp).eq.13)then
+            fract=0.70
+            tfulm = 933.4
+c  note that i'm ignoring heat of transformation from alpha-beta-gamma
+            hfsful = fract*397800.+(1.-fract)*82350.
+          elseif(imater(2,icomp).eq.17)then
+            fract=0.981
+            tfulm = 917.
+            hfsful = fract*397800.+(1.-fract)*432000.
+          else
+            stop 'ifuele-1'
+          endif
+        else
+          fract = 0.382
+          tcldm = 933.4
+          tfulm = 933.4
+          hfscld = 3.9553e5
+          hfsful = 3.9553e5
+          viscal = 3.0e-3
+          viscul = 3.0e-3
+          rhoal = 2.702e3
+          rhoao = 3.965e3
+          rhou = 1.905e4
+          rhouo = 1.905e4
+          rhoual = rhou*rhoal/( (1.0-fract)*rhoal+fract*rhou)
+        endif
+c  ** start of variable initialization **
+      do 50 i = 1,naz
+        kz = ndax*(icomp-1) + i
+        kb1 = (i-1)*(ndmatr+1) + 1
+        ke1 = kb1 + nmater(kz) - 1
+        do kl = kb1,ke1
+          if (imater(kl,icomp).eq.13 .or.
+     &    imater(kl,icomp).eq.17) go to 52
+        enddo
+        stop 'ifuele-2'
+  52    uthick(i,icomp) = radmat(kl+1,icomp) - radmat(kl,icomp)
+c  initialize inner cladding radii
+        rci2(i,icomp) = radmat((i-1)*(ndmatr+1)+nmater(kz), icomp)
+        rco2(i,icomp) = radmat((i-1)*(ndmatr+1)+nmater(kz)+1,icomp)
+        rpel2(i,icomp) = rci2(i,icomp)
+        rcoi2(i,icomp) = rco2(i,icomp)
+        cldtho(i,icomp) = radmat((i-1)*(ndmatr+1)+2,icomp)
+        cldthi(i,icomp) = rco2(i,icomp) -
+     +                     radmat((i-1)*(ndmatr+1)+nmater(kz),icomp)
+        dro(i,icomp) = 0.0
+        dri(i,icomp) = 0.0
+        imelt(i,icomp) = 0
+c  save inner surface temperature for bundle timestep routine
+        tsur1(kz) = tcond3( nrods2(1,icomp), i, icomp )
+c  Initialize inner surface heat fluxes.
+        qclad(kz) = 0.0
+        qout2(i,icomp,1) = 0.0
+cc      qout2(i,ndcomp+icomp,1) = 0.0
+c  Save number of heat conduction elements.
+        numelm(kz) = nrods2(1,icomp) - 1
+c  Save number of radial nodes in fuel and inner cladding.
+        call rnodes( xcond3(1,i,icomp), rci2(i,icomp),
+     &  rci2(i,icomp), nrcond(kz), nrcldi(kz),
+     &  nrods2(i,icomp))
+c  Save node number where fuel starts.
+        rad = radmat(kl,icomp)
+        call rnodes (xcond3(1,i,icomp),rad,rad,nrcon1(kz),nrcon1(kz),
+     &  nrods2(i,icomp))
+c  Initialize area and volume.
+        afuel(kz) = slbwd(icomp) * rco2(i,icomp)
+      if (idcomp(icomp).eq.5 .or. idcomp(icomp).eq.7) then
+        afuel(kz) = slbwd(icomp)*(xcond3(4,i,icomp)-xcond3(2,i,icomp))
+      endif
+        kz2 = 2 * ndax * (icomp-1) + i
+        vfuel(kz2) = afuel(kz) * dzcond(kz)
+c  initialize mass (currently not used).
+        wsrbng(kz) = 1.0
+        wzrbng(kz) = 1.0
+        wzobng(kz) = 1.0
+   50 continue
+c  initialize component related variables
+       islbot(icomp) = 0
+       pitch(icomp) = 1.0
+       rcos(icomp) = rco2(1,icomp)
+       rl(icomp) = 0.0
+       vfueli(icomp) = 0.0
+       do 55 i=1,naz
+         kz = ndax * (icomp-1) + i
+         rl(icomp) = rl(icomp) + dzcond(kz)
+         kz2 = 2 * ndax * (icomp-1) + i
+         vfueli(icomp) = vfueli(icomp) + vfuel(kz2)
+   55  continue
+      naz1(icomp) = naz
+      lflag(icomp) = 0
+      do 1 i=1,naz
+        oxdeo2(i,icomp) = 0.0
+        oxdwc2(i,icomp) = 0.0
+        oxdeoo(i,icomp) = 0.0
+        oxdwco(i,icomp) = 0.0
+        oxdwai(i,icomp) = 0.0
+        oxdwao(i,icomp) = 0.0
+        mascoo(i,icomp) = 0.0
+        mascoi(i,icomp) = 0.0
+        masfao(i,icomp) = 0.0
+        masfuo(i,icomp) = 0.0
+        mscdmo(i,icomp) = 0.0
+        mscamo(i,icomp) = 0.0
+        mscomo(i,icomp) = 0.0
+        mscdmi(i,icomp) = 0.0
+        mscami(i,icomp) = 0.0
+        mscomi(i,icomp) = 0.0
+        msfulm(i,icomp) = 0.0
+        msfam(i,icomp) = 0.0
+        msfaom(i,icomp) = 0.0
+        msfum(i,icomp) = 0.0
+        msfuom(i,icomp) = 0.0
+  1   continue
+      do 2 i=1,naz
+        rcwdrz = fnro(15,300.) * slbwd(icomp) * dzcnd2(i,icomp)
+        mascdo(i,icomp) = rcwdrz * xcond3(2,i,icomp)
+        mascao(i,icomp) = mascdo(i,icomp)
+        nrd = nrods2(i,icomp)
+        mascdi(i,icomp) = rcwdrz * ( xcond3(nrd,i,icomp)
+     *                             - xcond3(nrd-1,i,icomp) )
+        mascai(i,icomp) = mascdi(i,icomp)
+        rfwdrz = slbwd(icomp) * dzcnd2(i,icomp) * uthick(i,icomp)
+        ifmat = imater(((i-1)*(ndmatr+1)+2),icomp)
+        masful(i,icomp) = rfwdrz / ((1.-fract) / fnro(ifmat,300.)
+     +                     + fract / fnro(15,300.) )
+        masfa(i,icomp) = fract * masful(i,icomp)
+        masfu(i,icomp) = (1.-fract) * masful(i,icomp)
+        totmas(i,icomp) = masful(i,icomp)+mascdo(i,icomp)+
+     +  mascdi(i,icomp)
+        cdomas(i,icomp) = mascdo(i,icomp)
+        cdimas(i,icomp) = mascdi(i,icomp)
+        fulmas(i,icomp) = masful(i,icomp)
+    2 continue
+      write (output,'(1x,4hnode,1x,5(8x,i2,5x))')(j,j=1,nrods2(1,icomp))
+      do 62 j=1,naz
+   62   write (output,'(2x,i2,2x,15(1pe15.4))')
+     +  j,(xcond3(jj,j,icomp),jj=1,nrods2(j,icomp))
+      write (output,'(1x,4hnode,1x,5(8x,i2,5x))')(j,j=1,nrods2(1,icomp))
+      do 65 j=1,naz
+   65   write (output,'(2x,i2,2x,15(1pe15.4))')
+     +  j,(tcond3(jj,j,icomp),jj=1,nrods2(j,icomp))
+      do 70 j=1,nmater(ndax*(icomp-1)+1)
+        do 70 k=1,naz
+          ktr=ndax*(icomp-1)+k
+          if(j.eq.1)then
+            area=cldtho(k,icomp)*slbwd(icomp)
+          elseif (j.eq.2) then
+            area=afuel(ktr)
+          elseif (j.eq.3) then
+            area=cldthi(k,icomp)*slbwd(icomp)
+          endif
+   70   continue
+      return
+      end
+*endif

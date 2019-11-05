@@ -1,0 +1,148 @@
+*mlist
+*if def,selap
+       subroutine solshr (kb,naz,tsur,tsol,tliqav,wbotsh,wflo,haddbt,
+     & dz,wfrosh,avoidl,hadd,rftemp,ifrag,vladeb,dzfrcl,woxflo,woxshr)
+!
+!  Descriptive sentence for solshr goes here.
+!
+!  Cognizant engineer: ljs.
+!
+!  Calling subroutine: liqshr.
+!  Subroutines called: matpro.
+!
+!     argument list :
+!     kb        = elevation at which liquid neutron ab-
+!                  sorber material begins to flow. (m)
+!                  (input)
+!     naz       = number of axial zones      (input)
+!     tsur(k)   = average temperature of control rod in
+!                 axial zone k at end of time step. (k).
+!                 (input)
+!     tsol      = solidification temperature (k)   (input)
+!     tliqav    = average temperature of liquified mater-
+!                 at start of flow. (k)   (input)
+!    wbotsh    = mass of liquified flowshroud
+!                which flowed below bottom
+!                of core. (kg)    (input/output)
+!     wflo      = mass of liquified material at start of
+!                 flow. (kg)    (input)
+!     haddbt    = heat added to region below core due to
+!                 flow of liquified control rod material.
+!                 (j)     (input/output)
+!     dz(k)     = height of each axial zone  (m)  (input)
+!     wfrosh(k) = mass of solidified flowshroud
+!                axial zone k. (kg)    (input/output)
+!     avoidl(k) = flow area around flowshroud. (m**2)
+!                 (input)
+!     hadd(k)   = heat added to axial zone k during time
+!                 step due to flow of liquified control
+!                 rod material. (j)    (output)
+!     rftemp    = reference temperature for enthalpy cal-
+!                 culations. normally, rftemp is set equal
+!                 to room temperature. (k)    (input)
+!     ifrag(k)  = variable indicating whether or not in-
+!                 tact control rod, debris bed or void
+!                 region exists in axial zone k.
+!                 0 = intact control rod
+!                 1 or 2 = debris bed
+!                 3 = void region
+!                 (input)
+!     vladeb(k) = volume of liquid which can be absorbed
+!                 by debris bed in axial zone k. (m**2)
+!                 (input)
+!    dzfrcl(k) = fraction of height of axial zone k which
+!                is completely filled with liquified/
+!                solidified control rod material resting
+!                on top of debris bed.  (input/output)
+!      woxflo    = mass of oxygen on flowing liquid (kg)
+!                  (input)
+!      woxshr(k) = mass of oxygen in crust on flow shroud in
+!                  axial zone k. (kg)  (input)
+!
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+!
+       include 'scddat.h'
+       include 'contrl.h'
+!
+       integer kb,naz
+       real(kr) tsol,tliqav,wbotsh,wflo,haddbt,rftemp,woxflo
+!
+       integer ifrag
+       real(kr) tsur,dz,avoidl,vladeb,wfrosh,woxshr,hadd,dzfrcl
+       dimension tsur(ndax),dz(*),avoidl(ndax),
+     +           ifrag(*),vladeb(*),wfrosh(*),
+     * woxshr(ndax),hadd(*),dzfrcl(*)
+!
+!  Local variables.
+       integer k,kbsol,ksol,kstack,nsw
+       real(kr) rho,vol,vols
+       real(kr) cden,centhl,centhlr
+!
+!  find first axial zone below zone kb which is cooler than
+!  solidification temperature minus 200 k.
+!
+        nsw=0
+        ksol=0
+        do140k=kb,1,-1
+        if(nsw.eq.1)go to 140
+       if(tsur(k).lt.(tsol-1000.0))then
+        nsw=1
+        ksol=k
+        end if
+        if(nsw.eq.1)go to 140
+        if(ifrag(k).eq.1.or.ifrag(k).eq.2)then
+        nsw=1
+        ksol=k
+        end if
+  140   continue
+        if(ksol.ge.1)go to 200
+!
+!       calculate mass and heat added to region below
+!
+!       bottom of core.
+!
+       wbotsh=wflo+wbotsh
+       if (chngno(70)) then
+         haddbt = haddbt + wflo*centhlr(tliqav,rftemp)
+       else
+         haddbt = haddbt + wflo*centhl(tliqav,rftemp)
+       endif
+!
+!       go to return
+!
+        go to 850
+  200   continue
+       kbsol=ksol
+       if(ifrag(kbsol).eq.0)then
+        wfrosh(kbsol)=wfrosh(kbsol)+wflo
+        woxshr(kbsol)=woxshr(kbsol)+woxflo
+        hadd(kbsol)=hadd(kbsol)+wflo*centhl(tliqav,rftemp)
+        else
+        rho=cden(tliqav)
+        vol=wflo/rho
+        if(vol.le.vladeb(kbsol))vols=vol
+        if(vol.gt.vladeb(kbsol))vols=vladeb(k)
+        wfrosh(kbsol)=wfrosh(kbsol)+vols*rho
+       woxshr(kbsol)=woxshr(kbsol)+(vols/vol)*woxflo
+        hadd(kbsol)=hadd(kbsol)+vols*rho*
+     #  centhl(tliqav, rftemp)
+        if((vol-vols).lt.1.e-10)go to 240
+        kstack=kbsol+1
+!
+!      stack balance of liquid on top of debris.
+!
+        if(kstack.gt.naz)kstack=naz
+        wfrosh(kstack)=wfrosh(kstack)+
+     #  (vol-vols)*rho
+       woxshr(kstack)=woxshr(kstack)+((vol-vols)/vol)*woxflo
+        hadd(kstack)=hadd(kstack)+(vol-vols)*
+     #  rho*centhl(tliqav, rftemp)
+        dzfrcl(kstack)=dzfrcl(kstack)+
+     #  (vol-vols)/avoidl(kstack)
+  240    continue
+        end if
+  850   continue
+        return
+       end
+*endif

@@ -1,0 +1,173 @@
+*mlist
+       subroutine liqshr(dtmac,dz,naz,rl,toxshr,tzrshr,rftemp,
+     & tsur,tsur0,z,ifrag,tcrshr,wbotsh,wfrosh,
+     & wremsh,hadd,haddbt,hremov,wzrshr,mltshi,tmac,avoidl,
+     & vladeb,dzfrcl,slbwd,woxshr)
+!  liqshr calculates liquefaction-flow-solidification of flow shroud
+!  made of zircaloy.
+!
+!  Cognizant engineer: ljs.
+!
+*if def,selap
+!
+!#     calling subroutine: slabc
+!#     subroutines called: solshr
+!#     engineer/programmer: l. j. siefken
+!#     argument list definition:
+!#     dtmac     = time step (s)     (input)
+!#     dz(k)     = height of each axial zone  (m)  (input)
+!#     naz       = number of axial zones      (input)
+!#     rl        = summation of hieghts of all axial zones.
+!#                 (m)    (input)
+!#       toxshr(k) = thickness of oxide layer on inside surface
+!#                   of flow shroud. (m)  (input)
+!#       tzrshr(k) = thickness of zr layer on inside surface of flow
+!#                   shroud. (m)  (input)
+!#     rftemp    = reference temperature for enthalpy cal-
+!#                 culations. normally, rftemp is set equal
+!#                 to room temperature. (k)    (input)
+!#     tsur(k)   = average temperature of flow shroud  in
+!#                 axial zone k at end of time step. (k).
+!#                 (input)
+!#     tsur0(k)  = average temperature of flow shroud in
+!#                 axial zone k at start of time step. (k)
+!#                 (input)
+!#     z(k)      = elevation of midplane of axial zone k. (m)
+!#                 (input)
+!#     ifrag(k)  = variable indicating whether or not in-
+!#                 tact flow shroud, debris bed or void
+!#                 region exists in axial zone k.
+!#                 0 = intact flow shroud
+!#                 1 or 2 = debris bed
+!#                 3 = void region
+!#                 (input)
+!#      tcrshr(k) = thickness of crust of solidified flow
+!#                   shroud in axial zone k. (m) (input)
+!#      wbotsh    = mass of solidified flow shroud which flowed
+!#                  below bottom of core. (kg)  (input/output)
+!#      wfrosh(k) = mass of solidified flow shroud in axial zone k.
+!#                  (kg)  (input/output)
+!#      wremsh(k) = mass of in situ flow shroud removed from
+!#                  axial zone k. (kg)  (input/output)
+!#     hadd(k)   = heat added to axial zone k during time
+!#                 step due to flow of liquified flow
+!#                 shroud material. (j)    (output)
+!#     haddbt    = heat added to region below core due to
+!#                 flow of liquified flow shroud material.
+!#                 (j)     (input/output)
+!#     hremov(k) = heat removed from axial zone k during
+!#                 time step due to flow of liquified flow
+!#                 shroud material. (j)    input/output)
+!#     wzrshr(k) = mass of in-situ liquified flow shroud in
+!#                axial zone k. (kg)    (input/output)
+!#      mltshi(k) = indicator of in-situ liquified flow shroud
+!#                   in axial zone k. 0 = no ; 1 = yes. (output)
+!#    tmac      = current time (s)   (input)
+!#     avoidl(k) = flow area around flow shroud (m*2)
+!#                 (input)
+!#     vladeb(k) = volume of liquid which can be absorbed
+!#                 by debris bed in axial zone k. (m**2)
+!#                 (input)
+!#    dzfrcl(k) = fraction of height of axial zone k which
+!#                is completely filled with liquified/
+!#                solidified flow shroud material resting
+!#                on top of debris bed.  (input/output)
+!#       slbwd      = width of flow shroud. (m)  (input)
+!#      woxshr(k) = mass of oxygen absorbed by solidified
+!#                  flow shroud material in axial zone k. (kg)
+!#                  (input)
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       include 'contrl.h'
+       include 'scddat.h'
+       include 'ufiles.h'
+!
+       integer naz,ifrag,mltshi
+       real(kr) dtmac,dz,rl,toxshr,tzrshr,rftemp,tsur,tsur0,z,tcrshr,
+     * wbotsh,wfrosh,wremsh,hadd,haddbt,hremov,wzrshr,tmac,avoidl,
+     * vladeb,dzfrcl,slbwd,woxshr
+        dimension dz(*),toxshr(*),tzrshr(*),tsur(ndax),tsur0(*),
+     #  z(*),ifrag(*),tcrshr(ndax),wfrosh(*),wremsh(*),hadd(*),
+     #  hremov(ndax),wzrshr(ndax),mltshi(ndax),avoidl(ndax),
+     #  vladeb(*),dzfrcl(*),
+     #  woxshr(ndax)
+!  Local variables.
+       integer k,kb
+       real(kr) afraco,afracu,afracz,fu,fz,rhosh,rhosol,temp1,tliqav,
+     & tsol,volcrs,wflo,woxflo
+       real(kr) cden,centhl,centhlr,pliq
+!
+       haddbt=0.0
+       wbotsh=0.0
+        do100k=1,naz
+        tcrshr(k)=0.0
+        wzrshr(k)=0.0
+        hremov(k)=0.0
+        hadd(k)=0.0
+       mltshi(k)=0
+  100   continue
+!
+!      calculate liquefaction temperature of zr.
+!
+       do120k=1,naz
+!
+       if(wremsh(k).gt.1.e-15.and.wfrosh(k).lt.1.e-10)go to 120
+!
+       temp1=rftemp
+       rhosh=cden(temp1)
+       if(tsur(k).gt.2700.0.and.toxshr(k).lt.0.4e-3)mltshi(k)=1
+        if (tsur(k).gt.2970.0) mltshi(k) = 1
+  120  continue
+!
+!      calculate amount of in situ material.
+!
+       do130k=1,naz
+!
+!
+       if(mltshi(k).eq.0)go to 130
+       if(wremsh(k).gt.1.e-15)go to 130
+       temp1=rftemp
+       rhosh=cden(temp1)
+       wzrshr(k)=rhosh*dz(k)*tzrshr(k)*slbwd
+  130  continue
+!
+!      calculate relocation of liquified flowshroud.
+!
+       do300k=1,naz
+       if(mltshi(k).lt.1)go to 300
+       if(ifrag(k).gt.0)go to 300
+       if(wzrshr(k).lt.1.e-15.and.wfrosh(k).lt.1.e-10)go to 300
+       kb=k
+       wflo=wzrshr(k)+wfrosh(k)
+       fu=0.0
+       fz=1.
+       call pmole(fu, fz, afracu, afracz, afraco)
+       tsol=pliq(afraco, afracu, afracz)
+       woxflo=0.0
+       tliqav=tsur(kb)
+        call solshr(kb    , naz   , tsur  , tsol  ,
+     #               tliqav, wbotsh, wflo  , haddbt,
+     #               dz    , wfrosh, avoidl, hadd  ,
+     #               rftemp, ifrag , vladeb, dzfrcl,
+     #               woxflo, woxshr)
+       if(wzrshr(k).gt.1.e-15)wremsh(k)=wzrshr(k)
+        wzrshr(k)=0.0
+       wfrosh(k)=0.0
+       if (chngno(70)) then
+         hremov(k) = hremov(k) + wremsh(k)*centhlr(tliqav,rftemp)
+       else
+         hremov(k) = hremov(k) + wremsh(k)*centhl(tliqav,rftemp)
+       endif
+  300  continue
+!
+!      calculate thickness of crust frozen on wall of shroud
+!
+         do320k=1,naz
+         temp1=tsur(k)
+         rhosol=cden(temp1)
+         volcrs=wfrosh(k)/rhosol
+         tcrshr(k)=volcrs/(dz(k)*slbwd)
+  320    continue
+       return
+       end
+*endif

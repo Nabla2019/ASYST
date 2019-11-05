@@ -1,0 +1,162 @@
+*mlist
+       subroutine srestf (nogof)
+!  Reads the restart input file, input data for stripf file, and
+!  plotalf and plotnum records.
+!
+!  Cognizant engineer: rjw.
+!
+*in32 iw
+*in32 itrec
+*in32end
+!
+       implicit none
+       logical nogof
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'genrl.h'
+       include 'ufiles.h'
+       include 'ufilef.h'
+!
+       integer l3a(7),l3b(10),iw(11),itrec(10)
+       integer i,ii,in,len,nerr
+       real rw(11),strec(10),iv
+       equivalence (rw(1),iw(1)),(strec(1),itrec(1))
+       character crstrc*24,ctrec*24,labl1(2)*9,chwrds*24,chwrd*8
+       character*8 blnk
+       integer iwrd
+!
+       data l3a/104,0,0,1,0,1,-1/
+       data l3b/103,0,1,7,0,1,0,2,-1,-1/
+       data crstrc/'restart-plot file'/
+       data ctrec/'strip file'/
+       data labl1/'steady st','transient'/
+       data blnk/'        '/
+!
+!  Process rstplt control card.
+       nogof = .false.
+       l3b(6) = 1
+       call inp2 (fa(filndx(1)),rw,l3b)
+       if (l3b(6) .ge. 0) go to 30
+   31  nogof = .true.
+       go to 41
+!
+   30  if (l3b(6) .gt. 1) then
+         write (chwrd,'(a8)') rw(2)
+       else
+         chwrd = 'ncmpress'
+       endif
+       if (chwrd .eq. 'cmpress') then
+         print = ior(print,8192)
+         write (output,"('0Compressed option is not available, uncompres
+     &sed restart-plot file is assumed.')")
+       elseif (chwrd .eq. 'ncmpress') then
+         write (output,"('0Uncompressed restart-plot file is assumed.')"
+     &)
+       else
+         nogof = .true.
+         go to 41
+       endif
+       if (l3b(6) .gt. 2) then
+         if (l3b(6) .lt. 7) then
+           read (blnk,'(a8)') rw(2)
+           do i = l3b(6)+1,7
+             rw(i) = rw(2)
+           enddo
+         endif
+         write (filsch(5)(1:40),'(5a8)') (rw(i),i=3,7)
+         write (output,"('0Restart-plot file name changed to: ',a)")
+     &   trim(filsch(5))
+       endif
+!
+       newrst = .false.
+       len = 0
+       open (unit=rstplt,file=filsch(5),status='old',
+     & form='unformatted',iostat=len)
+       if (len .ne. 0) then
+         write (tty,"('Open error number',i8,' on file ',a,', perhaps fi
+     &le is not available.')") len,trim(filsch(5))
+         write (output,"('0******** Open error number',i8,' on file ',a,
+     &', perhaps file is not available.')") len,trim(filsch(5))
+         go to 31
+       endif
+       rewind rstplt
+       read (rstplt,end=27,err=28) len,iwrd
+       read (rstplt,end=27,err=28) (rw(in),in=1,10)
+       if (len .eq. 10) go to 39
+       write (output,"('0******** Wrong length on first record of restar
+     &t input file.')")
+       go to 31
+   27  write (output,"('0******** Eof encountered on first read of resta
+     &rt input file, no file available.')")
+       go to 31
+   28  write (output,"('0******** Parity error on first record.')")
+       go to 31
+   39  write (chwrds,'(3a8)') (rw(in),in=4,6)
+       if (chwrds.eq.crstrc .or. chwrds.eq.ctrec) go to 40
+       write (output,"('0******** Label in first record of restart input
+     & file is incorrect.')")
+       go to 31
+   40  write (output,"('0Restart input file was written by program ',3a8
+     &,' on ',3a8,', ',a9,' run.')")
+     & (rw(i),i=1,3),(rw(i),i=7,9),labl1(iw(10))
+       call aatl
+!  Process restart output control card.
+   41  l3a(6) = 1
+       call inp2 (fa(filndx(1)),iv,l3a)
+       if (l3a(6)) 10,15,12
+   12  write (chwrd,'(a8)') iv
+       if (chwrd .eq. 'none') then
+         write (output,"('0******** None is an illegal option on card 10
+     &4 for strip file.')")
+         go to 10
+       endif
+       if (chwrd .ne. 'noaction') then
+         write (output,"('0$$$$$$$$ Illegal option on card 104, error wi
+     &ll be ignoed.')")
+       endif
+         write (output,"('0Strip file will be written.')")
+   15  chwrds = ptitle(1:38)
+       if (iand(print,15) .ge. 2) chwrds(1:12) = '   SCDAP/R5 '
+       read (chwrds(1:24),'(3a8)') (strec(i),i=1,3)
+       read (ctrec,'(3a8)') (strec(i),i=4,6)
+       read (ctitle(82:105),'(3a8)') (strec(i),i=7,9)
+       itrec(10) = iw(10)
+       if (iand(print,15) .ne. 0) then
+         len = 0
+         open (unit=stripf,file=filsch(6),status='new',form='formatted',
+     &   iostat=len)
+         if (len .ne. 0) then
+           write (tty,"('Open error number',i8,' on file ',a,', perhaps 
+     &file already exists.')") len,trim(filsch(6))
+           write (output,"('0******** Open error number',i8,' on file ',
+     &a,', perhaps file already exists.')") len,trim(filsch(6))
+           go to 10
+         endif
+         write (stripf,"(6a8,2x,3a8)",iostat=nerr) (strec(ii),ii=1,9)
+         write (stripf,'(a)') ctitle(1:80)
+         if (nerr .eq. 0) go to 19
+         write (output,"('0******** Write error on stripf file, iostat =
+     &',i5)") nerr
+         go to 10
+       else
+         len = 0
+         open (unit=stripf,file=filsch(6),status='new',
+     &   form='unformatted',iostat=len)
+         if (len .ne. 0) then
+           write (tty,"('Open error number',i8,' on file ',a,', perhaps 
+     &file already exists.')") len,trim(filsch(6))
+           write (output,"('0******** Open error number',i8,' on file ',
+     &a,', perhaps file already exists.')") len,trim(filsch(6))
+           go to 10
+         endif
+         len = 10
+         write (stripf) len,strec
+         go to 19
+       endif
+   10  fail = .true.
+!
+   19  if (.not.nogof) return
+       fail = .true.
+       return
+       end

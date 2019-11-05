@@ -1,0 +1,1503 @@
+*mlist
+       subroutine vexplt
+c  Subroutine computes the explicit liquid and vapor velocities and
+c  the pressure gradient coefficients needed for the implicit pressure
+c  solution.  It also computes the old time source terms for the mass
+c  and energy equations.
+c
+c  Cognizant engineer: hxc,jat,dmk,rar,rjw.
+c
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'cmpdac.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'eccmxc.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'pumpblk.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'turbin.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       real aaa2,alpf,alpg,arcf,arcg,c0,c1,delpza,delpzz,det,drivw,ff1,
+     & flux,fluxjt,pumpd,ravol,rfvfrr,rgvgrr,
+     & rhofga,sat1,sat2,scrach,suctw,vafrf,virmas,
+     & vpgnxx,zangl(2),sigrav,eps30
+       real fjunfk,fjunrk,gm,gvis,rem,visl,vism,x
+       real ravrt,fijdv,figvj,fifvj,fij1
+$if def,mmfld,2
+       real fricmj,rmvmrc,hlossm,delpzm,dlpzzm,v11,v12,
+     & v13,v21,v22,v23,v31,v32,v33,onmvm
+       integer i,i1,ih1,ih2,ii,ijet,imm,io,ipp,ix,iy,j,
+     & jx,jxjet,k,k4,kf,kx,l,l4,lf,lx,m,n,nh1,nh2,nskpm,nskpp
+       integer kd,ld,ilvk,ilvl,ilvkb,ilvlb
+       logical err
+       integer it
+       real prop(26)
+       integer iprop(36)
+       logical lprop(36)
+       equivalence (prop(1),iprop(1),lprop(1))
+c
+       data eps30/1.e-30/
+c
+       sigrav = gravcn*0.5
+c  Initialize mass, energy, and quality convective terms.
+       if (lpdat(issys)%lnoncn .ne. 0) then
+         kx = ixvff
+         do i1 = 1,lpdat(issys)%lnoncn
+           j = kx
+cdir$ ivdep
+           do m = 1,lpdat(issys)%livn
+             sourcn(j) = 0.0
+             j = j + scskp
+           enddo
+           kx = kx + 1
+         enddo
+       endif
+$if def,mmfld
+       if (lnonmf(issys) .ne. 0) then
+         i = lpdat(issys)%liv
+         do m = 1,lpdat(issys)%livn
+           if (iand(imap(i),ishft(1,25)) .ne. 0) then
+             hmg(i) = 1.0
+             hmf(i) = 1.0
+             hig(i) = 1.0e8
+             hif(i) = 1.0e8
+           endif
+           i = i + ivskp
+         enddo
+       endif
+$endif
+       ix = ixvff
+       i = lpdat(issys)%liv
+       do m = 1,lpdat(issys)%livn
+c-wdgb
+         if (chngno(74)) then
+           aaa2 = 1.0
+         else
+           aaa2 = pps(i)/p(i)
+         endif
+c-wdge
+cc  Experimental code.
+c        if (hif(i) .eq. 0) hig(i) = min(hig(i),10.0)
+c        if (hig(i) .eq. 0) hif(i) = min(hif(i),10.0)
+cc
+c  For frozen flow, set aaa2=0.
+         if (chngno(2)) aaa2 = 0.
+         pmhig(ix) = (1.0 - aaa2)*hgf(i)*dt
+         if (chngno(14)) pmhig(ix) = 0.0
+         pshig(ix) = aaa2*hig(i)
+c-wdgb
+         if (chngno(74)) then
+           sat1 = ttempi(i) - tempg(i)
+         else
+           sat1 = satt(i) - tempg(i)
+         endif
+         gg(ix) = pshig(ix)*sat1
+         if (dfront(i) .gt. 0.0) then
+           prop(2) = p(i)
+           prop(4) = ufla(i)
+           iprop(23) = sth2xv(i)
+           if (nfluid .eq. 1) then
+             call sth2x6 (fa(ndxstd),prop,it,err)
+           elseif (nfluid .eq. 2) then
+             call std2x6 (fa(ndxstd),prop,it,err)
+           elseif (nfluid .eq. 12) then
+           else
+             call strpu1 (fa(ndxstd),prop,it,err)
+           endif
+c  Force a diagnostic edit before it stops.
+           if (err) help = 1
+c-wdgb
+           if (chngno(74)) then
+             sat2 = ttempi(i) - prop(1)
+           else
+             sat2 = satt(i) - prop(1)
+           endif
+         else
+           if (chngno(74)) then
+             sat2 = ttempi(i) - tempf(i)
+           else
+             sat2 = satt(i) - tempf(i)
+           endif
+         endif
+         ff(ix) = hif(i)*sat2
+         ff1 = voidgo(i) - vodgoo(i)
+c  Approximate dH/dvoid using old information
+c    should be replaced with an analytic derivative from phantv
+         if (ff1 .ne. 0.0) then
+           ff1 = 1.0/ff1
+           gal(ix) = aaa2*(hig(i) - higo(i))*ff1*sat1
+           fal(ix) = (hif(i) - hifo(i))*ff1*sat2
+         else
+           gal(ix) = 0.0
+           fal(ix) = 0.0
+         endif
+         aaa2 = ff(ix) + gg(ix)
+         if (aaa2 .le. 0.0) then
+           sathfx(ix) = uf(i) + po(i)/rhof(i)
+           sathgx(ix) = sathg(i)
+         else
+           sathfx(ix) = sathf(i)
+           sathgx(ix) = hsteam(i)
+         endif
+c  The low value of 1.e4 was chosen based on Helium.
+         hsgf(ix) = dt/max(sathgx(ix) - sathfx(ix),1.0e4)
+         if (chngno(14)) hsgf(ix) = 0.0
+         ff(ix) = ff(ix)*hsgf(ix)
+         gg(ix) = gg(ix)*hsgf(ix)
+         fal(ix) = fal(ix)*hsgf(ix)
+         gal(ix) = gal(ix)*hsgf(ix)
+         aaa2 = sathfx(ix)*gg(ix) + sathgx(ix)*ff(ix) - pmhig(ix)*
+     &   (tempf(i) - tempg(i))
+         ff1 = ff(ix) + gg(ix)
+         tloc(ix) = v(i)*dt
+         delv(ix) = v(i) - vo(i)
+         vafrf = hyarf(i)*delv(ix)
+         vagrg(ix) = hyarg(i)*delv(ix)
+         sat1 = gammsw(ix)*dt
+         sat2 = gammsc(ix)*dt
+         sourcm(ix) = (sat1 + sat2 - ff1)*2.0*v(i) + vafrf - vagrg(ix)
+         aaa2 = (aaa2 - sat1*sathg(i) - sat2*sathf(i))*v(i)
+         sourcf(ix) = qwf(i)*dt + aaa2 - vafrf*ufo(i)
+         sourcg(ix) = qwg(i)*dt - aaa2 - vagrg(ix)*ugo(i)
+         vagrg(ix) = vagrg(ix)*qualao(i)
+         sourca(ix) = -vagrg(ix)
+         ix = ix + scskp
+         i = i + ivskp
+       enddo
+$if def,mmfld
+       if (lnonmf(issys) .ne. 0) then
+         ix = ixvff
+         i = lpdat(issys)%liv
+cdir$ ivdep
+         do m = 1,lpdat(issys)%livn
+           vamrm(ix) = voidm(i)*rhomt(i)*delv(ix)
+           sorcmm(ix) = -vamrm(ix)
+           hmf(i) = 0.0
+           hmg(i) = 0.0
+           if (voidm(i) .ne. 0.0 .and. .not.chngno(14)) then
+             hmg(i) = 1.0
+             hmf(i) = 1.0
+           endif
+           qmtg(i) = hmg(i)*(tempmt(i) - tempg(i))
+           qmtf(i) = hmf(i)*(tempmt(i) - tempf(i))
+           sorcme(ix) = -vamrm(ix)*um(i) + tloc(ix)*(qwmt(i) - qmtg(i) -
+     &     qmtf(i))
+           sourcg(ix) = sourcg(ix) + tloc(ix)*qmtg(i)
+           sourcf(ix) = sourcf(ix) + tloc(ix)*qmtf(i)
+           ix = ix + scskp
+           i = i + ivskp
+         enddo
+       endif
+$endif
+       if (lpdat(issys)%lnoncn .ne. 0) then
+         kx = ixvff
+         lx = lpdat(issys)%liv
+         do i1 = 1,lpdat(issys)%lnoncn
+           j = kx
+           ix = ixvff
+           i = lx
+cdir$ ivdep
+           do m = 1,lpdat(issys)%livn
+             tloc2(ix) = gaman(i)*tloc(ix)
+             sourcn(j) = tloc2(ix)
+             sourca(ix) = sourca(ix) + tloc2(ix)
+             sourcm(ix) = sourcm(ix) + tloc2(ix)
+             sourcg(ix) = sourcg(ix) + tloc2(ix)*enthn(i)
+             j = j + scskp
+             ix = ix + scskp
+             i = i + ivskp
+           enddo
+           if (i1 .eq. nonhy) then
+             ix = ixvff
+             i = lpdat(issys)%liv
+cdir$ ivdep
+             do m = 1,lpdat(issys)%livn
+               sourcg(ix) = sourcg(ix) - 9.0*tloc2(ix)*hsteam(i)
+               sourcm(ix) = sourcm(ix) - 9.0*tloc2(ix)
+               ix = ix + scskp
+               i = i + ivskp
+             enddo
+           endif
+           kx = kx + 1
+           lx = lx + 1
+         enddo
+       endif
+$if def,mmfld
+       if (lnonmf(issys) .ne. 0) then
+         kx = ixvff
+         lx = lpdat(issys)%liv
+         do i1 = 1,lnonmf(issys)
+           j = kx
+           ix = ixvff
+           i = lx
+c$$ temporary coding
+           gamamt(lx) = 1.0
+cdir$ ivdep
+           do m= 1,lpdat(issys)%livn
+             tloc2(ix) = gamamt(i)*tloc(ix)
+             sorcmn(j) = tloc2(ix)
+             sorcmm(ix) = sorcmm(ix) + tloc2(ix)
+             sorcme(ix) = sorcme(ix) + tloc2(ix)*(enthmt(i) +
+     &       powmt(i)*dt)
+             if (chngno(14)) then
+               gamamt(i) = 0.0
+               tloc2(ix) = 0.0
+               sorcmn(j) = 0.0
+               sorcmm(ix) = 0.0
+               sorcme(ix) = 0.0
+             endif
+             j = j + scskp
+             ix = ix + scskp
+             i = i + ivskp
+           enddo
+           kx = kx + 1
+           lx = lx + 1
+         enddo
+       endif
+$endif
+c
+$if def,nanscr
+c  Nan out tloc,tloc2
+       call nanscv(13,14)
+$endif
+c  Loop over all junctions.
+       i  = lpdat(issys)%lij
+       ix = ixjff
+cdir$ ivdep
+       do m = 1,lpdat(issys)%lijn
+         fwalfj(i) = 0.0
+         fwalgj(i) = 0.0
+         pmpph(ix) = 0.0
+         fjet(ix) = 0.0
+         scvtur(ix) = 1.0
+         psumf(ix) = 0.0
+         psumg(ix) = 0.0
+         fifj(ix) = 0.0
+         figj(ix) = 0.0
+         avrf(ix) = 0.0
+         avrg(ix) = 0.0
+         i = i + ijskp
+         ix = ix + scskp
+       enddo
+c
+       if (lvpump(lpdat(issys)%llvect) .ne. 0) then
+         call pump
+         i1 = lvpump(lpdat(issys)%llvect)
+         do m = 1,lvptr(i1)
+           i1 = i1 + 1
+           n = lvptr(i1)
+           i = nvco(n) + filndx(4)
+           ii = njco(n) + filndx(5)
+           io = ii + ijskp
+           ix = jcnxs(ii)
+           iy = ix + scskp
+           pmpph(ix) = 0.5*pmpthd(n)
+           pmpph(iy) = pmpph(ix)
+           arcf = voidfj(ii)*rhofj(ii)*ajun(ii)
+           scrach = voidfj(io)*rhofj(io)*ajun(io)
+           psumf(ix) = arcf*ajun(ii)/(arcf + scrach + eps30)
+           psumf(iy) = scrach*ajun(io)/(arcf + scrach + eps30)
+           arcg = voidgj(ii)*rhogj(ii)*ajun(ii)
+           scrach = voidgj(io)*rhogj(io)*ajun(io)
+           psumg(ix) = arcg*ajun(ii)/(arcg + scrach + eps30)
+           psumg(iy) = scrach*ajun(io)/(arcg + scrach + eps30)
+           scrach = -sigrav*pslope(vctrls(i))
+           psumf(ix) = psumf(ix)*hyarf(i)*scrach
+           psumf(iy) = psumf(iy)*hyarf(i)*scrach
+           psumg(ix) = psumg(ix)*hyarg(i)*scrach
+           psumg(iy) = psumg(iy)*hyarg(i)*scrach
+           ix = vctrls(i)
+           pumpd = angmm(ix) - pmpthd(n)*(hyarf(i)*velf(i) +
+     &     hyarg(i)*velg(i))*avol(i)/(hyarg(i) + hyarf(i))
+           if (pumpd .lt. 0.0) then
+             if (iand(cmpopt(n),65536) .eq. 0) then
+               write (output,"(' $$$$$$$$ Pump',i4,' has negative dissip
+     &ation, ncount=',i8,' time=',es13.5,'.')") cmpnum(n),ncount,timehy
+               cmpopt(n) = ior(cmpopt(n),65536)
+             endif
+             if (iand(ishft(cmpopt(n),-24),15) .gt. 2) pumpd = 0.0
+           endif
+           arcf = hyarf(i)*csubpf(i)
+           arcg = hyarg(i)*csubpg(i)
+           pumpd = pumpd*dt/(arcf + arcg)
+           sourcf(ix) = sourcf(ix) + pumpd*arcf
+           sourcg(ix) = sourcg(ix) + pumpd*arcg
+         enddo
+       endif
+c
+       if (lvaccm(lpdat(issys)%llvect) .ne. 0) call accum
+c
+       nh1 = 0
+       nh2 = 0
+       ix = ixjff
+       ih1 = ixjff
+       ih2 = ixjff
+       i = lpdat(issys)%lij
+       do m = 1,lpdat(issys)%lijn
+         if (iand(jc(i),32768) .eq. 0) then
+           if (iand(jc(i),2) .eq. 0) then
+             ihld1(ih1) = i
+             nh1 = nh1 + 1
+             ih1 = ih1 + scskp
+           else
+             ihld3(ih2) = i
+             nh2 = nh2 + 1
+             ih2 = ih2 + scskp
+           endif
+         endif
+         i = i + ijskp
+         ix = ix + scskp
+       enddo
+       ih2 = ixjff
+       do m = 1,nh2
+         i = ihld3(ih2)
+         ix = jcnxs(i)
+         if (cmptyp(jcnfnd(i)) .ne. 9) then
+           if (velfj(i).ne.0.0 .or. velgj(i).ne.0.0) then
+$if def,dbgprnt
+             write (12,"('0$$$$$$$$ Nonzero velocity in blocked junction
+     &,',i10,'.','vexpltaa',i10,2es13.5)") junno(i),ncount,
+     &   velfj(i),velgj(i)
+$endif
+c            if (help .ge. 0) help = 1
+             velfj(i) = 0.0
+             velgj(i) = 0.0
+           endif
+         endif
+         vfdpk(ix) = 0.0
+         vgdpk(ix) = 0.0
+         vfdpl(ix) = 0.0
+         vgdpl(ix) = 0.0
+         ih2 = ih2 + scskp
+       enddo
+$if def,mmfld
+       if (lnonmf(issys) .ne. 0) then
+         ih2 = ixjff
+         do m = 1,nh2
+           i = ihld3(ih2)
+           ix = jcnxs(i)
+           vmdpk(ix) = 0.0
+           vmdpl(ix) = 0.0
+           ih2 = ih2 + scskp
+         enddo
+       endif
+$endif
+c
+c  The momentum equations are written as a sum and difference equ.
+c  The sum equation is of the form
+c  sumf*(vel. liquid at new time) + sumg*(vel. gas at new time)
+c  = all old time terms(sumold).
+c  The difference equation is of the form
+c  diff*(vel. liquid at new time) + difg*(vel. gas at new time)
+c  = all old time terms(difold).
+c
+c  General values needed in the calculation.
+       if (nh1 .ne. 0) then
+         ih1 = ixjff
+cdir$ ivdep
+         do m = 1,nh1
+           i = ihld1(ih1)
+           ix = jcnxs(i)
+           l4 = iand(ishft(jcex(i),-13),3)
+           k = ij1nx(i)
+           kf = k + l4
+           k4 = vctrls(k) + l4
+           l4 = iand(ishft(jcex(i),-10),3)
+           l = ij2nx(i)
+           lf = l + l4
+           l4 = vctrls(l) + l4
+           ncrosk(ix) = 1.0
+           if (iand(jc(i),8192) .ne. 0) ncrosk(ix) = 0.0
+           ncrosl(ix) = 1.0
+           if (iand(jc(i),4096) .ne. 0) ncrosl(ix) = 0.0
+           dxx(ix) = 1.0/(dxkx(ix) + dxlx(ix))
+c  Modify for level.
+           voidgk(ix) = voidgo(k)
+           voidgl(ix) = voidgo(l)
+c  Modify for vertical junctions
+           if( iand(jc(i),ishft(1,26)).ne.0 ) then
+             ilvk = iand(ishft(vctrlx(k),-7),1)
+             ilvl = iand(ishft(vctrlx(l),-7),1)
+             if( ilvk.eq.1 ) then
+               if( iand(jc(i),ishft(1,27)).eq.0 ) then
+                 voidgk(ix) = voidla(k)
+               else
+                 voidgk(ix) = voidlb(k)
+               endif
+             endif
+             if( ilvl.eq.1 ) then
+               if( iand(jc(i),ishft(1,27)).eq.0 ) then
+                 voidgl(ix) = voidlb(l)
+               else
+                 voidgl(ix) = voidla(l)
+               endif
+             endif
+           endif
+           voidfa(ix) = ((1.0-voidgk(ix))*dxkx(ix) +
+     &      (1.0-voidgl(ix))*dxlx(ix))*dxx(ix)
+           voidga(ix) = (voidgk(ix)*dxkx(ix) + voidgl(ix)*dxlx(ix))*
+     &     dxx(ix)
+           rhofa(ix) = (rhofo(k)*dxkx(ix) + rhofo(l)*dxlx(ix))*dxx(ix)
+           rhoga(ix) = (rhogo(k)*dxkx(ix) + rhogo(l)*dxlx(ix))*dxx(ix)
+           vpgen(ix) = (vapgno(k)*dxkx(ix) + vapgno(l)*dxlx(ix))*
+     &     dxx(ix)
+           if (chngno(14)) vpgen(ix) = 0.0
+c  Average of (void*rho) for the junction.
+           avrf(ix) = max(voidfa(ix),1.0e-15)*rhofa(ix)
+           avrg(ix) = max(voidga(ix),1.0e-15)*rhoga(ix)
+           ravrf(ix) = 1.0/avrf(ix)
+           ravrg(ix) = 1.0/avrg(ix)
+$if -def,decalpha,1
+           ltestt(ix) = iand(ior(vctrl(k),vctrl(l)),1) .ne. 0
+$if def,decalpha,1
+           ltestt(ix) = iand(vctrl(k),1).ne.0.or.iand(vctrl(l),1).ne.0
+           rfvfj(ix) = 0.5
+           if (.not.ltestt(ix)) rfvfj(ix) = max(1.0e-15,voidfj(i))*
+     &     rhofj(i)*ravrf(ix)*0.5
+           rgvgj(ix) = 0.5
+           if (.not.ltestt(ix)) rgvgj(ix) = max(1.0e-15,voidgj(i))*
+     &     rhogj(i)*ravrg(ix)*0.5
+           dxk(ix) = dxkx(ix)*avkx(ix)*0.5
+           dxl(ix) = dxlx(ix)*avlx(ix)*0.5
+           dx(ix) = dxl(ix) + dxk(ix)
+c  Interphase drag.
+c  Liquid friction.
+           fricfk(ix) = dxk(ix)*fwalf(kf)*ravrf(ix)
+           fricfl(ix) = dxl(ix)*fwalf(lf)*ravrf(ix)
+           if (chngno(14)) then
+             fricfk(ix) = 0.0
+             fricfl(ix) = 0.0
+           endif
+c  Vapor friction.
+           fricgk(ix) = dxk(ix)*fwalg(kf)*ravrg(ix)
+           fricgl(ix) = dxl(ix)*fwalg(lf)*ravrg(ix)
+           if (chngno(14)) then
+             fricgk(ix) = 0.0
+             fricgl(ix) = 0.0
+           endif
+           if (chngno(75)) then
+           convf(ix) = ncrosl(ix)*(velf(lf)*difvfx(l4)) -
+     &     ncrosk(ix)*(velf(kf)*difvfx(k4))
+           convg(ix) = ncrosl(ix)*(velg(lf)*difvgx(l4)) -
+     &     ncrosk(ix)*(velg(kf)*difvgx(k4))
+           else
+           convf(ix) = ncrosl(ix)*(velf(lf)**2 + difvfx(l4)) -
+     &     ncrosk(ix)*(velf(kf)**2 + difvfx(k4))
+           convg(ix) = ncrosl(ix)*(velg(lf)**2 + difvgx(l4)) -
+     &     ncrosk(ix)*(velg(kf)**2 + difvgx(k4))
+           endif
+c
+           if (chngno(67)) then
+c  use v**2 instead of v*vdot for momentum flux term
+             convf(ix) = ncrosl(ix)*velf(lf)**2 -
+     &       ncrosk(ix)*velf(kf)**2
+             convg(ix) = ncrosl(ix)*velg(lf)**2 -
+     &       ncrosk(ix)*velg(kf)**2
+           endif
+           if (chngno(68)) then
+c  use velj*(velK-velL) instead of v*vdot for momentum flux term
+             convf(ix) = (ncrosl(ix)*velf(lf) -
+     &       ncrosk(ix)*velf(kf))*velfj(i)
+             convg(ix) = (ncrosl(ix)*velg(lf) -
+     &       ncrosk(ix)*velg(kf))*velgj(i)
+           endif
+c
+           rfvfrr = min(max((convf(ix) + 1.0e-5)*2.5e4,0.0),0.5)
+           rfvfrr = max(5.0e-16,(rfvfrr*hyarf(l) +
+     &     (0.5 - rfvfrr)*hyarf(k))*ravrf(ix))
+           if (ltestt(ix)) rfvfrr = 0.5
+           rgvgrr = min(max((convg(ix) + 1.0e-5)*2.5e4,0.0),0.5)
+           rgvgrr = max(5.0e-16,(rgvgrr*hyarg(l) +
+     &     (0.5 - rgvgrr)*hyarg(k))*ravrg(ix))
+           if (ltestt(ix)) rgvgrr = 0.5
+           convf(ix) = convf(ix)*rfvfrr
+           convg(ix) = convg(ix)*rgvgrr
+           convfs(ix) = avrf(ix)*convf(ix)
+           convgs(ix) = avrg(ix)*convg(ix)
+           ih1 = ih1 + scskp
+         enddo
+$if def,mmfld
+         if (lnonmf(issys) .ne. 0) then
+           ih1 = ixjff
+cdir$ ivdep
+           do m = 1,nh1
+             i = ihld1(ih1)
+             ix = jcnxs(i)
+             k = ij1nx(i)
+             l = ij2nx(i)
+             voidma(ix) = (voidm(k)*dxkx(ix) + voidm(l)*dxlx(ix))*
+     &       dxx(ix)
+             rhoma(ix) = (rhomt(k)*dxkx(ix) + rhomt(l)*dxlx(ix))*
+     &       dxx(ix)
+             avrm(ix) = max(voidma(ix),1.0e-5)*rhoma(ix)
+             ravrm(ix) = 1.0/avrm(ix)
+             rmvmj(ix) = 0.5
+             if (.not.ltestt(ix)) rmvmj(ix) = max(1.0e-15,voidmj(i))*
+     &       rhomj(i)*ravrm(ix)*0.5
+             avrgms(ix) = avrg(ix) + avrm(ix)
+             avrfms(ix) = avrf(ix) + avrm(ix)
+             avrgmp(ix) = avrg(ix)*avrm(ix)
+             avrfmp(ix) = avrf(ix)*avrm(ix)
+             fricmk(ix) = dxk(ix)*fwalm(k)*ravrm(ix)
+             fricml(ix) = dxl(ix)*fwalm(l)*ravrm(ix)
+             if (chngno(14)) then
+               fricmk(ix) = 0.0
+               fricml(ix) = 0.0
+             endif
+             k4 = vctrls(k)
+             l4 = vctrls(l)
+             convm(ix) = ncrosl(ix)*(velmt(l)**2 + difvmx(l4)) -
+     &       ncrosk(ix)*(velmt(k)**2 + difvmx(k4))
+             rmvmrc = min(max((convm(ix) + 1.0e-5)*2.5e4,0.0),0.5)
+             rmvmrc = max(5.0e-16,(rmvmrc*rhomt(l)*voidm(l) +
+     &       (0.5 - rmvmrc)*rhomt(k)*voidm(k))*ravrm(ix))
+             if (ltestt(ix)) rmvmrc = 0.5
+             convm(ix) = convm(ix)*rmvmrc
+             convms(ix) = avrm(ix)*convm(ix)
+             ih1 = ih1 + scskp
+           enddo
+         endif
+$endif
+         if (lpdat(issys)%lnoncn .ne. 0) then
+           ih1 = ixjff
+cdir$ ivdep
+           do m = 1,nh1
+             i = ihld1(ih1)
+             ix = jcnxs(i)
+             snk(ix) = 0.0
+             snl(ix) = 0.0
+             ih1 = ih1 + scskp
+           enddo
+           do i1 = 1,lpdat(issys)%lnoncn
+             ih1 = ixjff
+             if (i1 .ne. nonhy) then
+cdir$ ivdep
+               do m = 1,nh1
+                 i = ihld1(ih1)
+                 ix = jcnxs(i)
+                 snk(ix) = snk(ix) + gaman(ij1nx(i)+i1-1)
+                 snl(ix) = snl(ix) + gaman(ij2nx(i)+i1-1)
+                 ih1 = ih1 + scskp
+               enddo
+             else
+cdir$ ivdep
+               do m = 1,nh1
+                 i = ihld1(ih1)
+                 ix = jcnxs(i)
+                 snk(ix) = snk(ix) - 8.0*gaman(ij1nx(i)+i1-1)
+                 snl(ix) = snl(ix) - 8.0*gaman(ij2nx(i)+i1-1)
+                 ih1 = ih1 + scskp
+               enddo
+             endif
+           enddo
+           ih1 = ixjff
+cdir$ ivdep
+           do m = 1,nh1
+             i = ihld1(ih1)
+             ix = jcnxs(i)
+             vngen(ix) = (snk(ix)*dxkx(ix) + snl(ix)*dxlx(ix))*
+     &       dxx(ix)
+             ih1 = ih1 + scskp
+           enddo
+         else
+           ih1 = ixjff
+cdir$ ivdep
+           do m = 1,nh1
+             i = ihld1(ih1)
+             ix = jcnxs(i)
+             vngen(ix) = 0.0
+             ih1 = ih1 + scskp
+           enddo
+         endif
+$if def,mmfld
+         if (lnonmf(issys) .ne. 0) then
+           ih1 = ixjff
+           do m = 1,nh1
+             i = ihld1(ih1)
+             ix = jcnxs(i)
+             smk(ix) = 0.0
+             sml(ix) = 0.0
+             ih1 = ih1 + scskp
+           enddo
+           do i1 = 1, lnonmf(issys)
+             ih1 = ixjff
+             do m = 1,nh1
+               i = ihld1(ih1)
+               ix = jcnxs(i)
+               smk(ix) = smk(ix) + gamamt(ij1nx(i)+i1-1)
+               sml(ix) = sml(ix) + gamamt(ij2nx(i)+i1-1)
+               ih1 = ih1 + scskp
+             enddo
+           enddo
+           ih1 = ixjff
+           do m = 1,nh1
+             i = ihld1(ih1)
+             ix = jcnxs(i)
+             vmgen(ix) = (smk(ix)*dxkx(ix) + sml(ix)*dxlx(ix))*
+     &       dxxix)
+             ih1 = ih1 + scskp
+           enddo
+         endif
+$endif
+       endif
+c
+$if def,nanscr
+c  Nan out dxk,dxl
+       call nanscj(40,41)
+c  Nan out dxx
+       call nanscj(47,47)
+$endif
+c
+       if (lvturb(lpdat(issys)%llvect) .ne. 0) then
+         call turbst
+         i1 = lvturb(lpdat(issys)%llvect)
+         do m = 1,lvptr(i1)
+           i1 = i1 + 1
+           n = lvptr(i1)
+           if (turdef(n) .ne. 0.0) then
+             i = njco(n) + filndx(5)
+             ix = jcnxs(i)
+c  Special convective terms for a turbine.
+             scvtur(ix) = 1.0 - tureff(n)
+c            nskpm = 1 + iand(ishft(jc(i-ijskp),-29),1)
+c            nskpp = 1 + iand(ishft(jc(i+ijskp),-29),1)
+c            imm = i - nskpm*ijskp
+c            ipp = i + nskpp*ijskp
+c            convf(ix) = ((velfjo(i) + abs(velfjo(i)))*(velfjo(i) -
+c    &       velfj(imm)) + (velfjo(i) - abs(velfjo(i)))*(velfjo(ipp) -
+c    &       velfjo(i)))*rfvfj(ix)
+c            convg(ix) = ((velgjo(i) + abs(velgjo(i)))*(velgjo(i) -
+c    &       velgjo(imm)) + (velgjo(i) - abs(velgjo(i)))*(velgjo(ipp) -
+c    &       velgjo(i)))*rgvgj(ix)
+c            convfs(ix) = avrf(ix)*convf(ix)
+c            convgs(ix) = avrg(ix)*convg(ix)
+!  Remove turbine energy from volume.
+             i = nvco(n) + filndx(4)
+             ix = vctrls(i)
+             arcf = hyarf(i)*csubpf(i)
+             arcg = hyarg(i)*csubpg(i)
+             pumpd = (turfru(n) + pideal(n) - turpow(n))*dt/
+     &       (arcf + arcg)
+             sourcf(ix) = sourcf(ix) + pumpd*arcf
+             sourcg(ix) = sourcg(ix) + pumpd*arcg
+           endif
+         enddo
+       endif
+c
+       if (lvjtmx(lpdat(issys)%llvect) .ne. 0) then
+         i1 = lvjtmx(lpdat(issys)%llvect)
+         do 100 m = 1,lvptr(i1)
+           i1 = i1 + 1
+c  Check for special jetpump momentum flux calculations in drive
+c  or suction junctions.
+           n = lvptr(i1)
+           if (cmptyp(n) .eq. 15) then
+             zangl(1) = cos(cmpphi(n))
+             zangl(2) = 1.0
+           else
+             zangl(1) = 1.0
+             zangl(2) = 1.0
+           endif
+           i = njco(n) + filndx(5)
+           do 115 jx = 1,2
+             ijet = i + (3 - 2*jx)*ijskp
+             jxjet = 3 - jx
+             k = ij1nx(i)
+             kf = k + iand(ishft(jcex(i),-13),3)
+             if (jx.eq.1) then
+               drivw = ajun(i)*(hyarf(k)*velfjo(i) +
+     &         hyarg(k)*velgjo(i))
+               suctw = ajun(ijet)*(hyarf(k)*velfjo(ijet) +
+     &         hyarg(k)*velgjo(ijet))
+             endif
+             if (iand(jc(i),2).eq.0 .and. drivw.gt.0.0) then
+c  Special convective terms for a jetpump.
+c  Half cell flux terms unaffected by the jetpump mixing.
+               l = ij2nx(i)
+               lf = l + iand(ishft(jcex(i),-10),3)
+               ix = jcnxs(i)
+               scrach = 0.5*((velfjo(i)/athrot(i))**2 - velf(kf)**2)
+               convf(ix) = hyarf(k)*scrach/(max(1.0-voidgo(k),1.0e-7)*
+     &         rhofa(ix))
+               convfs(ix) = hyarf(k)*scrach
+               scrach = 0.5*((velgjo(i)/athrot(i))**2 - velg(kf)**2)
+               convg(ix) = hyarg(k)*scrach/(max(voidgo(k),1.0e-7)*
+     &         rhoga(ix))
+               convgs(ix) = hyarg(k)*scrach
+c  Additional flux terms for half cell containing the jetpump mixing.
+               ravol = 1.0/avol(lf)
+               flux = voidfj(i)*rhofj(i)*velfjo(i)*ajun(i)
+               fluxjt = voidfj(ijet)*rhofj(ijet)*velfjo(ijet)*ajun(ijet)
+               flux = (flux*(velf(lf) - velfjo(i)*zangl(jx)/athrot(i)) +
+     &         fluxjt*(velf(lf) - velfjo(ijet)*zangl(jxjet)/
+     &         athrot(ijet)))*ravol
+               convf(ix) = convf(ix) +
+     &         flux/(max((1.0-voidgo(l)),1.0e-7)*rhofa(ix))
+               convfs(ix) = convfs(ix) + flux
+               flux = voidgj(i)*rhogj(i)*velgjo(i)*ajun(i)
+               fluxjt = voidgj(ijet)*rhogj(ijet)*velgjo(ijet)*ajun(ijet)
+               flux = (flux*(velg(lf) - velgjo(i)*zangl(jx)/athrot(i)) +
+     &         fluxjt*(velg(lf) - velgjo(ijet)*zangl(jxjet)/
+     &         athrot(ijet)))*ravol
+               convg(ix) = convg(ix) + flux/(max(voidgo(l),1.0e-7)*
+     &         rhoga(ix))
+               convgs(ix) = convgs(ix) + flux
+c  Stratified flow forces and added mass removed for jetpump.
+               dpstf(ix) = 0.0
+               faaj(i) = 0.0
+c  Additional built in form loss for positive drive reverse suction.
+               if (jx.eq.2 .and. drivw*suctw.lt.0.0) fjet(ix) =
+     &         min(1.0 + ajun(i)*athrot(i)/(ajun(ijet)*athrot(ijet)*
+     &         min(suctw/drivw,-1.0)),0.0)**2
+             endif
+             i = i + ijskp
+  115      continue
+  100    continue
+       endif
+c
+       if (nh1 .ne. 0) then
+         ih1 = ixjff
+cdir$ ivdep
+         do 110 m = 1,nh1
+           i = ihld1(ih1)
+           ix = jcnxs(i)
+           k = ij1nx(i)
+           kf = k + iand(ishft(jcex(i),-12),7)
+           l = ij2nx(i)
+           lf = l + iand(ishft(jcex(i),-9),7)
+           kd = k + iand(ishft(jcex(i),-13),3)
+           ld = l + iand(ishft(jcex(i),-10),3)
+c  Head loss terms.
+c  User inputted form losses.
+           scrxch(ix) = 0.01*athrot(i)
+c  Loss factors for momentum equations and dissipation.
+           if (fjunfc(i).ne.0.0 .or. fjunrc(i).ne.0.0) then
+             if (velgjo(i) .ge. 0.0) then
+               x = quals(k)
+               gvis = viscg(k)
+             else
+               x = quals(l)
+               gvis = viscg(l)
+             endif
+             if (velfjo(i) .ge. 0.0) then
+               visl = viscf(k)
+             else
+               visl = viscf(l)
+             endif
+             vism = x*gvis + (1.0 - x)*visl
+             gm = abs(2.0*avrg(ix)*rgvgj(ix)*velgjo(i) +
+     &       2.0*avrf(ix)*rfvfj(ix)*velfjo(i))
+             rem = max(50.0,gm*diamj(i)/vism)
+           endif
+           if (fjunfb(i) .ne. 0.0) then
+             if (fjunfc(i) .ne. 0.0) then
+               fjunfk = fjunf(i) + fjunfb(i)/rem**fjunfc(i)
+             else
+               fjunfk = fjunf(i) + fjunfb(i)
+             endif
+           else
+             fjunfk = fjunf(i)
+           endif
+           if (fjunrb(i) .ne. 0.0) then
+             if (fjunrc(i) .ne. 0.0) then
+               fjunrk = fjunr(i) + fjunrb(i)/rem**fjunrc(i)
+             else
+               fjunrk = fjunr(i) + fjunrb(i)
+             endif
+           else
+             fjunrk = fjunr(i)
+           endif
+           fjunft(i) = fjunfk
+           fjunrt(i) = fjunrk
+           hlossf(ix) = fjunfk
+           if (velfjo(i) .lt. 0.0) hlossf(ix) = fjunrk
+           hlossf(ix) = (abs(velfjo(i)) + scrxch(ix))*rfvfj(ix)*
+     &     (formfj(i) + fjet(ix) + hlossf(ix))
+           hlossg(ix) = fjunfk
+           if (velgjo(i) .lt. 0.0) hlossg(ix) = fjunrk
+           hlossg(ix) = (abs(velgjo(i)) + scrxch(ix))*rgvgj(ix)*
+     &     (formgj(i) + fjet(ix) + hlossg(ix))
+           delpza = voidgk(ix)*rhog(k)+(1.0-voidgk(ix))*rhof(k)
+           if( iand(imap(k),64).ne.0 ) then
+               delpza = rhof(k) + (rhog(k) - rhof(k)) * max(1.e-05,
+     &         voidgk(ix))
+           endif
+           if (iand(jc(i),4) .ne. 0) delpza = -delpza
+           delpzz = voidgl(ix)*rhog(l)+(1.0-voidgl(ix))*rhof(l)
+           if( iand(imap(l),64).ne.0 ) then
+               delpzz = rhof(l) + (rhog(l) - rhof(l)) * max(1.e-05,
+     &         voidgl(ix))
+           endif
+           if (iand(jc(i),8) .ne. 0) delpzz = -delpzz
+             delpza = gravcn*(hydzc(kf)*delpza + hydzc(lf)*delpzz)
+           pk(ix) = po(k)
+           pl(ix) = po(l)
+c  Modify hydrostatic pressure for level tracking model.
+c  Turnoff momentum flux in junction if level in either volume at ends
+c  Modify if vertical junction
+           if( iand(jc(i),ishft(1,26)).ne.0 ) then
+             ilvk = iand(ishft(vctrlx(k),-7),1)
+             ilvkb = iand(ishft(vctrlx(k),-8),1)
+             ilvl = iand(ishft(vctrlx(l),-7),1)
+             ilvlb = iand(ishft(vctrlx(l),-8),1)
+             if( ilvk.eq.1 ) then
+               if( dlev(k).gt.dl(k)/2.0 .and.
+     &           iand(jc(i),ishft(1,27)).eq.0 ) then
+                 pk(ix) = po(k) + dplev(k)*(dlev(k)-0.5*dl(k))
+               elseif ( dlev(k).lt.dl(k)/2.0 .and.
+     &           iand(jc(i),ishft(1,27)).ne.0 ) then
+                 pk(ix) = po(k) - dplev(k)*(dlev(k)-0.5*dl(k))
+               endif
+             endif
+             if( ilvk.eq.1 .or. ilvkb.eq.1 ) then
+               convf(ix) = 0.0
+               convg(ix) = 0.0
+               convfs(ix) = 0.0
+               convgs(ix) = 0.0
+             endif
+             if(ilvl.eq.1 ) then
+               if( dlev(l).gt.dl(l)/2.0 .and.
+     &           iand(jc(i),ishft(1,27)).ne.0 ) then
+                 pl(ix) = po(l) + dplev(l)*(dlev(l)-0.5*dl(l))
+               elseif ( dlev(l).lt.dl(l)/2.0 .and.
+     &           iand(jc(i),ishft(1,27)).eq.0 ) then
+                 pl(ix) = po(l) - dplev(l)*(dlev(l)-0.5*dl(l))
+               endif
+             endif
+             if( ilvl.eq.1 .or. ilvlb.eq.1 ) then
+               convf(ix) = 0.0
+               convg(ix) = 0.0
+               convfs(ix) = 0.0
+               convgs(ix) = 0.0
+             endif
+           endif
+c  Junction friction.
+           fricfj(ix) = fricfk(ix) + fricfl(ix)
+           fricgj(ix) = fricgk(ix) + fricgl(ix)
+           fwalfj(i)  = fricfj(ix)
+           fwalgj(i)  = fricgj(ix)
+           psmf(ix) = (fricfj(ix) + hlossf(ix))*avrf(ix)
+           psmg(ix) = (fricgj(ix) + hlossg(ix))*avrg(ix)
+           psld(ix) = pmpph(ix) - convfs(ix) - convgs(ix) - delpza
+           vpgnx(ix) = vpgen(ix)*dx(ix)
+           vngen(ix) = vngen(ix)*dx(ix)
+           ih1 = ih1 + scskp
+  110    continue
+$if def,mmfld
+         if (lnonmf(issys) .ne. 0) then
+           ih1 = ixjff
+cdir$ ivdep
+           do 14 m = 1,nh1
+             i = ihld1(ih1)
+             ix = jcnxs(i)
+             k = ij1nx(i)
+             kf = k + iand(ishft(jcex(i),-12),7)
+             l = ij2nx(i)
+             lf = l + iand(ishft(jcex(i),-9),7)
+             hlossm = fjunf(i)
+             if (velmjo(i) .lt. 0.0) hlossm = fjunr(i)
+             hlossm = (abs(velmjo(i)) + scrxch(ix))*rmvmjix)*
+     &       (formmj(i) + hlossm)
+c  Body force for metal field.
+             delpzm = voidm(k)*rhomt(k)
+             if (iand(jc(i),4).ne.0) delpzm = -delpzm
+             dlpzzm = voidm(l)*rhomt(l)
+             if (iand(jc(i),8).ne.0) dlpzzm = -dlpzzm
+             delpzm = gravcn*(hydzc(kf)*delpzm + hydzc(lf)*dlpzzm)
+c  Junction wall friction loss.
+             fricmj = fricmkix) + fricmlix)
+             psmmix) = (fricmj + hlossm)*avrmix)
+             pmldix) = -convmsix) - delpzm
+             vmgnxix) = vmgen(ix)*dx(ix)
+             ih1 = ih1 + scskp
+   14      continue
+         endif
+$endif
+c  Sum momentum equation. ( liquid + vapor )
+         ih1 = ixjff
+cdir$ ivdep
+         do m = 1,nh1
+           i = ihld1(ih1)
+           ix = jcnxs(i)
+           if(chngno(47)) then
+             sumf(ix) = avrf(ix)*dx(ix)+(2.0*psmf(ix) - vpgnx(ix) +
+     &       psumf(ix))*dt
+             sumg(ix) = avrg(ix)*dx(ix)+(2.0*psmg(ix) + vpgnx(ix) +
+     &       vngen(ix) + psumg(ix))*dt
+           else
+             sumf(ix) = avrf(ix)*dx(ix) + (psmf(ix) - vpgnx(ix) +
+     &       psumf(ix))*dt
+             sumg(ix) = avrg(ix)*dx(ix) + (psmg(ix) + vpgnx(ix) +
+     &       vngen(ix) + psumg(ix))*dt
+           endif
+           ih1 = ih1 + scskp
+         enddo
+         ih1 = ixjff
+$if def,mmfld,1
+         if (lnonmf(issys) .eq. 0) then
+cdir$ ivdep
+           do m = 1,nh1
+             i = ihld1(ih1)
+             ix = jcnxs(i)
+             k = ij1nx(i)
+             l = ij2nx(i)
+             if(chngno(47)) then
+               sumold(ix) = (avrf(ix)*velfjo(i)+avrg(ix)*velgjo(i))*
+     &         dx(ix) + (scvtur(ix)*(pk(ix) - pl(ix)) + psld(ix) +
+     &         psmf(ix)*velfjo(i) + psmg(ix)*velgjo(i) +
+     &         psumf(ix)*velfjo(i) + psumg(ix)*velgjo(i))*dt
+             else
+               sumold(ix) = (avrf(ix)*velfjo(i)+avrg(ix)*velgjo(i))*
+     &         dx(ix) + (scvtur(ix)*(pk(ix) - pl(ix)) + psld(ix) +
+     &         psumf(ix)*velfjo(i) + psumg(ix)*velgjo(i))*dt
+             endif
+             ih1 = ih1 + scskp
+           enddo
+$if def,mmfld
+         else
+           do m = 1,nh1
+             i = ihld1(ih1)
+             ix = jcnxs(i)
+             k = ij1nx(i)
+             l = ij2nx(i)
+             if (chngno(14)) then
+               ffmj(i) = 0.0
+               fgmj(i) = 0.0
+               cfmj(i) = 0.0
+               cgmj(i) = 0.0
+             endif
+             sumf(ix) = sumf(ix) + avrfmpix)*ffmj(i)*dt*dx(ix) +
+     &       voidfa(ix)*voidmaix)*avrfmsix)*cfmj(i)*dx(ix)
+             sumg(ix) = sumg(ix) + avrgmpix)*fgmj(i)*dt*dx(ix) +
+     &       voidga(ix)*voidmaix)*avrgmsix)*cgmj(i)*dx(ix)
+             summix) = -(avrfmpix)*ffmj(i) + avrgmpix)*fgmj(i))*
+     &       dt*dx(ix) - (voidfa(ix)*voidmaix)*avrfmsix)*cfmj(i) +
+     &       voidga(ix)*voidmaix)*avrgmsix)*cgmj(i))*dx(ix)
+             cvmrvix) = cgmj(i)*voidga(ix)*voidmaix)*avrgmsix)*
+     &       (velgjo(i) - velmjo(i)) +
+     &       cfmj(i)*voidfa(ix)*voidmaix)*avrfmsix)*
+     &       (velfjo(i) - velmjo(i))
+             sumold(ix) = (avrf(ix)*velfj(i) + avrg(ix)*velgj(i))*
+     &       dx(ix) + (scvtur(ix)*max(1.0e-5,1.0 - voidmaix))*
+     &       (po(k) - po(l)) + psld(ix) + psumf(ix)*velfjo(i) +
+     &       psumg(ix)*velgjo(i) + dpstm(ix))*dt + cvmrvix)*dx(ix)
+             ih1 = ih1 + scskp
+           enddo
+         endif
+$endif
+c  Store coefficients and source from sum momentum equation needed
+c  in subroutine ccfl.
+         ih1 = ixjff
+cdir$ ivdep
+         do 18 m = 1,nh1
+           i = ihld1(ih1)
+           ix = jcnxs(i)
+           k = ij1nx(i)
+           l = ij2nx(i)
+           fwfxaf(ix) = sumf(ix)
+           fwfxag(ix) = sumg(ix)
+           pfinrg(ix) = sumold(ix)
+c  Vapor generation term for difference equation.
+           vpgnxx = ravrg(ix)
+           if (vpgen(ix) .lt. 0.0) vpgnxx = -ravrf(ix)
+           vpgnx(ix) = vpgnx(ix)*vpgnxx
+           vngen(ix) = vngen(ix)*ravrg(ix)
+c  Virtual mass interaction.
+           rhofga = 1.0/(rhofa(ix)*rhoga(ix))
+c
+c  This needs to be uncommented for the gravity driven wave test problem
+c  for 3-D RELAP5/NPR.
+c          faaj(i) = 0.0001*faaj(i)
+           virmas = faaj(i)*(avrf(ix) + avrg(ix))**2*rhofga
+           if (chngno(14)) then
+             virmas = 0.0
+             dpstf(ix) = 0.0
+           endif
+c  Difference momentum equation. ( liquid - vapor )
+           difr(ix) = scvtur(ix)*(rhoga(ix) - rhofa(ix))*rhofga
+           scrach = (1.0 + virmas)*dx(ix)
+           if (chngno(76)) then
+c  Change 76 uses modified fifj(ix) and figj(ix).
+c  We clear diff momentum eq by avrfg(ix) = voidga*rhoga*voidfa*rhofa
+c   and use the actual voidga and voidfa, not the 1.0E-15 floored values
+c   so that we get true zeros when a phase is not present.
+c  ravrt is the numerator of (ravrf(ix) + ravrg(ix))
+c  avrfg(ix) is the denominator of (ravrf(ix) + ravrg(ix))
+             avrfg(ix) = voidga(ix)*rhoga(ix)*voidfa(ix)*rhofa(ix)
+             ravrt = voidga(ix)*rhoga(ix) + voidfa(ix)*rhofa(ix)
+           else
+c  For original diff momentum solution, set some defaults, so we can
+c   multiply by them in all the following equations and not have to
+c   set up any more if-then-else-endif blocks for chngno(76).
+             avrfg(ix) = 1.0
+             ravrt = ravrf(ix) + ravrg(ix)
+           endif
+c  Incorporate fij(i), fxj(i) and c0j(i) into interphase
+c  friction terms of momentum difference equation.
+           c0 = c0j(i)
+           if (voidj(i) .gt. 0.0) c0 = min(c0,1.0/voidj(i))
+           if (voidj(i) .lt. 0.99999) then
+             c1 = ( 1.0 - c0*voidj(i) )/(1.0 - voidj(i))
+           else
+             c1 = ((voidj(i) - 0.99999) + (1.0 - voidj(i))*(1.0 -
+     &       0.99999*c0)
+     &       *1.0e5)*1.0e5
+           endif
+c
+c  This needs to be uncommented for the gravity driven wave test problem
+c  for 3-D RELAP5/NPR.
+c          fij(i) = 0.0001*fij(i)
+           if (chngno(14)) then
+             figj(ix) = 0.0
+             fifj(ix) = 0.0
+             fifvj = 0.0
+             figvj = 0.0
+           elseif (chngno(47)) then
+             fijdv = ravrt*dx(ix)*fij(i)*abs(c1*velgjo(i) -
+     &       c0*velfjo(i))
+             figvj = fijdv*c1
+             fifvj = fijdv*c0
+             fij1 = ravrt*(dx(ix)*fij(i)*0.01 + fidxup(ix))
+             figj(ix) = figvj + fij1
+             fifj(ix) = fifvj + fij1
+           else
+             figj(ix) = ravrt*
+     &       (dx(ix)*(fij(i)*(abs(c1*velgjo(i) - c0*velfjo(i))*c1 +
+     &       0.01)) + fidxup(ix))
+             fifj(ix) = ravrt*
+     &       (dx(ix)*(fij(i)*(abs(c1*velgjo(i) - c0*velfjo(i))*c0 +
+     &       0.01)) + fidxup(ix))
+             fifvj = 0.0
+             figvj = 0.0
+           endif
+c  Incorporate interphase friction terms fifj and figj into diff and
+c  difg.
+           alpg = max(1.0e-5,voidga(ix))
+           alpf = max(1.0e-5,voidfa(ix))
+           fricgj(ix) = fricgj(ix)*(1.0 - fxj(i) +
+     &     fxj(i)*alpg*(1.0 - rhoga(ix)/rhofa(ix)))
+           fricfj(ix) = fricfj(ix)*(1.0 - fxj(i) +
+     &     fxj(i)*alpf*(1.0 - rhofa(ix)/rhoga(ix)))
+           if (chngno(47)) then
+             diff(ix) = avrfg(ix)*(scrach + (2.0*fricfj(ix) +
+     &       vpgnx(ix) + 2.0*hlossf(ix))*dt) +
+     &       (fifvj + fifj(ix))*dt
+             difg(ix) = avrfg(ix)*(-scrach - (2.0*fricgj(ix) +
+     &       vpgnx(ix) + 2.0*hlossg(ix) + vngen(ix))*dt) -
+     &       (figvj + figj(ix))*dt
+             difold(ix) = avrfg(ix)*((velfjo(i) - velgjo(i))*scrach -
+     &       (difr(ix)*(pl(ix) - pk(ix)) + convf(ix) - convg(ix) -
+     &       dpstf(ix) + (fricfj(ix) + hlossf(ix))*velfjo(i) -
+     &       (fricgj(ix) + hlossg(ix))*velgjo(i))*dt) +
+     &       (fifvj*velfjo(i) - figvj*velgjo(i))*dt
+           else
+             diff(ix) = avrfg(ix)*(scrach + (fricfj(ix) +
+     &       vpgnx(ix) + hlossf(ix))*dt) + fifj(ix)*dt
+             difg(ix) = avrfg(ix)*(-scrach - (fricgj(ix) +
+     &       vpgnx(ix) + hlossg(ix) + vngen(ix))*dt) - figj(ix)*dt
+             difold(ix) = avrfg(ix)*((velfjo(i) - velgjo(i))*scrach -
+     &       (difr(ix)*(pl(ix) - pk(ix)) + convf(ix) - convg(ix) -
+     &       dpstf(ix))*dt)
+           endif
+           ih1 = ih1 + scskp
+   18    continue
+$if def,mmfld
+         if (lnonmf(issys) .ne. 0) then
+           ih1 = ixjff
+cdir$ ivdep
+           do 19 m = 1,nh1
+             i = ihld1(ih1)
+             ix = jcnxs(i)
+             k = ij1nx(i)
+             l = ij2nx(i)
+             diff(ix) = diff(ix) + avrmix)*ffmj(i)*dt*dx(ix) +
+     &       cfmj(i)*voidmaix)*avrfmsix)/rhofa(ix)*dx(ix)
+             difg(ix) = difg(ix) - avrmix)*fgmj(i)*dt*dx(ix) -
+     &       cgmj(i)*voidmaix)*avrgmsix)/rhoga(ix)*dx(ix)
+             difmix) = (fgmj(i) - ffmj(i))*avrmix)*dt*dx(ix) +
+     &       voidmaix)*(cgmj(i)*avrgmsix)/rhoga(ix) - cfmj(i)*
+     &       avrfmsix)/rhofa(ix))*dx(ix)
+             difold(ix) = difold(ix) - cgmj(i)*avrmix)*avrgmsix)*
+     &       (velgjo(i) - velmjo(i))/(rhoga(ix)*rhomaix))*dx(ix) +
+     &       cfmj(i)*avrmix)*avrfmsix)*(velfjo(i) - velmjo(i))/
+     &       (rhofa(ix)*rhomaix))*dx(ix)
+c  Momentum equation for metal field.
+             metgix) = -fgmj(i)*avrgmpix)*dt*dx(ix) - cgmj(i)*
+     &       voidga(ix)*avrmix)*dx(ix)
+             metfix) = -ffmj(i)*avrfmpix)*dt*dx(ix) - cfmj(i)*
+     &       voidfa(ix)*avrmix)*dx(ix)
+             metmix) = avrmix)*dx(ix) + (psmmix) +
+     &       vmgnxix))*dt - metgix) - metfix)
+             metoldix) = avrmix)*velmj(i)*dx(ix) + (scvtur(ix)*
+     &       voidmaix)*(po(k) - po(l)) + pmldix) - dpstm(ix))*dt
+     &       - cvmrvix)*dx(ix)
+             ih1 = ih1 + scskp
+   19      continue
+         endif
+$endif
+c  Solution of sum and difference momentum equations for
+c  velocity of liquid and velocity of gas.
+         ih1 = ixjff
+$if def,mmfld,1
+         if (lnonmf(issys) .eq. 0) then
+cdir$ ivdep
+           do m = 1,nh1
+             i = ihld1(ih1)
+             ix = jcnxs(i)
+             det = 1.0/(sumf(ix)*difg(ix) - sumg(ix)*diff(ix))
+             velfj(i) = (difg(ix)*sumold(ix) - sumg(ix)*difold(ix))*
+     &       det
+             velgj(i) = (sumf(ix)*difold(ix) - diff(ix)*sumold(ix))*
+     &       det
+c  The momentum equations now look like:
+c  final liquid vel. = velfj(i) - vfdpl(i)*(p(l) - po(l))
+c                               + vfdpk(i)*(p(k) - po(k))
+c  final gas    vel. = velgj(i) - vgdpl(i)*(p(l) - po(l))
+c                               + vgdpk(i)*(p(k) - po(k)).
+             det = det*dt
+c  Since difr mulitplies dP in the diff eq, this term also has to
+c  be modified by multiplying by avrfg
+             vfdpk(ix) = (difg(ix)*scvtur(ix) -
+     &       sumg(ix)*avrfg(ix)*difr(ix))*det
+             vgdpk(ix) = (sumf(ix)*avrfg(ix)*difr(ix) -
+     &       diff(ix)*scvtur(ix))*det
+             vfdpl(ix) = vfdpk(ix)
+             vgdpl(ix) = vgdpk(ix)
+             ih1 = ih1 + scskp
+           enddo
+$if def,mmfld
+         else
+c  Determinant for 3x3 momentum equations.
+           do m = 1,nh1
+             i = ihld1(ih1)
+             ix = jcnxs(i)
+c  If no liquid or vapor, solve a 1x1.
+             if (voidmj(i) .gt.0.99999) then
+               velmj(i) = metoldix)/metmix)
+               velgj(i) = 0.
+               velfj(i) = 0.
+               vmdpk(ix) = voidmaix)/metmix)
+               vgdpk(ix) = 0.
+               vfdpk(ix) = 0.
+               vmdpl(ix) = vmdpk(ix)
+               vgdpl(ix) = 0.
+               vfdpl(ix) = 0.
+               goto 333
+             endif
+c  No metal, solve 2x2.
+             if (voidmj(i) .le. 1.0e-05) then
+               det = 1.0/(sumf(ix)*difg(ix) - sumg(ix)*diff(ix))
+               velfj(i) = (difg(ix)*sumold(ix) - sumg(ix)*
+     &         difold(ix))*det
+               velgj(i) = (sumf(ix)*difold(ix) - diff(ix)*
+     &         sumold(ix))*det
+               velmj(i) = 0.0
+               det = det*dt
+               vfdpk(ix) = (difg(ix)*scvtur(ix) - sumg(ix)*
+     &         difr(ix))*det
+               vgdpk(ix) = (sumf(ix)*difr(ix) - diff(ix)*
+     &         scvtur(ix))*det
+               vmdpk(ix) = 0.0
+               vfdpl(ix) = vfdpk(ix)
+               vgdpl(ix) = vgdpk(ix)
+               vmdpl(ix) = vmdpk(ix)
+               goto 333
+             endif
+             v11 = difg(ix)*metmix) - difmix)*metgix)
+             v12 = summix)*metgix) - sumg(ix)*metmix)
+             v13 = sumg(ix)*difmix) - summix)*difg(ix)
+             v21 = difmix)*metfix) - diff(ix)*metmix)
+             v22 = sumf(ix)*metmix) - summix)*metfix)
+             v23 = summix)*diff(ix) - sumf(ix)*difmix)
+             v31 = diff(ix)*metgix) - difg(ix)*metfix)
+             v32 = sumg(ix)*metfix) - sumf(ix)*metgix)
+             v33 = sumf(ix)*difg(ix) - sumg(ix)*diff(ix)
+             det = 1.0/(summix)*v31 + difmix)*v32 + metmix)*v33)
+             velfj(i) = (v11*sumold(ix) + v12*difold(ix) +
+     &       v13*metoldix))*det
+             velgj(i) = (v21*sumold(ix) + v22*difold(ix) +
+     &       v23*metoldix))*det
+             velmj(i) = (v31*sumold(ix) + v32*difold(ix) +
+     &       v33*metoldix))*det
+c  The final momentum equations now in form:
+c  final vel. = explicit vel. - vdpl(i)*( p(l)-po(l) )
+c                              + vdpk(i)*( p(k)-po(k) )
+             onmvm = max(1.0e-5,(1.0 - voidmaix)))
+             det = det*dt
+             vfdpk(ix) = (v11*onmvm*scvtur(ix) + v12*difr(ix) +
+     &       v13*voidmaix))*det
+             vgdpk(ix) = (v21*onmvm*scvtur(ix) + v22*difr(ix) +
+     &       v23*voidmaix))*det
+             vmdpk(ix) = (v31*onmvm*scvtur(ix) + v32*difr(ix) +
+     &       v33*voidmaix))*det
+             vfdpl(ix) = vfdpk(ix)
+             vgdpl(ix) = vgdpk(ix)
+             vmdpl(ix) = vmdpk(ix)
+  333  continue
+             ih1 = ih1 + scskp
+           enddo
+         endif
+c  End of momentum equations.
+$endif
+         ih1 = ixjff
+         do m = 1,nh1
+           i = ihld1(ih1)
+           ix = jcnxs(i)
+c  Test for choking.
+           ltestt(ix) = iand(jc(i),1).eq.0 .or. velgj(i)*velgjo(i)
+     &     .le.0.0
+c
+c  Set up 3-D pointers.
+c
+           k = ij1nx(i)
+           kf = k + iand(ishft(jcex(i),-13),3)
+           l = ij2nx(i)
+           lf = l + iand(ishft(jcex(i),-10),3)
+c  Dissipation terms (for energy equation).
+c  Wall friction losses and form losses.
+           scrach = avol(kf)*arat(i)*avkx(ix)*dt
+           snk(ix) = scrach*fricfk(ix)*avrf(ix)*velfjo(i)**2
+           snk(ix+1) = scrach*fricgk(ix)*avrg(ix)*velgjo(i)**2
+           if (chngno(41)) then
+            if (velfjo(i).lt.0.) then
+             snk(ix+1) = snk(ix+1) +
+     &        scrach*hlossf(ix)*avrf(ix)*velfjo(i)**2
+            endif
+            if (velgjo(i).lt.0.) then
+             snk(ix) = snk(ix)+
+     &        scrach*hlossg(ix)*avrg(ix)*velgjo(i)**2
+            endif
+           endif
+           scrxch(ix) = avol(lf)*arat(i+1)*avlx(ix)*dt
+           snl(ix) = scrxch(ix)*fricfl(ix)*avrf(ix)*velfjo(i)**2
+           snl(ix+1) = scrxch(ix)*fricgl(ix)*avrg(ix)*velgjo(i)**2
+           if (chngno(41)) then
+            if (velfjo(i).gt.0.) then
+             snl(ix+1) = snl(ix+1) +
+     &        scrxch(ix)*hlossf(ix)*avrf(ix)*velfjo(i)**2
+            endif
+            if (velgjo(i).gt.0.) then
+             snl(ix+1) = snl(ix+1)+
+     &        scrxch(ix)*hlossg(ix)*avrg(ix)*velgjo(i)**2
+            endif
+           endif
+           ih1 = ih1 + scskp
+         enddo
+$if def,mmfld
+         if (lnonmf(issys) .ne. 0) then
+           ih1 = ixjff
+           do m = 1,nh1
+             i = ihld1(ih1)
+             ix = jcnxs(i)
+             smk(ix) = scrxch(ix)*fricmkix)*avrmix)*velmjo(i)**2
+             sml(ix) = scrxch(ix)*fricmlix)*avrmix)*velmjo(i)**2
+             ih1 = ih1 + scskp
+           enddo
+         endif
+$endif
+c  Downstream pressure needed for unchoking.
+         ih1 = ixjff
+         do m = 1,nh1
+           i = ihld1(ih1)
+           ix = jcnxs(i)
+           if (.not.ltestt(ix)) then
+             if (velfjo(i) .ge. 0.0) then
+               k = ij1nx(i)
+               scvjck(ix) = po(k) + psld(ix) - psmf(ix)*velfjo(i) -
+     &         psmg(ix)*velgjo(i)
+             else
+               l = ij2nx(i)
+               scvjck(ix) = po(l) - psld(ix) + psmf(ix)*velfjo(i) +
+     &         psmg(ix)*velgjo(i)
+             endif
+           endif
+           ih1 = ih1 + scskp
+         enddo
+         ih1 = ixjff
+         do m = 1,nh1
+           i = ihld1(ih1)
+           ix = jcnxs(i)
+           kx = jcnx1(i)
+           lx = jcnx1(i+1)
+c  Wall friction losses.
+           sourcf(kx) = sourcf(kx) + snk(ix)
+           sourcg(kx) = sourcg(kx) + snk(ix+1)
+           sourcf(lx) = sourcf(lx) + snl(ix)
+           sourcg(lx) = sourcg(lx) + snl(ix+1)
+           ih1 = ih1 + scskp
+         enddo
+$if def,mmfld
+         if (lnonmf(issys) .ne. 0) then
+           ih1 = ixjff
+           do m = 1,nh1
+             i = ihld1(ih1)
+             ix = jcnxs(i)
+             kx = jcnx1(i)
+             lx = jcnx1(i+1)
+             sorcme(kx) = sorcme(kx) + smk(ix)
+             sorcme(lx) = sorcme(lx) + sml(ix)
+             ih1 = ih1 + scskp
+           enddo
+         endif
+$endif
+       endif
+c
+c  Debug printout.
+$if def,dbgprnt
+       if (help.ne.0 .and. iand(ihlppr(2),ishft(1,6)).ne.0) then
+         call helphd ('vexplt',8)
+         if (nh1 .ne. 0) then
+           write (output,2001)
+ 2001  format ('0Sum and difference terms'/1x,119('=')/7x,
+     & 'junno(i)',3x,'sumf',9x,'sumg',9x,'sumold',7x,'diff',9x,'difg',
+     & 9x,'difold',7x,'avrf',9x,'avrg'/1x,119('='))
+           ih1 = ixjff
+           do m = 1,nh1
+             i = ihld1(ih1)
+             ix = jcnxs(i)
+             if (iand(jcex(i),ishft(1,20)).ne.0)
+     &       write (output,2002) junno(i),sumf(ix),sumg(ix),
+     &       sumold(ix),diff(ix),difg(ix),difold(ix),avrf(ix),
+     &       avrg(ix)
+ 2002  format (6x,i10.9,1p,8g13.5)
+             ih1 = ih1 + scskp
+           enddo
+           write (output,2003)
+ 2003  format('0volume terms'/1x,132('=')/7x,'volno(i)',3x,
+     & 'dl(i)',8x,'voidf(i)',5x,'rhof(i)',6x,'fwalf(i)',5x,'velf(i)',6x,
+     & 'difvfx(ix)',3x,'sourcf(ix)',3x,'sourcm(ix)',3x,'gamas(i)'/
+     & 18x,'hydzc(i)',5x,'voidg(i)',5x,'rhog(i)',6x,'fwalg(i)',5x,
+     & 'velg(i)',6x,'difvgx(ix)',3x,'sourcg(ix)',3x,'sourca(ix)',
+     & 3x,'enths(i)'/1x,132('='))
+           ix = ixvff
+           i = lpdat(issys)%liv
+           do m = 1,lpdat(issys)%livn
+             if (iand(vctrlx(i),1).ne.0) then
+               write (output,2004) volno(i),dl(i),voidf(i),rhofo(i),
+     &         fwalf(i),velf(i),difvfx(ix),sourcf(ix),sourcm(ix),
+     &         gamas(i),hydzc(i)+hydzc(i+1),voidg(i),rhogo(i),fwalg(i),
+     &         velg(i),difvgx(ix),sourcg(ix),sourca(ix),enths(i)
+ 2004  format (6x,i10.9,1p,9g13.5/16x,9g13.5)
+               if (iand(imap(i+1),16384) .ne. 0) write (output,2015)
+     &         dl(i+1),fwalf(i+1),velf(i+1),difvfx(ix+1),hydzc(i+2) +
+     &         hydzc(i+3),fwalg(i+1),velg(i+1),difvgx(ix+1)
+ 2015  format (16x,1p,g13.5,26x,3g13.5/16x,g13.5,26x,3g13.5)
+               if (iand(imap(i+2),16384) .ne. 0) write (output,2015)
+     &         dl(i+2),fwalf(i+2),velf(i+2),difvfx(ix+2),hydzc(i+4) +
+     &         hydzc(i+5),fwalg(i+2),velg(i+2),difvgx(ix+2)
+             endif
+             ix = ix + scskp
+             i = i + ivskp
+           enddo
+           if (lpdat(issys)%lnoncn .ne. 0) then
+             write (output,2007)
+ 2007  format('0Noncondensibles'/1x,132('=')/7x,'volno(i)',3x,
+     & 'gaman(1)',5x,'gaman(2)',5x,'gaman(3)',5x,'gaman(4)',5x,
+     & 'gaman(5)'/18x,'sourcn(1)',4x,'sourcn(2)',4x,'sourcn(3)',4x,
+     & 'sourcn(4)',4x,'sourcn(5)'/18x,'enthn(1)',5x,'enthn(2)',5x,
+     & 'enthn(3)',5x,'enthn(4)',5x,'enthn(5)'/1x,132('='))
+             ix = ixvff
+             i = lpdat(issys)%liv
+             do m = 1,lpdat(issys)%livn
+               if (lpdat(issys)%lnoncn .lt. 5) then
+                 do ii = lpdat(issys)%lnoncn,4
+                   sourcn(ix+ii) = 0.0
+                 enddo
+               endif
+               if (iand(vctrlx(i),1).ne.0)
+     &         write (output,2008) volno(i),gaman(i),gaman(i+1),
+     &         gaman(i+2),gaman(i+3),gaman(i+4),sourcn(ix),sourcn(ix+1),
+     &         sourcn(ix+2),sourcn(ix+3),sourcn(ix+4),enthn(i),
+     &         enthn(i+1),enthn(i+2),enthn(i+3),enthn(i+4)
+ 2008  format(6x,i10.9,1p,5g13.5/16x,5g13.5/16x,5g13.5)
+               ix = ix + scskp
+               i = i + ivskp
+             enddo
+           endif
+           write (output,2005)
+ 2005  format ('0Junction terms'/1x,132('=')/7x,'junno(i)',
+     & 3x,'fij(i)',7x,'ajun(i)',6x,'arat(i)',6x,'fjunf(i)',5x,
+     & 'formfj(i)',4x,'velfjo(i)',4x,'velgjo(i)',4x,'fifj(ix)',5x,
+     & 'vfdpk(ix)'/18x,'fidxup(ix)',3x,'athrot(i)',4x,
+     & 'arat(i+1)',4x,'fjunr(i)',5x,'formgj(i)',4x,'velfj(i)',5x,
+     & 'velgj(i)',5x,'figj(ix)',5x,'vgdpk(ix)'/1x,132('='))
+           ix = ixjff
+           i = lpdat(issys)%lij
+           do m = 1,lpdat(issys)%lijn
+             if (iand(jcex(i),ishft(1,20)).ne.0)
+     &       write (output,2006) junno(i),fij(i),ajun(i),arat(i),
+     &       fjunf(i),formfj(i),velfjo(i),velgjo(i),fifj(ix),vfdpk(ix),
+     &       fidxup(ix),athrot(i),arat(i+1),fjunr(i),formgj(i),
+     &       velfj(i),velgj(i),figj(ix),vgdpk(ix)
+ 2006  format (6x,i10.9,1p,9g13.5/16x,9g13.5)
+             ix = ix + scskp
+             i = i + ijskp
+           enddo
+         endif
+       endif
+$endif
+       if (help .ne. 0) then
+         i = lpdat(issys)%lij
+         ix = ixjff
+         do m = 1,lpdat(issys)%lijn
+$if def,dbgprnt
+           write (12,"(i10,6es20.12)") junno(i),velfj(i),velgj(i),
+     &     vfdpk(ix),vfdpl(ix),vgdpk(ix),vgdpl(ix)
+$endif
+           i = i + ijskp
+           ix = ix + scskp
+         enddo
+       endif
+$if def,nanscr
+c  Nan out pslope
+       call nanscv(12,12)
+c  Nan out angmm
+       call nanscj(13,13)
+c  Nan out vagrg
+       call nanscv(15,15)
+c  Nan out fjet
+       call nanscj(14,14)
+c  Nan out avrfg
+       call nanscj(22,22)
+c  Nan out fricfj,fricgj
+       call nanscj(40,41)
+c  Nan out ihld1,ihld3,ncrosk,ncrosl,vpgnx,rhofa,rhoga
+c          vpgen,ravrf,ravrg,rfvfj,rgvgj,ltestt,fricfk,fricfl
+c          fricgk,fricgl,convf,convg,convfs,convgs,snk(2),snl(2)
+c          vngen,psmf,psmg,psld,sumf,sumg,sumold,diff,difg,difold
+c          figj,dx
+       call nanscj(42,80)
+c  Nan out voidga,fifj,voidfa
+       call nanscj(86,88)
+c  Nan out fal,gal
+       call nanscv(89,90)
+c  Nan out psumf,psumg,vmgnx,scrxch,difr
+       call nanscj(91,95)
+c  Nan out delv
+       call nanscv(96,96)
+c  Nan out cvmrv,hlossf,hlossg
+       call nanscj(97,99)
+$if def,mmfld
+c  Nan out vamrm,voidma,rhoma,avrm,ravrm,rmvmj,fricmk,fricml,convm,
+c          smk,sml,vmgen,psmm,pmld,summ,difm,metf,metg,metm,metold
+       call nanscj(113,132)
+c  Nan out dpstm
+       call nanscj(134,134)
+c  Nan out avrgms,avrfms,avrgmp,avrfmp,convms
+       call nanscj(136,140)
+$endif
+c  Nan out avrf,avrg
+       call nanscj(153,154)
+$endif
+       return
+       end

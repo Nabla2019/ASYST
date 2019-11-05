@@ -1,0 +1,1348 @@
+*mlist
+       subroutine rvalve
+c  Process valve input data. A valve has the same input as a single
+c  junction in addition to valve data.
+c  Valve types available are: trip valve, check valve, inertial swing
+c  check valve, motor valve, servo valve and relief valve.
+c
+c  Cognizant engineer: dmk
+c
+*in32 init
+*in32end
+       use cmpdat
+       use jundat
+       use voldat
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'cmpdtv.h'
+       include 'comctl.h'
+       include 'cons.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'rcompc.h'
+       include 'statec.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+       integer l3a(15),l3b(10),l3c(10),l3d(7),l3e(18),l3f(11),init(17)
+       integer  l3g(8),l3h(9),l3i(8),l3j(23)
+       integer  lenvlv(6)
+       real  xinit(17)
+       equivalence ( init(1),xinit(1) )
+       character labl1(2)*5,labl2(2)*9,labl3(2)*8,lablx*9,labl4(2)*9,
+     & labl5(2)*9,labl6(2)*4,labl7(2)*5,labl8(2)*8,labl9(2)*12,
+     & vname(2)*5,vtype(6)*6,chwrd*8
+c      integer inrv
+       integer i,icc,ick,ief,ifv,ihf,ii,ij,ik,ilv,init1,ink,irf,isf,
+     & ist,inp10,itbl,iv,k,k1,k2,ks,l,lcntgs,len,maxlen,n3,n4,nc,nc1,
+     & nj1,nj1o,nni,nnn,nnv,nv1,nv1o
+       real aj,cvcon,f1,f2,f3,ff2,ff3,fff,fform,fr,ft,fstm,ft2,
+     & xinit3,xint10,xint11,xint12,xint13,xint14,xint15,xint17,xint2,
+     & xint3,xint4,xint5,xint6,xint7,xint8,xint9,xlbin2,xlbpft,xlbsec,
+     & xnit10,xnit11,xnit12,xnit3,xnit8
+       logical tfail,tfail2,tfail3,ovl,ac
+       external fabend,ftbmov,ftbsft,inp10,inp2,lcntgs,setndf
+c  Data statements.
+       parameter (maxlen=35)
+       data l3a/2*0,  6,9,0,1,0,0,1,1,1,0,1,1,1/
+       data l3b/2*0,0,4,0,1,1,1,1,1/
+       data l3c/2*0,  3,4,0,1,0,1,1,1/
+       data l3d/3*0,  1,0,1,-1 /
+       data l3e/3*0, 12,0,1,0,0,10*1 /
+       data l3f/3*0,  5,0,1,0,0,1,1,0 /
+       data l3g/3*0,  0,0,0,1,1/
+       data l3h/3*0,300,0,0,2,2*1/
+       data l3i/3*0,  2,0,0,0,0/
+       data l3j/2*0, 12,17,0,1,0,16*1/
+       data ft/0.3048/,ft2/9.290304e-2/,xlbsec/0.45359237/
+     &      xlbin2/6.894757e3/,cvcon/7.598055e-7/,xlbpft/14.59390/
+       data  labl1/' vel.',' flow'/,
+     &       labl2/'(ft/sec)','(lbm/sec)'/,
+     &       labl3/'(m/sec)','(kg/sec)'/,
+     &       labl4/'(pa)','(lbf/in2)'/,
+     &       labl5/'(kg-m2)','(lbm-ft2)'/,
+     &       labl6/'(m)','(ft)'/,
+     &       labl7/'(kg)','(lbm)'/,
+     &       labl8/'(n/m)','(lbf/ft)'/,
+     &       labl9/'(n-sec/m)','(lbf-sec/ft)'/
+       data  vtype /'chkvlv','trpvlv','inrvlv','mtrvlv','srvvlv',
+     &              'rlfvlv'/
+       data lenvlv/17,19,27,26,26,35/
+       data  vname /'motor','servo'/
+c
+c  Get component number.
+       ovl = .false.
+       i = ncmps(filndx(3)) + filndx(3)
+       nc = cmpnum(i)
+c  Extend component block.
+       filsiz(3) =  filsiz(3) + maxlen
+       l3a(1) = filsiz(3)
+       if (.not.cmpsrc) l3a(1) = l3a(1) + maxlen
+       if (lcntgs(filid(3),1) .ge. l3a(1)) go to 10
+   15  write (output,2001) nc
+ 2001  format ('0******** Insufficient storage to process component',i4,
+     & '.')
+   12  l3d(1) = nc*10000
+       l3d(2) = l3d(1) + 9999
+       filsiz(1) = inp10(fa(filndx(1)),l3d(1),l3d(2))
+       call ftbsft (2.0,filsiz(1),1,filndx(1))
+  204  filsiz(3) = filsiz(3) - maxlen + 4
+       cmplen(i) = 4
+       cmptyp(i) = 0
+       call ftbsft (filid(3),filsiz(3),1,filndx(3))
+       ncmps(filndx(3)) = ncmps(filndx(3)) + 4
+       fail = .true.
+       go to 1000
+   10  call ftbsft (filid(3),l3a(1),1,filndx(3))
+       i = ncmps(filndx(3)) + filndx(3)
+       nvc(i) = 0
+       njc(i) = 1
+       cmpopt(i) = 0
+c  Check if replacement or flag modification is possible.
+       ii = filndx(3)
+       if (cmpsrc) go to 401
+       nnv = ncomp - 1
+       if (nnv .eq. 0) go to 407
+       nv1 = 0
+       nj1 = 0
+         tfail = .false.
+       do k = 1,nnv
+         nv1o = nvc(ii)
+         nj1o = njc(ii)
+         nc1 = cmplen(ii)
+         if (cmpnum(ii) - nc) 403,404,405
+  405  tfail = .true.
+  403    nv1 = nv1 + nv1o
+         nj1 = nj1 + nj1o
+         ii = ii + nc1
+       enddo
+       if ( tfail )  go to  410
+  407  cmpsrc = .true.
+       go to 401
+  404  ncomp = nnv
+       if (cmptyp(ii) .ne. cmptyp(i)) go to 406
+       ovl = cmpflg
+       go to 14
+  410  nv1o = 0
+       nj1o = 0
+       nc1 = 0
+  406  if (.not.cmpflg) go to 14
+  409  write (output,2035) nc
+ 2035  format ('0******** Illegal use of component flag change option in
+     & component',i4,'.')
+       write (output,2007) nc
+ 2007  format ('0******** Data for component',i4,' cannot be processed.'
+     +)
+       go to 12
+c  Extend volume and junction blocks for this component.
+  401  if (cmpflg) go to 409
+   14  if (cmpsrc) nv1o = 0
+       k2 = -nv1o
+       k = filsiz(4) + k2*ivskp
+       k1 = max(filsiz(4),k)
+       if (k1 .gt. lcntgs(filid(4),1)) go to 15
+       call ftbsft (filid(4),k1,2,filndx(4))
+       if (cmpsrc) nv1 = nvols(filndx(4))
+       iv = nv1*ivskp + filndx(4)
+       k1 = (nvols(filndx(4)) - nv1 - nv1o)*ivskp
+       if (k1 .ne. 0) then
+         n3 = iv + nv1o*ivskp
+         n4 = iv
+         ink = n3 - n4
+         if (ink .ne. 0) then
+           if (ink .lt. 0) k1 = -k1
+           call ftbmov (fa(n3+1),fa(n4+1),k1)
+         endif
+       endif
+  411  nvols(filndx(4)) = nvols(filndx(4)) + k2
+       if (associated(cmphld(nc)%volp)) deallocate (cmphld(nc)%volp)
+       if (associated(cmphld(nc)%junp)) deallocate (cmphld(nc)%junp)
+       allocate (cmphld(nc)%junp(1))
+   16  filsiz(4) = k
+c  Get junction block.
+       if (cmpsrc) nj1o = 0
+       k2 = 1 - nj1o
+       k = filsiz(5) + k2*ijskp
+       k1 = max(filsiz(5),k)
+       if (k1 .gt. lcntgs(filid(5),1)) go to 15
+       call ftbsft (filid(5),k1,2,filndx(5))
+       if (cmpsrc) nj1 = njuns(filndx(5))
+       ij = nj1*ijskp + filndx(5)
+       k1 = (njuns(filndx(5)) - nj1 - nj1o)*ijskp
+       if (k1 .eq. 0) go to 421
+       n3 = ij + nj1o*ijskp
+       n4 = ij + ijskp
+       if (n3 - n4) 422,421,423
+  422  k1 = -k1
+  423  call ftbmov (fa(n3+1),fa(n4+1),k1)
+  421  njuns(filndx(5)) = njuns(filndx(5)) + k2
+       filsiz(5) = k
+       if (.not.ovl) then
+         call setndf (fa(ij+1),ijskp)
+         jc(ij) = 128
+         jcex(ij) = 0
+         ijflg(ij) = 0
+         athrot(ij) = 1.0
+       endif
+       call ftbsft (filid(5),filsiz(5),2,filndx(5))
+       call ftbsft (filid(4),filsiz(4),2,filndx(4))
+       iv = nv1*ivskp + filndx(4)
+       ij = nj1*ijskp + filndx(5)
+c  Write output header for component.
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2101) nc, cmpnam(i),cmpalf(cmptyp(i))
+ 2101  format ('0====================================================='
+     & '==================',/,
+     & 22x,'Input data for component',i4,',',2a9,', having
+     & 0 volumes and 1 junction')
+c  Process junction.
+       fr = 1.0
+       if (.not.uniti) fr = ft2
+       l3a(1) = nc*10000 + 101
+       l3a(2) = -l3a(1) - 8
+       l3a(6) = 1
+       call inp2 (fa(filndx(1)),init,l3a)
+       if (l3a(6) .gt. 0) go to 22
+       if (ovl) go to 11
+       write (output,2002)
+ 2002  format ('0******** Junction geometry set to default conditions fo
+     &r continued checking.')
+       ij1(ij) = 0
+       ij2(ij) = 0
+       ajun(ij) = 0.0
+       aj  =  ajun(ij)
+       fjunf(ij) = 0.0
+       fjunr(ij) = 0.0
+   11  fail = .true.
+       go to 30
+   22  if (ovl) go to 28
+       tfail = .false.
+       if (init(1) .le. 0) then
+         init(1) = 0
+         tfail = .true.
+       endif
+       if (init(2) .le. 0) then
+         init(2) = 0
+         tfail = .true.
+       endif
+       if (tfail) then
+         write (output,2006)
+ 2006  format ('0******** Volume pointers less than or equal to 0, set t
+     &o 0 for further checking.')
+         fail = .true.
+       endif
+       ij1(ij) = init(1)
+       ij2(ij) = init(2)
+       if (xinit(3) .lt. 0.0) then
+         write (output,2003)
+ 2003  format ('0******** Junction area less than 0.0, set to 0.0 for co
+     &ntinued checking.')
+         xinit(3) = 0.0
+         fail = .true.
+       endif
+       ajun(ij) = xinit(3)*fr
+       aj =  ajun(ij)
+       tfail = .false.
+       if (xinit(4) .lt. 0.0) then
+         xinit(4) = 0.0
+         tfail = .true.
+       endif
+       if (xinit(5) .lt. 0.0) then
+         xinit(5) = 0.0
+         tfail = .true.
+       endif
+       fjunf(ij) = xinit(4)
+       fjunr(ij) = xinit(5)
+       if (tfail) then
+         write (output,2004)
+ 2004  format ('0******** Form loss coefficients less than 0.0, set to 0
+     &.0 for continued checking.')
+         fail = .true.
+       endif
+   28  tfail = .false.
+       if (init(6) .lt. 0) then
+         init(6) = -init(6)
+         tfail = .true.
+       endif
+       ink = 0
+       ief = init(6)/1000000
+       init(6) = init(6) - 1000000*ief
+       icc = init(6)/100000
+       init(6) = init(6) - 100000*icc
+       ist = init(6)/10000
+       init(6) = init(6) - 10000*ist
+       ick = init(6)/1000
+       init(6) = init(6) - 1000*ick
+       irf = init(6)/100
+       init(6) = init(6) - 100*irf
+       ihf = init(6)/10
+       isf = init(6) - ihf*10
+       if (ief .gt. 1) then
+         ief = 0
+         tfail = .true.
+       endif
+       if (icc .gt. 1) then
+         icc = 0
+         tfail = .true.
+       endif
+       if (ist .gt. 3) then
+         ist = 0
+         tfail = .true.
+       endif
+       if (ick .ge. 2) then
+         ick = 0
+         tfail = .true.
+       endif
+       if (irf .ge. 3) then
+         irf = 0
+         tfail = .true.
+       endif
+       if( irf .eq. 2 ) then
+         irf = 1
+         ink = 1
+       endif
+       if (ihf .gt. 2) then
+         ihf = 0
+         tfail = .true.
+       endif
+       if (ihf .eq. 2) ihf = 1
+       if (isf .gt. 3) then
+         isf = 0
+         tfail = .true.
+       endif
+       jc(ij) = ior(ior(ior(ior(ior(jc(ij),ishft(irf,8)),
+     & ishft(ihf,9)),ishft(isf,12)),ishft(ick,4)),ishft(ist,17))
+       jcex(ij) = ior(ior(jcex(ij),ishft(icc,2)),ishft(ief,15))
+       jcex(ij) = ior(jcex(ij),ishft(ink,29))
+       if (tfail) then
+         write (output,2031)
+ 2031  format ('0******** Junction controls incorrect, set to zero for c
+     &ontinued checking.')
+         fail = .true.
+       endif
+c  Discharge coefficients.
+       if (chngno(53)) then
+c  Set Discharge Coefficient & Non-Equilibrium Parameter
+c  for the Henry-Fauske Critical Flow Option.
+c  Set default value for discharge coeff. if not read in:
+         if (l3a(6) .lt. 7) xinit(7) = 1.0
+c  Check range of input value for discharge coeff.
+         if(xinit(7).gt.2.0 .or. xinit(7).le.0.0) then
+           write(output,2032)
+           fail = .true.
+           xinit(7) = 1.0
+         endif
+c  Store Discharge Coeff. in JDISSC.
+         jdissc(ij) = xinit(7)
+c  Set default value for non-equilibrium parameter:
+         if (l3a(6) .lt. 8) xinit(8) = 0.14
+         if (xinit(8).lt.0.01) then
+           write(output,2232)
+ 2232  format ('0****** Henry-Fauske Non-Equilibrium Factor',
+     & ' lt 0.01, the frozen option will be used.')
+           xinit(8) = 0.0
+         elseif (xinit(8) .gt. 1000.) then
+           write (output,2332)
+ 2332  format ('0****** Henry-Fauske Non-Equilibrium Factor',
+     & ' gt 1000, the equilibrium option will be used.')
+           xinit(8) = 100.
+         endif
+c  Store Non-Equilibrium Parameter in JDISTP.
+         jdistp(ij) = xinit(8)
+c  The super-heated vapor discharge coeff is not used.
+         if (l3a(6) .lt. 9) xinit(9) = 0.0
+         jdissh(ij) = xinit(9)
+       else
+c  Set Discharge Coefficients for Standard Critical Flow Model.
+         if (l3a(6) .lt. 7) xinit(7) = 1.0
+         if(xinit(7).gt.2.0 .or. xinit(7).le.0.0) then
+           write(output,2032)
+ 2032  format ('0******** Improper discharge coefficient-- gt 2.0 or le
+     &0.0 -- set to 1.0 for continued checking.')
+           fail = .true.
+           xinit(7) = 1.0
+         endif
+         jdissc(ij) = xinit(7)
+         if (l3a(6) .lt. 8) xinit(8) = 1.0
+         if(xinit(8).gt.2.0 .or. xinit(8).le.0.0) then
+           write(output,2032)
+           fail = .true.
+           xinit(8) = 1.0
+         endif
+         jdistp(ij) = xinit(8)
+         if (l3a(6) .lt. 9) xinit(9) = 1.0
+         if(xinit(9).gt.2.0 .or. xinit(9).le.0.0) then
+           write(output,2032)
+           fail = .true.
+           xinit(9) = 1.0
+         endif
+         jdissh(ij) = xinit(9)
+       endif
+c  Process junction input data card.
+   30  if (ovl) go to 132
+       fr = 1.0
+       if (.not. uniti) fr = ft
+       l3b(1) = l3a(1) + 9
+       l3b(6) = 1
+       call inp2 (fa(filndx(1)),init,l3b)
+       if (l3b(6) .ge. 0) go to 550
+       write (output,2120)
+ 2120  format ('0******** Junction input data set to default for continu
+     &ed checking.')
+       fail = .true.
+       go to 52
+  550  if (l3b(6) .ne. 0) go to 53
+   52  diamj(ij) = 2.0*sqrt(ajun(ij)/pi)
+       betacc(ij) = 0.0
+       constc(ij) = 1.0
+       constm(ij) = 1.0
+       go to 59
+   53  if (l3b(6) .ne. 4) then
+         write (output,2122)
+ 2122  format ('0******** Junction input data card contains less than 4
+     &words, input set to default.')
+         fail = .true.
+         go to 52
+       endif
+       if (xinit(1) .lt. 0.0) then
+         write (output,2123)
+ 2123  format ('0******** Junction diameter less then 0.0, set to 0.0 fo
+     &r continued checking.')
+         xinit(1) = 0.0
+         fail = .true.
+       endif
+       diamj(ij) = xinit(1)*fr
+       if (xinit(2).lt.0.0 .or. xinit(2).gt.1.0) then
+         write (output,2124)
+ 2124  format ('0******** Beta factor less than 0.0 or greater than 1.0,
+     & set to 0.0 for continued checking.')
+         xinit(2) = 0.0
+         fail = .true.
+       endif
+       betacc(ij) = xinit(2)
+       if (xinit(3) .le. 0.0) then
+         write (output,2125)
+ 2125  format ('0******** Gas intercept less than or equal to 0.0, set t
+     &o 0.0 for continued checking.')
+         xinit(3) = 0.0
+         fail = .true.
+       endif
+       constc(ij) = xinit(3)
+       if (xinit(4) .le. 0.0) then
+         write (output,2126)
+ 2126  format ('0******** Slope less than or equal to 0.0, set to 0.0 fo
+     &r continued checking.')
+         xinit(4) = 0.0
+         fail = .true.
+       endif
+       constm(ij) = xinit(4)
+c  Process junction form loss input data card.
+   59  if (ovl) go to 132
+       l3b(1) = l3a(1) + 10
+       l3b(6) = 1
+       call inp2 (fa(filndx(1)),init,l3b)
+       if (l3b(6) .ge. 0) go to 1550
+       write (output,3120)
+ 3120  format ('0******** Junction input form loss data set to default f
+     &or continued checking.')
+       fail = .true.
+       go to 52
+ 1550  if (l3b(6) .ne. 0) go to 153
+       fjunfb(ij) = 0.0
+       fjunfc(ij) = 0.0
+       fjunrb(ij) = 0.0
+       fjunrc(ij) = 0.0
+       go to 159
+  153  if (l3b(6) .ne. 4) then
+         write (output,3122)
+ 3122  format ('0******** Junction input form loss data card contains le
+     &ss than 4 words, input set to default.')
+         fail = .true.
+         go to 152
+       endif
+       if (xinit(1) .lt. 0.0) then
+         write (output,3123)
+ 3123  format ('0******** Forward form loss coefficient less than 0.0, s
+     &et to 0.0 for continued checking.')
+         xinit(1) = 0.0
+         fail = .true.
+       endif
+       fjunfb(ij) = xinit(1)
+       if (xinit(2).lt.0.0) then
+         write (output,3124)
+ 3124  format ('0******** Forward form loss exponent less than 0.0, se
+     &t to 0.0 for continued checking.')
+         xinit(2) = 0.0
+         fail = .true.
+       endif
+       fjunfc(ij) = xinit(2)
+       if (xinit(3) .lt. 0.0) then
+         write (output,3125)
+ 3125  format ('0******** Reverse form loss coefficient less than 0.0, s
+     &et to 0.0 for continued checking.')
+         xinit(3) = 0.0
+         fail = .true.
+       endif
+       fjunrb(ij) = xinit(3)
+       if (xinit(4) .lt. 0.0) then
+         write (output,3126)
+ 3126  format ('0******** Reverse form loss exponent less than 0.0, se
+     &t to 0.0 for continued checking.')
+         xinit(4) = 0.0
+         fail = .true.
+       endif
+       fjunrc(ij) = xinit(4)
+c  Process card to aid hydrodynamic noding diagram.
+  159  l3b(1) = l3b(1) + 2
+       l3b(6) = 1
+       call inp2 (fa(filndx(1)),xinit,l3b)
+       tfail = .true.
+       if (l3b(6) .lt. 0) then
+         fail = .true.
+       elseif (l3b(6) .gt. 0) then
+         if (l3b(6) .eq. 4) then
+           tfail = .false.
+         else
+           fail = .true.
+           write (output,"('0******** Less than four quantities were ent
+     &ered on Card',i8,', all quantities set to zero.')") l3b(1)
+         endif
+       endif
+       if (tfail) then
+         guinval(ij:ij+1) = 0.0
+         guinang(ij:ij+1) = 0.0
+       else
+         guinval(ij) = xinit(1)
+         guinval(ij+1) = xinit(3)
+         guinang(ij) = xinit(2)
+         guinang(ij+1) = xinit(4)
+         if (.not.uniti) guinval(ij:ij+1) = guinval(ij:ij+1)*ft
+         tfail = any(guinval(ij:ij+1).lt.0.0) .or.
+     &   any(abs(guinang(ij:ij+1)).gt.360.0)
+         if (tfail) then
+           fail = .true.
+           write (output,"('0******** One or more quantities on Card',
+     & i8,' are negative.')") l3b(1)
+         endif
+       endif
+c  Process junction initial conditions.
+       l3c(1) = l3a(1) + 100
+       l3c(6) = 1
+       call inp2 (fa(filndx(1)),init,l3c)
+       if (l3c(6) .le. 0) then
+         write (output,2005)
+ 2005  format ('0******** Junction initial velocities set to 0.0 for con
+     &tinued checking.')
+         init(1) = 0
+         velfj(ij) = 0.0
+         velgj(ij) = 0.0
+$if def,mmfld,1
+         velmj(ij) = 0.0
+         fail = .true.
+         go to 32
+       endif
+$if def,mmfld,1
+       if (l3c(6) .ne. 4) xinit(4) = 0.0
+       if (init(1).ne.0 .and. init(1).ne.1) then
+         init(1) = 0
+         write (output,2027)
+ 2027  format ('0******** Control for junction initial conditions incorr
+     &ect, set to 0 for continued checking.')
+         fail = .true.
+       endif
+       fr = 1.0
+       if (init(1) .eq. 0) then
+         if (.not.uniti) fr = ft
+         velfj(ij) = xinit(2)*fr
+         velgj(ij) = xinit(3)*fr
+$if def,mmfld,1
+         velmj(ij) = xinit(4)*fr
+       else
+         cmpopt(i) = 1
+         if (.not.uniti) fr = xlbsec
+         velfj(ij) = xinit(2)*fr
+         velgj(ij) = xinit(3)*fr
+$if def,mmfld,1
+         velmj(ij) = xinit(4)*fr
+       endif
+c  Read valve data.
+   32  init1     =  init(1)
+       l3d(1)    =  l3c(1) + 99
+       l3d(6)    =  1
+       call inp2 (fa(filndx(1)),init,l3d)
+       if ( l3d(6) .eq. 0 )  go to  137
+       write (chwrd,'(a8)') xinit(1)
+       do ik = 1, 6
+         if (vtype(ik) .eq. chwrd) go to 140
+       enddo
+c  Valve type not present, set to pressure check valve and continue
+c  processing.
+  137  write(output,3002) l3d(1)
+ 3002  format(' ******** Valve type not present on card',i10,' assume pr
+     &essure dependent check valve.')
+       fail = .true.
+       vlvnm(i)  = 1
+       pcv(i)    =  0.0
+       aleak(i)  =  0.0
+       ik        =  1
+       go to 132
+  140  vlvnm(i) = ik
+       l3e(1)    =  l3d(1) + 1
+       l3e(2)    = -l3e(1) - 10
+       l3e(6)    =  1
+c ----------- chkvlv, trpvlv, inrvlv, mtrvlv, srvvlv, rlfvlv
+       go to (   145,    150,    155,    165,    175,    260), ik
+       call fabend
+c  Check valve.
+  145  call inp2 (fa(filndx(1)),init,l3e)
+       if ( l3e(6) .eq. 4 )  go to  146
+c  Not enough data for check valve, assume pressure dependent and
+c  continue processing.
+       write(output,3003) vtype(1), l3e(1), vtype(1)
+ 3003  format(' ******** Input data for ',a6,' on card',i10
+     &             ,' incorrect, assume zero data for ',a6)
+       fail      = .true.
+       vlvnm(i) = 1
+       pcv(i)    =  0.0
+       aleak(i)  =  0.0
+       go to 132
+  146  vlvnm(i) = 1
+       if ( init(1) .eq. 1 )  go to  148
+       cmpopt(i) = ior(cmpopt(i),4)
+       if(init(1) .lt. 0) cmpopt(i) = ior(cmpopt(i),8)
+  148  if(init(2) .gt. 0) cmpopt(i) = ior(cmpopt(i),16)
+       pcv(i)    =  xinit(3)
+       if ( .not. uniti )  pcv(i) = xinit(3)*xlbin2
+       aleak(i)  =  xinit(4)
+       if ( aleak(i) .eq. 0.0 )  go to  132
+       if (iand(jc(ij),256) .ne. 0) go to 132
+       tfail     = .true.
+       write(output,3016) l3c(1)
+ 3016  format('0******** Card',i10,' not flagged for abrupt area-change'
+     +)
+       go to 132
+c  Trip valve.
+  150  call inp2 (fa(filndx(1)),init,l3e)
+       if ( l3e(6) .eq. 1 )  go to  152
+c  Not enough data for trip valve, assume 000 trip and continue
+c  processing.
+       write(output,3003) vtype(2), l3e(1), vtype(2)
+       fail      = .true.
+       vlvnm(i) = 2
+       vlvtrp(i) =  0
+       vlvtrp(i+1) =  0
+       go to 132
+  152  vlvnm(i) = 2
+       vlvtrp(i) = init(1)
+       tfail = (init(1) .le. 0) .or. (init(1) .gt. 2000)
+       if ( tfail )  write(output,3004)  l3e(1), init(1)
+ 3004  format(' ******** Card',i10,' has invalid trip number',i10)
+       fail = fail .or. tfail
+       go to 132
+c  Inertial valve.
+  155  call inp2 (fa(filndx(1)),init,l3e)
+       if ( l3e(6) .eq. 12 )  go to  156
+c  Not enough data for inertial valve, assume zero initial conditions
+c  and continue processing.
+       write(output,3003) init(1), l3d(1), vtype(3)
+       fail      = .true.
+       vlvnm(i) = 3
+       pcv(i)    =  0.0
+       aleak(i)  =  0.0
+       theta(i)  =  0.0
+       thetao(i) =  0.0
+       mintht(i) =  0.0
+       maxtht(i) =  0.0
+       moment(i) =  0.0
+       omega (i) =  0.0
+       omegao(i) =  0.0
+       lngvlv(i) =  0.0
+       rdsvlv(i) =  0.0
+       vlfmas(i) =  0.0
+       go to 132
+  156  tfail     = .false.
+       if (iand(jc(ij),256) .ne. 0) go to 101
+       tfail     = .true.
+       write(output,3016) l3c(1)
+  101  vlvnm(i) = 3
+       fail = fail .or. tfail
+       tfail = .false.
+       if ((init(1) .gt. -1) .and. (init(1) .lt. 3)) go to 102
+       tfail = .true.
+       go to 103
+  102  continue
+       if (init(1) .eq. 1) cmpopt(i) = ior(cmpopt(i),8)
+       if (init(1) .eq. 2) cmpopt(i) = ior(cmpopt(i),64)
+  103  if ((init(2) .eq. 0) .or. (init(2) .eq. 1)) go to 104
+       tfail = .true.
+       go to 105
+  104  cmpopt(i) = ior(cmpopt(i),16*init(2))
+  105  if (tfail) write (output, 3014) l3c(1), init(1), init(2)
+ 3014  format('0******** Card',i10,' incorrect inertial valve latch '
+     & 'W(1) allowed to be 0, 1, and 2. W(1) input = ',i5,/,
+     & 10x,' or initial condition flag (W(2) must be input as 0 or 1)'
+     & '= ',i5)
+       fail = fail .or. tfail
+       tfail = .false.
+       pcv(i)    =  xinit(3)
+       aleak(i)  =  xinit(4)
+       theta(i)  =  xinit(5)
+       thetao(i) = theta(i)
+       mintht(i) =  xinit(6)
+       maxtht(i) =  xinit(7)
+       moment(i) =  xinit(8)
+       omega(i)  =  xinit(9)
+       omegao(i) =  omega(i)
+       lngvlv(i) =  xinit(10)
+       rdsvlv(i) =  xinit(11)
+       vlfmas(i) =  xinit(12)
+       if ( uniti )  go to 160
+       pcv(i)    =  xinit(3)*xlbin2
+       moment(i) =  xinit(8)*xlbsec*ft2
+       lngvlv(i) =  xinit(10)*ft
+       rdsvlv(i) =  xinit(11)*ft
+       vlfmas(i) =  xinit(12)*xlbsec
+  160  fail = fail .or. tfail
+       tfail = .false.
+       if ((mintht(i).lt.0.0).or.(theta(i).lt.mintht(i))) tfail=.true.
+       if ((maxtht(i) .le. mintht(i)) .or.
+     &     (theta(i) .gt. maxtht(i))) tfail = .true.
+       if (tfail) write (output, 3001) l3e(1), mintht(i), theta(i),
+     &                                 maxtht(i)
+ 3001 format(14h ******** Card,i10,43h inconsistant inertial valve flapp
+     &er angles/24x,15hminimum angle =,1p,g13.5,16h initial angle =,
+     &g13.5,16h maximum angle =,g13.5)
+       fail = fail .or. tfail
+       tfail = .false.
+c  If valve is set to be initially open it must be between the limits.
+       if ((theta(i) .lt. mintht(i)) .and.
+     & iand(cmpopt(i),16) .eq. 0) tfail = .true.
+       if (theta(i).gt.mintht(i).and.
+     & iand(cmpopt(i),16).ne.0) tfail =.true.
+c      if (iand(cmpopt(i),16) .eq. 0) then
+c        if ((theta(i) .gt. maxtht(i)) .or.
+c    &       (theta(i) .le. mintht(i)))
+c    &   tfail = .true.
+c      endif
+c      if (iand(cmpopt(i),16) .eq. 1) then
+c        if (theta(i) .gt. mintht(i)) tfail = .true.
+c      endif
+       if ( vlfmas(i) .le. 0.0  )  tfail = .true.
+       if (tfail) write (output, 3005) l3e(1),init(2),theta(i),mintht(i)
+ 3005 format(14h ******** Card,i10,'   inconsistant inertial valve i. c.
+     & flags and initial angle',/24x,' Initial condition flag =',i2,
+     & ' initial angle =',g13.5,' minimum angle =',g13.5)
+       fail = fail .or. tfail
+       tfail = .false.
+c  Check for initial full open or close to set bit number 3.
+       if (theta(i) .ge. maxtht(i) .or. theta(i) .le. mintht(i))
+     &   cmpopt(i) = ior(cmpopt(i),4)
+       if ((aleak(i)  .lt. 0.0) .or. (moment(i) .le. 0.0) .or.
+     &     (lngvlv(i) .le. 0.0) .or. (rdsvlv(i) .le. 0.0) .or.
+     &     (vlfmas(i) .le. 0.0)) tfail = .true.
+       if (tfail) write (output, 3017) l3e(1), xinit(4), xinit(8),
+     & xinit(10), xinit(11), xinit(12)
+ 3017  format ('0******** Card',i10,' has incorrect inertial valve terms
+     &, aleak can be zero but not the others '/24x,'leak fraction
+     &=',1p,g13.5/24x,'flapper moment of inertia =',g13.5/24x,'moment le
+     &ngth =',g13.5/24x,'flapper radius =',g13.5/24x,'flapper mass=',
+     & g13.5)
+       fail = fail .or. tfail
+       tfail = .false.
+       go to 132
+c  Motor valve.
+  165  l3f(1)    =  l3e(1)
+       l3f(2)    =  l3e(2)
+       l3f(6)    =  l3e(6)
+       vlvcon(i) =  0.0
+       ncvtbl(i) =  0
+       ncvtbl(i+1) = 0
+       ncvtbl(i+2) = 0
+       call inp2 (fa(filndx(1)),init,l3f)
+       if ( l3f(6) .eq. 4 .or. l3f(6) .eq. 5 )  go to  172
+c  Not enough data for motor valve, assume 000 trips and no table
+c  and continue processing.
+       write(output,3003) vtype(4), l3f(1), vtype(4)
+       fail      = .true.
+       vlvnm(i) = 4
+       clstrp(i) =  0
+       clstrp(i+1) = 0
+       opntrp(i) =  0
+       opntrp(i+1) =  0
+       tblnum(i) =  0
+       tblnum(i+1) = 0
+       vlvslp(i) =  0.0
+       vlstm(i)   =  0.0
+       vlstmo(i)  =  0.0
+       atlast(i) =  0.0
+       ac = iand(jc(ij),256) .ne. 0
+       go to 132
+  172  vlvnm(i) = 4
+       tfail     = .false.
+       tfail2    = .false.
+       tfail3    = .false.
+  129  opntrp(i) = init(1)
+       clstrp(i) = init(2)
+       tfail2 = init(1).le.0 .or. init(1).gt.2000
+       tfail3 = init(2).le.0 .or. init(2).gt.2000
+       if ( tfail2 )  write(output,3006)  l3f(1), init(1)
+ 3006  format(' ******** Card',i10,' has invalid open trip number',i10)
+       if ( tfail3 )  write(output,3015)  l3f(1), init(2)
+ 3015  format(' ******** Card',i10,' has invalid close trip number',i10)
+       tfail     =  tfail2 .or. tfail3
+       if ( init(1) .ne. init(2) )  go to  173
+       tfail     = .true.
+       write(output,3007) l3f(1),init(1),init(2)
+ 3007  format(' ******** Card',i10,' has equal trip numbers',i10,' and',
+     +i10)
+  173  if ( l3f(6) .eq. 4 )  init(5) = 0
+       tblnum(i) =  init(5)
+       vlvslp(i) =  xinit(3)
+       vlstm(i)  =  xinit(4)
+       if (xinit(4).lt.0.0 .or. xinit(4).gt.1.0) then
+         vlstm(i) = 0.0
+         tfail = .true.
+         write (output,3042) l3f(1),xinit(4)
+ 3042  format ('0******** Card',i10,' has invalid initial position numbe
+     &r',1p,g13.5)
+       endif
+       vlstmo(i) = vlstm(i)
+       if (tblnum(i).lt.0 .or. tblnum(i).gt.999) then
+         tblnum(i) =  0
+         tblnum(i+1) = 0
+         tfail = .true.
+         write (output,3008) l3f(1),init(5)
+ 3008  format ('0******** Card',i10,' has invalid table number',i10)
+       endif
+       if (vlvslp(i) .le. 0.0) then
+         tfail = .true.
+         write (output,3009) l3f(1),xinit(3)
+ 3009  format ('0******** Card',i10,' has negative or zero slope',1p,
+     & e13.5)
+       endif
+       fail = fail .or. tfail
+       ac = iand(jc(ij),256) .ne. 0
+       go to  132
+c  Servo valve.
+  175  vlvnm(i) = 5
+       tfail  =  .false.
+       l3i(1) =  l3e(1)
+       l3i(2) =  l3e(2)
+       l3i(6) =  l3e(6)
+       vlvcon(i) =  0.0
+       ncvtbl(i) =  0
+       ncvtbl(i+1) = 0
+       ncvtbl(i+2) = 0
+       clstrp(i) = 0
+       clstrp(i+1) = 0
+       vlvslp(i) = 0.0
+       call inp2 (fa(filndx(1)),init,l3i)
+       if ( l3i(6) .eq. 1 .or. l3i(6) .eq. 2 )  go to  176
+c  Incorrect input data.
+       write(output,3003) vtype(5),l3i(1),vtype(5)
+       fail =  .true.
+       opntrp(i) =  0
+       opntrp(i+1) =  0
+       tblnum(i) =  0
+       tblnum(i+1) = 0
+       vlstm(i) =  0.0
+       vlstmo(i) =  0.0
+       atlast(i) =  0.0
+       ac = iand(jc(ij),256) .ne. 0
+       go to  132
+  176  opntrp(i) =  init(1)
+       tfail = (init(1) .lt. 1) .or. (init(1) .gt. 9999)
+       if ( .not. tfail )  go to  177
+       fail =  .true.
+       opntrp(i) =  0
+       opntrp(i+1) =  0
+       write(output,3043) l3i(1),init(1)
+ 3043  format('0******** Card',i10,' has invalid control reference'
+     &     ,i10,'.')
+  177  if ( l3i(6) .eq. 1 )  init(2) =  0
+       tblnum(i) =  init(2)
+       tfail =  (init(2) .lt. 0) .or. (init(2) .gt. 999)
+       if ( .not. tfail )  go to  181
+       fail =  .true.
+       tblnum(i) =  0
+       tblnum(i+1) = 0
+       write(output,3008) l3i(1),init(2)
+  181  ac = iand(jc(ij),256) .ne. 0
+       go to 132
+c  Relief valve.
+  260  vlvnm(i) = 6
+       xinit(1:17) = 0.0
+       l3j(1)    = l3e(1)
+       l3j(2)    = l3e(2)
+       l3j(6)    = l3e(6)
+       call inp2 (fa(filndx(1)), init, l3j)
+c ---- xinit(1)    (2)   (3)   (4)   (5)    (6)     (7)     (8)      (9)
+c        vlvinr dinlet dseat dpist xlift dring1  hring1  dring2   hring2
+c ---- xinit(10)   (11)  (12)   (13)  (14)     (15) (16)  (17)
+c       dbellows sprcon psetp vlfmas bdamp pbellows vstm velvl
+       if ((l3j(6) .ge. 15) .and. (l3j(6) .le. 18)) go to 261
+c  Incorrect data entry.
+       fail = .true.
+       write(output, 3003)vtype(6), l3j(1), vtype(6)
+  261  tfail = .false.
+       tfail = iand(jc(ij),256) .eq. 0
+       if (tfail) write(output, 3016) l3j(1)
+       fail  = fail .or. tfail
+       tfail = .false.
+       if (init(1) .gt. 0) cmpopt(i) = ior(cmpopt(i),16)
+       adisk(i)  = xinit(2)
+       dseat(i)  = xinit(3)
+       adann(i)  = xinit(4)
+       vlstmx(i) = xinit(5)
+       drings(i) = xinit(6)
+       hring1(i) = xinit(7)
+       arings(i) = xinit(8)
+       hring2(i) = xinit(9)
+       abelin(i) = xinit(10)
+       sprcon(i) = xinit(11)
+       vlsetp(i) = xinit(12)
+       vlfmas(i) = xinit(13)
+       bdamp(i)  = xinit(14)
+       pbellw(i) = xinit(15)
+       vlstm(i)  = xinit(16)
+       vlstmo(i) = vlstm(i)
+       velvl(i)  = xinit(17)
+       velvlo(i) = velvl(i)
+       if (uniti) go to 263
+       pbellw(i) = pbellw(i)*xlbin2
+       vlfmas(i) = vlfmas(i)*xlbsec
+       sprcon(i) = sprcon(i)*xlbpft
+       adann(i)  = adann(i)*ft
+       adisk(i)  = adisk(i)*ft
+       abelin(i) = abelin(i)*ft
+       arings(i) = arings(i)*ft
+       velvl(i)  = velvl(i)*ft
+       drings(i) = drings(i)*ft
+       dseat(i)  = dseat(i)*ft
+       vlsetp(i) = vlsetp(i)*xlbin2
+       vlstmx(i) = vlstmx(i)*ft
+       hring1(i) = hring1(i)*ft
+       hring2(i) = hring2(i)*ft
+       bdamp(i) = bdamp(i)*xlbpft
+c  Check valve lift.
+  263  tfail = vlstmx(i) .le. 0.0
+       fail = fail .or. tfail
+       if (tfail) write(output, 3050) l3j(1)
+       if (tfail) vlstmx(i) = 1.0
+c  Check for negative terms.
+       tfail = (vlsetp(i) .lt. 0.0) .or. (vlfmas(i) .lt. 0.0) .or.
+     &         (bdamp(i)  .lt. 0.0) .or. (sprcon(i) .lt. 0.0) .or.
+     &         (vlstm(i)  .lt. 0.0) .or. (adisk(i)  .lt. 0.0)
+       fail  = fail .or. tfail
+       if (.not.tfail) go to 267
+       write(output, 3051) l3j(1)
+       adisk(i)  = max(0.0, adisk(i))
+       vlsetp(i) = max(0.0, vlsetp(i))
+       vlfmas(i) = max(0.0, vlfmas(i))
+       bdamp(i)  = max(0.0, bdamp(i))
+       sprcon(i) = max(0.0, sprcon(i))
+       vlstm(i)  = max(0.0, vlstm(i))
+       vlstmo(i) = vlstm(i)
+c  Check initial valve stem position.
+  267  tfail = (vlstm(i)  .gt. 1.0)
+       fail  = fail .or. tfail
+       if (tfail) write(output, 3052) l3j(1)
+       vlstm(i) = min(1.0, vlstm(i))
+       vlstmo(i) = vlstm(i)
+c  Check for consistent open/close flag.
+       tfail = ((vlstm(i) .gt. 0.0) .and. (init(1) .le. 0)) .or.
+     &         ((vlstm(i) .eq. 0.0) .and. (init(1) .gt. 0))
+       fail  = fail .or. tfail
+       if (tfail) write(output, 3055) l3j(1)
+c  Check for nonzero valve mass and spring constant.
+       tfail = (vlfmas(i) .eq. 0.0) .and. (sprcon(i) .eq. 0.0)
+       fail  = fail .or. tfail
+       if (.not.tfail) go to 266
+       write(output, 3053) l3j(1)
+       vlfmas(i) = 1.0
+       sprcon(i) = 1.0
+c  Check for consistent valve setpoint and spring constant.
+  266  tfail = (vlsetp(i) .gt. 0.0) .and. (sprcon(i) .eq. 0.0)
+       fail  = fail .or. tfail
+       if (tfail) write (output, 3054) l3j(1)
+       if (tfail) sprcon(i) = 1.0
+c  Check for consistent input of inlet diameter and junction area.
+       tfail = (ajun(ij) .le. 0.0) .and. (adisk(i) .le. 0.0)
+       fail  = fail .or. tfail
+       if (tfail) write (output, 3056) l3j(1)
+       tfail = .false.
+ 3050 format(' ******** Card',i10,', word 6 must be greater than 0.0')
+ 3051 format(' ******** Card',i10,', one or more of words 2, 12, 13, 14,
+     & 15 or 17 has been input negative')
+ 3052 format(' ******** Card',i10,', word 16 has been input greater than
+     & 1.0')
+ 3053 format(' ******** Card',i10,' both words 11 and 13 are input as ze
+     &ro')
+ 3054 format(' ******** Card',i10,' word 11 is input as zero and word 12
+     & is input nonzero')
+ 3055 format(' ******** Card',i10,' words 1 and 16 define inconsistent v
+     &alve open/closed conditions')
+ 3056 format(' ******** Card',i10,' word 1 may not be input 0.0 if the j
+     &unction area is input 0.0')
+c  Edit component input.
+  132  l3c(1) = nc*1000000
+       junno(ij) = l3c(1)
+       cmphld(nc)%junp(1)%junno = l3c(1)
+       if (iand(ihlppr(2),ishft(1,22)).ne.0) then
+         ihf =
+     &   1000000*iand(ishft(jcex(ij),-15),1) +
+     &   100000*iand(ishft(jcex(ij),-2),1) +
+     &   10000*iand(ishft(jc(ij),-17),3) +
+     &   1000*iand(ishft(jc(ij),-4),1) +
+     &   100*iand(ishft(jc(ij),-8),1) +
+     &   10*iand(ishft(jc(ij),-9),1) +
+     &   iand(ishft(jc(ij),-12),3)
+         write (output,2111)
+ 2111  format ('0  Jun.no. from vol.   to vol.',2x,'jun. area',
+     & 5x,'jun-flag',2x,'subcooled',5x,'two-phase',5x,'superheated')
+         if (.not.unito) then
+           write (output,2112)
+ 2112  format (32x,'(ft2)',9x,'efvcahs',3x,'dschg. coef.',2x,'dschg.
+     & coef.',2x,'dschg. coef.')
+           xinit(2) = ajun(ij)/ft2
+           write (output,2102) l3c(1),ij1(ij),ij2(ij),xinit(2),ihf,
+     &     jdissc(ij),jdistp(ij),jdissh(ij)
+         else
+           write (output,2113)
+ 2113  format (32x,'(m2)',10x,'efvcahs',3x,'dschg. coef.',2x,'dschg.'
+     & ' coef.',2x,'dschg. coef.')
+           write (output,2102) l3c(1),ij1(ij),ij2(ij),ajun(ij),ihf,
+     &     jdissc(ij),jdistp(ij),jdissh(ij)
+ 2102  format (3i10,1p,e14.6,i9.7,3e14.6)
+         endif
+  180    write (output,2121)
+ 2121  format ('0  Jun.no.',5x,'forward loss ',3x,'forward loss',4x,'for
+     &ward loss',4x,'reverse loss ',3x,'reverse loss',4x,'reverse loss')
+         write (output,2127)
+ 2127  format (15x,'coefficient  ',3x,'multiplier  ',4x,'exponent
+     &  ','coefficient  ',3x,'multiplier  ',4x,'exponent ')
+         write (output,2128) l3c(1),fjunf(ij),fjunfb(ij),fjunfc(ij),
+     &   fjunr(ij),fjunrb(ij),fjunrc(ij)
+ 2128  format(i10,1x,1p,6e16.6)
+         write (output,2130)
+ 2130  format ('0  Jun.no.',25x,'junction diam.',3x,'beta factor',6x,
+     & 'gas intercept',4x,'slope')
+         if (.not.unito) then
+           write (output,2131)
+ 2131  format (35x,'(ft)')
+           xinit(2) = diamj(ij)/ft
+           write (output,2132) l3c(1),xinit(2),betacc(ij),constc(ij),
+     &     constm(ij)
+ 2132  format (i10,20x,1p,4e17.6)
+         else
+           write (output,2133)
+ 2133  format (35x,'(m)')
+           write (output,2132) l3c(1),diamj(ij),betacc(ij),constc(ij),
+     &     constm(ij)
+         endif
+         if (any(guinval(ij:ij+1).ne.0.0)) then
+           write (output,"('0  Jun.no.  Noding diagram modification:  fr
+     &om value',7x,'from angle',7x,'to value',9x,'to angle')")
+           xinit(1:2) = guinval(ij:ij+1)
+           if (.not.unito) xinit(1:2) = xinit(1:2)/ft
+           write (output,"(i10,27x,4es17.6)") l3c(1),xinit(1),
+     &     guinang(ij),xinit(2),guinang(ij+1)
+         endif
+       nnn = 2
+$if def,mmfld,1
+       if (nonmf .eq. 0) then
+         write (output,2114) (labl1(init1+1),nni=1,nnn)
+ 2114  format ('0  Jun.no.',25x,'init. liq.',a5,2x,'init. vap.',a5)
+$if def,mmfld
+       else
+         nnn = 3
+         write (output,2117) (labl1(init1+1),nni=1,nnn)
+ 2117  format ('0  Jun.no.',25x,'init. liq.',a5,2x,'init. vap.',a5,
+     & 2x,'init. met.',a5)
+       endif
+$endif
+       if (.not.unito) then
+         write (output,2115) (labl2(init1+1),nni=1,nnn)
+ 2115  format (35x,a10,7x,a10,7x,a10)
+         if (init1 .eq. 0) then
+           xinit(2) = velfj(ij)/ft
+           xinit(3) = velgj(ij)/ft
+         else
+           xinit(2) = velfj(ij)/xlbsec
+           xinit(3) = velgj(ij)/xlbsec
+         endif
+         write (output,2103) l3c(1),(xinit(nni),nni=2,nnn+1)
+ 2103  format (i10,20x,1p,3e17.6)
+       else
+         write (output,2116) (labl3(init1+1),nni=1,nnn)
+ 2116  format (35x,a10,7x,a10)
+$if def,mmfld,1
+         if (nonmf .eq. 0) then
+           write (output,2103) l3c(1),velfj(ij),velgj(ij)
+$if def,mmfld,3
+         else
+           write (output,2103) l3c(1),velfj(ij),velgj(ij),velmj(ij)
+         endif
+       endif
+       init1 = 1
+       if (unito) init1 = 0
+c ----------- chkvlv, trpvlv, inrvlv, mtrvlv, srvvlv, rlfvlv
+       go to (   210,    250,    300,    350,    360,    370), ik
+       call fabend
+c  Check valve.
+  210  ifv = 100*iand(ishft(cmpopt(i),2),1)
+     & +      10*iand(ishft(cmpopt(i),3),1)
+     & +         iand(ishft(cmpopt(i),4),1)
+       write(output,3010)
+ 3010  format('0  Jun.no.',25x,'back pressure',4x,'leakage'
+     &             ,10x,'check valve')
+       write(output,3011) labl4(init1+1)
+ 3011  format(35x,a10,7x,'(% area open)',4x,'flags')
+       xinit3 = pcv(i)
+       if (.not. unito) xinit3 = xinit3 / xlbin2
+       write(output,3012)  l3c(1), xinit3, aleak(i), ifv
+ 3012  format(i10,20x,1p,2e17.6,i8)
+       go to  400
+c  Trip valve.
+  250  write(output,3020)
+ 3020  format('0  Jun.no.',25x,'trip number')
+       write(output,3021)  l3c(1), vlvtrp(i)
+ 3021  format(i10,19x,i9)
+       go to  400
+c  Inertial valve.
+  300  if ( unito )  go to  301
+       xnit3     =  pcv(i)/xlbin2
+       xnit8     =  moment(i)/(xlbsec*ft2)
+       xnit10    =  lngvlv(i)/ft
+       xnit11    =  rdsvlv(i)/ft
+       xnit12    =  vlfmas(i)/xlbsec
+       go to  302
+  301  xnit3     =  pcv(i)
+       xnit8     =  moment(i)
+       xnit10    =  lngvlv(i)
+       xnit11    =  rdsvlv(i)
+       xnit12    =  vlfmas(i)
+  302  continue
+       write(output,3030)
+ 3030  format('0  Jun.no.',25x,'back pressure',4x,'leakage'
+     &             ,10x,'inertial valve')
+       write(output,3031)  labl4(init1+1)
+ 3031  format(35x,a10,7x,'(% area open)',4x,'latch',4x,'open-flag')
+c      inrv = iand(ishft(cmpopt(i),4),1)
+c      xint2 = iand(ishft(cmpopt(i),3),1)
+       write(output,3032) l3c(1), xnit3, aleak(i), init(1), init(2)
+ 3032  format(i10,20x,1p,2e17.6,i7,4x,i7)
+       write(output,3033)
+ 3033  format('0  Jun.no.',25x,'valve angle',6x,'minimum',10x,'maximum'
+     &              /35x,'theta (deg)',6x,'(deg)',12x,'(deg)')
+       write(output,3034) l3c(1), theta(i), mintht(i), maxtht(i)
+ 3034  format(i10,20x,1p,3e17.6)
+       write(output,3035)
+ 3035  format('0  Jun.no.',25x,'inertia',10x,'ang.vel.',9x
+     &             ,'moment length',4x,'flapper radius',3x,'flapper mass
+     &')
+       write(output,3036)labl5(init1+1),labl6(init1+1),labl6(init1+1),
+     &   labl7(init1+1)
+ 3036  format(35x,a10,7x,'(rad/sec)',8x,a10,7x,a10,7x,a10)
+       write(output,3037) l3c(1),xnit8,omega(i),xnit10,xnit11,xnit12
+ 3037  format(i10,20x,1p,5e17.6)
+       go to  400
+c  Motor valve.
+  350  write(output,3038)
+ 3038  format('0  Jun.no.',25x,'open trip no. close trip no. table no.'
+     &     ,5x,'slope',9x,'initial position')
+       write(output,3040)
+ 3040  format(78x,'(1.0/sec)')
+       write (output,3041) l3c(1),opntrp(i),clstrp(i),tblnum(i),
+     & vlvslp(i),vlstm(i)
+ 3041  format(i10,19x,i9,5x,i9,4x,i9,10x,1p,2e14.5)
+       go to  400
+c  Servo valve.
+  360  write(output,3044)
+ 3044  format('0  Jun.no.',25x,'control number  table number'/)
+       write(output,3045) l3c(1),opntrp(i),tblnum(i)
+ 3045  format(i10,25x,i10,7x,i10)
+       go to 400
+c  Relief valve.
+  370  if (unito) go to 371
+       xint2 = adisk(i)/ft
+       xint3 = dseat(i)/ft
+       xint4 = adann(i)/ft
+       xint5 = vlstmx(i)/ft
+       xint6 = drings(i)/ft
+       xint7 = hring1(i)/ft
+       xint8 = arings(i)/ft
+       xint9 = hring2(i)/ft
+       xint10 = abelin(i)/ft
+       xint11 = sprcon(i)/xlbpft
+       xint12 = vlsetp(i)/xlbin2
+       xint13 = vlfmas(i)/xlbsec
+       xint14 = bdamp(i)/(xlbpft * ft2)
+       xint15 = pbellw(i)/xlbin2
+       xint17 = velvl(i)/ft
+       lablx  = labl2(1)
+       go to 373
+  371  xint2  = adisk(i)
+       xint3  = dseat(i)
+       xint4  = adann(i)
+       xint5  = vlstmx(i)
+       xint6  = drings(i)
+       xint7  = hring1(i)
+       xint8  = arings(i)
+       xint9  = hring2(i)
+       xint10 = abelin(i)
+       xint11 = sprcon(i)
+       xint12 = vlsetp(i)
+       xint13 = vlfmas(i)
+       xint14 = bdamp(i)
+       xint15 = pbellw(i)
+       xint17 = velvl(i)
+       lablx  = labl3(1)
+  373  write(output, 4050)
+       write(output, 4051) (labl6(init1+1), ilv = 1, 8)
+       write (output,4052) l3c(1),cmpopt(i),xint2,xint3,xint4,
+     &                    xint5, xint6, xint7, xint8, xint9
+       write(output, 4053)
+       write(output, 4054) labl6(init1+1),labl8(init1+1),labl4(init1+1),
+     &                     labl7(init1+1), labl9(2*(init1+1)-1),
+     &                     labl9(2*(init1+1)),labl4(init1+1),lablx
+       write(output, 4055) l3c(1), xint10, xint11, xint12, xint13,
+     &                     xint14, xint15, vlstm(i), xint17
+c
+ 4050  format('0  Jun.no. ic.flg',2x,'inlet dia',4x,'seat dia',5x,
+     & 'piston dia',3x,'valve lift',3x,'in ring dia',2x,'in ring ht',
+     & 2x,'out ring dia',2x,'out ring ht')
+ 4051  format(16x,8(3x,a10))
+ 4052  format(i10,i7,1p,8g13.5)
+ 4053  format('0  Jun.no.',9x,'bellows dia',2x,'spr con',6x,
+     & 'set point p',2x,'valve mass',3x,'damp coef',4x,'bellows p',
+     & 4x,'stem pos',5x,'valve vel')
+ 4054  format(16x,4(3x,a10),2x,a12,2x,a10,13x,a10)
+ 4055  format(i10,7x,1p,8g13.5)
+  400  continue
+       endif
+       len = 0
+       ii = ii - i
+       if ( ik .ne. 4 .and. ik .ne. 5 )  go to  136
+       ks = filsiz(3) + 300
+       if ( lcntgs(filid(3),1) .lt. ks )  go to  15
+       call ftbsft(filid(3),ks,1,l)
+       filndx(3) = l
+       i =  ncmps(l) + l
+       l3g(1) = l3d(1) + 100
+       l3g(6) = 1
+       call inp2 (fa(filndx(1)),init,l3g)
+       if (l3g(6) .gt. 0) go to 552
+       fstm =  1.0
+       fform =  1.0
+       go to  553
+  552  fstm  =  xinit(1)
+       fform =  xinit(2)
+        if ( fstm .eq. 0.0 )  fstm =  1.0
+        if ( fform .eq. 0.0 )  fform =  1.0
+  553  if ( aj .ne. 0.0 )  go to  559
+       fail   =  .true.
+       aj     =  1.0
+       write(output,4008)
+ 4008  format ('0******** Full open valve area is 0.0, reset to 1.0'
+     &    ' and continue processing.')
+ 4011  format ('0Table is energy loss vs. normalized stem position, norm
+     &. stem position factor is',1p,g13.5,', energy loss factor is',
+     & g13.5,'.')
+  559  fff =  2.00182e-3*aj*aj
+       l3h(1) =  l3g(1) + 1
+       l3h(2) = -l3h(1) - 99
+       l3h(6) =  1
+       call inp2 (fa(filndx(1)),cvtbl(i),l3h)
+       if ( l3g(6) .le. 0 .and. l3h(6) .le. 0 )  go to  554
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write(output,4011)  fstm, fform
+       if ( l3g(6) .le. 0 .or. l3h(6) .gt. 0 )  go to  572
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write(output,4007) vname(ik-3)
+       go to  571
+  572  if ( mod(l3h(6),3) .eq. 0 )  go to  556
+       if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write(output,2052) vname(ik-3)
+  571  fail = .true.
+       write (output,4001)
+       cvtbl(i)   =  1.0
+       cvtbl(i+1) =  0.0
+       cvtbl(i+2) =  0.0
+       len = 3
+       go to  136
+ 2052  format ('0******** Number of entries for ',a5,' valve table is no
+     &t a multiple of 3.')
+c  Check for table not present.
+ 4007  format('0******** Table specified but not entered for ',a5,
+     & ' valve')
+ 4001  format ('0******** Default table being entered.')
+c  Check for abrupt area change.
+  554  if ( ac )  go to 136
+       fail =  .true.
+       write(output,4002)  vname(ik-3)
+ 4002  format ('0******** Abrupt area change not specified for motor '
+     & 'valve= ',a5)
+       go to  136
+  556  if ( .not. ac ) go to  558
+       fail = .true.
+       write(output,4004)  vname(ik-3)
+ 4004  format ('0******** Abrupt area change flag set for motor '
+     & 'valve= ',a5,' with energy loss table,',/,9x,
+     & 'continue checking.')
+  558  if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write(output,4005)
+ 4005  format(5x,'norm. stem',8x,'csubv forward',5x,'csubv reverse',5x,
+     & 'norm. stem',8x,'loss forward',6X,'loss reverse'/
+     & 5x,'(as input)',8x,'(as input)',8x,'(as input)')
+       itbl  =  l3h(6) + i -1
+       f1    =  -1.0e-20
+       vlvcon(i) =  fff/(cvcon*cvcon*fform*fform)
+       do  560  k = i,itbl,3
+         if ( f1 .le. cvtbl(k) )  go to  561
+         fail   =  .true.
+         write(output,4010)
+ 4010  format ('0******** Valve stem table entries not in ascending orde
+     &r, default table entered.')
+         cvtbl(i) = 1.0
+         cvtbl(i+1) = 0.0
+         cvtbl(i+2) = 0.0
+         len = 3
+         go to  136
+  561    f1 = cvtbl(k)
+         f2 = cvtbl(k+1)
+         f3 = cvtbl(k+2)
+         cvtbl(k)  =  cvtbl(k)*fstm
+         ff2 =  min(vlvcon(i)/max(f2*f2,1.0e-30),1.0e30)
+         ff3 =  min(vlvcon(i)/max(f3*f3,1.0e-30),1.0e30)
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write(output,4006) f1,f2,f3,cvtbl(k),ff2,ff3
+ 4006   format(1p,6e18.5)
+  560   continue
+       len =  len + l3h(6)
+       ncvtbl(i) = 3
+       ncvtbl(i+1) = l3h(6)
+       ncvtbl(i+2) = 1
+  136  len = len + lenvlv(ik)
+       cmplen(i) = len
+       if (cmpsrc .or. nc1.eq.0) go to 431
+       k2 = len - nc1
+       ii = i + ii
+       n3 = ii + nc1
+       n4 = ii + len
+       k1 = i + len - n3
+       if (k2) 433,432,434
+  434  k1 = -k1
+  433  call ftbmov (fa(n3+1),fa(n4+1),k1)
+       i = i + k2
+  432  call ftbmov (fa(i+1),fa(ii+1),len)
+       ncmps(filndx(3)) = ncmps(filndx(3)) + k2
+       filsiz(3) = filsiz(3) + k2 - maxlen
+       go to 438
+  431  filsiz(3) = filsiz(3) + len - maxlen
+       ncmps(filndx(3)) =  ncmps(filndx(3)) + len
+  438  call ftbsft (filid(3),filsiz(3),3,filndx(3))
+ 1000  return
+       end

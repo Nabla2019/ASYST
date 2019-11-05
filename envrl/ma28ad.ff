@@ -1,0 +1,320 @@
+       subroutine ma28ad (n,nz,a,licn,irn,lirn,icn,u,ikeep,iw,w,iflag)
+!  Subroutine performs the lu factorization of a.
+!
+       use ma28mod
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer n,nz,licn,lirn,iflag
+       real(kr) a(:),u,w(:)
+       integer icn(:),ikeep(:,:),irn(:),iw(:,:)
+!
+!  The parameters are as follows:
+!  n     Order of matrix; not altered by subroutine.
+!  nz    Number of non-zeros in input matrix; not altered by subroutine.
+!  a     Array of length licn. Holds non-zeros of matrix on entry and
+!        non-zeros of factors on exit. Reordered by mc20ad and mc23ad
+!        and altered by ma30ad.
+!  licn  Integer, length of arrays a and icn; not altered by
+!        subroutine.
+!  irn   Integer array of length lirn. Holds row indices on input.
+!        Used as workspace by ma30ad to hold column orientation of
+!        matrix.
+!  lirn  Integer, length of array irn; not altered by the subroutine.
+!  icn   Integer array of length licn. Holds column indices on entry
+!        and column indices of decomposed matrix on exit. Reordered by
+!        mc20ad and mc23ad and altered by ma30ad.
+!  u     Real variable, set by user to control bias towards numeric or
+!        sparsity pivoting. u=1.0 gives partial pivoting while u=0.0
+!        does not check multipliers at all. Values of u greater than one
+!        are treated as one while negative values are treated as zero.
+!        Not altered by subroutine.
+!  ikeep Integer array of length 5*n; used as workspace by ma28ad
+!        (see later comments). It is not required to be set on entry
+!        and, on exit, it contains information about the decomposition.
+!        It should be preserved between this call and subsequent calls
+!        to ma28b/bd or ma28c/cd.
+!        ikeep(i,1),i=1,n holds the total length of the part of row i
+!        in the diagonal block.
+!        Row ikeep(i,2),i=1,n of the input matrix is the ith row in
+!        pivot order.
+!        Column ikeep(i,3),i=1,n of the input matrix is the ith column
+!        in pivot order.
+!        ikeep(i,4),i=1,n holds the length of the part of row i in
+!        the l part of the l/u decomposition.
+!        ikeep(i,5),i=1,n holds the length of the part of row i in the
+!        off-diagonal blocks. If there is only one diagonal block,
+!        ikeep(1,5) will be set to -1.
+!  iw    Integer array of length 8*n. If the option nsrch.le.n is
+!        used, then the length of array iw can be reduced to 7*n.
+!  w     Real array, length n. Used by mc24ad both as workspace and to
+!        return growth estimate in w(1). The use of this array by ma28ad
+!        is thus optional depending on common block logical variable,
+!        grow.
+!  iflag Integer variable, used as error flag by routine. A positive
+!        or zero value on exit indicates success. Possible negative
+!        values are -1 through -14.
+!
+       interface
+!
+       subroutine mc20ad (nc,maxa,a,inum,jptr,jnum,jdisp)
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer jdisp,maxa,nc
+       real(kr) a(:)
+       integer inum(:),jnum(:),jptr(:)
+       end subroutine mc20ad
+!
+       subroutine mc23ad (n,icn,a,licn,lenr,idisp,ip,iq,lenoff,iw,iw1)
+       use ma28mod
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer licn,n
+       real(kr) a(:)
+       integer icn(:),idisp(:),ip(:),iq(:),iw(:,:),iw1(:,:),
+     & lenoff(:),lenr(:)
+       end subroutine mc23ad
+!
+       subroutine ma30ad (nn,icn,a,licn,lenr,lenrl,idisp,ip,iq,
+     & irn,lirn,lenc,ifirst,lastr,nextr,lastc,nextc,iptr,ipc,u,
+     & iflag)
+       integer, parameter :: kr=selected_real_kind(12,200)
+       real(kr) u
+       integer iflag,licn,lirn,nn
+       real(kr) a(:)
+       integer icn(:),idisp(:),ifirst(:),ip(:),ipc(:),iptr(:),
+     & iq(:),irn(:),lastc(:),lastr(:),lenc(:),lenr(:),lenrl(:),
+     & nextc(:),nextr(:)
+       end subroutine ma30ad
+!
+       subroutine mc22ad (n,icn,a,nz,lenrow,ip,iq,iw,iw1)
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer n,nz
+       real(kr) a(:)
+       integer icn(:),ip(:),iq(:),iw(:,:),iw1(:),lenrow(:)
+       end subroutine mc22ad
+!
+       subroutine mc24ad (n,icn,a,licn,lenr,lenrl,w)
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer licn,n
+       real(kr) a(:),w(:)
+       integer icn(:),lenr(:),lenrl(:)
+       end subroutine mc24ad
+!
+       end interface
+!
+       real(kr) upriv
+       integer i,i1,iend,ii,j,j1,j2,jay,jj,knum,length,
+     & move,newj1,newpos
+!
+!  Some initialization and transfer of information between common
+!  blocks (see earlier comments).
+       iflag = 0
+       aborta = abort1
+       abortb = abort2
+       abort = abort1
+       mlp = lp
+       nlp = lp
+       tol1 = tol
+       lbig1 = lbig
+       nsrch1 = nsrch
+!  upriv private copy of u is used in case it is outside range zero to
+!  one and is thus altered by ma30ad.
+       upriv = u
+!  Simple data check on input variables and array dimensions.
+       if (n.le.0) then
+         iflag = -8
+         if (lp.ne.0) write (lp,"(33x,'n out of range =',i10)") n
+         go to 210
+       endif
+       if (nz.le.0) then
+         iflag = -9
+         if (lp.ne.0) write (lp,"(33x,'nz non positive =',i10)") nz
+         go to 210
+       endif
+       if (licn.lt.nz) then
+         iflag = -10
+         if (lp.ne.0) write (lp,"(33x,'licn too small =',i10)") licn
+         go to 210
+       endif
+       if (lirn.lt.nz) then
+         iflag = -11
+         if (lp.ne.0) write (lp,"(33x,'lirn too small =',i10)") lirn
+         go to 210
+       endif
+!
+!  Data check to see if all indices lie between 1 and n.
+       do i=1,nz
+         if (irn(i).gt.0 .and. irn(i).le.n .and. icn(i).gt.0 .and.
+     &   icn(i).le.n) cycle
+         if (iflag.eq.0 .and. lp.ne.0) write (lp,
+     &   "(' Error return from ma28ad because indices found out of range
+     &.')")
+         iflag = -12
+         if (lp.ne.0) write (lp,
+     &   "(1x,i6,'th element with value',es22.14,' is out of range 
+     &with indices',i8,',',i8)") i,a(i),irn(i),icn(i)
+       enddo
+       if (iflag.lt.0) return
+!
+!  Sort matrix into row order.
+!      write (12,"(a,2i5)") 'ma28ad01',n,nz
+!      write (12,"(a,2i5/(i4,es13.5,2i5))") 'ma28ada1',n,nz,
+!    & (i,a(i),irn(i),icn(i),i=1,20)
+!      write (12,"(14i4)") (i,ikeep(i,:),iw(i,:),i=1,3)
+       call mc20ad (n,nz,a,icn,iw(:,1),irn,0)
+!      write (12,"(a,2i5)") 'ma28ad02',n,nz
+!      write (12,"(a,2i5/(i4,es13.5,2i5))") 'ma28ada1',n,nz,
+!    & (i,a(i),irn(i),icn(i),i=1,20)
+!      write (12,"(14i4)") (i,ikeep(i,:),iw(i,:),i=1,3)
+!  Part of ikeep is used here as a work-array. ikeep(i,2) is the last
+!  row to have a non-zero in column i. ikeep(i,3) is the off-set of
+!  column i from the start of the row.
+       ikeep(1:n,2) = 0
+       ikeep(1:n,1) = 0
+!
+!  Check for duplicate elements, summing any such entries and printing
+!  a warning message on unit mp.
+!  Move is equal to the number of duplicate elements found.
+       move = 0
+!  The loop also calculates the largest element in the matrix, themax.
+       themax = 0.0_8
+!  j1 is position in arrays of first non-zero in row.
+       j1 = iw(1,1)
+       do i=1,n
+         iend = nz + 1
+         if (i.ne.n) iend = iw(i+1,1)
+         length = iend - j1
+         if (length.eq.0) cycle
+         j2 = iend - 1
+         newj1 = j1 - move
+         do jj=j1,j2
+           j = icn(jj)
+           themax = max(themax,abs(a(jj)))
+           if (ikeep(j,2).ne.i) then
+!  First time column has ocurred in current row.
+             ikeep(j,2) = i
+             ikeep(j,3) = jj - move - newj1
+             if (move.eq.0) cycle
+!  Shift necessary because of  previous duplicate element.
+             newpos = jj - move
+             a(newpos) = a(jj)
+             icn(newpos) = icn(jj)
+           else
+!  Duplicate element.
+             move = move + 1
+             length = length - 1
+             jay = ikeep(j,3) + newj1
+             if (mp.ne.0) write (mp,
+     & "(' Duplicate element in position',i8,',',i8,' with value',
+     & es22.14)") i,j,a(jj)
+             a(jay) = a(jay) + a(jj)
+             themax = max(themax,abs(a(jay)))
+           endif
+         enddo
+         ikeep(i,1) = length
+         j1 = iend
+       enddo
+!
+!  knum is actual number of non-zeros in matrix with any multiple
+!  entries counted only once.
+       knum = nz - move
+       if (lblock) then
+!
+!  Perform block triangularisation.
+!      write (12,"(a,2i5)") 'ma28ad03',n,nz
+!      write (12,"(a,2i5/(i4,es13.5,2i5))") 'ma28ada3',n,nz,
+!    & (i,a(i),irn(i),icn(i),i=1,20)
+!      write (12,"(14i4)") (i,ikeep(i,:),iw(i,:),i=1,3)
+         call mc23ad (n,icn,a,licn,ikeep(:,1),idispc,ikeep(:,2),
+     &   ikeep(:,3),ikeep(:,5),iw(:,3:7),iw)
+!      write (12,"(a,2i5)") 'ma28ad04',n,nz
+!      write (12,"(a,2i5/(i4,es13.5,2i5))") 'ma28ada4',n,nz,
+!    & (i,a(i),irn(i),icn(i),i=1,20)
+!      write (12,"(14i4)") (i,ikeep(i,:),iw(i,:),i=1,3)
+         if (idispc(1).le.0) then
+           iflag = -7
+           if (idispc(1).eq.-1) iflag = -1
+           if (lp.ne.0) write (lp,"(33x,'Error return from mc23ad.')")
+           go to 210
+         endif
+       else
+!
+!  Block triangularization not requested.
+!  Move structure to end of data arrays in preparation for ma30ad.
+!  Also set lenoff(1) to -1 and set permutation arrays.
+         do i=1,knum
+           ii = knum - i + 1
+           newpos = licn - i + 1
+           icn(newpos) = icn(ii)
+           a(newpos) = a(ii)
+         enddo
+         idispc(1) = 1
+         idispc(2) = licn - knum + 1
+         do i=1,n
+           ikeep(i,2) = i
+           ikeep(i,3) = i
+         enddo
+       endif
+!
+       if (lbig) big1 = themax
+!
+!      write (12,"(a,2i5)") 'ma28ad05',n,nz
+!      write (12,"(a,2i5/(i4,es13.5,2i5))") 'ma28ada5',n,nz,
+!    & (i,a(i),irn(i),icn(i),i=1,20)
+!      write (12,"(14i4)") (i,ikeep(i,:),iw(i,:),i=1,3)
+       if (nsrch.gt.n) then
+!  Perform l/u decomosition on diagonal blocks.
+         call ma30ad (n,icn,a,licn,ikeep(:,1),ikeep(:,4),idispc,
+     &   ikeep(:,2),ikeep(:,3),irn,lirn,iw(:,2),iw(:,3),iw(:,4),iw(:,5),
+     &   iw(:,6),iw(:,7),iw(:,8),iw(:,1),upriv,iflag)
+       else
+!  This call if used if nsrch has been set less than or equal n.
+!  In this case, two integer work arrays of length can be saved.
+         call ma30ad (n,icn,a,licn,ikeep(:,1),ikeep(:,4),idispc,
+     &   ikeep(:,2),ikeep(:,3),irn,lirn,iw(:,2),iw(:,3),iw(:,4),iw(:,5),
+     &   iw(:,1),iw(:,1),iw(:,6),iw(:,1),upriv,iflag)
+       endif
+!      write (12,"(a,2i5)") 'ma28ad06',n,nz
+!      write (12,"(a,2i5/(i4,es13.5,2i5))") 'ma28ada6',n,nz,
+!    & (i,a(i),irn(i),icn(i),i=1,20)
+!      write (12,"(14i4)") (i,ikeep(i,:),iw(i,:),i=1,3)
+!
+!  Transfer common block information.
+       minirn = max(mirn,nz)
+       minicn = max(micn,nz)
+       irncp = mirncp
+       icncp = micncp
+       irank = mirank
+       ndrop = ndrop1
+       if (lbig) big = big1
+       if (iflag.lt.0) then
+         if (lp.ne.0) write (lp,"(33x,'Error return from ma30ad.')")
+         go to 210
+       endif
+!
+!  Reorder off-diagonal blocks according to pivot permutation.
+!      write (12,"(a,2i5)") 'ma28ad07',n,nz
+!      write (12,"(a,2i5/(i4,es13.5,2i5))") 'ma28ada7',n,nz,
+!    & (i,a(i),irn(i),icn(i),i=1,20)
+!      write (12,"(14i4)") (i,ikeep(i,:),iw(i,:),i=1,3)
+       i1 = idispc(1) - 1
+       if (i1.ne.0) call mc22ad (n,icn,a,i1,ikeep(:,5),ikeep(:,2),
+     & ikeep(:,3),iw,irn)
+!      write (12,"(a,2i5)") 'ma28ad08',n,nz
+!      write (12,"(a,2i5/(i4,es13.5,2i5))") 'ma28ada8',n,nz,
+!    & (i,a(i),irn(i),icn(i),i=1,20)
+!      write (12,"(14i4)") (i,ikeep(i,:),iw(i,:),i=1,3)
+       i1 = idispc(1)
+       iend = licn - i1 + 1
+!
+!  Optionally calculate element growth estimate.
+       if (grow) then
+         call mc24ad(n,icn,a(i1:),iend,ikeep(:,1),ikeep(:,4),w)
+!  Increment growth estimate by original maximum element.
+         w(1) = w(1) + themax
+         if (n.gt.1) w(2) = themax
+       endif
+!  Set flag if the only error is due to duplicate elements.
+       if (iflag.ge.0 .and. move.ne.0) iflag = -14
+       return
+  210  if (lp.ne.0) write (lp,"('+Error return from ma28ad because')")
+       return
+       end

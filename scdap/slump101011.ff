@@ -1,0 +1,490 @@
+*mlist
+*if def,selap
+       subroutine slump (wdtqlp,wuobng,tcond3,dzcond,nsigl,unuca,unucda,
+     & idcomp,naz,pitch,rcos,dzfrcq,timehy,tsatlp,nhrdpn,lcrucb)
+c
+c
+c  Subroutine determines whether a new unique slumping of core material
+c  into lower vessel region occurred during this time step. If slumping
+c  occurred, it calculates the total mass of material that will end up
+c  eventually falling into lower vessel region due to this slumping.
+c  This falling may be spread out over many time steps.
+c
+c  Cognizant engineer: ljs.
+c
+c     wdtqlp(j) = total thermal energy in material wbotab(j) through
+c                 wbotsr(j) (joules). it has already been multiplied
+c                 by nsigl(j).
+c     wuobng(j*k) = as-fabricated mass of uo2 at axial node j of
+c                   component k (kg).
+c     tcond3(l,k,j) = temperature of radial node l, axial node k,
+c                     component j (k).
+c     dzcond(j*k) = height of axial node k of component j (m).
+c     nsigl(j) = number of rods in component j.
+c     unuca(k,j) = linear power from nuclear heat at axial node k of
+c                  component j (w/m).
+c     unucda(k,j) = decay instead of nuclear heat.
+c      ncomp = number of component groups.
+c      idcomp(j) = indicator of type of component; 0=fuel rod,
+c                  1=control rod, 2=shroud.
+c      naz(j) = number of axial nodes for component j.
+c      pitch(j) = pitch of fuel rods in conponent j (m).
+c     rcos(j) = as-fabricated outer diameter of component j (m).
+c     dzfrcq(k,j) = fraction of height of axial node k of component j
+c                   that is filled with cohesive debris.
+c      timehy = current problem time (s).
+c      tsatlp = saturation temperature of water in lower vessel
+c               region (k).
+c     nhrdpn(j)=axial node containing hardpan in component j.
+c               until hardpan is formed, this variable equals
+c                zero.
+c     lcrucb(k,j)=indicator of whether crucible containing cir-
+c                 culating liquefied debris is located at axial
+c                 node k of component j. 0=no; 1=yes.
+c
+       implicit none
+c
+       real timehy,tsatlp
+       include 'scddat.h'
+       include 'cpmdat.h'
+       include 'ufiles.h'
+       include 'hardpn.h'
+       include 'slumpv.h'
+       include 'intcom.h'
+       include 'scdpow.h'
+       include 'uphdpn.h'
+       include 'miscon.h'
+c
+c     wbotuo(j) = mass of uo2 from component group j (but per rod
+c                 basis) that dripped all way from location of
+c                 breach in rod to bottom of core. (kg). this
+c                 variable is output of liqsol calculation.
+c     wbotzr(j) = zr
+c     wbotox(j) = oxygen attached to zr
+c     wbotab(j) = silver
+c     wbotsr(j) = stainless steel.
+c
+       integer nsigl,idcomp,naz,nslmpa
+       real wdtqlp,wuobng,tcond3,dzcond,unuca,unucda,pitch,rcos,dzfrcq,
+     * qradpl
+      dimension wdtqlp(ndcomp),
+     #     wuobng(ndax*ndcomp), tcond3(ndrd,ndax,ndcomp),
+     #     dzcond(ndax*ndcomp), nsigl(ndcomp), unuca(ndax,ndcomp),
+     #     unucda(ndax,ndcomp), idcomp(ndcomp),
+     #     pitch(ndcomp), rcos(ndcomp), dzfrcq(ndax,ndcomp),
+     #     nslmpa(ndcomp), qradpl(ndcomp)
+       integer nhrdpn,lcrucb
+      dimension nhrdpn(ndcomp), lcrucb(ndax,ndcomp)
+c
+c  Local variables.
+       integer j,k,k1,k2,kdyn,kmltbt,kmltmn,kmltop,n,ncrcfk,ncrcfm,
+     & nmltln,nmid,nslmpc,nkk
+       integer ncomph,ntest1,ntest2,jindex,nudslp
+       real afalum,afcadm,aflith,afru,afrz,afsoil,anrods,
+     & delten,dvpool,enth,entpol,frac,qperum,rhopol,timfrc,tsat,
+     & volpol,volslp,wmstot,wmsupr,wsso,wzuo
+       real tmp1
+       real zuden1,zunth1,qdpol1
+       external zuden1,zunth1
+       external crucbr,mixent
+c
+c  Set variable indicating that user-defined slumping has occurred
+c  during time step.
+       nudslp=0
+c  Specify atomic fractions of al, li, and cd.
+       aflith=0.0
+       afcadm=0.0
+       afsoil=0.0
+c
+c  Initialize local variables.
+       nkk = ntpslp(mcp)
+       tsat=tsatlp
+       rftemp=tsatlp
+       nslump(mcp) = 0
+       wuoslp=0.0
+       wurslp=0.0
+       wzrslp=0.0
+       powslp=0.0
+       wzoslp=0.0
+       wbcslp=0.0
+       wssslp=0.0
+       wagslp=0.0
+       enth=0.0
+c  Does user-defined slumping of stainless steel material to lower
+c  head occur during this time step?
+       if (int(crucb) .eq. 1) then
+         if (ncntr1 .eq. 2) ncntr1 = 1
+       endif
+       if (ncntr1.eq.1 .or. (ncntr1.eq.2 .and. repool.lt.0.1)) then
+         if (timehy .ge. fcntr1) then
+           wssslp=fcntr2
+           write(output,9019)wssslp
+ 9019  format(' sub. slump - case of user-defined slumping,',
+     # ' mass of stainless steel that slumps into lower head =',
+     # e10.4,' kg')
+c  Assign internal energy of slumping stainless steel corresponding with
+c  it being at temperature just above its melting temperature.
+           enth=1.12e+6*wssslp
+           ncntr1=0
+           nudslp=1
+         endif
+       endif
+c
+c  Check to see whether any liquefied material breached cladding and
+c  flowed all the way down rod.
+       do j = 1,ncomp
+         anrods=float(nsigl(j))
+         enth=wdtqlp(j)+enth
+         if (idcomp(j) .le. 0) then
+           wuoslp=wuoslp+wbotuo(j)*anrods
+           if (wbotox(j).gt.(0.3*wbotzr(j)+1.e-10)) then
+             wzoslp = wzoslp+(wbotzr(j)+wbotox(j))*anrods
+           else
+             wzrslp=wzrslp+wbotzr(j)*anrods
+           endif
+         elseif (idcomp(j).le.1) then
+           wagslp=wagslp+wbotab(j)*anrods
+           wssslp=wssslp+wbotsr(j)*anrods
+           wzrslp=wzrslp+wbotzr(j)*anrods
+         elseif (idcomp(j).le.2) then
+           wzrslp=wzrslp+wbotsr(j)*anrods
+         elseif(idcomp(j).eq.8) then
+           wbcslp=wbcslp+wbotab(j)*anrods
+           wssslp=wssslp+wbotsr(j)*anrods
+           wzrslp=wzrslp+wbotzr(j)*anrods
+           wzoslp=wzoslp+wbotox(j)*anrods
+         endif
+       enddo
+       wmstot=wuoslp+wzrslp+wzoslp+wssslp+wagslp+wbcslp
+c  Consider slumping due to failure of upper crust of pool.
+       wmsupr=wuslpu+wzslpu+waslpu+wsslpu
+       if (wmsupr.gt.0.5 .or. wmstot.ge.1.0e-6) then
+         wuoslp=wuoslp+wuslpu
+         wzoslp=wzoslp+wzslpu
+         wssslp=wssslp+wsslpu
+         wagslp=wagslp+waslpu
+         tmpslp(mcp,nkk)=tmslpu
+c        write(output,915)timehy,wuslpu,tmslpu,wmstot
+c 915  format (/,'Subroutine slump called for failure of upper',
+c    & ' crust,',/,' slump  event time=',g18.10,
+c    & ' wuslpu=',e10.4,' tmslpu=',e10.4,' wmstot=',e10.4)
+c        write(output,916)wuoslp,wzoslp,wagslp,wzrslp
+c 916  format (' wuoslp=',e10.4,' wzoslp=',e10.4,' wagslp=',e10.4,
+c    & ' wzrslp=',e10.4)
+       endif
+       if (wmstot.ge.1.0e-6 .or. wmsupr.gt.0.5) then
+         nslump(mcp) = 1
+c
+c  Check to see whether more slumps than allowed in array dimensions has
+c  occurred.
+         delten=0.0
+         if (nsqslp .eq. 200) then
+c  Shuffle all terms up one notch.
+c  Lump quantities in slot 1 with those in slot 2.
+           if (timehy.lt.timsle(1)) then
+             timfrc=(timsle(1)-timehy)/(timsle(1)-timsls(1))
+             delten=timfrc*enthdb(1)
+             wuoseq(2)=wuoseq(2)+timfrc*wuoseq(1)
+             wurseq(2)=wurseq(2)+timfrc*wurseq(1)
+             wzrseq(2)=wzrseq(2)+timfrc*wzrseq(1)
+             wzoseq(2)=wzoseq(2)+timfrc*wzoseq(1)
+             wbcseq(2)=wbcseq(2)+timfrc*wbcseq(1)
+             wssseq(2)=wssseq(2)+timfrc*wssseq(1)
+             wagseq(2)=wagseq(2)+timfrc*wagseq(1)
+             powseq(2)=powseq(2)+timfrc*powseq(1)
+             enthdb(2)=enthdb(2)+delten
+           endif
+           do n = 2,nsqslp
+             enthdb(n-1)=enthdb(n)
+             timsls(n-1)=timsls(n)
+             timsle(n-1)=timsle(n)
+             wuoseq(n-1)=wuoseq(n)
+             wurseq(n-1)=wurseq(n)
+             wzrseq(n-1)=wzrseq(n)
+             wzoseq(n-1)=wzoseq(n)
+             wbcseq(n-1)=wbcseq(n)
+             wssseq(n-1)=wssseq(n)
+             wagseq(n-1)=wagseq(n)
+             powseq(n-1)=powseq(n)
+           enddo
+           nsqslp = nsqslp - 1
+         endif
+         nsqslp = nsqslp + 1
+         timsls(nsqslp)=timehy
+         if (wmstot.gt.wmsupr) then
+           timsle(nsqslp)=timehy+10.
+c  If user-defined melting and slumping of upper plenum structures or
+c  core plate, then set end time of slumping from user-defined value.
+         else
+           timsle(nsqslp)=timehy+68.
+         endif
+         if (wmstot.gt.wmsupr) then
+c
+c  Calculate heat generation in debris that slumped.
+c  Make approximate calculation since liqsol does not store this
+c  quantity.
+           nmid=0.5*float(naz)
+           if(nmid.lt.1)nmid=1
+           if(nmid.gt.naz)nmid=naz
+c  Calculate heat generation per unit mass of uo2.
+           if (wuobng(nmid).gt.1.e-6.and.wuoslp.gt.1.e-6) then
+             qperum=(unuca(nmid,1)+unucda(nmid,1))*dzcond(nmid)/
+     &       wuobng(nmid)
+           else
+             qperum=0.0
+           endif
+           powslp=qperum*wuoslp
+           wzuo=0.0
+           wsso=0.0
+           afru=1.0
+           afrz=0.0
+           call mixent(enth,wuoslp, wzrslp, wzoslp, wagslp,wssslp,
+     &     wsso, wzuo, afru, afrz, wbcslp, tsatlp, tmpslp(mcp,nkk))
+         else
+c  Case of slumping due to failure of upper crust.
+           powslp=qdslpu
+c  Calculate enthalpy of mixture of uo2,zro2,ss and ag.
+           afalum=0.0
+           aflith=0.0
+           afcadm=0.0
+           afsoil=0.0
+           enth = zunth1(afpool(1),afpool(2),afpool(3),afpool(4),
+     &     afpool(5),afpool(6),afpool(7),tmpslp(mcp,nkk),afalum,aflith,
+     &     afcadm,afsoil,rftemp)
+           enth = wmsupr*enth
+         endif
+       endif
+c***   This line deleted to model slumping after first failure, 9/30/91
+c***   if (int(crucb).eq.1) go to 200
+c
+c  If dumping of cohesive debris, then nslmpc=1.
+c  Check to see whether crucible has formed. If so, ncrcfm=0.
+       nslmpc=0
+c  Store lowest axial node at which breach occurred (kmltmn).
+       kmltmn=naz
+       do 152 j = 1,ncomp
+         if (idcomp(j).ne.0) go to 152
+c  Note.  Line below removed from active coding so that calculation
+c         can be perfomed of molten pool slumping for case of no
+c         metallic meltdown of core.
+c***     if (nhrdpn(j).le.0) go to 152
+         ncrcfm=0
+c  If ncrcfk=1, then cohesive debris at some elevation for component j.
+         ncrcfk=0
+         do 150 k = 1,naz
+           if (ncrcfk.eq.1) go to 150
+           if (lcrucb(k,j).ne.1) go to 150
+c  Cohesive debris has been encountered.
+           ncrcfk=1
+c  Calculate thickness of liquid cohesive debris.
+           nmltln=0
+           kmltop=0
+           kmltbt=0
+           do k2 = k,naz
+             if (nmltln.eq.1) cycle
+             if (lcrucb(k,j).eq.1) then
+               if (kmltbt.eq.0) kmltbt=k2
+               kmltop=k2
+             else
+               if(kmltbt.ge.1) nmltln=1
+             endif
+           enddo
+           if (kmltop.ge.1) ncrcfm=1
+c  Start if  block A-A.
+           if (ncrcfm.eq.0) then
+c****  temporary. no heat is transferred axially by convection.
+             qradpl(j)=0.0
+             nslmpa(j)=0
+           else
+c  Liquid is present, so possibility for breach of crucible.
+c  Calculate whether crust is breached.
+             call crucbr (rcos,pitch,idcomp,kmltbt,kmltop,
+     &       k,j,unuca,unucda,nsigl,tcond3,tsat,dzfrcq,
+     &       nslmpa(j),qradpl(j),thkcbr,nhrdpn(j),lcrucb,int(crucb))
+c  Start if block B-B.
+c  Note. nslmpa(j)=1=slumping at this time step.
+             if (nslmpa(j).eq.1) then
+c  Start if block C-C.
+c  If liquefied material from intact rod has slumped below core during
+c  this time step, then nslump(mcp) has already been set to 1.
+               if (nslump(mcp) .eq. 0) then
+                 delten=0.0
+c  Start if block D-D.
+                 if (nsqslp.eq.200) then
+c  Start if block E-E.
+                   if (timehy.lt.timsle(1)) then
+                     delten = ((timsle(1) - timehy)/(timsle(1) -
+     &               timsls(1)))*enthdb(1)
+                     enthdb(2)=enthdb(2)+delten
+                     timfrc=(timsle(1)-timehy)/(timsle(1)-timsls(1))
+                     wuoseq(2)=wuoseq(2)+timfrc*wuoseq(1)
+                     wurseq(2)=wurseq(2)+timfrc*wurseq(1)
+                     wzrseq(2)=wzrseq(2)+timfrc*wzrseq(1)
+                     wzoseq(2)=wzoseq(2)+timfrc*wzoseq(1)
+                     wbcseq(2)=wbcseq(2)+timfrc*wbcseq(1)
+                     wssseq(2)=wssseq(2)+timfrc*wssseq(1)
+                     wagseq(2)=wagseq(2)+timfrc*wagseq(1)
+                     powseq(2)=powseq(2)+timfrc*powseq(1)
+                   endif
+c  endif block E-E.
+                   do n = 2,nsqslp
+                     enthdb(n-1)=enthdb(n)
+                     wuoseq(n-1)=wuoseq(n)
+                     wurseq(n-1)=wurseq(n)
+                     wzrseq(n-1)=wzrseq(n)
+                     wzoseq(n-1)=wzoseq(n)
+                     wbcseq(n-1)=wbcseq(n)
+                     wssseq(n-1)=wssseq(n)
+                     wagseq(n-1)=wagseq(n)
+                     powseq(n-1)=powseq(n)
+                     timsls(n-1)=timsls(n)
+                     timsle(n-1)=timsle(n)
+                   enddo
+                   nsqslp=nsqslp-1
+                 endif
+c  Endif block D-D.
+                 nsqslp=nsqslp+1
+                 timsls(nsqslp)=timehy
+                 timsle(nsqslp)=timehy+68.
+                 nslump(mcp) = 1
+               endif
+c  Endif block C-C.
+               nslmpc=1
+               if(kmltbt.lt.kmltmn)kmltmn=kmltbt
+             endif
+c  Endif block B-B.
+           endif
+C  Endif block A-A.
+  150    continue
+  152  continue
+       if (nslmpc.eq.0) go to 200
+c  Calculate draining of crucible.
+       crucb=1.0
+c  Assume all liquid above breach drains out of crucible.
+c  Calculate volume of liquefied material.
+       tmp1=tupool
+       if(tmp1.lt.3120.0)tmp1=3120.0
+cljs define afalum etc.
+       afalum=0.0
+       aflith=0.0
+       afcadm=0.0
+       afsoil=0.0
+       rhopol=zuden1(afpool(1),afpool(2),afpool(3),afpool(4),afpool(5),
+     & afpool(6),afpool(7),afalum,aflith,afcadm,afsoil,tmp1)
+       volpol=(wupool+wzpool+wapool+wspool+wmpool)/rhopol
+c  Calculate enthalpy of mixture.
+       entpol=zunth1(afpool(1),afpool(2),afpool(3),afpool(4),afpool(5),
+     & afpool(6),afpool(7),tupool,afalum,aflith,afcadm,afsoil,
+     & rftemp)
+       write(output,919)timehy,entpol,tupool,rhopol,volpol
+  919  format (' slump Molten pool properties at time of slumping:',
+     & ' event time=',g18.10,/,' slump  entpol=',e10.4,
+     & ' tupool=',e10.4,' rhopol=',e10.4,' volpol=',e10.4)
+c
+c  Calculate volume of liquefied material below elevation of break.
+c  Note.  To model slumping only of material above location at which
+c  breach calculated to occur, then activate line below.
+       if (kmltmn.ge.1.or.int(crucb).eq.1) then
+c  All liquefied material slumped.
+         volslp=volpol
+         dvpool=0.0
+       else
+         k1=kmltmn-1
+         dvpool=0.0
+         do k = k1,1,-1
+           do j = 1,ncomp
+             kdyn=(j-1)*ndax+k
+             if (idcomp(j).ne.0) cycle
+c  Note.  Line below deactivated to model molten pool formed in ceramic
+c  environment.
+c***         if (nhrdpn(j) .le. 0) cycle
+             if (lcrucb(k,j) .eq. 1)
+     &       dvpool=dvpool+float(nsigl(j))*dzcond(kdyn)*pitch(j)**2
+           enddo
+         enddo
+       endif
+       if (dvpool.gt.volpol) then
+         volslp=0.0
+       else
+         volslp=volpol-dvpool
+       endif
+       if (volslp.lt.1.e-9) then
+         frac=0.0
+         nslmpc=0
+         crucb=0.0
+       else
+         frac=volslp/volpol
+         wuoslp=wuoslp+frac*wupool
+         wupool=(1.-frac)*wupool
+         wzoslp=wzoslp+frac*wzpool
+         wzpool=(1.-frac)*wzpool
+         wzrslp=wzrslp+frac*wmpool
+         wmpool=(1.-frac)*wmpool
+         wssslp = wssslp + frac * wspool
+         wspool =(1.-frac)*wspool
+         wagslp = wagslp + frac * wapool
+         wapool = (1.-frac)*wapool
+c
+c  Increment enthalpy.
+         enth=enth+(wuoslp+wzoslp+wssslp+wagslp+wzrslp)*entpol
+c  Calculate heat generation in slumping material.
+         qdpol1=qdpool
+         if(nspowi.eq.3.or.nspowi.eq.1)qdpol1=qdpol1*powtot(1)
+         powslp=powslp+frac*qdpol1
+         qdpool=(1.-frac)*qdpool
+       endif
+       write(output,905)timehy,frac,volpol,rhopol,entpol
+  905  format (' in slump, timehy=',e10.4,' frac=',e10.4,
+     # ' volpol=',e10.4,' rhopol=',e10.4,' entpol=',e10.4)
+       write(output,907)volslp,wuoslp,wzoslp,wzrslp,powslp,enth
+  907  format (' volslp=',e10.4,' wuoslp=',e10.4,' wzoslp=',
+     # e10.4,' wzrslp=',e10.4,' powslp=',e10.4,' enth=',e10.4)
+c  Reset molten crucible flag from 1 to 2 for material that has slumped
+c  to lower head during time step.
+c***   Note. for slumping only of material above breach, activate line.
+c***   k1=kmltmn
+       k1=1
+       if(int(crucb).eq.1) k1=1
+       do j = 1,ncomp
+         do k = k1,naz
+           if (idcomp(j).ne.0) cycle
+           if (lcrucb(k,j).eq.1) lcrucb(k,j)=2
+           if (lcrucb(k,j).eq.2.and.j.lt.ncomp) then
+c  Flag that embedded control rods have also slumped.
+c  Check for layout of core components where all fuel rods defined
+c  first, then all control rods.
+             ntest1=0
+             ntest2=0
+             if (ncomp.ge.4) then
+               ncomph=ncomp/2
+               if(idcomp(1).eq.0.and.idcomp(2).eq.0)ntest1=1
+               if(idcomp(ncomph+1).eq.1.and.idcomp(ncomph+2).eq.1)
+     &         ntest2=1
+               if (ntest1.eq.1.and.ntest2.eq.1) then
+c  Layout of core with all fuel rods defined first, then the control
+c  rods.
+                 jindex=ncomph+j
+                 lcrucb(k,jindex)=2
+               endif
+             endif
+             if (ntest1.eq.0.and.ntest2.eq.0) then
+               if(idcomp(j+1).eq.1) lcrucb(k,j+1)=2
+             endif
+           endif
+          enddo
+        enddo
+  200   enrslp=enth
+        if (nslump(mcp) .eq. 1) then
+          enthdb(nsqslp)=enrslp
+          wuoseq(nsqslp)=wuoslp
+          wurseq(nsqslp)=wurslp
+          wzrseq(nsqslp)=wzrslp
+          wzoseq(nsqslp)=wzoslp
+          wbcseq(nsqslp)=wbcslp
+          wssseq(nsqslp)=wssslp
+          wagseq(nsqslp)=wagslp
+          powseq(nsqslp)=powslp
+        endif
+        return
+        end
+*endif

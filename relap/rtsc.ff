@@ -1,0 +1,187 @@
+*mlist
+       subroutine rtsc
+!  Process time step control cards.
+!
+!  Cognizant engineer: rjw.
+!
+*in32 icr
+*in32end
+       use tstpctc
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'ufiles.h'
+!
+!  Local variables.
+       integer, parameter :: tspskp=7
+       real(kr) told
+       integer i,ie1,ie2,ie3,ie4,ie5,ix,j,k0,k1,k2,
+     & l3a(14),l3c(8)
+       logical tfail
+       real(kr) scr(693)
+       integer icr(693)
+       equivalence (scr(1),icr(1))
+!  Data statements.
+       data l3a/201,-299,0,693,0,1,7,3*1,4*0/
+       data l3c/200,0,0,2,0,1,1,0/
+!
+!  Get starting time if not default of zero for new problem or from
+!  restart file for restart problem.
+       l3c(6) = 1
+       call inp2 (fa(filndx(1)),scr,l3c)
+       tfail = .true.
+       if (l3c(6) .lt. 0) then
+         fail = .true.
+       elseif (l3c(6) .gt. 0) then
+         if (scr(1) .ne. -1.0) then
+           if (scr(1) .lt. 0.0) then
+             write (output,"('0******** Error in simulation start time o
+     &n card 200, set to 0.0.')")
+             scr(1) = 0.0
+             fail = .true.
+           endif
+           timehy = scr(1)
+           timeht = scr(1)
+          write (output,"('0Start time set to',es15.6,' sec.')") timehy
+         endif
+         if (l3c(6) .gt. 1) then
+           if (icr(2).lt.0 .or. icr(2).ge.10000) then
+             fail = .true.
+             write (output,"('0******** Control variable number specifie
+     &d on Card 200 is incorrect.')")
+           else
+             tfail = .false.
+             tspctr(1) = icr(2)
+             if (tspctr(1) .ne. 0) write (output,"('0Time increment will
+     & be limited by value in Control Variable',i5,'.')") tspctr(1)
+           endif
+         endif
+       endif
+       if (tfail) tspctr(1) = 0
+       tspctr(2) = 0
+!
+!  Check if time step control input is present.
+       tfail = .false.
+       if (.not.allocated(tstpct)) curclm = 0
+       call inplnk (l3a(1),ix,ie3,ie4,fa(filndx(1)))
+       if (ie4.ne.0 .or. (ix.ne.-1 .and. ix.lt.300)) then
+!  Input present, delete data from restart if present.
+         if (allocated(tstpct)) deallocate (tstpct)
+         l3a(6) = 1
+         call inp2 (fa(filndx(1)),scr,l3a)
+         if (l3a(6) .lt. 0) then
+           fail = .true.
+         elseif (l3a(6) .eq. 0) then
+           if (curclm .eq. 0) then
+             write (output,"('0******** Time step control (201-299) card
+     &s are missing.')")
+             fail = .true.
+           endif
+         elseif (mod(l3a(6),tspskp) .ne. 0) then
+           write (output,"('0******** Number of quantities on time step
+     & control (201-299) cards are not a multiple of seven.')")
+             fail = .true.
+         else
+           curclm = l3a(6)/tspskp
+           curctl = 0
+           curcmi = 0
+           curcmj = 0
+           curcrs = 0
+           ie1 = 0
+           ie2 = 0
+           ie3 = 0
+           ie4 = 0
+           ie5 = 0
+           told = -1.e75
+           if (iand(ihlppr(2),ishft(1,22)) .ne. 0) write (output,
+     & "('0',39x,'Time step control data'/5x,'end time',9x,'min.time ste
+     &p    max.time step  option   minor edit   major edit     restart'/
+     & 5x,'(sec)',12x,'(sec)',12x,'(sec)',20x,'frequency    frequency   
+     & frequency')")
+           allocate (tstpct(curclm))
+           i = 1
+           do j = 1,curclm
+             tstpct(j)%tspend = scr(i)
+             if (tstpct(j)%tspend .le. told) ie1 = ie1 + 1
+             told = tstpct(j)%tspend
+             tstpct(j)%dtmin = scr(i+1)
+             if (tstpct(j)%dtmin .lt. 1.0e-12) ie2 = ie2 + 1
+             tstpct(j)%dtmax = scr(i+2)
+             if (tstpct(j)%dtmax .le. 0.0) ie2 = ie2 + 1
+             if (tstpct(j)%dtmin .gt. tstpct(j)%dtmax) ie5 = ie5 + 1
+             tstpct(j)%dtmin = min(tstpct(j)%dtmin,1.0e-6)
+             k0 = icr(i+3)/1000
+             k2 = icr(i+3) - k0*1000
+             k1 = k2/100
+             k2 = k2 - k1*100
+             if (k1.lt.0 .or. k1.gt.7 .or. k0.lt.0 .or. k0.gt.15 .or.
+     &       k2.lt.0 .or. k2.gt.63) ie3 = ie3 + 1
+             tstpct(j)%tsppac = ior(ior(ishft(k1,12),ishft(k0,6)),k2)
+             if (icr(i+4).le.0 .or. icr(i+5).le.0 .or. icr(i+6).le.0)
+     &       ie4 = ie4 + 1
+             tstpct(j)%tsppmi = icr(i+4)
+             tstpct(j)%tsppmj = icr(i+5)
+             tstpct(j)%tspprs = icr(i+6)
+             if (iand(ihlppr(2),ishft(1,22)) .ne. 0)
+     &       write (output,"(3es17.6,i9,3i13)") scr(i),scr(i+1),
+     &       scr(i+2),icr(i+3),icr(i+4),icr(i+5),icr(i+6)
+             i = i + tspskp
+           enddo
+           tfail = .false.
+           if (ie1 .ne. 0) then
+             write (output,"('0******** Time end values on time step con
+     &trol (201-299) cards not increasing, occurred',i3,' times.')") ie1
+             tfail = .true.
+           endif
+           if (ie2 .ne. 0) then
+             write (output,"('0******** Time step values on time step co
+     &ntrol (201-299) cards less than 1.0e-12',i4,' times.')") ie2
+             tfail = .true.
+           endif
+           if (ie5 .ne. 0) then
+             write (output,"('0******** Minimum time step greater than m
+     &aximum time step',i4,' times.')") ie5
+             tfail = .true.
+           endif
+           if (ie3 .ne. 0) then
+             write (output,"('0******** Time step option on time step co
+     &ntrol (201-299) cards not in range',i4,' times.')") ie3
+             tfail = .true.
+           endif
+           if (ie4 .ne. 0) then
+             write (output,"('0******** Frequencies on time step control
+     & (201-299) cards are less than zero',i4,' times.')") ie4
+             tfail = .true.
+           endif
+           fail = fail .or. tfail
+         endif
+       endif
+       if (.not.tfail) then
+         if (curclm .eq. 0) then
+           fail = .true.
+           write (output,"('0******** No time step control lines (201-29
+     &9) have been entered, and at least one line must be entered.')")
+         else
+!  Position to appropriate time step card.
+           tfail = .false.
+           do i = 1,curclm
+             if (tstpct(i)%tspend .gt. timehy) then
+               tfail = .true.
+               curctl = i
+               curcmi = tstpct(i)%tsppmi
+               curcmj = tstpct(i)%tsppmj
+               curcrs = tstpct(i)%tspprs
+               exit
+             endif
+           enddo
+           if (.not.tfail) then
+             write (output,"('0******** A time end value is not greater 
+     &than time at restart.')")
+           fail = .true.
+           endif
+         endif
+       endif
+       return
+       end

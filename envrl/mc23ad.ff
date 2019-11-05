@@ -1,0 +1,215 @@
+       subroutine mc23ad (n,icn,a,licn,lenr,idisp,ip,iq,lenoff,iw,iw1)
+!  Date   01 Jan 1984     Copyright UKAEA, Harwell.
+!  Calls   mc13    mc21
+!
+       use ma28mod
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       integer licn,n
+       real(kr) a(:)
+       integer icn(:),idisp(:),ip(:),iq(:),iw(:,:),iw1(:,:),
+     & lenoff(:),lenr(:)
+!
+       interface
+!
+       subroutine mc13e (n,icn,licn,ip,lenr,arp,ib,num,lowl,numb,prev)
+       integer licn,n,num
+       integer arp(:),ib(:),icn(:),ip(:),lenr(:),lowl(:),numb(:),
+     & prev(:)
+       end subroutine mc13e
+!
+       subroutine mc21a (n,icn,licn,ip,lenr,iperm,numnz,iw)
+       integer licn,n,numnz
+       integer icn(:),ip(:),iperm(:),lenr(:),iw(:,:)
+       end subroutine mc21a
+!
+       end interface
+!
+       integer i,i1,i2,ibeg,iblock,iend,ii,ilend,inew,iold,irowb,
+     & irowe,j,jj,jnew,jold,jnpos,k,leni,nz
+!
+!  Set up pointers iw(.,1) to the beginning of the rows and set lenoff
+!  equal to lenr.
+       iw1(1,1) = 1
+       lenoff(1) = lenr(1)
+       if (n.ne.1) then
+         do i = 2,n
+           lenoff(i) = lenr(i)
+           iw1(i,1) = iw1(i-1,1) + lenr(i-1)
+         enddo
+       endif
+!  idisp(1) points to the first position in a/icn after the
+!  off-diagonal blocks and untreated rows.
+       idisp(1) = iw1(n,1) + lenr(n)
+!
+!  Find row permutation ip to make diagonal zero-free.
+       call mc21a (n,icn,licn,iw1(:,1),lenr,ip,numnz,iw)
+!
+!  Possible error return for structurally singular matrices.
+       if (numnz.ne.n.and.abort) go to 170
+!
+!  iw1(.,2) and lenr are permutations of iw1(.,1) and lenr/lenoff
+!  suitable for entry to mc13d since matrix with these row pointer
+!  and length arrays has maximum number of non-zeros on the diagonal.
+       do ii = 1,n
+         i = ip(ii)
+         iw1(ii,2) = iw1(i,1)
+         lenr(ii) = lenoff(i)
+       enddo
+!
+!  Find symmetric permutation iq to block lower triangular form.
+!      call mc13d (n,icn,licn,iw1(1,2),lenr,iq,iw(1,4),num,iw)
+       call mc13e (n,icn,licn,iw1(:,2),lenr,iq,iw(:,4),num,iw(:,1),
+     & iw(:,2),iw(:,3))
+!
+       if (num.eq.1) then
+!
+!  Action taken if matrix is irreducible.
+! whole matrix is just moved to the end of the storage.
+         do i = 1,n
+           lenr(i) = lenoff(i)
+           ip(i) = i
+           iq(i) = i
+         enddo
+         lenoff(1) = -1
+!  idisp(1) is the first position after the last element in the
+!  off-diagonal blocks and untreated rows.
+         nz = idisp(1) - 1
+         idisp(1) = 1
+!  idisp(2) is the position in a/icn of the first element in the
+!  diagonal blocks.
+         idisp(2) = licn - nz + 1
+         large = n
+         if (nz.eq.licn) return
+         do k = 1,nz
+           j = nz - k + 1
+           jj = licn - k + 1
+           a(jj) = a(j)
+           icn(jj) = icn(j)
+         enddo
+         return
+       endif
+!
+!  Data structure reordered.
+!
+!  Form composite row permutation ... ip(i) = ip(iq(i)).
+       do ii = 1,n
+         i = iq(ii)
+         iw(ii,1) = ip(i)
+       enddo
+       ip(1:n) = iw(1:n,1)
+!
+!  Run through blocks in reverse order separating diagonal blocks
+!  which are moved to the end of the storage. Elements in
+!  off-diagonal blocks are left in place unless a compress is
+!  necessary.
+!
+!  ibeg indicates the lowest value of j for which icn(j) has been
+!  set to zero when element in position j was moved to the
+!  diagonal block part of storage.
+       ibeg = licn + 1
+!  iend is the position of the first element of those treated rows
+!  which are in diagonal blocks.
+       iend = licn + 1
+!  large is the dimension of the largest block encountered so far.
+       large = 0
+!
+!  num is the number of diagonal blocks.
+       do k = 1,num
+         iblock = num - k + 1
+!  i1 is first row (in permuted form) of block iblock.
+!  i2 is last row (in permuted form) of block iblock.
+         i1 = iw(iblock,4)
+         i2 = n
+         if (k.ne.1) i2 = iw(iblock+1,4) - 1
+         large = max(large,i2-i1+1)
+!  Go through the rows of block iblock in the reverse order.
+         do ii = i1,i2
+           inew = i2 - ii + i1
+!  We now deal with row inew in permuted form (row iold in original
+!  matrix).
+           iold = ip(inew)
+!  If there is space to move up diagonal block portion of row go to 110
+           if (iend-idisp(1).ge.lenoff(iold)) go to 110
+!
+!  In-line compress.
+!  Moves separated off-diagonal elements and untreated rows to
+!  front of storage.
+           jnpos = ibeg
+           ilend = idisp(1) - 1
+           if (ilend.lt.ibeg) go to 190
+           do j = ibeg,ilend
+             if (icn(j).eq.0) cycle
+             icn(jnpos) = icn(j)
+             a(jnpos) = a(j)
+             jnpos = jnpos + 1
+           enddo
+           idisp(1) = jnpos
+           if (iend - jnpos.lt.lenoff(iold)) go to 190
+           ibeg = licn + 1
+!  Reset pointers to the beginning of the rows.
+           do i=2,n
+             iw1(i,1) = iw1(i-1,1) + lenoff(i-1)
+           enddo
+!
+!  Row iold is now split into diag. and off-diag. parts.
+  110      irowb = iw1(iold,1)
+           leni = 0
+           irowe = irowb + lenoff(iold) - 1
+!  Backward scan of whole of row iold (in original matrix).
+           if (irowe.ge.irowb) then
+             do jj = irowb,irowe
+               j = irowe - jj + irowb
+               jold = icn(j)
+!  iw(.,2) holds the inverse permutation to iq. It was set to this
+!  in mc13d.
+               jnew = iw(jold,2)
+!  If (jnew.lt.i1) then ....
+!  Element is in off-diagonal block and so is left in situ.
+               if (jnew.lt.i1) cycle
+!  Element is in diagonal block and is moved to the end of the storage.
+               iend = iend - 1
+               a(iend) = a(j)
+               icn(iend) = jnew
+               ibeg = min(ibeg,j)
+               icn(j) = 0
+               leni = leni + 1
+             enddo
+             lenoff(iold) = lenoff(iold) - leni
+           endif
+           lenr(inew) = leni
+         enddo
+!
+         ip(i2)=-ip(i2)
+       enddo
+!  Resets ip(n) to positive value.
+       ip(n) = -ip(n)
+!  idisp(2) is position of first element in diagonal blocks.
+       idisp(2) = iend
+!
+!  This compress is used to move all off-diagonal elements to the
+!  front of the storage.
+       if (ibeg.gt.licn) return
+       jnpos = ibeg
+       ilend = idisp(1) - 1
+       do j = ibeg,ilend
+         if (icn(j).eq.0) cycle
+         icn(jnpos) = icn(j)
+         a(jnpos) = a(j)
+         jnpos = jnpos+1
+       enddo
+!  idisp(1) is first position after last element of off-diagonal blocks.
+       idisp(1) = jnpos
+       return
+!  Error returns.
+  170  if (lp.ne.0) write(lp,180) numnz
+  180  format (33x,' Matrix is structurally singular, rank =',i6)
+       idisp(1) = -1
+       go to 210
+  190  if (lp.ne.0) write(lp,200) n
+  200  format (33x,' licn not big enough, increase by',i6)
+       idisp(1) = -2
+  210  if (lp.ne.0) write(lp,220)
+  220  format ('+error return from mc23ad because')
+       return
+       end

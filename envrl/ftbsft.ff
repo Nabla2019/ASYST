@@ -1,0 +1,179 @@
+       subroutine ftbsft (id,flsz,lohi,i2)
+c
+c  This subroutine moves file id to user selected end of memory and/or
+c  changes file size.
+c  id = file identifier (input)
+c  flsz = file size to allocate (input)
+c  lohi = flag for preferred location of move (input)
+c       1 = move towards preferred end
+c       2 = move towards other end
+c       3 = no move, only change size
+c  i2 = index of file in memory (output)
+c
+c  Cognizant engineer: rjw
+c
+*call ftbcom
+c
+$if -def,in32,1
+       real id
+$if def,in32,1
+       real*8 id
+       integer flsz
+       logical hilos
+c
+$if -def,in32,1
+       parameter (msk=1073741823)
+c
+   10  if (id .eq. 0.0) call ftberr (19)
+       if (flsz .le. 0) call ftberr (16)
+       if (lohi.le.0 .or. lohi.gt.3) call ftberr (22)
+       call idfind (id,i1)
+       if (i1 .eq. 0) call ftberr (11)
+$if -def,in32,2
+       if (iand(ia(i1+1),msk) .ne. 0) call ftberr (43)
+       k = iand(ia(i1+2),msk)
+$if def,in32,2
+       if (ia(2,i1+1) .ne. 0) call ftberr (43)
+       k = ia(2,i1+2)
+       if (k .gt. 2) call ftberr (49)
+       if (k .eq. 1) call ftbslk
+       mmin = 0
+$if -def,in32,2
+       ia13 = ishft(ia(i1+3),-30)
+       ia23 = iand(ia(i1+3),msk)
+$if def,in32,2
+       ia13 = ia(1,i1+3)
+       ia23 = ia(2,i1+3)
+       if (lohi .eq. 3) go to 150
+$if -def,in32,1
+    1  ia(i1+2) = 0
+$if def,in32,2
+    1  ia(1,i1+2) = 0
+       ia(2,i1+2) = 0
+       hilos = hilo
+       if (lohi - 2) 11,12,13
+   12  hilo = .not.hilo
+       go to 11
+   13  hilo = .true.
+   11  msize = size(k)
+       if (ia13 .lt. minz(k)) minz(k) = ia13
+       if (ia13 .ge. maxz(k)) maxz(k) = ia13 + ia23
+       call ftblct (k,flsz,i2)
+       hilo = hilos
+       size(k) = msize
+       if (i2 .eq. ia13) go to 140
+       if (lohi .eq. 3) call ftberr (48)
+       l = min0(ia23,flsz)
+       if (i2.ge.ia13 .and. i2.le.ia13+l) l = -l
+$if def,lcm,3
+       if (k .eq. 1) go to 100
+       call ftbmv2 (ia13,i2,l)
+       go to 130
+  100  call ftbmov (a(ia13),a(i2),l)
+$if -def,in32,1
+  130  ia(i1+3) = ior(ishft(i2,30),ia23)
+$if def,in32,2
+       ia(1,i1+3) = i2
+       ia(2,i1+3) = ia23
+  140  size(k) = size(k)-flsz+ia23
+       if (flsz .eq. ia23) go to 145
+$if -def,in32,3
+       ia(i1+3) = ior(iand(ia(i1+3),not(msk)),flsz)
+       ia(i1+1) = ishft(flsz,30)
+  145  ia(i1+2) = k
+$if def,in32,5
+       ia(2,i1+3) = flsz
+       ia(1,i1+1) = flsz
+       ia(2,i1+1) = 0
+  145  ia(1,i1+2) = 0
+       ia(2,i1+2) = k
+       if (mmin .ne. 0) minz(k) = mmin
+       if (k .eq. 1) dlt = .true.
+$if def,nandbg
+c  Only do scm.
+       if (k .gt. 1) return
+c  Nan out the new space and the old space.
+       if (flsz .gt. ia23) then
+c                          new file is bigger than old file
+c                          nan the newly acquired space at end
+         call nanvd(ia,i2+ia23,flsz-ia23)
+         if (i2 .lt. ia13) then
+c                          new start is below old start
+c                          nan old space beyond end if any
+           call nanvd(ia,i2+flsz,(ia13+ia23)-(i2+flsz))
+         elseif (i2 .gt. ia13) then
+c                              new start is above old start
+c                              nan old space before start if any
+           call nanvd(ia,ia13,min(i2-ia13,ia23))
+         else
+c            new start is at old start
+c            already taken care of extra space in file
+         endif
+       elseif (flsz .lt. ia23) then
+c                              new file is smaller than old file
+         if (i2 .lt. ia13) then
+c                          new start is below old start
+           if (i2+flsz .le. ia13) then
+c                                 new end is below old start
+c                                 nan all of the old stuff
+             call nanvd(ia,ia13,ia23)
+           else
+c            new end is inside old file space
+c            nan the excess stuff
+             call nanvd(ia,i2+flsz,ia13+ia23-(i2+flsz))
+           endif
+         elseif (i2 .gt. ia13) then
+c                              new start is above old start
+           if (i2 .ge. ia13+ia23) then
+c                                 new start is above old end
+c                                 nan out the old file space
+             call nanvd(ia,ia13,ia23)
+           else
+c            new start is inside the old file
+c            nan out the space at the front of the old file
+             call nanvd(ia,ia13,i2-ia13)
+           endif
+         else
+c          new start if at same location as old start
+c          nan out the extra space at the end
+           call nanvd(ia,i2+flsz,ia23-flsz)
+         endif
+        else
+c           new file is same size as old file
+         if (i2 .lt. ia13) then
+c                          new start is below old start
+           if (i2+flsz .le. ia13) then
+c                                 new end is below old start
+c                                 nan all the old file
+             call nanvd(ia,ia13,ia23)
+           else
+c            new end is inside old file
+             call nanvd(ia,i2+flsz,ia13-i2)
+           endif
+         elseif (i2 .gt. ia13) then
+c                              new start is above old start
+           if (i2 .ge. ia13+ia23) then
+c                                 new start is above old end
+c                                 nan all the old file
+             call nanvd(ia,ia13,ia23)
+           else
+c            new start is inside old file
+c            nan the old stuff up to where the new file starts
+             call nanvd(ia,ia13,i2-ia13)
+           endif
+         else
+c           new file is at same location as old file, do nothing
+         endif
+       endif
+$endif
+       return
+  150  if (flsz .gt. ia23) go to 160
+       if (maxz(k) .le. ia13) maxz(k) = ia13 + ia23
+       if (minz(k) .ge. ia13) minz(k) = ia13 + flsz
+       i2 = ia13
+       go to 140
+  160  if (minz(k) .lt. ia13) mmin = minz(k)
+       minz(k) = ia13
+       if (minz(k) .ge. maxz(k)) call ftberr (48)
+       go to 1
+       end

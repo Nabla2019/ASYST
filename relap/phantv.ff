@@ -1,0 +1,2566 @@
+*mlist
+       subroutine phantv
+c
+c  Subroutine computes interphase heat transfer and also calculates
+c  some information for vexplt.  This replaces the volume loop in
+c  earlier subroutine phaint, which replaced earlier subroutines
+c  fidrag and mdot.
+c
+c  Cognizant engineer: rar kuo ras (hxc wmb).
+c
+c----------------------------------------------------------------------
+c   (1)  If (  reflood     ), the selection logic of the pre-  or post-c
+c        interfacialheat transfer correlations is modified as was done b
+c        Analytis in RELAP5/MOD2.
+c----------------------------------------------------------------------
+c
+       use invtbl
+       use lpdatc
+$if def,iua
+       use uncdata
+$endif
+       implicit none
+       include 'fast.h'
+       include 'cons.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'eccmxc.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+$if def,makemap,1
+       include 'makmap.h'
+       include 'przdat.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'stcblk.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+c  Local variables.
+        real acrit,afilm,alpan,alpanf,alpbub,alpdrp,alphab,alphac,
+     & alphad,alphbc,alphcd,alphde,alphef,alpian,avlim,bet,centr,cosang,
+     & ctheta,deltaf,delvv,drpnu,dtempc,dtempv,dlvol,diamvh,fact1,fact2,
+     & fanm,fbub,fdis,fian,fids,flux1,flux2,flux3,
+     & fislg,flow,fslug,fstrat,fstrta,fstrtb,fwfc,fwfc1,fwgc,fwgc1,gr,
+     & ggas3d,gliq3d,grvec1,grvec2,grvec3,grvty,hifdrp,
+     & hifsav,hifsb1,hifsp1,hifsub,hifsup,hifvs,higsb1,higsp1,higsup,
+     & htheta,nu,pr,preduc,psinq,ray,rdbub,rddrp,rdstar,rebub,
+     & redrp,reginv,rfannl,rfiann,rfislg,rfslug,rhofg,rhyli,rhyva,rvc,
+     & sannu,sbubb,sdrop,shzst,slugc,slslg,stheta,svslg,tgsat,twindo,
+     & vapnu,vdfact,vcritl,veps,vfgbb,vfilm,void,voidb,voidgs,voidpr,
+     & velgdf,vflux,vlf,vlg,vvg,wj,x,x1,xintrp,xj,xj1,xj2,xj3,
+     & trmmm
+       real aintf, hifilm,jakob,hiflev,z,f27,f32,f33,f34
+       real filmt, refilm, prfilm, nut, nul, hfilm, vbr
+       real lapno, dbubl, gliqa, jliq, jvap, vfbelo
+       real vgjs, vstrat, ajsign
+       real dbubm, dtsuph, hbubl, hwall, qbubl,
+     &      qwall, qzubr, vsupf
+       real lamcr,percnt
+$if def,mmfld,1
+       real prandl,reynol,cohdm,htcoef
+       integer i,ifrmto,ih1,ih2,ih3,ih4,ih5,ih6,ih7,ipack,ix,iz,izz,
+     & j,jm1,jtype,jvx,jx,k1,l,ls,m,mm,n,nh1,nh2,nh3,nh4,nh5,nh6,
+     & nh7
+       integer ll,nv,lv,lvs
+       logical poschf,posdry,lhelp,priz,sw1,threed
+       logical inormk,inorml,islev,reflod
+c
+c  Data statements.
+       data dtempc/0.2/, dtempv/1.0/, hifsup/3.0e6/
+       data rfiann,rfannl,rfislg,rfslug/2.5,2.5,2.5,2.0/
+       data veps/0.3/
+c
+c  Define statement functions.
+       psinq(x)=x*(x*(x*(x*(-0.239e-7*x + 0.27526e-5) - 0.1984090e-3) +
+     & 0.0083333315) - 0.1666666664)
+c
+c  Loop over volumes using real volume list.
+       ll = lpdat(issys)%llvect
+       lv = lvavol(ll)
+       lvs = lv
+       nv = lvptr(lv)
+       if (nv .ne. 0) then
+         do mm = 1,nv
+           lv = lv + 1
+           i = lvptr(lv)
+           ix = vctrls(i)
+           l = invfnd(i)
+           n = vcnfnd(i)
+c  Set pressurizer and 3D logical variables.
+           priz = cmptyp(n) .eq. 17
+           threed = cmptyp(n) .eq. 16
+c  Initialize variables.
+           reflod = .false.
+           higg(ix) = 0.0
+           hiff(ix) = 0.0
+           hggff(ix) = 0.0
+           hifc(ix) = 0.0
+           hifc1(ix) = 0.0
+           higc(ix) = 0.0
+           higc1(ix) = 0.0
+           hgfc(ix) = 0.0
+           hgfc1(ix) = 0.0
+           dtsf(ix) = 0.0
+           dtsfm(ix) = 0.0
+           dtsfsp(ix) = 0.0
+           dtsfsb(ix) = 0.0
+           higsub(ix) = 0.0
+           dtsg(ix) = 0.0
+           dtsgms(ix) = 0.0
+           dtsgm(ix) = 0.0
+           rhocpf(ix) = 0.0
+           trmm(ix) = 0.0
+           trmm1(ix) = 0.0
+           hfg(ix) = 0.0
+           scrchh(ix) = 0.0
+           xliqh(ix) = 0.0
+           xvaph(ix) = 0.0
+           nmapp(ix) = 0.0
+           fidxup(ix) = 0.0
+           pfinrg(ix) = 0.0
+           rvcrit(ix) = 0.0
+           fwfxaf(ix) = voidf(i)
+           fwfxaf(ix+1) = voidf(i)
+           fwfxaf(ix+2) = voidf(i)
+           fwfxag(ix) = voidg(i)
+           fwfxag(ix+1) = voidg(i)
+           fwfxag(ix+2) = voidg(i)
+           fwalf(i) = voidf(i)
+           fwalf(i+1) = voidf(i)
+           fwalf(i+2) = voidf(i)
+           fwalg(i) = voidg(i)
+           fwalg(i+1) = voidg(i)
+           fwalg(i+2) = voidg(i)
+           if (iand(imap(i),64) .ne. 0) then
+             voidg(i) = max(1.e-08,min(0.99999999,voidg(i)))
+             voidf(i) = 1.0 - voidg(i)
+           endif
+c
+c  Determine the flow map to be used.
+c  Calculate the parameters used in correlations.
+           if (.not.threed) then
+c  1D components
+             nmapp(ix) = iand(imap(i),63)
+             velgdf = velg(i) - velf(i)
+             avelfg(ix) = max(abs(velf(i) - velg(i)),0.01)
+             avelf(ix) = abs(velf(i))
+             diamvh = diamv(i)
+             dlvol = dl(i)
+             fluxm(ix) = hyarg(i)*abs(velg(i)) + hyarf(i)*
+     &       abs(velf(i))
+             vflux = fluxm(ix)
+             vlg = velg(i)
+             vlf = velf(i)
+             pecltv(i) = max(abs(ggas(i)) + abs(gliq(i)),0.001)*
+     &       diamv(i)*csubpf(i)/thconf(i)
+           else
+c 3D components
+             vlg = sqrt(velg(i)*velg(i) + velg(i+1)*velg(i+1) +
+     &       velg(i+2)*velg(i+2))
+             vlf = sqrt(velf(i)*velf(i) + velf(i+1)*velf(i+1) +
+     &       velf(i+2)*velf(i+2))
+             avelf(ix) = abs(vlf)
+             velgdf = sqrt((velg(i)-velf(i))*(velg(i)-velf(i)) +
+     &       (velg(i+1)-velf(i+1))*(velg(i+1)-velf(i+1)) +
+     &       (velg(i+2)-velf(i+2))*(velg(i+2)-velf(i+2)))
+             avelfg(ix) = max(velgdf, 0.01)
+             flux1 = hyarg(i)*abs(velg(i)) + hyarf(i)*abs(velf(i))
+             flux2 = hyarg(i)*abs(velg(i+1)) +
+     &       hyarf(i)*abs(velf(i+1))
+             flux3 = hyarg(i)*abs(velg(i+2)) +
+     &       hyarf(i)*abs(velf(i+2))
+             fluxm(ix) = sqrt(flux1*flux1 + flux2*flux2 +
+     &       flux3*flux3)
+             vflux = fluxm(ix)
+             diamvh = sqrt(diamv(i)*diamv(i) +
+     &       diamv(i+1)*diamv(i+1) + diamv(i+2)*diamv(i+2))
+             dlvol = sqrt(dl(i)*dl(i) + dl(i+1)*dl(i+1) +
+     &       dl(i+2)*dl(i+2))
+             ggas3d = sqrt(ggas(i)*ggas(i)+ggas(i+1)*ggas(i+1)+
+     &       ggas(i+2)*ggas(i+2))
+             gliq3d = sqrt(gliq(i)*gliq(i)+gliq(i+1)*gliq(i+1)+
+     &       gliq(i+2)*gliq(i+2))
+             pecltv(i) = max(abs(ggas3d) + abs(gliq3d),0.001)*
+     &       diamvh*csubpf(i)/thconf(i)
+c  Determine the flow regime map to be used.
+c  Assume that local coordinate and the inertia coordinate are same.
+c  It should be changed if rotation is used.
+             grvty = sqrt(gravv(i)*gravv(i) +
+     &       gravv(i+1)*gravv(i+1) +  gravv(i+2)*gravv(i+2))
+             grvec1 =  gravv(i)/grvty
+             grvec2 =  gravv(i+1)/grvty
+             grvec3 =  gravv(i+2)/grvty
+             if (fluxm(ix) .gt. 1.0e-8) then
+               cosang=(flux1*grvec1+flux2*grvec2+flux3*grvec3)/
+     &         (fluxm(ix))
+             else
+               cosang = 1.0
+             endif
+             if (abs(cosang) .gt. 0.7071) then
+               nmapp(ix) = 1
+             else
+               nmapp(ix) = 2
+             endif
+           endif
+           ivert(ix) = 0
+           ipack = 0
+           xliqh(ix) = 0.0
+           xvaph(ix) = 0.0
+           scrchh(ix) = 0.0
+$if def,mmfld
+           if (lnonmf(issys) .ne. 0) then
+             hmg(i) = 0.
+             hmf(i) = 0.
+             if (voidm(i) .ne. 0.0) then
+               prandl = csubpg(i)*viscg(i)/thcong(i)
+               reynol = rhog(i)*abs(velg(i) - velmt(i))*
+     &         diamvh/viscg(i)
+               cohdm = thcong(i)/diamvh
+               htcoef = max(4.36*cohdm,0.023*(prandl*reynol*reynol)
+     &         **0.4)
+               hmg(i) = max(htcoef,0.23*thcong(i)*(rhog(i)**2*
+     &         abs(tempmt(i) - tempg(i))*prandl/(tempg(i)*
+     &         viscg(i)**2))**0.3333)
+             endif
+           endif
+$endif
+           costhe(ix) = sign(1.0, (0.5 - voidg(i)))
+           dstar(ix) = 0.0
+           rhfg(ix) = ttrip + 3.0
+           nvalhx(ix) = p(i).ge.pcrit .or. (voidg(i).eq.0.0 .and.
+     &     voidf(i).eq.0.0) .or. (voidf(i).ne.0.0 .and.
+     &     voidg(i).ne.0.0 .and. tempf(i).lt.rhfg(ix) .and.
+     &     tempg(i).lt.rhfg(ix))
+           nvalhi(ix) = iand(vctrl(i),33).ne.0 .or. (quala(i).le.
+     &     0.99999999 .and. iand(vctrl(i),2).ne.0) .or. nvalhx(ix)
+           hfg(ix) = max(sathg(i) - sathf(i),1.0e-12)
+           rhfg(ix) = 1.0/hfg(ix)
+c-wdgb
+         if (chngno(74)) then
+           dtsf(ix) = ttempi(i) - tempf(i)
+           dtsg(ix) = ttempi(i) - tempg(i)
+         else
+           dtsf(ix) = satt(i) - tempf(i)
+           dtsg(ix) = satt(i) - tempg(i)
+         endif
+c-wdge
+           if (.not.nvalhi(ix)) then
+             higg(ix) = 0.0
+             hiff(ix) = 0.0
+             hggff(ix) = 0.0
+             trmm(ix) = abs(max(-2.0, dtsg(ix)))
+             higsub(ix) = 1.0e4*(1.0 + trmm(ix)*(1.0e2 + 0.25e2*
+     &       trmm(ix)))
+             trmm(ix) = max(0.0,-dtsf(ix))
+             dtsfm(ix) = 1.0 + trmm(ix)*(2.5e2 + 0.5e2*trmm(ix))
+             dtsgms(ix) = (1.0 - sign(1.0,dtsg(ix)))*0.5
+             dtsgm(ix) = 1.0 - dtsgms(ix)
+             rhocpf(ix) = rhof(i)*csubpf(i)
+             dtsfsp(ix) = 0.5 - sign(0.5,dtsf(ix))
+             dtsfsb(ix)=1.0 - dtsfsp(ix)
+           endif
+           fbub = 0.0
+           fslug = 0.0
+           fanm = 0.0
+           fdis = 0.0
+           fian = 0.0
+           fislg = 0.0
+           fids = 0.0
+           fstrat = 0.0
+           rhofg = max(1.0e-07,rhof(i) - rhog(i))
+           dstar(ix) = diamvh*sqrt(gravcn*rhofg/
+     &     max(sigma(i),1.0e-7))
+           if (nmapp(ix) .eq. 5) then
+c  Call eccmix for its particular flow regime patterns.
+             posdry = .false.
+             poschf = .false.
+c  Prevention of calling eccmix, if no condensation is expected.
+             if (voidg(i) .gt. 0.0) then
+               jm1 = invj(l)%invvnx
+               k1 = ij1nx(jm1)
+               if (velfj(jm1)*voidfj(jm1).gt.0.01 .and.
+     &         tempf(k1) + 0.1.lt.satt(i)) then
+                 call eccmxv (hifc(ix),i, jm1, l, ix, n)
+                 higg(ix) = hig(i)
+                 hggff(ix) = hig(i)
+                 voidpr = (voidg(i)*(1.0 - voidg(i)))**0.2
+                 hiff(ix) = min(hifc(ix),1.0e8*max(4.724,472.4*
+     &           voidpr))*max(0.0,min(1.0,(voidg(i) - 1.0e-10)*
+     &           10.00000001))
+c  Note: flattened void-dependence of the hif limit.
+                 go to 255
+               endif
+             endif
+             nmapp(ix) = 2
+           endif
+           if (nmapp(ix) .eq. 4) then
+c  High mixing map decisions.
+             posdry = .false.
+             poschf = .false.
+             if (voidg(i) .le. 0.5) then
+c  Bubbly.
+               flomap(ix) = 1
+               fbub = 1.0
+             else
+               alphad = 1.0e-4
+               if (voidg(i) .lt. 0.95) then
+c  Transition.
+                 flomap(ix) = 2
+                 alpbub = 0.5*exp(-10.0*(voidg(i) - 0.5))
+                 alpdrp = 0.05*exp(-10.0*(0.95 - voidg(i)))
+                 fdis = max(0.0,min((voidg(i) - alpbub)/(1.0 -
+     &           alpbub - alpdrp),1.0))
+                 fbub = max(0.0, min(1.0, (1.0 - fdis)))
+               else
+c  Dispersed.
+                 fdis = 1.0
+                 flomap(ix) = 3
+               endif
+             endif
+           elseif (nmapp(ix) .eq. 2) then
+c  Horizontal map decisions.
+             poschf = .false.
+             posdry = .false.
+c  Compute Dukler's stratification criterion.
+             void = min(voidg(i),voidf(i))
+$if def,mmfld,3
+             if (lnonmf(issys) .ne. 0) then
+               if (voidm(i).ne.0.) void = min(voidg(i),1.0-voidg(i))
+             endif
+             costhe(ix) = htheta(void)
+             scrchh(ix) = costhe(ix)**2
+             alphad = 1.0e-4
+             if (chngno(55)) then
+               alphef = 1.0e-3
+             else
+               alphef = max(2.0*alphad,min(2.0e-3*rhog(i)/rhof(i),
+     &         2.0e-4))
+             endif
+             stheta = max(alphad,costhe(ix)*(1.0 +
+     &       psinq(scrchh(ix))))
+             costhe(ix) = sqrt(max(0.0,min(1.0,(1.0 - stheta)*
+     &       (1.0 + stheta))))*sign(1.0,(0.5 - voidg(i)))
+             ctheta = costhe(ix)
+c vcritl is Tatail-Dukler critical velocity squared.
+c 1.924225501 = .5**2*g*pi/4
+             vcritl = 1.924225501*rhofg*voidg(i)*diamvh*
+     &       (1.0 - ctheta)**2/(rhog(i)*stheta)
+             scrchh(ix) = max(1.0e-30,velgdf**2)
+             rvcrit(ix) = sqrt(scrchh(ix)/max(scrchh(ix)*1.0e-30,
+     &       vcritl))
+             if (rvcrit(ix).lt.1.0 .and. fluxm(ix).lt.3000.0) then
+               fstrta = min(1.0,max(0.0,2.0*(1.0 - rvcrit(ix))))
+               fstrtb = min(1.0,max(0.0,0.002*(3000.0 - fluxm(ix))))
+               fstrat = fstrta*fstrtb
+               fstrat = fstrat*min(1.0,voidf(i)/alphef,
+     &         max(0.0,voidg(i)*1.0e5 - 1.0))
+               fstrat = min(1.0,max(0.0,fstrat))
+             endif
+             fstrt(i) = fstrat
+             if (fstrat .lt. 1.0) then
+               alphab = 0.25
+               if (fluxm(ix).gt.2000.0) alphab = min(0.50,0.25e-3*
+     &         (fluxm(ix) - 2000.0) + 0.25)
+               if (voidg(i) .le. alphab) then
+c  Bubbly.
+                 flomap(ix) = 4
+                 fbub = 1.0
+               else
+                 alphac = 0.8
+                 alphde = 0.75
+                 centr = 4.0e-5
+                 if (voidg(i) .le. alphac) then
+c  Slug.
+                   flomap(ix) = 5
+                   fanm = max(0.0, min((20.0*(voidg(i) - alphde)),
+     &             1.0))
+                   fslug = max(0.0, min((1.0 - fanm), 1.0))
+                   alpan = alphac
+                   slugc = 8.0/(alphac - alphab)
+                 elseif (voidf(i) .gt. alphad) then
+c  Annular-mist.
+                   flomap(ix) = 6
+                   fanm = 1.0
+                   alpan = voidg(i)
+                   scrchh(ix) = 4.0e-5*(rvcrit(ix)**2)**3
+                 else
+c  Dispersed.
+                   fdis = 1.0
+                   flomap(ix) = 7
+                 endif
+               endif
+             endif
+           else
+c  Vertical flow map decisions.
+c  Determine if wet or dry wall map is to be used.
+             tgsat = tempg(i) - tsatt(i) - 1.0
+             reflod = iand(imap(i),ishft(1,29)).ne.0
+             if ( reflod ) then
+c  When bundle modify tgsat
+               if (iand(vctrl(i),ishft(1,30)) .ne. 0) then
+                 tgsat = tgsat - 30.
+               endif
+             endif
+             poschf = (qwg(i).gt.0.0 .or. reflod)
+     &            .and. tgsat.gt.0.0
+c  15 to 60 degree interpolation window as p-reduced varies from .025 to
+c  .25.
+             if (poschf) then
+               preduc = p(i)/pcrit
+               if (preduc .lt. 0.25) then
+                 if (preduc .lt. 0.025) then
+                    twindo = 0.06666667
+                  else
+                    twindo = 1.0/(15.0 + 200.0*(preduc - 0.025))
+                  endif
+                else
+                  twindo = 0.016666667
+                endif
+                pfinrg(ix) = max(0.0,min(1.0,twindo*tgsat))
+             endif
+             if (reflod) then
+c When bundle, modify pfinrg (wet-wall below 1; dry-wall above 1)
+               if (iand(vctrl(i),ishft(1,30)) .ne. 0) then
+                 if(poschf) pfinrg(ix) = max(0.0,min(1.0,(1.0-exp(-0.5*
+     &             tgsat))*1.0000454))
+               else
+                 if(poschf) pfinrg(ix) = max(0.0,min(1.,twindo*tgsat))
+               endif
+             endif
+             vcritl = 5.66*sqrt(sqrt(max(sigma(i),1.0e-7)*rhofg)/
+     &       rhog(i))
+             alphab = max(0.25*min(1.0,(((0.045*dstar(ix))**2)**
+     &       2)**2),1.0e-3)
+c  Set minimum slug transition to 0.25 for bundle geometry.
+             if (iand(vctrl(i),ishft(1,30)).ne.0) alphab = max(0.25,
+     &         alphab)
+             if (fluxm(ix) .gt. 2000.0) then
+               if (fluxm(ix) .lt. 3000.0) then
+                 alphab = 1.0e-3*(fluxm(ix) - 2000.0)*(0.5 -
+     &           alphab) + alphab
+               else
+                 alphab=0.5
+               endif
+               pfinrg(ix) = max(0.0,min(1.0,pfinrg(ix)*
+     &         (0.4 - alphab)*10.))
+             endif
+             if (pfinrg(ix) .eq. 0.0) poschf = .false.
+             posdry = pfinrg(ix) .ge. 1.0
+             alphbc = 0.05
+c  Modifications for revised annular flow transition criteria (uk).
+             if (.not.threed) then
+c  1D components.
+               acrit = vcritl/max(abs(velg(i)),vcritl)
+               vfilm = 3.13*sqrt(diamvh*rhofg/rhog(i))
+               xj = voidg(i)*velg(i) + voidf(i)*velf(i)
+               wj = 1.0
+               if (xj .lt. 0.0) wj = 0.0
+               if (abs(xj) .le. veps) then
+                 x1 = (xj + veps)/(2.0*veps)
+                 wj = x1*x1*(3.0 - 2.0*x1)
+               endif
+               if (hydzc(i) + hydzc(i+1) .ge. 0.0) then
+                 afilm = wj*vfilm/max(abs(velg(i)),vfilm) +
+     &           (1.0 - wj)*0.75
+               else
+                 afilm = (1.0 - wj)*(vfilm/max(abs(velg(i)),
+     &           vfilm)) + wj*0.75
+               endif
+             else
+c  3D components.
+               acrit = vcritl/max(abs(vlg),vcritl)
+               vfilm = 3.13*sqrt(diamvh*rhofg/rhog(i))
+               xj1 = voidg(i)*velg(i) + voidf(i)*velf(i)
+               xj2 = voidg(i)*velg(i+1) + voidf(i)*velf(i+1)
+               xj3 = voidg(i)*velg(i+2) + voidf(i)*velf(i+2)
+               xj = -(grvec1*xj1 + grvec2*xj2 + grvec3*xj3)
+               wj = 1.0
+               if (xj .lt. 0.0) wj = 0.0
+               if (abs(xj) .le. veps) then
+                 x1 = (xj + veps)/(2.0*veps)
+                 wj = x1*x1*(3.0 - 2.0*x1)
+               endif
+               if (hydzc(i+4) + hydzc(i+5) .ge. 0.0) then
+                 afilm = wj*vfilm/max(abs(vlg),vfilm) +
+     &           (1.0 - wj)*0.75
+               else
+                 afilm = (1.0 - wj)*(vfilm/max(abs(vlg),
+     &           vfilm)) + wj*0.75
+               endif
+             endif
+             if (chngno(55)) then
+               alphac = max(0.8,min(afilm,acrit,0.9))
+             else
+               alphac = max(0.5,min(afilm,acrit,0.9))
+             endif
+c  Set minimum annular-mist transition to 0.8 for bundle geometry.
+             if (iand(vctrl(i),ishft(1,30)).ne.0) alphac = max(0.8,
+     &       alphac)
+             if (voidg(i) .le. alphab) then
+c  Bubbly and/or inverse-annular.
+               if (.not.poschf) then
+                 flomap(ix) = 4
+                 fbub = 1.0
+               elseif (posdry) then
+                 flomap(ix) = 8
+                 fian = 1.0
+                 alpian = voidg(i)
+               else
+                 flomap(ix) = 8
+                 fbub = 1.0
+                 fian = 1.0
+                 alpian = voidg(i)
+               endif
+             else
+               alphad = 1.0e-4
+               centr = 7.5e-5
+               if (voidg(i) .lt. alphac) then
+c  Slug and/or inverse-slug.
+                 slugc = 8.0/(alphac - alphab)
+                 if (.not.poschf) then
+                   flomap(ix) = 5
+                   alphde = max(alphab,alphac - 0.05)
+                   if (chngno(55)) then
+                     alphef = 1.0e-3
+                   else
+                     alphef = max(2.0*alphad,min(2.e-3*rhog(i)/
+     &               rhof(i),2.e-4))
+                   endif
+                   fanm = max(0.0,min(20.0*(voidg(i) - alphde),1.0))
+                   fslug = max(0.0, min(1.0 - fanm, 1.0))
+                   alpan = alphac
+                   rvcrit(ix) =  voidg(i)*vlg/vcritl
+                 elseif (posdry) then
+                   flomap(ix) = 9
+                   alphcd = min(alphac,alphab+0.2)
+                   fian = max(0.0, min(5.0*(alphcd-voidg(i)), 1.0))
+                   fislg = max(0.0, min((1.0 - fian), 1.0))
+                   alpian = alphab
+                 else
+                   flomap(ix) = 9
+                   alphde = max(alphab,alphac - 0.05)
+                   if (chngno(55)) then
+                     alphef = 1.0e-3
+                   else
+                     alphef = max(2.0*alphad,min(2.e-3*rhog(i)/
+     &               rhof(i),2.e-4))
+                   endif
+                   fanm = max(0.0,min(20.0*(voidg(i) - alphde),1.0))
+                   fslug = max(0.0, min(1.0 - fanm, 1.0))
+                   alpan = alphac
+                   rvcrit(ix) =  voidg(i)*vlg/vcritl
+                   alphcd = min(alphac,alphab+0.2)
+                   fian = max(0.0, min(5.0*(alphcd-voidg(i)), 1.0))
+                   fislg = max(0.0, min((1.0 - fian), 1.0))
+                   alpian = alphab
+                 endif
+               elseif (voidg(i) .gt. alphac .and. voidg(i) .le.
+     &         1.0 - alphad) then
+c  Annular-mist and/or dispersed.
+                 if (.not.poschf) then
+                   flomap(ix) = 6
+                   if (chngno(55)) then
+                     alphef = 1.0e-3
+                   else
+                     alphef = max(2.0*alphad,min(2.0e-3*rhog(i)/
+     &               rhof(i),2.0e-4))
+                   endif
+                   alpan = voidg(i)
+                   rvcrit(ix) = voidg(i)*vlg/vcritl
+                   fanm = 1.0
+                 elseif (posdry) then
+                   flomap(ix) = 10
+                   fids = 1.0
+                 else
+                   flomap(ix) = 10
+                   if (chngno(55)) then
+                     alphef = 1.0e-3
+                   else
+                     alphef = max(2.0*alphad,min(2.0e-3*rhog(i)/
+     &               rhof(i),2.0e-4))
+                   endif
+                   alpan = voidg(i)
+                   rvcrit(ix) = voidg(i)*vlg/vcritl
+                   fanm = 1.0
+                   fids = 1.0
+                 endif
+               else
+c  Dispersed.
+                 if (.not.poschf) then
+                   flomap(ix) = 7
+                   fdis = 1.0
+                 elseif (posdry) then
+                   flomap(ix) = 11
+                   fids = 1.0
+                 else
+                   flomap(ix) = 11
+                   fdis = 1.0
+                   fids = 1.0
+                 endif
+               endif
+             endif
+           endif
+           fanms(ix) = fanm
+           if (.not.posdry) then
+c  Wet wall correlations.
+             fwfc = 0.0
+             fwgc = 0.0
+             fwfc1 = 0.0
+             fwgc1 = 0.0
+             if (nmapp(ix) .ne. 4) then
+               hifc(ix) = 1.0
+               higc(ix) = 1.0
+               hgfc(ix) = 1.0
+               hifc1(ix) = 1.0
+               higc1(ix) = 1.0
+               hgfc1(ix) = 1.0
+             else
+               hifc(ix) = 0.0
+               higc(ix) = 0.0
+               hgfc(ix) = 0.0
+               hifc1(ix) = 0.0
+               higc1(ix) = 0.0
+               hgfc1(ix) = 0.0
+             endif
+             if (fstrat .lt. 1.0) then
+               if (fbub .gt. 0.0) then
+c  Bubbly.
+                 vfgbb = velgdf
+                 if (flomap(ix) .ne. 2) alpbub = max(voidg(i),
+     &           1.0e-5)
+                 if (voidg(i) .lt. 1.0e-5) vfgbb = vfgbb*voidg(i)*
+     &           1.0e5
+                 if (chngno(61)) then
+c  Compute bubble diameter based on Laplace No.
+                   lapno = sqrt (sigma(i)/(gravcn*rhofg))
+                   dbubl = min(0.9*diamvh,2.0*lapno)
+c  Apply maximum bubble diameter criteria of TBD.
+                   vsupf = voidf(i) * avelf(ix)
+                   vsupf = max(0.01,vsupf)
+                   dbubm = 2.96 * sigma(i)**0.6 * diamvh**0.48
+     &             * viscf(i)**0.08 / (rhof(i)**0.68
+     &             * vsupf**1.12)
+                   dbubl = max(1.0e-4,min(dbubm,dbubl))
+                   rdbub = 1.0 / dbubl
+                   sbubb = 6.0 * alpbub/dbubl
+                   vbr = 1.53*sqrt(gravcn*lapno/rhof(i))
+                   rebub = rhof(i)*min(vfgbb,vbr)*dbubl/viscf(i)
+                   rebub = max(1.0,rebub)
+                 else
+                   call fidisv (vfgbb,alpbub,rdbub,rebub,sbubb,i,0,
+     &             diamvh,reflod)
+                 endif
+                 fwgc = fbub*voidg(i)
+                 fwfc = fbub*voidf(i)
+                 if (.not.nvalhi(ix)) then
+                   vdfact = alpbub/max(1.0e-9,voidg(i))
+                   higc(ix) = sbubb*higsub(ix)*vdfact
+                   hifc(ix) = 0.0
+                   trmm(ix) = abs(min(0.0,max(-2.0,dtsg(ix))))
+                   hgfc(ix) = sbubb*1.0e4*(1.0 + trmm(ix)*(1.0e2 +
+     &             0.25e2*trmm(ix)))*vdfact
+                   if (voidg(i).gt.0.0 .or. dtsf(ix).lt.0.0) then
+                     scrchh(ix) = 1.0 +  max(-1.0,min(0.0,dtsf(ix)))
+                     scrchh(ix) = max(0.0,min(1.e-5,voidg(i)*
+     &               (1.0 - qualao(i)))*1.e5*scrchh(ix) + 1.0 -
+     &               scrchh(ix))
+                     call hifbub (hifc(ix),alpbub,rdbub,rebub,sbubb,
+     &               1.0,i)
+                     hifc(ix) = hifc(ix)*scrchh(ix)
+                     hifsp1 = hifc(ix)
+                     hifsb1 = hifc(ix)
+                     if (chngno(61)) then
+c  Enhancements to HIF for Flashing.
+c  Liquid temperature greater than saturation at the
+c  total pressure.
+                       if (tempf(i) .gt. tsatt(i)) then
+c  Contribution from wall nucleation:
+c  use curvefit to approximate Forster-Zuber
+                         dtsuph = tempf(i) - tsatt(i)
+                         qwall = 0.0744 * p(i)**0.79 * dtsuph**2
+c  Use pool boiling CHF as upper limit:
+c  use curvefit to approximate Zuber CHF
+                         qzubr = 2.18e+4 * p(i)**0.34
+                         qzubr = min(4.0e+6,qzubr)
+                         qwall = min(qwall,qzubr)
+c  Contribution due to nucleation sites within the fluid
+c  (eg., dissolved gases):
+c  use Plesset-Zwick for bubble HTC:
+                         hbubl = 3.82 * (thconf(i)/dbubl) *
+     &                   (rhof(i)*csubpf(i)/(rhog(i)*hfg(ix)))
+     &                   * dtsuph
+                         qbubl = hbubl * dtsuph
+c  Put heat fluxes on a per unit volume basis:
+                         qwall = qwall * (4.0/diamvh)
+                         qbubl = qbubl * max(20.0,sbubb)
+c  Convert to HTC referenced to saturation at vapor partial
+c  pressure:
+                         hwall = qwall / max(1.0,-dtsf(ix))
+                         hbubl = qbubl / max(1.0,-dtsf(ix))
+c  Add flashing contribution to HIF:
+                         hifsp1 = max(hifsp1,hbubl) + hwall
+                       endif
+                     endif
+                     if (iand(imap(i),63) .ne. 5 .and.
+     &               .not.chngno(37)) then
+                       fact1 = min(hifsb1,17539.0*max(4.724,472.4*
+     &                 voidg(i)*(1.0 - voidg(i))))*max(0.0,
+     &                 min(1.0,(voidg(i) - 1.0e-10)*10.00000001))
+                       fact2 = hifsb1
+                       hifsb1 = max(fact1,min(fact2,(fact2 - fact1)*
+     &                 5.8015095e-7*(p(i) - 8.6184463e6) + fact1))
+                     endif
+                     xintrp = max(0.0,min(1.0,0.5*(dtsf(ix) + 1.0)))
+                     xintrp = xintrp*xintrp*(3.0 - 2.0*xintrp)
+                     hifc(ix) = hifsb1*xintrp + hifsp1*(1.0 -
+     &               xintrp)
+                   endif
+                 endif
+                 if (fbub .lt. 1.0) then
+                   if (nmapp(ix) .eq. 4) then
+                     hifc(ix) = hifc(ix)*fbub
+                     higc(ix) = higc(ix)*fbub
+                     hgfc(ix) = hgfc(ix)*fbub
+                   else
+                     if (.not.nvalhi(ix)) then
+                       hifc(ix) = hifc(ix)**fbub
+                       higc(ix) = higc(ix)**fbub
+                       hgfc(ix) = hgfc(ix)**fbub
+                     endif
+                   endif
+                 endif
+               endif
+               if (fslug .gt. 0.0) then
+c  Slug flow.
+               if (chngno(61)) then
+                 alpbub = alphab
+                 vfgbb = 1.0
+               else
+                 vfgbb = exp(-slugc*(voidg(i) - alphab))
+                 alpbub = alphab*vfgbb
+               endif
+                 fwgc1 = fslug*alpbub
+                 fwfc1 = fslug*(1.0 - alpbub)
+                 voidb = (voidg(i) - alpbub)/(1.0 - alpbub)
+                 if (chngno(61)) then
+c  Limit relative velocity using churn-turbulent
+c  bubble rise velocity
+                   lapno = sqrt (sigma(i)/(gravcn*rhofg))
+                   dbubl = min(0.9*diamvh,2.0*lapno)
+c  apply maximum bubble diameter criteria of TBD:
+                   vsupf = voidf(i) * avelf(ix)
+                   vsupf = max(0.01,vsupf)
+                   dbubm = 2.96 * sigma(i)**0.6 * diamvh**0.48
+     &                     * viscf(i)**0.08 / (rhof(i)**0.68
+     &                     * vsupf**1.12)
+                   dbubl = max(1.0e-4,min(dbubm,dbubl))
+                   rdbub = 1.0 / dbubl
+                   sbubb = 6.0 * alpbub/dbubl
+                   vbr = 1.53*sqrt(gravcn*lapno/rhof(i))
+                   rebub = rhof(i)*min(avelfg(ix),vbr)*dbubl/viscf(i)
+                   rebub = max(1.0,rebub)
+                 else
+                   scrchh(ix) = velgdf*vfgbb**2
+                   call fidisv (scrchh(ix),alpbub,rdbub,
+     &             rebub,sbubb,i,0,diamvh,reflod)
+                 endif
+                 void = 1.0 - voidb
+                 sbubb = void*sbubb*vfgbb
+                 svslg = 4.5*voidb/diamvh
+                 if (.not.nvalhi(ix)) then
+                   call hifbub (hifc1(ix),alpbub,rdbub,rebub,sbubb,
+     &             vfgbb,i)
+                   trmm(ix) = svslg*rfslug
+                   if (chngno(61)) then
+                     filmt = 0.5 * (1.0 - sqrt(voidg(i))) * diamvh
+                     filmt = max(20.0e-6,filmt)
+                     gliqa = abs(gliq(i))
+                     refilm = gliqa*diamvh/viscf(i)
+                     prfilm = csubpf(i)*viscf(i)/thconf(i)
+                     nut = 0.023*(refilm**0.8)*(prfilm**0.4)
+                     nul = 4.0*(1.0+0.022*refilm**0.46)
+                     hifsub = (thconf(i)/filmt)*max(nul,nut)
+                     hifsub = min(3.2e+5,hifsub)
+                     hifsb1 = hifsub*svslg + hifc1(ix)
+                   else
+                     hifsub = 1.18942*sqrt(thconf(i)*min(avelfg(ix),
+     &               0.8)*rhocpf(ix)/diamvh)
+                     hifsb1 = hifsub*trmm(ix) + hifc1(ix)
+                   endif
+                   if (iand(imap(i),63) .ne. 5 .and.
+     &             .not.chngno(37)) then
+                     fact1 = min(hifsb1,17539.0*max(4.724,472.4*
+     &               voidg(i)*(1.0 - voidg(i))))*max(0.0,min(1.0,
+     &               (voidg(i) - 1.0e-10)*10.00000001))
+                     fact2 = hifsb1
+                     hifsb1 = max(fact1,min(fact2,(fact2 - fact1)*
+     &               5.8015095e-7*(p(i) - 8.6184463e6) + fact1))
+                   endif
+                   if (chngno(61)) then
+                     hifsp1 = hifsub*svslg + hifc1(ix)
+c  Enhancements to HIF for Flashing.
+c  Liquid temperature greater than saturation at the
+c  total pressure.
+                     if (tempf(i) .gt. tsatt(i)) then
+c  Contribution from wall nucleation:
+c  use curvefit to approximate Forster-Zuber
+                       dtsuph = tempf(i) - tsatt(i)
+                       qwall = 0.0744 * p(i)**0.79 * dtsuph**2
+c  Use pool boiling CHF as upper limit:
+c  use curvefit to approximate Zuber CHF
+                       qzubr = 2.18e+4 * p(i)**0.34
+                       qzubr = min(4.0e+6,qzubr)
+                       qwall = min(qwall,qzubr)
+c  Contribution due to nucleation sites within the fluid
+c  (eg., dissolved gases):
+c  use Plesset-Zwick for bubble HTC:
+                       hbubl = 3.82 * (thconf(i)/dbubl) *
+     &                 (rhof(i)*csubpf(i)/(rhog(i)*hfg(ix)))
+     &                 * dtsuph
+                       qbubl = hbubl * dtsuph
+c  Put heat fluxes on a per unit volume basis:
+                       qwall = qwall * (4.0/diamvh)
+                       qbubl = qbubl * sbubb
+c  Convert to HTC referenced to saturation at vapor partial
+c  pressure:
+                       hwall = qwall / max(1.0,-dtsf(ix))
+                       hbubl = qbubl / max(1.0,-dtsf(ix))
+c  Add flashing contribution to HIF:
+                       hifsp1 = hifsub*svslg
+     &                 + max(hifc1(ix),hbubl) + hwall
+                     endif
+                   else
+                     hifsp1 = hifsup*trmm(ix) + hifc1(ix)
+                   endif
+                   xintrp = max(0.0,min(1.0,0.5*(dtsf(ix) + 1.0)))
+                   xintrp = xintrp*xintrp*(3.0 - 2.0*xintrp)
+                   hifc1(ix) = hifsb1**xintrp*hifsp1**(1.0 - xintrp)
+                   higsup = (2.2 + 0.82*sqrt(diamvh*avelfg(ix)*
+     &             rhog(i)/viscg(i)))*thcong(i)/diamvh
+                   higsp1 = higsup*trmm(ix) + higsub(ix)*sbubb
+                   higsb1 = higsub(ix)*(trmm(ix) + sbubb)
+                   xintrp = max(0.0,min(1.0,0.5*(dtsg(ix) + 1.0)))
+                   xintrp = xintrp*xintrp*(3.0 - 2.0*xintrp)
+                   higc1(ix) = higsb1**xintrp*higsp1**(1.0 - xintrp)
+                   higsp1 = higsup*trmm(ix)
+                   trmmm = trmm(ix)
+                   trmm(ix) = abs(min(0.0,max(-2.0,dtsg(ix))))
+                   higsp1 = sbubb*1.0e4*(1.0 + trmm(ix)*(1.0e2 +
+     &             0.25e2*trmm(ix))) + higsp1
+                   higsb1 = 1.0e4*(1.0 + trmm(ix)*(1.0e2 +
+     &             0.25e2*trmm(ix)))*(trmmm + sbubb)
+                   hgfc1(ix) = higsb1**xintrp*higsp1**(1.0 - xintrp)
+                 endif
+                 if (fslug .lt. 1.0) then
+                   if (.not.nvalhi(ix)) then
+                     hifc1(ix) = hifc1(ix)**fslug
+                     higc1(ix) = higc1(ix)**fslug
+                     hgfc1(ix) = hgfc1(ix)**fslug
+                   endif
+                 endif
+                 hifc(ix) = hifc1(ix)
+                 higc(ix) = higc1(ix)
+                 hgfc(ix) = hgfc1(ix)
+               endif
+               if (fanm .gt. 0.0) then
+c  Annular-mist flow.
+                 if (chngno(55)) then
+                   if (nmapp(ix) .eq. 2) then
+                     lamcr = voidg(i)*vlg/sqrt(vcritl)
+                   else
+                     lamcr = rvcrit(ix)
+                   endif
+                   scrchh(ix) = centr*(lamcr**2)**3
+                 else
+                   scrchh(ix) = centr*(rvcrit(ix)**2)**3
+                 endif
+                 alpanf = 1.0 - alpan
+                 fluxm(ix) = 1.0e-4*sqrt(sqrt(abs(vlf*alpanf*
+     &           rhof(i)*diamvh/viscf(i))))
+                 if (scrchh(ix) .le. 200.0) then
+                   vfgbb = exp(-scrchh(ix))*max(0.0,(1.0 -
+     &             fluxm(ix)))
+                 else
+                   vfgbb = 0.0
+                 endif
+                 if (voidg(i).gt.alphac .and. alpanf.lt.alphef) then
+                   scrchh(ix) = (alpanf - alphad)/(alphef - alphad)
+                   alphad = alphad*scrchh(ix)+1.0e-5*(1.0 -
+     &             scrchh(ix))
+                   vfgbb = vfgbb*scrchh(ix)
+                 endif
+                 voidb  = max(0.0, alpanf*vfgbb)
+                 if (nmapp(ix) .eq. 3) then
+                   rdstar = sqrt(sqrt(alpanf))
+                 else
+                   rdstar = sqrt(sqrt(voidb))
+                 endif
+                 fwfc = fanm*rdstar
+                 fwgc = fanm*(1.0 - rdstar)
+                 alpdrp = max((alpanf - voidb)/(1.0 - voidb),alphad)
+                 scrchh(ix)=(velgdf)*(1.0 - vfgbb)
+                 if (voidf(i) .lt. 1.0e-6) scrchh(ix) = scrchh(ix)*
+     &           voidf(i)*1.0e6
+                 call fidisv (scrchh(ix),alpdrp,rddrp,redrp,sdrop,
+     &           i,1,diamvh,reflod)
+                 void = 1.0 - voidb
+                 voidgs = sqrt(void)
+                 if (nmapp(ix) .eq. 3) then
+                   sdrop = 0.
+                   sannu = 4.0*sqrt(alpan)/diamvh
+c-wdgb
+               if (chngno(74)) then
+c                extv03(i)= sannu
+               endif
+c-wdge
+                 else
+                   sdrop = void*sdrop
+                   sannu = 6.1192775*sqrt(rdstar)*voidgs/diamvh
+                 endif
+                 fluxm(ix) = max(1.0e-08,0.5*(1.0 - voidgs)*
+     &           dstar(ix))
+                 rdstar = min(30.0,1.0/dstar(ix))
+                 if (.not.nvalhi(ix)) then
+                   rvc = abs(rvcrit(ix))
+                   trmm(ix) = sannu*rfannl*min(1.0 + sqrt(rvc) +
+     &             0.05*rvc,6.0)
+                   drpnu = 2.0 + 7.0*min(1.0 + csubpf(i)*max(0.0,
+     &             dtsf(ix))*rhfg(ix),8.0)
+                   if (chngno(55)) then
+                     hifdrp = drpnu*sdrop*thconf(i)*rddrp
+                     dtsuph = max(0.0,-dtsf(ix))
+                     hifdrp = hifdrp*(1.0 + 0.25*dtsuph**2)
+                   else
+                     hifdrp = drpnu*sdrop*thconf(i)*rddrp
+     &               *dtsfm(ix)
+                   endif
+                   if (chngno(45)) then
+c  Call htfilm to get htc associated with annular film.
+c  Interfacial area comes from perimeter of vapor core.
+c  Factor of 8/3 to correct total resistance across
+c  film to value from bulk temp. to interface.
+                     call htfilm(i,hifilm,'PHANTV')
+                     aintf = 4.0 * sqrt(alpan) / diamv(i)
+                     hifsub = 2.667 * hifilm * aintf
+                     hifsb1 = hifsub
+                     hifc(ix) = hifsb1
+                   else
+                     if (chngno(55)) then
+c
+c Revised Film HTC:  SHL & SCL
+c
+                       filmt = 0.25 * alpanf * diamvh
+                       filmt = max(2.0e-5,filmt)
+                       refilm = alpanf*rhof(i)*abs(vlf)
+     &                 *diamvh/viscf(i)
+                       prfilm = csubpf(i)*viscf(i)/thconf(i)
+                       nut = 0.023*(refilm**0.8)*(prfilm**0.4)
+                       nul = 4.0*(1.0+0.022*refilm**0.46)
+                       hfilm = 2.67*(thconf(i)/filmt)*
+     &                         max(nul,nut)
+                       hfilm = min(3.2e+5,hfilm)
+                       hifsub = hfilm*sannu
+                       hifsb1 = hifsub + hifdrp
+                     else
+                       hifsub = 1.0e-3*rhocpf(ix)*max(1.0e-6,
+     &                 avelf(ix))
+                       hifsb1 = hifsub*trmm(ix) + hifdrp
+                     endif
+                     if (iand(imap(i),63) .ne. 5 .and.
+     &               .not.chngno(37)) then
+                       fact1 = min(hifsb1,17539.0*max(4.724,
+     &                 472.4*voidgo(i)*(1.0 - voidgo(i))))
+     &                 *max(0.0,min(1.0,(voidgo(i) - 1.0e-10)
+     &                 *10.00000001))
+                       fact2 = hifsb1
+                       hifsb1 = max(fact1,min(fact2,(fact2 -
+     &                 fact1)*5.8015095e-7*(p(i) - 8.6184463e6)
+     &                 + fact1))
+                     endif
+                     if (chngno(55)) then
+                       hifsp1 = hifsub + hifdrp
+                     else
+                       hifsp1 = hifsup*trmm(ix) + hifdrp
+                     endif
+                     xintrp = max(0.0,min(1.0,0.5*(dtsf(ix)
+     &               + 1.0)))
+                     xintrp = xintrp*xintrp*(3.0 - 2.0*xintrp)
+                     hifc(ix) = hifsb1**xintrp*hifsp1**(1.0 -
+     &               xintrp)
+                   endif
+                   if (voidf(i) .lt. alphad) then
+                     scrchh(ix) = 1.0 - min(dtempc,max(0.0,
+     &               dtsg(ix)))*5.0
+                     sdrop = sdrop*(voidf(i)*scrchh(ix)/alphad +
+     &               1.0 - scrchh(ix))
+                   endif
+                   higsup = (0.023*(diamvh*rhog(i)*alpan*
+     &             avelfg(ix)/viscg(i))**0.8*trmm(ix)/diamvh +
+     &             (2.0 + sqrt(redrp)*0.50)*rddrp*sdrop)*thcong(i)
+                   higsb1 = higsub(ix)*(trmm(ix) + sdrop)
+                   xintrp = max(0.0,min(1.0,0.5*(dtsg(ix) + 1.0)))
+                   xintrp = xintrp*xintrp*(3.0 - 2.0*xintrp)
+                   higc(ix) = higsb1**xintrp*higsup**(1.0-xintrp)
+                   trmm1(ix) = abs(min(0.0,max(-2.0,dtsg(ix))))
+                   higsb1 = 1.0e4*(1.0 + trmm1(ix)*(1.0e2 +
+     &             0.25e2*trmm1(ix)))*(trmm(ix) + sdrop)
+                   hgfc(ix) = higsb1**xintrp*higsup**(1.0-xintrp)
+                 endif
+                 if (fanm .lt. 1.0) then
+                   if (.not.nvalhi(ix)) then
+                     hifc(ix) = hifc(ix)**fanm*hifc1(ix)
+                     higc(ix) = higc(ix)**fanm*higc1(ix)
+                     hgfc(ix) = hgfc(ix)**fanm*hgfc1(ix)
+                   endif
+                 endif
+               endif
+               if (fdis .gt. 0.0) then
+c  Dispersed.
+c  Raise minimum hif in dispersed regime.
+                 if (flomap(ix) .ne. 2) then
+                   if (qualao(i).ne.0.0 .and. voidg(i).eq.1.0) then
+                     alpdrp = max(voidf(i),1.0e-3)
+                   else
+                     alpdrp = max(voidf(i),1.0e-4)
+                   endif
+                 endif
+                 scrchh(ix) = velgdf
+                 call fidisv (scrchh(ix),alpdrp,rddrp,redrp,sdrop,
+     &           i,1,diamvh,reflod)
+                 fwfc1 = fdis*voidf(i)
+                 fwgc1 = fdis*voidg(i)
+                 if (.not.nvalhi(ix)) then
+                   vdfact = alpdrp/max(1.0e-10,voidf(i))
+                   drpnu = 2.0+7.0*min(1.0 + csubpf(i)*
+     &             max(0.0,dtsf(ix))*rhfg(ix),8.0)
+                   if (chngno(55)) then
+                     vdfact = alpdrp/max(1.0e-8,voidf(i))
+                     hifc1(ix) = drpnu*sdrop*thconf(i)*rddrp*vdfact
+                     dtsuph = max(0.0,-dtsf(ix))
+                     hifc1(ix) = hifc1(ix)*(1.0 + 0.25*dtsuph**2)
+                   else
+                     hifc1(ix) = drpnu*sdrop*thconf(i)*rddrp*
+     &               dtsfm(ix)*vdfact
+                   endif
+                   hifsp1 = hifc1(ix)
+                   hifsb1 = hifc1(ix)
+                   if (iand(imap(i),63) .ne. 5 .and.
+     &             .not.chngno(37)) then
+                     fact1 = min(hifsb1,17539.0*max(4.724,472.4*
+     &               voidg(i)*(1.0 - voidg(i))))*max(0.0,
+     &               min(1.0,(voidg(i) - 1.0e-10)*10.00000001))
+                     fact2 = hifsb1
+                     hifsb1 = max(fact1,min(fact2,(fact2 - fact1)*
+     &               5.8015095e-7*(p(i) - 8.6184463e6) + fact1))
+                   endif
+                   xintrp = max(0.0,min(1.0,0.5*(dtsf(ix) + 1.0)))
+                   xintrp = xintrp*xintrp*(3.0 - 2.0*xintrp)
+                   hifc1(ix) = hifsb1**xintrp*hifsp1**(1.0 -
+     &             xintrp)
+                   higc1(ix) = 0.0
+                   hgfc1(ix) = 0.0
+                   if (voidf(i).gt.0.0 .or. (dtsg(ix).gt.0.0 .and.
+     &             pps(i).ge.ptrip)) then
+                     scrchh(ix) = 1.0 - min(dtempc,max(0.0,
+     &               dtsg(ix)))*5.0
+                     scrchh(ix) = max(0.0,min(1.e-5,voidf(i))*
+     &               1.e5*scrchh(ix) + 1.0 - scrchh(ix))
+                     higc1(ix) = (((2.0 + 0.5*sqrt(redrp))*rddrp*
+     &               thcong(i)*dtsgms(ix) + higsub(ix)*dtsgm(ix))*
+     &               sdrop)*scrchh(ix)
+                     trmm(ix) = abs(min(0.0,max(-2.0,dtsg(ix))))
+                     hgfc1(ix) = (((2.0 + 0.5*sqrt(redrp))*rddrp*
+     &               thcong(i)*dtsgms(ix) + 1.0e4*(1.0 + trmm(ix)*
+     &               (1.0e2 + 0.25e2*trmm(ix)))*dtsgm(ix))*sdrop)*
+     &               scrchh(ix)
+                   endif
+                 endif
+                 if (fdis .lt. 1.0) then
+                   if (nmapp(ix) .eq. 4) then
+c  Interpolation for high mixing map.
+                     hifc1(ix) = hifc1(ix)*fdis + hifc(ix)
+                     higc1(ix) = higc1(ix)*fdis + higc(ix)
+                     hgfc1(ix) = hgfc1(ix)*fdis + hgfc(ix)
+                   else
+                     if (.not.nvalhi(ix)) then
+                       hifc1(ix) = hifc(ix)*(hifc1(ix)**fdis)
+                       higc1(ix) = higc(ix)*(higc1(ix)**fdis)
+                       hgfc1(ix) = hgfc(ix)*(hgfc1(ix)**fdis)
+                     endif
+                   endif
+                 endif
+                 hifc(ix) = hifc1(ix)
+                 higc(ix) = higc1(ix)
+                 hgfc(ix) = hgfc1(ix)
+               endif
+               if (.not.nvalhi(ix)) then
+                 hiff(ix) = hifc(ix)
+                 higg(ix) = higc(ix)
+                 hggff(ix) = hgfc(ix)
+                 if (chngno(9)) then
+                   if (dtsf(ix).gt.0.0 .and. voidg(i).ne.0.0 .and.
+     &             nmapp(ix).lt.4) then
+                     if (nmapp(ix) .eq. 2) vcritl = sqrt(vcritl)
+                     hiff(ix) = vcritl*voidg(i)*rhog(i)*hfg(ix)/
+     &               (dtsf(ix)*dlvol)
+                   endif
+                 endif
+               endif
+               fwfxaf(ix) = fwfc + fwfc1
+               fwfxag(ix) = fwgc + fwgc1
+             endif
+             if (fstrat .gt. 0.0) then
+c  Horizontal stratification.
+               flomap(ix) = 12
+               voidb = voidg(i)*pi + costhe(ix)*
+     &         sqrt(max(0.0,min(1.0,(1.0-costhe(ix)**2))))
+               scrchh(ix) =  0.318309886*voidb
+               fwfxaf(ix) = fstrat*(1.0 - scrchh(ix)) + (1.0 -
+     &         fstrat)*fwfxaf(ix)
+               fwfxag(ix) = fstrat*scrchh(ix) + (1.0 - fstrat)*
+     &         fwfxag(ix)
+               scrchh(ix) = diamvh*pi
+               rhyva = (voidb + stheta)/(scrchh(ix)*max(1.0e-9,
+     &         voidg(i)))
+               rhyli = (pi - voidb + stheta)/(scrchh(ix)*
+     &         max(1.0e-9,voidf(i)))
+               reginv = viscg(i)*rhyva/(rhog(i)*(abs(velgdf)
+     &         + 0.01))
+c 1.273239545 is 4/pi
+               shzst = 1.273239545*stheta/diamvh
+               if (.not.nvalhi(ix)) then
+                 higc(ix) = 0.0
+                 hifc(ix) = 0.0
+                 hgfc(ix) = 0.0
+                 f27 = 1.0 + sqrt(rvcrit(ix))
+                 trmm(ix) = shzst*f27
+                 trmm1(ix) = abs(min(0.0,max(-2.0,dtsg(ix))))
+                 if (chngno(9)) avlim = min(avelfg(ix),sqrt(vcritl))
+                 if (voidf(i).gt.0.0 .or. dtsg(ix).gt.dtempc) then
+                   if (chngno(9)) then
+                     higc(ix)=(0.023*(diamvh*voidg(i)*rhog(i)*avlim/
+     &               viscg(i))**0.8*dtsgms(ix)*thcong(i)*rhyva +
+     &               higsub(ix)*(dtsgm(ix)+dtsgms(ix)*4.0*max(0.0,
+     &               0.25 - voidg(i))))*trmm(ix)
+                     hgfc(ix) = (0.023*(diamvh*voidg(i)*rhog(i)*
+     &               avlim/viscg(i))**0.8*thcong(i)*rhyva +
+     &               1.0e4*(1.0 + trmm1(ix)*(1.0e2 +
+     &               0.25e2*trmm1(ix)))*4.0*max(0.0,0.25 -
+     &               voidg(i)))*trmm(ix)
+                   else
+                     higc(ix)=(0.023*(diamvh*voidg(i)*rhog(i)*
+     &               avelfg(ix)/
+     &               viscg(i))**0.8*dtsgms(ix)*thcong(i)*rhyva +
+     &               higsub(ix)*(dtsgm(ix)+dtsgms(ix)*4.0*max(0.0,
+     &               0.25 - voidg(i))))*trmm(ix)
+                     hgfc(ix) = (0.023*(diamvh*voidg(i)*rhog(i)*
+     &               avelfg(ix)/
+     &               viscg(i))**0.8*thcong(i)*rhyva +
+     &               1.0e4*(1.0 + trmm1(ix)*(1.0e2 +
+     &               0.25e2*trmm1(ix)))*4.0*max(0.0,0.25 -
+     &               voidg(i)))*trmm(ix)
+                   endif
+                 endif
+                 dtsfsp(ix) = 0.5 - sign(0.5,dtsf(ix))
+                 if (voidg(i).gt.0.0 .or. -dtsf(ix).gt.dtempv) then
+                   if (chngno(9)) then
+                     hifc(ix)=(0.023*(avlim*diamvh*voidf(i)*rhof(i)/
+     &               viscf(i))**0.8*dtsfm(ix) - 3.81972*dtsf(ix)*
+     &               dtsfsp(ix)*rhfg(ix)*rhocpf(ix)/(max(4.0*
+     &               voidg(i),1.0)*rhog(i)))*rhyli*thconf(i)*
+     &               trmm(ix)
+                   else
+                     hifc(ix)=(0.023*(avelfg(ix)*diamvh*
+     &               voidf(i)*rhof(i)/viscf(i))**0.8*dtsfm(ix) -
+     &               3.81972*dtsf(ix)*dtsfsp(ix)*rhfg(ix)*rhocpf(ix)/
+     &               (max(4.0*voidg(i),1.0)*rhog(i)))*rhyli*
+     &               thconf(i)*trmm(ix)
+                   endif
+                   hifsp1 = hifc(ix)
+                   hifsb1 = hifc(ix)
+                   if (iand(imap(i),63) .ne. 5 .and.
+     &             .not.chngno(37)) then
+                     fact1 = min(hifsb1,17539.0*max(4.724,472.4*
+     &               voidg(i)*(1.0 - voidg(i))))*max(0.0,min(1.0,
+     &               (voidg(i) - 1.0e-10)*10.00000001))
+                     fact2 = hifsb1
+                     hifsb1 = max(fact1,min(fact2,(fact2 - fact1)*
+     &               5.8015095e-7*(p(i)-8.6184463e6) + fact1))
+                   endif
+                   xintrp = max(0.0,min(1.0,0.5*(dtsf(ix) + 1.0)))
+                   xintrp = xintrp*xintrp*(3.0 - 2.0*xintrp)
+                   hifc(ix) = hifsb1**xintrp*hifsp1**(1.0-xintrp)
+                 endif
+                 endif
+               if (fstrat .lt. 1.0) then
+                 if (.not.nvalhi(ix)) then
+                   if (hiff(ix) .gt. 0.0) hiff(ix) =
+     &             hiff(ix)*(hifc(ix)/hiff(ix))**fstrat
+                   if (higg(ix) .gt. 0.0) higg(ix) =
+     &             higg(ix)*(higc(ix)/higg(ix))**fstrat
+                   if (hggff(ix) .gt. 0.0) hggff(ix) =
+     &             hggff(ix)*(hgfc(ix)/hggff(ix))**fstrat
+                 endif
+               else
+                 if (.not.nvalhi(ix)) then
+                   hiff(ix) = hifc(ix)
+                   higg(ix) = higc(ix)
+                   hggff(ix) = hgfc(ix)
+                 endif
+               endif
+             endif
+           endif
+           if (poschf) then
+c  Dry wall correlations.
+             fwfc = 0.0
+             fwgc = 0.0
+             fwfc1 = 0.0
+             fwgc1 = 0.0
+             hifc(ix) = 1.0
+             higc(ix) = 1.0
+             hgfc(ix) = 1.0
+             hifc1(ix) = 1.0
+             higc1(ix) = 1.0
+             hgfc1(ix) = 1.0
+             if (.not.posdry .and. .not.nvalhi(ix)) hifsav =
+     &       hiff(ix)
+             if (fian .gt. 0.0) then
+c  Inverted annular.
+               vfgbb = exp(-(alphab - alpian)*8.0/alphab)*
+     &         min(voidg(i)/alphbc,0.9999999)
+               voidb = alpian*vfgbb
+               scrchh(ix) = sqrt(voidb)
+               fwgc = fian*scrchh(ix)
+               fwfc = fian*(1.0 - scrchh(ix))
+               alpbub = max((alpian-voidb)/(1.0-voidb),1.0e-7)
+               vfgbb = 1.0 - vfgbb
+               scrchh(ix) = velgdf*vfgbb**2
+               call fidisv (scrchh(ix),alpbub,rdbub,rebub,sbubb,
+     &         i,0,diamvh,reflod)
+               void = 1.0 - voidb
+               voidgs = sqrt(void)
+               sbubb = void*sbubb*vfgbb
+               sannu = 4.0*voidgs/diamvh
+               rdstar = min(30.0,1.0/dstar(ix))
+               fluxm(ix) = max(1.0e-08,0.5*(1.0 - voidgs)*
+     &         dstar(ix))
+               if (.not.nvalhi(ix)) then
+                 hifc(ix) = 0.0
+                 trmm1(ix) = sannu*rfiann
+                 if (voidg(i).gt.0.0 .or. dtsf(ix).lt.0.0) then
+                   scrchh(ix) = 1.0 + max(-1.0, min(0.0, dtsf(ix)))
+                   scrchh(ix) = max(0.0,min(1.e-5,voidg(i)*(1.0 -
+     &             qualao(i)))*1.e5*scrchh(ix) + 1.0 - scrchh(ix))
+                   call hifbub (hifc(ix),alpbub,rdbub,rebub,sbubb,
+     &             vfgbb,i)
+                   hifc(ix) = (hifc(ix)+(0.023*(avelfg(ix)*
+     &             diamvh*rhof(i)*(1.0 - alpian)/viscf(i))**
+     &             0.8*thconf(i)*dtsfsb(ix)/diamvh + hifsup*
+     &             dtsfsp(ix))*trmm1(ix))*scrchh(ix)
+                   hifsp1 = hifc(ix)
+                   hifsb1 = hifc(ix)
+                   if (iand(imap(i),63) .ne. 5 .and.
+     &             .not.chngno(37)) then
+                     fact1 = min(hifsb1,17539.0*max(4.724,472.4*
+     &               voidg(i)*(1.0 - voidg(i))))*max(0.0,min(1.0,
+     &               (voidg(i) - 1.0e-10)*10.00000001))
+                     fact2 = hifsb1
+                     hifsb1 = max(fact1,min(fact2,(fact2 - fact1)*
+     &               5.8015095e-7*(p(i) - 8.6184463e6) + fact1))
+                   endif
+                   xintrp = max(0.0,min(1.0,0.5*(dtsf(ix) + 1.0)))
+                   xintrp = xintrp*xintrp*(3.0 - 2.0*xintrp)
+                   hifc(ix) = hifsb1*xintrp + hifsp1*(1.0 - xintrp)
+                 endif
+                 deltaf = 0.5*diamvh*max(1.0 - 0.25*
+     &           diamvh*sannu,0.040)
+                 vapnu = 2.5 - dtsg(ix)*(0.20 - dtsg(ix)*0.010)
+                 higc(ix) = (higsub(ix)*sbubb+vapnu*thcong(i)*
+     &           trmm1(ix)/deltaf)
+                 trmm(ix) = abs(min(0.0,max(-2.0,dtsg(ix))))
+                 vapnu = max(0.0,dtsg(ix))
+                 vapnu = 2.5 - vapnu*(0.20 - vapnu*0.010)
+                 hgfc(ix) = 1.0e4*(1.0 + trmm(ix)*(1.0e2 +
+     &           0.25e2*trmm(ix)))*sbubb + vapnu*thcong(i)*
+     &           trmm1(ix)/deltaf
+               endif
+               if (fian .lt. 1.0) then
+                 if (.not.nvalhi(ix)) then
+                   hifc(ix) = hifc(ix)**fian
+                   higc(ix) = higc(ix)**fian
+                   hgfc(ix) = hgfc(ix)**fian
+                 endif
+               endif
+             endif
+             if (fislg .gt. 0.0) then
+c  Inverted slug.
+               void = exp(-(alphac - voidg(i))/(alphac - alphab))
+               alpdrp = (1.0 - alphac)*void
+               fwfc1 = fislg*alpdrp
+               fwgc1 = fislg*(1.0 - alpdrp)
+               voidb = (voidf(i) - alpdrp)/(1.0 - alpdrp)
+               scrchh(ix) = velgdf*void**2
+               call fidisv (scrchh(ix),alpdrp,rddrp,redrp,sdrop,
+     &         i,2,diamvh,reflod)
+               slslg = 4.5*voidb/diamvh
+               void = 1.0 - voidb
+               sdrop = void*sdrop
+               if (.not.nvalhi(ix)) then
+                 trmm(ix) = slslg*rfislg
+                 drpnu = 2.0+7.0*min(1.0 + csubpf(i)*max(0.0,
+     &           dtsf(ix))*rhfg(ix),8.0)
+                 hifc1(ix) = drpnu*thconf(i)*(rddrp*sdrop +
+     &           trmm(ix)/diamvh)*dtsfm(ix)
+                 vapnu = 2.5 - dtsg(ix)*(0.20 - dtsg(ix)*0.010)
+                 trmm1(ix) = 0.25*voidg(i)
+                 deltaf = diamvh*max(0.020,min(trmm1(ix)*
+     &           (1.0 - trmm1(ix)),0.2))
+                 higc1(ix) = (vapnu*trmm(ix)/deltaf + (2.0 +
+     &           sqrt(redrp)*0.50)*rddrp*sdrop)*thcong(i)
+                 vapnu = max(0.0,dtsg(ix))
+                 vapnu = 2.5 - vapnu*(0.20 - vapnu*0.010)
+                 hgfc1(ix) = (vapnu*trmm(ix)/deltaf + (2.0 +
+     &           sqrt(redrp)*0.50)*rddrp*sdrop)*thcong(i)
+c  Interpolate inverted slug to dispersed as equilibrium qual ->zero.
+                 if (quale(i) .gt. -0.02) then
+                   alpdrp = max(voidf(i),1.0e-4)
+                   scrchh(ix) = velgdf
+                   call fidisv (scrchh(ix),alpdrp,rddrp,redrp,
+     &             sdrop,i,2,diamvh,reflod)
+                   vdfact = alpdrp/max(1.e-12,voidf(i))
+                   drpnu = 2.0+7.0*min(1.0 + csubpf(i)*max(0.0,
+     &             dtsf(ix))*rhfg(ix),8.0)
+                   hifc(ix) = drpnu*sdrop*thconf(i)*rddrp*dtsfm(ix)*
+     &             vdfact
+                   scrchh(ix) = 1.0 - min(dtempc,max(0.0,dtsg(ix)))*
+     &             5.0
+                   scrchh(ix) = max(0.0,min(1.e-5,voidf(i))*1.e5*
+     &             scrchh(ix) + 1.0 - scrchh(ix))
+                   higc(ix) = (((2.0 + 0.5*sqrt(redrp))*rddrp*
+     &             thcong(i)*dtsgms(ix) + higsub(ix)*dtsgm(ix))*
+     &             sdrop)*scrchh(ix)
+                   hgfc(ix) = (2.0 + 0.5*sqrt(redrp))*rddrp*
+     &             thcong(i)*sdrop*scrchh(ix)
+                   hifc1(ix) = 50.*(hifc(ix) - hifc1(ix))*min(0.0,
+     &             quale(i)) + hifc(ix)
+                   higc1(ix) = 50.*(higc(ix) - higc1(ix))*min(0.0,
+     &             quale(i)) + higc(ix)
+                   hgfc1(ix) = 50.*(hgfc(ix) - hgfc1(ix))*min(0.0,
+     &             quale(i)) + hgfc(ix)
+                   flomap(ix) = 10
+                 endif
+                 hifsp1 = hifc1(ix)
+                 hifsb1 = hifc1(ix)
+                 if (iand(imap(i),63) .ne. 5 .and.
+     &           .not.chngno(37)) then
+                   fact1 = min(hifsb1,17539.0*max(4.724,472.4*
+     &             voidg(i)*(1.0 - voidg(i))))*max(0.0,min(1.0,
+     &             (voidg(i) - 1.0e-10)*10.00000001))
+                   fact2 = hifsb1
+                   hifsb1 = max(fact1,min(fact2,(fact2 - fact1)*
+     &             5.8015095e-7*(p(i) - 8.6184463e6) + fact1))
+                 endif
+                 xintrp = max(0.0,min(1.0,0.5*(dtsf(ix) + 1.0)))
+                 xintrp = xintrp*xintrp*(3.0 - 2.0*xintrp)
+                 hifc1(ix) = hifsb1**xintrp*hifsp1**(1.0-xintrp)
+               endif
+               if (fislg .lt. 1.0) then
+                 if (.not.nvalhi(ix)) then
+                   higc(ix) = higc1(ix)**fislg*higc(ix)
+                   hifc(ix) = hifc1(ix)**fislg*hifc(ix)
+                   hgfc(ix) = hgfc1(ix)**fislg*hgfc(ix)
+                 endif
+               endif
+               hifc(ix) = hifc1(ix)
+               higc(ix) = higc1(ix)
+               hgfc(ix) = hgfc1(ix)
+             endif
+             if (fids .gt. 0.0) then
+c  Dispersed.
+               alpdrp = max(voidf(i),1.0e-4)
+               scrchh(ix) = velgdf
+               call fidisv (scrchh(ix),alpdrp,rddrp,redrp,sdrop,i,
+     &         2,diamvh,reflod)
+               fwfc = fids*voidf(i)
+               fwgc = fids*voidg(i)
+               if (.not.nvalhi(ix)) then
+                 vdfact = alpdrp/max(1.e-12,voidf(i))
+                 drpnu = 2.0 + 7.0*min(1.0 + csubpf(i)*max(0.0,
+     &           dtsf(ix))*rhfg(ix),8.0)
+                 if (chngno(55)) then
+crex               vdfact = alpdrp/max(1.e-8,voidf(i))
+                   hifc(ix) = drpnu*sdrop*thconf(i)*rddrp*vdfact
+                   dtsuph = max(0.0,-dtsf(ix))
+                   hifc(ix) = hifc(ix)*(1.0 + 0.25*dtsuph**2)
+                 else
+                   hifc(ix) = drpnu*sdrop*thconf(i)*rddrp*dtsfm(ix)*
+     &             vdfact
+                 endif
+                 hifsp1 = hifc(ix)
+                 hifsb1 = hifc(ix)
+                 if (iand(imap(i),63) .ne. 5 .and.
+     &           .not.chngno(37)) then
+                   fact1 = min(hifsb1,17539.0*max(4.724,472.4*
+     &             voidg(i)*(1.0 - voidg(i))))*max(0.0,min(1.0,
+     &             (voidg(i) - 1.0e-10)*10.00000001))
+                   fact2 = hifsb1
+                   hifsb1 = max(fact1,min(fact2,(fact2 - fact1)*
+     &             5.8015095e-7*(p(i) - 8.6184463e6) + fact1))
+                 endif
+                 xintrp = max(0.0,min(1.0,0.5*(dtsf(ix) + 1.0)))
+                 xintrp = xintrp*xintrp*(3.0 - 2.0*xintrp)
+                 hifc(ix) = hifsb1**xintrp*hifsp1**(1.0 - xintrp)
+                 higc(ix) = 0.0
+                 hgfc(ix) = 0.0
+                 if (voidf(i).gt.0.0 .or. (dtsg(ix).gt.0.0 .and.
+     &           pps(i).ge.ptrip)) then
+                   scrchh(ix) = 1.0 - min(dtempc,max(0.0,
+     &             dtsg(ix)))*5.0
+                   scrchh(ix) = max(0.0,min(1.e-5,voidf(i))*1.e5*
+     &             scrchh(ix) + 1.0 - scrchh(ix))
+                   higc(ix) = (((2.0 + 0.5*sqrt(redrp))*rddrp*
+     &             thcong(i)*dtsgms(ix)+higsub(ix)*dtsgm(ix))*
+     &             sdrop)*scrchh(ix)
+                   trmm(ix) = abs(min(0.0,max(-2.0,dtsg(ix))))
+                   hgfc1(ix) = (((2.0 + 0.5*sqrt(redrp))*rddrp*
+     &             thcong(i)*dtsgms(ix) + 1.0e4*(1.0 + trmm(ix)*
+     &             (1.0e2 + 0.25e2*trmm(ix)))*dtsgm(ix))*sdrop)*
+     &             scrchh(ix)
+                 endif
+               endif
+             endif
+             if (.not.posdry) then
+               if (.not.nvalhi(ix)) then
+                 hiff(ix) = hifsav
+                 hifc1(ix) = hifsav
+                 higc1(ix) = higg(ix)
+                 hgfc1(ix) = hggff(ix)
+                 if (hifc1(ix) .ne. 0.0) hiff(ix) = hifc1(ix)*
+     &           (1.0 - pfinrg(ix)) + hifc(ix)*pfinrg(ix)
+                 if (higc1(ix) .ne. 0.0) higg(ix) = higc1(ix)*
+     &           (1.0 - pfinrg(ix)) + higc(ix)*pfinrg(ix)
+                 if (hgfc1(ix) .ne. 0.0) hggff(ix) = hgfc1(ix)*
+     &           (1.0 - pfinrg(ix)) + hgfc(ix)*pfinrg(ix)
+               endif
+             else
+               if (.not.nvalhi(ix)) then
+                 hiff(ix) = hifc(ix)
+                 higg(ix) = higc(ix)
+                 hggff(ix) = hgfc(ix)
+               endif
+             endif
+             fwalf(i) = fwfc + fwfc1
+             fwalg(i) = fwgc + fwgc1
+           endif
+           if (nvalhi(ix)) then
+             if (nvalhx(ix)) then
+c  Set values for super-critical state or no liquid-vapor state.
+               hiff(ix) = 0.0
+               higg(ix) = 0.0
+               hggff(ix) = 0.0
+             else
+c  Set values for equilibrium.
+               dtsg(ix) = satt(i) - tempg(i)
+               dtsf(ix) = satt(i) - tempf(i)
+               if (dtsf(ix).lt.0.0) then
+                 hiff(ix) = min(1.e13,1.e14*max(voidg(i),1.e-5*
+     &           min(1.,-dtsf(ix)*10.)))
+               else
+                 hiff(ix) = min(1.e12,1.e13*voidg(i))
+               endif
+               if (dtsg(ix).gt.0.0) then
+                 higg(ix) = min(1.e13,1.e14*max(voidf(i),1.e-5*
+     &           min(1., dtsg(ix)*10.)))
+               else
+                 higg(ix) = min(1.e12,1.e13*voidf(i))
+               endif
+               hggff(ix) = 1.0e4
+               gammaw(i) = 0.0
+               gammac(i) = 0.0
+               gammsw(ix) = 0.0
+               gammsc(ix) = 0.0
+               htgwff(ix) = 0.0
+               htgwfg(ix) = 0.0
+               htgwft(ix) = 0.0
+               htgwfp(ix) = 0.0
+               htgcgf(ix) = 0.0
+               htgcgg(ix) = 0.0
+               htgcgt(ix) = 0.0
+               htgcgp(ix) = 0.0
+             endif
+           else
+c  Test for vertical stratification and adjust interfacial heat
+c  transfer coefficients.
+             sw1 = .true.
+             if (chngno(13)) then
+               if (reflod .or.
+     &         invcnt(i).eq.0 .or. voidf(i).eq.1.0 .or.
+     &         voidg(i).eq.1.0 .or. iand(vctrl(i),1).ne.0 .or.
+     &         nmapp(ix).eq.2 .or. nmapp(ix).eq.4 .or.
+     &         iand(imap(i),512).ne.0)
+     &         sw1 = .false.
+             else
+               if (reflod .or.
+     &         invcnt(i).eq.0 .or. min(voidf(i),voidg(i)).le.1.0e-5
+     &         .or. iand(vctrl(i),1).ne.0 .or. nmapp(ix).eq.2 .or.
+     &         nmapp(ix).eq.4 .or. iand(imap(i),512).ne.0)
+     &         sw1 = .false.
+             endif
+c  sw1 is false for: reflood,
+c  or vol has no juns, water close to cell boundary,
+c  or time dependent volumes,
+c  or not vertical geometry,
+c  or volume is horizontal or a pump,
+c  or vertical stratification model is off (imap bit 10 [=512]=
+c  or level tracking is on (imap bit 29)
+             if (sw1) then
+c  If change option 61 is invoked,
+c  this first block of coding is executed.
+c  Otherwise, the next block is executed.
+c  The chngno(61) block is similar in many
+c  aspects to the default block.
+               if (chngno(61)) then
+                 trmm(ix) = 1.0
+                 trmm1(ix) = 0.0
+                 delvv = 0.0
+                 jliq = 0.0
+                 jvap = 0.0
+                 j = l
+                 do ls = 1,invcnt(i)
+                   jx = invj(j)%invvnx
+c  jtype = 1 for vertical junctions, 0 for horizontal junctions
+                   jtype = iand(ishft(jc(jx),-26),1)
+c  ifrmto = 0 if the volume is a "from" volume
+c  ifrmto = 1 if the volume is a "to" volume
+                   ifrmto = iand(ishft(invj(j)%invjun,-2),1)
+c  inormk is true if junction is connected to "from" volume
+c  and it is connected to sides 1 or 2; jcex bits 14,15 are 0
+                   inormk = ifrmto .eq. 0 .and.
+     &             iand(ishft(jcex(jx),-13),3) .eq. 0
+c  inorml is true if junction is connected to "to" volume
+c  and it is connected to sides 1 or 2; jcex bits 11,12 are 0
+                   inorml = ifrmto .eq. 1 .and.
+     &             iand(ishft(jcex(jx),-10),3) .eq. 0
+c  So following if test checks for either a vertical junction or
+c  if it is not a vertical junction, then junction has to be a normal
+c  junction (not a cross flow junction) connected to this volume
+                   if (jtype .ne. 0 .or. (inormk .or. inorml)) then
+                     flow = ajun(jx)*(2*ifrmto-1)*(voidfj(jx)*
+     &               rhofj(jx)*velfjo(jx) + voidgj(jx)*rhogj(jx)*
+     &               velgjo(jx))
+                     delvv = delvv + flow
+                     jtype = iand(ishft(jc(jx),-27),1)
+                     jtype = abs(ifrmto - jtype)
+                     jvx = ij1nx(jx-ifrmto+1)
+                     if (jtype .eq. 1) then
+                       ajsign = ajun(jx)*(2*ifrmto - 1)
+                       jliq = jliq + ajsign*voidfj(jx)*velfjo(jx)
+                       jvap = jvap + ajsign*voidgj(jx)*velgjo(jx)
+                       trmm1(ix) = max(trmm1(ix),voidg(jvx))
+                     else
+                       trmm(ix) = min(trmm(ix),voidg(jvx))
+                     endif
+                   endif
+                   j = j + 1
+                 enddo
+                 fidxup(ix) = delvv*dt/rhof(i)
+                 jliq = max(0.0,jliq)/avol(i)
+                 jvap = max(0.0,jvap)/avol(i)
+c  Is Cell Above in Annular or Mist?
+c  (and has a higher void fraction).
+                 if (trmm(ix).ge.max(alphac,voidg(i))) then
+c  Is Cell Below in Bubbly?
+                   if (trmm1(ix).le.alphab) then
+c  Check Level Swell Criteria:
+                     lapno = sqrt(sigma(i)/(gravcn*rhofg))
+c  Use Minimum of Slug or Churn-Turbulent Drift Flux:
+                     vgjs = min(.345*sqrt(diamvh/lapno),1.53)*
+     &               sqrt(sqrt(gravcn*rhofg*sigma(i))/rhof(i))
+c  Void Fraction Under Mixture Level:
+                     vfbelo = jvap/(1.2*(jliq+jvap)+vgjs)
+                     vfbelo = max(vfbelo,trmm1(ix))
+c  If void fraction below mixture level is less than the
+c  bubbly - slug transition, a level can exist.
+                     if (vfbelo .lt. alphab) then
+                       vstrat = (alphab - vfbelo) / alphab
+c  Ramp stratification off as mixture fills control volume.
+                       vstrat = vstrat * min(1.0,voidg(i)/
+     &                 max(0.01,vfbelo))
+c  Ramp Stratification Off If Liquid is Superheated
+                       scrchh(ix) = max(1.0 - vstrat,
+     &                 min(1.0,-0.5*dtsf(ix)))
+                       if (voidg(i).lt.0.12 .and. trmm(ix).gt.0.95)
+     &                 ipack = 1
+                       voidgu(ix) = trmm(ix)
+                       voidgd(ix) = trmm1(ix)
+                       ivert(ix) = 1
+                       flomap(ix) = 13
+                       pr = viscf(i)*csubpf(i)/thconf(i)
+                       bet = max(betaff(i),1.e-5)
+c-wdgb
+                    if (chngno(74)) then
+                       gr = gravcn*bet*rhof(i)**2*diamvh**3*
+     &                 max(abs(tempf(i) - ttempi(i)),0.1)/viscf(i)**2
+                    else
+                       gr = gravcn*bet*rhof(i)**2*diamvh**3*
+     &                 max(abs(tempf(i) - satt(i)),0.1)/viscf(i)**2
+                    endif
+                       if (chngno(13)) gr = min(gr,3.0e+10)
+                       ray = gr*pr
+                       nu = 0.27*ray**0.25
+c  The Nu vs Ray equation: McAdams 3rd Ed. p.180.
+c  Pressurizer uses Nusselt numbers from Incropera & DeWitt, 2nd Ed,
+c  page 506, or user input heat transfer coefficients.
+                       if (priz) then
+                         if (pzhtcf(n) .lt. 0.0) then
+                           nu = max(0.15*ray**0.333,2.0*nu)
+                         else
+                           nu = pzhtcf(n)*diamvh/thconf(i)
+                         endif
+                       endif
+                       hifvs = nu*thconf(i)/(dlvol*diamvh)
+                       hifsp1 = hifvs
+                       hifsb1 = hifvs
+                       if (iand(imap(i),63) .ne. 5 .and.
+     &                 .not.chngno(37)) then
+                         fact1 = min(hifsb1,17539.0*max(4.724,472.4*
+     &                   voidg(i)*(1.0 - voidg(i))))*max(0.0,
+     &                   min(1.0,(voidg(i) - 1.0e-10)*10.00000001))
+                         fact2 = hifsb1
+                         hifsb1 = max(fact1,min(fact2,(fact2 - fact1)*
+     &                   5.8015095e-7*(p(i)-8.6184463e6) + fact1))
+                       endif
+                       xintrp = max(0.0,min(1.0,0.5*(dtsf(ix) + 1.0)))
+                       xintrp = xintrp*xintrp*(3.0 - 2.0*xintrp)
+                       hifvs = hifsb1**xintrp*hifsp1**(1.0-xintrp)
+                       hiff(ix) = hiff(ix)*scrchh(ix) + hifvs*
+     &                 (1.0 - scrchh(ix))
+c  Interfacial area/vol = 1/len.
+                       pr = viscg(i)*csubpg(i)/thcong(i)
+c-wdgb
+                     if (chngno(74)) then
+                       gr = gravcn*betagg(i)*rhog(i)**2*diamvh**3*
+     &                 max(abs(tempg(i) - ttempi(i)),0.1)/viscg(i)**2
+                     else
+                       gr = gravcn*betagg(i)*rhog(i)**2*diamvh**3*
+     &                 max(abs(tempg(i) - satt(i)),0.1)/viscg(i)**2
+                     endif
+c-wdge
+                       ray = gr*pr
+                       nu = 0.27*ray**0.25
+c  Pressurizer uses Nusselt numbers from Incropera & DeWitt, 2nd Ed,
+c  page 506, or user input heat transfer coefficients.
+                       if (priz) then
+                         if (pzhtcg(n) .lt. 0.0) then
+                           nu = max(0.15*ray**0.333,2.0*nu)
+                         else
+                           nu = pzhtcg(n)*diamvh/thcong(i)
+                         endif
+                       endif
+c  Ramp Stratification Off If Vapor Is
+c  Subcooled
+                       scrchh(ix)=max(1.0-vstrat,min(1.0,
+     &                 0.5*dtsg(ix)))
+                       higg(ix) = higg(ix)*scrchh(ix) + nu*
+     &                 thcong(i)/(dlvol*diamvh)*(1.0 -
+     &                 scrchh(ix))
+                       hggff(ix) = hggff(ix)*scrchh(ix) + nu*
+     &                 thcong(i)/(dlvol*diamvh)*(1.0 -
+     &                 scrchh(ix))
+                     endif
+                   endif
+                 endif
+c  end chngno(61) here
+               else
+c  begin .not.chngno(61) here
+                 vvg = 0.35*sqrt(gravcn*diamvh*rhofg/rhof(i))
+                 vvg = vflux/(rho(i)*vvg)
+                 if (vvg .lt. 1.0) then
+                   f33 = max(0.0, 2.0*min(1.0, vvg) - 1.0)
+                   trmm(ix) = 1.0
+                   trmm1(ix) = 0.0
+                   delvv = 0.0
+                   j = l
+                   do ls = 1,invcnt(i)
+                     jx = invj(j)%invvnx
+c  jtype = 1 for vertical junctions, 0 for horizontal junctions
+                     jtype = iand(ishft(jc(jx),-26),1)
+c  ifrmto = 0 if the volume is a "from" volume
+c  ifrmto = 1 if the volume is a "to" volume
+                     ifrmto = iand(ishft(invj(j)%invjun,-2),1)
+c  inormk is true if junction is connected to "from" volume
+c  and it is connected to sides 1 or 2; jcex bits 14,15 are 0
+                     inormk = ifrmto .eq. 0 .and.
+     &               iand(ishft(jcex(jx),-13),3) .eq. 0
+c  inorml is true if junction is connected to "to" volume
+c  and it is connected to sides 1 or 2; jcex bits 11,12 are 0
+                     inorml = ifrmto .eq. 1 .and.
+     &               iand(ishft(jcex(jx),-10),3) .eq. 0
+c  So following if test checks for either a vertical junction or
+c  if it is not a vertical junction, then junction has to be a normal
+c  junction (not a cross flow junction) connected to this volume
+                     if (jtype .ne. 0 .or. (inormk .or. inorml)) then
+                       flow = ajun(jx)*(2*ifrmto-1)*(voidfj(jx)*
+     &                 rhofj(jx)*velfjo(jx) + voidgj(jx)*rhogj(jx)*
+     &                 velgjo(jx))
+                       delvv = delvv + flow
+                       jtype = iand(ishft(jc(jx),-27),1)
+                       jtype = abs(ifrmto - jtype)
+                       jvx = ij1nx(jx-ifrmto+1)
+                       if (jtype .eq. 1) then
+                         trmm1(ix) = max(trmm1(ix),voidg(jvx))
+                       else
+                         trmm(ix) = min(trmm(ix),voidg(jvx))
+                       endif
+                     endif
+                     j = j + 1
+                   enddo
+                   fidxup(ix) = delvv*dt/rhof(i)
+                   if ((trmm(ix) - voidg(i).ge.0.2 .or. voidg(i) -
+     &             trmm1(ix).ge. 0.2) .and. trmm(ix).ge.0.7 .and.
+     &             trmm(ix) - trmm1(ix).ge..2) then
+                     if (voidg(i).lt.0.12 .and. trmm(ix).gt.0.95)
+     &               ipack = 1
+                     if ((trmm(ix).ge.voidf(i) .and. voidf(i).ge.
+     &               trmm1(ix)) .or. chngno(13)) then
+                       voidgu(ix) = trmm(ix)
+                       voidgd(ix) = trmm1(ix)
+                       ivert(ix) = 1
+                       flomap(ix) = 13
+                       pr = viscf(i)*csubpf(i)/thconf(i)
+                       bet = max(betaff(i),1.e-5)
+c-wdgb
+                     if (chngno(74)) then
+                       gr = gravcn*bet*rhof(i)**2*diamvh**3*
+     &                 max(abs(tempf(i) - ttempi(i)),0.1)/viscf(i)**2
+                     else
+                       gr = gravcn*bet*rhof(i)**2*diamvh**3*
+     &                 max(abs(tempf(i) - satt(i)),0.1)/viscf(i)**2
+                     endif
+c-wdge
+                       if (chngno(13)) gr = min(gr,3.0e+10)
+                       ray = gr*pr
+                       nu = 0.27*ray**0.25
+c  The Nu vs Ray equation: McAdams 3rd Ed. p.180.
+c  Pressurizer uses Nusselt numbers from Incropera & DeWitt, 2nd Ed,
+c  page 506, or user input heat transfer coefficients.
+                       if (priz) then
+                          if (pzhtcf(n) .lt. 0.0) then
+                           nu = max(0.15*ray**0.333,2.0*nu)
+                         else
+                           nu = pzhtcf(n)*diamvh/thconf(i)
+                         endif
+                       endif
+                       f32 = 1.0 - min(1.0, voidf(i)*1.e+2)
+                       if (chngno(13)) f32 = 0.0
+                       f34 =  max(0.0,min(1.0,-0.5*dtsf(ix)))
+                       scrchh(ix) = max(f32,f33,f34)
+                       hifvs = nu*thconf(i)/(dlvol*diamvh)
+                       hifsp1 = hifvs
+                       hifsb1 = hifvs
+                       if (iand(imap(i),63) .ne. 5 .and.
+     &                 .not.chngno(37)) then
+                         fact1 = min(hifsb1,17539.0*max(4.724,472.4*
+     &                   voidg(i)*(1.0 - voidg(i))))*max(0.0,
+     &                   min(1.0,(voidg(i) - 1.0e-10)*10.00000001))
+                         fact2 = hifsb1
+                         hifsb1 = max(fact1,min(fact2,(fact2 - fact1)*
+     &                   5.8015095e-7*(p(i)-8.6184463e6) + fact1))
+                       endif
+                       xintrp = max(0.0,min(1.0,0.5*(dtsf(ix) + 1.0)))
+                       xintrp = xintrp*xintrp*(3.0 - 2.0*xintrp)
+                       hifvs = hifsb1**xintrp*hifsp1**(1.0-xintrp)
+                       hiff(ix) = hiff(ix)*scrchh(ix) + hifvs*
+     &                 (1.0 - scrchh(ix))
+c  Interfacial area/vol = 1/len.
+                       pr = viscg(i)*csubpg(i)/thcong(i)
+c-wdgb
+                    if (chngno(74)) then
+                       gr = gravcn*betagg(i)*rhog(i)**2*diamvh**3*
+     &                 max(abs(tempg(i) - ttempi(i)),0.1)/viscg(i)**2
+                    else
+                       gr = gravcn*betagg(i)*rhog(i)**2*diamvh**3*
+     &                 max(abs(tempg(i) - satt(i)),0.1)/viscg(i)**2
+                    endif
+c-wdge
+                       ray = gr*pr
+                       nu = 0.27*ray**0.25
+c  Pressurizer uses Nusselt numbers from Incropera & DeWitt, 2nd Ed,
+c  page 506, or user input heat transfer coefficients.
+                       if (priz) then
+                         if (pzhtcg(n) .lt. 0.0) then
+                           nu = max(0.15*ray**0.333,2.0*nu)
+                         else
+                           nu = pzhtcg(n)*diamvh/thcong(i)
+                         endif
+                       endif
+                       scrchh(ix) = max(f33,min(1.0,dtsg(ix)*0.5))
+                       if (chngno(13)) scrchh(ix) = f33
+                       higg(ix) = higg(ix)*scrchh(ix) + nu*
+     &                 thcong(i)/(dlvol*diamvh)*(1.0 -
+     &                 scrchh(ix))
+                       hggff(ix) = hggff(ix)*scrchh(ix) + nu*
+     &                 thcong(i)/(dlvol*diamvh)*(1.0 -
+     &                 scrchh(ix))
+                     endif
+                   endif
+                 endif
+               endif
+c  end .not.chngno(61) above
+             endif
+c  end sw1 above
+c  Start level tracking model heat transfer coefficient calculation.
+c  If level tracking says there is a level in this cell.
+             islev = iand(ishft(vctrlx(i),-7),1) .gt. 0
+             if (islev) then
+               pr = viscf(i)*csubpf(i)/thconf(i)
+               bet = max(betaff(i),1.e-5)
+c-wdgb
+            if (chngno(74)) then
+               gr = gravcn*bet*rhof(i)**2*diamvh**3*
+     &         max(abs(tempf(i) - ttempi(i)),0.1)/viscf(i)**2
+            else
+               gr = gravcn*bet*rhof(i)**2*diamvh**3*
+     &         max(abs(tempf(i) - satt(i)),0.1)/viscf(i)**2
+            endif
+               if (chngno(13)) gr = min(gr,3.0e+10)
+               ray = gr*pr
+               nu = 0.27*ray**0.25
+c  The Nu vs Ray equation: McAdams 3rd Ed. p.180.
+c  Pressurizer uses Nusselt numbers from Incropera & DeWitt, 2nd Ed,
+c  page 506, or user input heat transfer coefficients.
+               if (priz) then
+                 if (pzhtcf(n) .lt. 0.0) then
+                   nu = max(0.15*ray**0.333,2.0*nu)
+                 else
+                   nu = pzhtcf(n)*diamvh/thconf(i)
+                 endif
+               endif
+               hifsav = nu*thconf(i)/(dlvol*diamvh)
+               f34 =  max(0.0,min(1.0,-0.5*dtsf(ix)))
+c  Do not use old time weighting when the liquid is subcooled.
+               if (f34 .eq. 0.) then
+                 hifo(i) = 0.0
+                 higo(i) = 0.0
+               endif
+               scrchh(ix) = f34
+               hiff(ix) = hifsav*(1.0-f34) + hiff(ix)*f34
+               hggff(ix) = hiff(ix)
+               flomap(ix) = 14
+             endif
+c  Jet junction
+             if (jjet(i) .gt. 0.) then
+               if (flomap(ix) .eq. 13 .or. flomap(ix) .eq. 14) then
+                 if (dtsf(ix) .gt. 0.01) then
+                   if (dlev(i) .gt. 0) then
+                     z = dlev(i)
+                   else
+                     z = voidf(i)*dlvol
+                   endif
+                   hifvs = hiff(ix)
+c  We do not want small h's when liquid is superheated.
+c  Smoothing required.
+                   jakob = csubpf(i)*dtsf(ix)/hfg(ix)
+                   pr = viscf(i)*csubpf(i)/thconf(i)
+                   call htlev(dtsf(ix),pr,jakob,z,hifvs,hiflev,i)
+                   if (dtsf(ix) .lt. 1.01) then
+                     hiff(ix) = hiff(ix) - (hiff(ix) - hiflev)*
+     &               (dtsf(ix) - 0.01)
+                   else
+                     hiff(ix) = hiflev
+                   endif
+                   hggff(ix) = hiff(ix)
+                   flomap(ix) = 15
+                 endif
+               endif
+             endif
+           endif
+c  Store items in imap and floreg.
+  255      imap(i) = ior(iand(imap(i),not(ishft(63,18))),
+     &     ishft(flomap(ix),18))
+           floreg(i) = flomap(ix)
+           imap(i) = ior(ior(iand(imap(i),not(3072)),
+     &     ishft(ivert(ix),11)),ishft(ipack,10))
+           imap(i+1) = ior(iand(imap(i+1),not(ishft(63,18))),
+     &     ishft(flomap(ix),18))
+           imap(i+1) = ior(ior(iand(imap(i+1),not(3072)),
+     &     ishft(ivert(ix),11)),ishft(ipack,10))
+           imap(i+2) = ior(iand(imap(i+2),not(ishft(63,18))),
+     &     ishft(flomap(ix),18))
+           imap(i+2) = ior(ior(iand(imap(i+2),not(3072)),
+     &     ishft(ivert(ix),11)),ishft(ipack,10))
+           fwfxaf(ix+1) = fwfxaf(ix)
+           fwfxag(ix+1) = fwfxag(ix)
+           fwfxaf(ix+2) = fwfxaf(ix)
+           fwfxag(ix+2) = fwfxag(ix)
+           fwalf(i+1) = fwalf(i)
+           fwalg(i+1) = fwalg(i)
+           fwalf(i+2) = fwalf(i)
+           fwalg(i+2) = fwalg(i)
+c  Calculate hif, hig, and hgf.
+           hif(i) = hiff(ix)
+           hig(i) = higg(ix)
+           hgf(i) = hggff(ix)
+           hif(i) = hif(i)*(1.0 - dfront(i)/max(1.0e-7,dlvol))
+c  Calculate variables needed for time smoothing.
+           celvec(ix) = dlvol
+           dmvvec(ix) = diamvh
+           velvcf(ix) = abs(vlf)
+           velvcg(ix) = abs(vlg)
+           dstvec(ix) = dstar(ix)
+         enddo
+       endif
+c  Calculate final hif, hig, and hgf.
+       ih1 = ixvff
+       nh1 = 0
+       lv = lvs
+       do m = 1,nv
+         lv = lv + 1
+         i = lvptr(lv)
+         ix = vctrls(i)
+         if (.not.nvalhi(ix)) then
+           jhld1(ih1) = i
+           ih1 = ih1 + scskp
+           nh1 = nh1 + 1
+         endif
+       enddo
+       if (nh1 .ne. 0) then
+         ih1 = ixvff
+         ih2 = ixvff
+         nh2 = 0
+c  Adjust interfacial heat transfer coefficients if noncondensible
+c  is present.
+         do m = 1,nh1
+           i = jhld1(ih1)
+           ix = vctrls(i)
+           if (qualao(i).gt.1.0e-9 .and. nmapp(ix).ne.5) then
+             jhld2(ih2) = i
+             ih2 = ih2 + scskp
+             nh2 = nh2 + 1
+           endif
+           ih1 = ih1 + scskp
+         enddo
+         if (nh2 .ne. 0) then
+           ih2 = ixvff
+           ih3 = ixvff
+           ih4 = ixvff
+           nh3 = 0
+           nh4 = 0
+           do m = 1,nh2
+             i = jhld2(ih2)
+             ix = vctrls(i)
+             if (dtsf(ix) .gt. 0.0) then
+               jhld3(ih3) = i
+               ih3 = ih3 + scskp
+               nh3 = nh3 + 1
+             endif
+             if (dtsg(ix) .gt. 0.0) then
+               jhld4(ih4) = i
+               ih4 = ih4 + scskp
+               nh4 = nh4 + 1
+             endif
+             ih2 = ih2 + scskp
+           enddo
+           if (nh3 .ne. 0) then
+             ih3 = ixvff
+             ih5 = ixvff
+             ih6 = ixvff
+             ih7 = ixvff
+             nh5 = 0
+             nh6 = 0
+             nh7 = 0
+             if (chngno(45)) then
+c  Noncondensible gas effect, for subcooled liquid film.
+c  Also, should have test for annular flow regime.
+c  Revert to old model for other regimes.
+c  Note: this entire section should be recoded when
+c  default model has been selected.
+               do m = 1,nh3
+                 i = jhld3(ih3)
+                 aintf = 4.0 * sqrt(voidg(i))/diamv(i)
+                 hifilm = hif(i)/aintf
+                 call ncfilm(i,hifilm)
+                 hif(i) = hifilm*aintf
+                 ih3 = ih3 + scskp
+               enddo
+             else
+               do m =1,nh3
+                 i = jhld3(ih3)
+c  Note: the UCB model used here was developed for annular
+c  downflow over a small range of operating conditions
+c  but is applied to all regimes.
+                 if (qualao(i) .lt. .063) then
+                   jhld5(ih5) = i
+                   ih5 = ih5 + scskp
+                   nh5 = nh5 + 1
+                 elseif (qualao(i) .gt. 0.6) then
+                   jhld6(ih6) = i
+                   ih6 = ih6 + scskp
+                   nh6 = nh6 + 1
+                 else
+                   jhld7(ih7) = i
+                   ih7 = ih7 + scskp
+                   nh7 = nh7 + 1
+                 endif
+                 ih3 = ih3 + scskp
+               enddo
+               if (nh5 .ne. 0) then
+               ih5 = ixvff
+               do m = 1,nh5
+                 i = jhld5(ih5)
+                 ix = vctrls(i)
+                 f2(ix) = 1.0 - 10.*qualao(i)
+                 ih5 = ih5 + scskp
+               enddo
+             endif
+             if (nh6 .ne. 0) then
+               ih6 = ixvff
+               do m = 1,nh6
+                 i = jhld6(ih6)
+                 ix = vctrls(i)
+                 f2(ix) = 1.0 - qualao(i)**0.22
+                 ih6 = ih6 + scskp
+               enddo
+             endif
+             if (nh7 .ne. 0) then
+               ih7 = ixvff
+               do m = 1,nh7
+                 i = jhld7(ih7)
+                 ix = vctrls(i)
+                 f2(ix) = 1.0 - 0.938*qualao(i)**0.13
+                 ih7 = ih7 + scskp
+               enddo
+             endif
+             ih3 = ixvff
+               do m = 1,nh3
+                 i = jhld3(ih3)
+                 ix = vctrls(i)
+                 scrchh(ix) = min(1.e-5, voidg(i))*1.e5
+                 hif(i) = hif(i)*(f2(ix)*scrchh(ix) + 1.0 -
+     &           scrchh(ix))
+                 ih3 = ih3 + scskp
+               enddo
+             endif
+           endif
+           if (nh4 .ne. 0) then
+             ih4 = ixvff
+             do m = 1,nh4
+               i = jhld4(ih4)
+               ix = vctrls(i)
+               hig(i) = hig(i)*(1.0 - qualao(i)*max(1.0,min(0.0,
+     &         dtsg(ix))))
+               ih4 = ih4 + scskp
+             enddo
+           endif
+         endif
+c-wdgb
+c        if (chngno(74)) then
+ccput the diffusion model modified interphase heat transfer coeff.(8)
+c        if ( timehy .ge. 2.0 ) then
+c        ih1 = ixvff
+c        do m  = 1,nh1
+c          i = jhld1(ih1)
+c            if (floreg(i) .eq. 6) then
+c               if (extv04(i) .ge. 0.0000001
+c    &             .and. quala(i) .ne. 0.0
+c    &             .and. extv03(i) .ne. 0.0) then
+c              higdot = extv04(i)*csubpg(i)/(exp(extv04(i)*csubpg(i)
+c    &                 *extv03(i)/hig(i)) -1.0)
+c              hifdot = -extv04(i)*csubpf(i)/(exp(-extv04(i)*csubpf(i)
+c    &                 *extv03(i)/hif(i)) -1.0)
+c              hig(i) = higdot*extv03(i)
+c              hif(i) = hifdot*extv03(i)
+c               endif
+c            endif
+c          ih1 = ih1 + scskp
+c        enddo
+c        endif
+c        endif
+cwdge
+c  Calculate variables needed for time smoothing.
+         ih1 = ixvff
+         ih2 = ixvff
+         ih3 = ixvff
+         nh2 = 0
+         nh3 = 0
+         do m = 1,nh1
+           i = jhld1(ih1)
+           if (iand(imap(i),131072) .ne. 0) then
+             jhld2(ih2) = i
+             ih2 = ih2 + scskp
+             nh2 = nh2 + 1
+           else
+             jhld3(ih3) = i
+             ih3 = ih3 + scskp
+             nh3 = nh3 + 1
+           endif
+           ih1 = ih1 + scskp
+         enddo
+         ih1 = ixvff
+         do m = 1,nh1
+           i = jhld1(ih1)
+           ix = vctrls(i)
+           timinv(ix) = sqrt(max(gravcn,0.516*dstvec(ix))/
+     &     dmvvec(ix))*dt
+           tcouri(ix) = min(velvcg(ix),velvcf(ix))*0.7*dt/celvec(ix)
+           scrchh(ix) = max(.10536,(1.e-7 + min(velvcg(ix),
+     &     velvcf(ix)))/max(velvcg(ix),velvcf(ix),1.0e-7))
+           ih1 = ih1 + scskp
+         enddo
+         ih1 = ixvff
+         ih2 = ixvff
+         nh2 = 0
+         do m = 1,nh1
+           i = jhld1(ih1)
+           ix = vctrls(i)
+           if (.not.chngno(13) .or. flomap(ix) .ne. 13 .or.
+     &     flomap(ix) .ne. 14) then
+             jhld2(ih2) = i
+             ih2 = ih2 + scskp
+             nh2 = nh2 + 1
+           endif
+           ih1 = ih1 + scskp
+         enddo
+         if (nh2 .ne. 0) then
+           ih2 = ixvff
+           ih3 = ixvff
+           ih4 = ixvff
+           nh3 = 0
+           nh4 = 0
+           do m = 1,nh2
+             i = jhld2(ih2)
+             if (hifo(i)*hif(i) .gt. 0.0) then
+               jhld3(ih3) = i
+               ih3 = ih3 + scskp
+               nh3 = nh3 + 1
+             endif
+             if (higo(i)*hig(i) .gt. 0.0 .or. hgfo(i)*hgf(i) .gt. 0.0)
+     &       then
+               jhld4(ih4) = i
+               ih4 = ih4 + scskp
+               nh4 = nh4 + 1
+             endif
+             ih2 = ih2 + scskp
+           enddo
+c  Time smoothing of hif.
+           if (nh3 .ne. 0) then
+             ih3 = ixvff
+             do m = 1,nh3
+               i = jhld3(ih3)
+               ix = vctrls(i)
+               trmm1(ix) = exp(-min(0.693,max(tcouri(ix)*
+     &         max(0.01,voidf(i)),1.0 - min(1.,voidf(i)*1.e7),
+     &         min(timinv(ix),scrchh(ix)))))
+               ih3 = ih3 + scskp
+             enddo
+             ih3 = ixvff
+             ih5 = ixvff
+             nh5 = 0
+             do m = 1,nh3
+               i = jhld3(ih3)
+               if (hif(i) .gt. hifo(i)) then
+                 jhld5(ih5) = i
+                 ih5 = ih5 + scskp
+                 nh5 = nh5 + 1
+               endif
+               ih3 = ih3 + scskp
+             enddo
+             if (nh5 .ne. 0) then
+               ih5 = ixvff
+               do m = 1,nh5
+                 i = jhld5(ih5)
+                 ix = vctrls(i)
+                 trmm1(ix) = trmm1(ix)*(1.0 + max(-0.5,0.25*min(0.0,
+     &           dtsf(ix))))
+                 ih5 = ih5 + scskp
+               enddo
+             endif
+             ih3 = ixvff
+             do m = 1,nh3
+               i = jhld3(ih3)
+               ix = vctrls(i)
+$if def,makemap
+               if (targmp.eq.2 .and. targcn.eq.ncount .and.
+     &         target.eq.volno(i)) then
+c  Do not time smooth hif.
+               else
+$endif
+               if( iand(imap(i),64).eq.0 )
+     &         hif(i) = hif(i)*(hifo(i)/hif(i))**trmm1(ix)
+$if def,makemap,1
+               endif
+               ih3 = ih3 + scskp
+             enddo
+           endif
+c  Time smoothing of hig and hgf.
+           if (nh4 .ne. 0) then
+             ih4 = ixvff
+             do m = 1,nh4
+               i = jhld4(ih4)
+               ix = vctrls(i)
+               trmm1(ix) = exp(-min(.693,max(tcouri(ix)*max(.01,
+     &         voidg(i)),1.0 - min(1.,voidg(i)*1.e5),
+     &         min(timinv(ix),scrchh(ix)))))
+$if def,makemap
+               if (targmp.eq.2 .and. targcn.eq.ncount .and.
+     &         target.eq.volno(i)) then
+c  Do not time smooth hgf.
+               else
+$endif
+                 if (iand(imap(i),64).eq.0 .and. hgfo(i)*hgf(i).gt.0.0)
+     &           hgf(i) = hgf(i)*(hgfo(i)/hgf(i))**trmm1(ix)
+$if def,makemap,1
+               endif
+               ih4 = ih4 + scskp
+             enddo
+             ih4 = ixvff
+             ih5 = ixvff
+             nh5 = 0
+             do m = 1,nh4
+               i = jhld4(ih4)
+               if (hig(i) .gt. higo(i) .and. higo(i)*hig(i) .gt. 0.0)
+     &         then
+                 jhld5(ih5) = i
+                 ih5 = ih5 + scskp
+                 nh5 = nh5 + 1
+               endif
+               ih4 = ih4 + scskp
+             enddo
+             if (nh5 .ne. 0) then
+               ih5 = ixvff
+               do m = 1,nh5
+                 i = jhld5(ih5)
+                 ix = vctrls(i)
+                 trmm1(ix) = trmm1(ix)*(1.0 - 2.5*max(0.0,min(.2,
+     &           dtsg(ix))))
+                 ih5 = ih5 + scskp
+               enddo
+             endif
+             ih4 = ixvff
+             do m = 1,nh4
+               i = jhld4(ih4)
+               ix = vctrls(i)
+$if def,makemap
+               if (targmp.eq.2 .and. targcn.eq.ncount .and.
+     &         target.eq.volno(i)) then
+c  Do not time smooth hgf.
+               else
+$endif
+                 if (iand(imap(i),64).eq.0 .and. higo(i)*hig(i).gt.0.0)
+     &           hig(i) = hig(i)*(higo(i)/hig(i))**trmm1(ix)
+$if def,makemap,1
+               endif
+               ih4 = ih4 + scskp
+             enddo
+           endif
+         endif
+c  Check on 0.5 vaporization/condensation limit.
+         ih1 = ixvff
+         ih2 = ixvff
+         nh2 = 0
+         do m = 1,nh1
+           i = jhld1(ih1)
+           if (hif(i)*hig(i) .gt. 0.0) then
+             jhld2(ih2) = i
+             ih2 = ih2 + scskp
+             nh2 = nh2 + 1
+           endif
+           ih1 = ih1 + scskp
+         enddo
+         if (nh2 .ne. 0) then
+           ih2 = ixvff
+           ih3 = ixvff
+           nh3 = 0
+           do m = 1,nh2
+             i = jhld2(ih2)
+             ix = vctrls(i)
+             trmm1(ix) = -(pps(i)/p(i))*hig(i)*dtsg(ix) -
+     &       hif(i)*dtsf(ix)
+             if (trmm1(ix) .ge. 0.0) then
+               xliqh(ix) = uf(i) + p(i)/rhof(i)
+               xvaph(ix) = sathg(i)
+             else
+               xvaph(ix) = hsteam(i)
+               xliqh(ix) = sathf(i)
+             endif
+             trmm(ix) = (gammsw(ix) + gammsc(ix) + trmm1(ix)/
+     &       max(xvaph(ix) - xliqh(ix),1.e-12))*dt
+             if (trmm(ix) .ne. 0) then
+               jhld3(ih3) = i
+               ih3 = ih3 + scskp
+               nh3 = nh3 + 1
+             endif
+             ih2 = ih2 + scskp
+           enddo
+           if (nh3 .ne. 0) then
+             ih3 = ixvff
+             ih4 = ixvff
+             ih5 = ixvff
+             nh4 = 0
+             nh5 = 0
+             do m = 1,nh3
+               i = jhld3(ih3)
+               ix = vctrls(i)
+               if (trmm(ix) .gt. 0) then
+                 jhld4(ih4) = i
+                 ih4 = ih4 + scskp
+                 nh4 = nh4 + 1
+               else
+                 jhld5(ih5) = i
+                 ih5 = ih5 + scskp
+                 nh5 = nh5 + 1
+               endif
+               ih3 = ih3 + scskp
+             enddo
+             ih6 = ixvff
+             nh6 = 0
+             if (nh4 .ne. 0) then
+               ih4 = ixvff
+               do m = 1,nh4
+                 i = jhld4(ih4)
+                 ix = vctrls(i)
+                 trmm1(ix) = 0.5*voidf(i)*rhof(i)
+                 if (trmm(ix).gt.trmm1(ix) .and. trmm1(ix).ne.0.0)
+     &           then
+                   avelfg(ix) = trmm1(ix)/trmm(ix)
+                   jhld6(ih6) = i
+                   ih6 = ih6 + scskp
+                   nh6 = nh6 + 1
+                 endif
+                 ih4 = ih4 + scskp
+               enddo
+             endif
+             if (nh5 .ne. 0) then
+               ih5 = ixvff
+               do m = 1,nh5
+                 i = jhld5(ih5)
+                 ix = vctrls(i)
+                 trmm1(ix) = 0.5*voidg(i)*rhog(i)*(1.0 - qualao(i))
+                 if (-trmm(ix).gt.trmm1(ix) .and. trmm1(ix).ne.0.0)
+     &           then
+                   avelfg(ix) = -trmm1(ix)/trmm(ix)
+                   jhld6(ih6) = i
+                   ih6 = ih6 + scskp
+                   nh6 = nh6 + 1
+                 endif
+                 ih5 = ih5 + scskp
+               enddo
+             endif
+             if (nh6 .ne. 0) then
+               ih6 = ixvff
+               do m = 1,nh6
+                 i = jhld6(ih6)
+                 ix = vctrls(i)
+$if def,makemap
+                 if (targmp.eq.2 .and. targcn.eq.ncount .and.
+     &           target.eq.volno(i)) then
+c  Do not time smooth hgf.
+                 else
+$endif
+c
+c  At low pressure, be more conservative on the approach to void limit.
+                   percnt = max(0.2,min(1.0,1.0e-4/dtdp(i)))
+                   if (voidg(i) .lt. 0.5) then
+                     hif(i) = percnt*hif(i)*avelfg(ix)
+                     if (tempg(i) .lt. satt(i)) then
+                       hig(i) = percnt*hig(i)*avelfg(ix)
+                     endif
+                   else
+                     if (tempf(i) - satt(i) .lt. 80.0) then
+                       hig(i) = percnt*hig(i)*avelfg(ix)
+                       if (tempf(i) .gt. satt(i)) then
+                         hif(i) = percnt*hif(i)*avelfg(ix)
+                       endif
+                     endif
+                   endif
+$if def,makemap,1
+                 endif
+                 ih6 = ih6 + scskp
+               enddo
+             endif
+           endif
+         endif
+       endif
+c  Checks on negative or zero hif and hig.
+       lhelp= .false.
+       ih1 = ixvff
+       nh1 = 0
+       lv = lvs
+       do m = 1,nv
+         lv = lv + 1
+         i = lvptr(lv)
+         ix = vctrls(i)
+         if (.not.nvalhx(ix)) then
+           jhld1(ih1) = i
+           ih1 = ih1 + scskp
+           nh1 = nh1 + 1
+         endif
+       enddo
+       if (nh1 .ne. 0) then
+         ih1 = ixvff
+         do m = 1,nh1
+           i = jhld1(ih1)
+           if ((hif(i).eq.0.0 .and. hig(i).eq.0.0) .or.
+     &       hif(i).lt.0.0 .or. hig(i).lt.0.0 ) then
+             if (help .ge. 0) help = 1
+             write (output,3000) volno(i),hif(i),hig(i)
+ 3000  format('0******** Error in phantv. volume= ',i12,
+     &/,' Mass transfer coefficients are'
+     &' both zero or one is less than zero, hif= ',1pg13.5,
+     &'  hig= ',1pg13.5,
+     &' diagnostic print follows.')
+c  Lower limit on interfacial heat transfer coefficients.
+             hif(i) = max(0.,hif(i))
+             hig(i) = max(0.,hig(i))
+             lhelp = .true.
+           endif
+c  PSU updates
+c  Zero interfacial heat transfer coefficients
+           if (chngno(2)) then
+             hif(i) = 1.0e-10
+             hig(i) = 1.0e-10
+             hgf(i) = 1.e+05
+           endif
+$if def,iua
+       if (uncmode) call appwtfrv(i)
+$endif
+           ih1 = ih1 + scskp
+         enddo
+       endif
+$if def,selap
+c see ?equil
+$if def,debth,4
+       if(idbvol(i).gt.0)then
+         hif(i)=1.0e+9
+         hig(i)=1.0e+9
+       endif
+$endif
+c
+c  Diagnostic printout.
+$if def,dbgprnt
+       if (help .ne. 0) then
+         if(iand(ihlppr(1),ishft(1,20)).ne.0) then
+           call helphd ('phantv',6)
+              write (output,3001)
+ 3001  format ('0Volume mass transfer terms'/1x,132('=')/1x,'i',
+     & 5x,'volno(i)',3x,'hif(i)',7x,'hifo(i)',6x,'hifc',9x,'hifc1',8x,
+     & 'dtsf',9x,'dtsfm',8x,'dtsfsp',7x,'dtsfsb',7x,'xliqh'/7x,
+     & 'vctrl(i)',3x,'hig(i)',7x,'higo(i)',6x,'higc',9x,'higc1',8x,
+     & 'dtsg',9x,'higsub',7x,'dtsgms',7x,'dtsgm',8x,'xvaph'/7x,
+     & 'nmapp',6x,'hgf(i)',7x,'hgfo(i)',6x,'hgfc',9x,'hgfc1',8x,'hfg',
+     & 10x,'trmm',9x,'trmm1',8x,'rvcrit',7x,'scrchh',/1x,132('='))
+           lv = lvs
+           iz = lpdat(issys)%livnn
+           do m = 1,nv
+             lv = lv + 1
+             i = lvptr(lv)
+             ix = vctrls(i)
+             izz = iand(vctrl(i),not(8))
+             izz = iand(izz,not(ishft(1,31)))
+             if(iand(vctrlx(i),1).ne.0) then
+               write (output,3002) iz,volno(i),hif(i),hifo(i),hifc(ix),
+     &         hifc1(ix),dtsf(ix),dtsfm(ix),dtsfsp(ix),dtsfsb(ix),
+     &         xliqh(ix),izz,hig(i),higo(i),higc(ix),higc1(ix),dtsg(ix),
+     &         higsub(ix),dtsgms(ix),dtsgm(ix),xvaph(ix),nmapp(ix),
+     &         hgf(i),hgfo(i),hgfc(ix),hgfc1(ix),hfg(ix),
+     &         trmm(ix),trmm1(ix),rvcrit(ix),scrchh(ix)
+ 3002  format (1x,i5,i10.9,1p,9g13.5/6x,i10,9g13.5/6x,i10,9g13.5)
+               if (lhelp) then
+                 hif(i) = 1.0e+12
+                 hig(i) = 1.0e+12
+               endif
+             endif
+             iz = iz + 1
+           enddo
+           write (output,3003)
+ 3003  format ('0Final volume mass transfer terms'/1x,132('=')/1x,
+     & 'i',5x,'volno',6x,'tempf',8x,'tempg',8x,'satt',9x,
+     & 'hif',10x,'hig',10x,'hgf',10x,'gammaw',7x,'qwf',10x,'qwg'/57x,
+     & 'hiff',9x,'higg',9x,'hggff'/1x,132('='))
+           lv = lvs
+           iz = lpdat(issys)%livnn
+           do m = 1,nv
+             lv = lv+1
+             i = lvptr(lv)
+             ix = vctrls(i)
+             dtsf(ix) = tempf(i) - satt(i)
+             dtsg(ix) = tempg(i) - satt(i)
+             if(iand(vctrlx(i),1).ne.0) then
+               write (output,3004) iz,volno(i),tempf(i),tempg(i),
+     &         satt(i),hif(i),hig(i),hgf(i),gammaw(i),qwf(i),qwg(i)
+ 3004  format (1x,i5,i10.9,1p,9g13.5)
+               write (output,3005) hiff(ix),higg(ix),
+     &         hggff(ix)
+ 3005  format (55x,1p,3g13.5)
+             endif
+             iz = iz + 1
+           enddo
+ 1020      write (output,3007)
+ 3007  format ('0Other volume terms'/1x,132('=')/1x,'i',
+     & 5x,'volno(i)',3x,'viscf(i)',5x,'thconf(i)',4x,'voidf(i)',5x,
+     & 'fwalf(i)',5x,'diamv(i)',5x,'costhe(ix)',3x,'fidxup(ix)',3x,
+     & 'flomap(ix)',3x,'fwfxaf(ix)'/7x,'imap(i)',4x,'viscg(i)',5x,
+     & 'thcong(i)',4x,'voidg(i)',5x,'fwalg(i)',5x,'dstar(ix)',4x,
+     & 'rvcrit(ix)',3x,'pfinrg(ix)',16x,
+     & 'fwfxag(ix)'/1x,132('='))
+           iz = lpdat(issys)%livnn
+           lv = lvs
+           do m = 1,nv
+             lv = lv + 1
+             i = lvptr(lv)
+             ix = vctrls(i)
+             if (iand(vctrlx(i),1).ne.0) then
+               write (output,3006) iz,volno(i),viscf(i),thconf(i),
+     &         voidf(i),fwalf(i),diamv(i),costhe(ix),fidxup(ix),
+     &         flomap(ix),fwfxaf(ix),imap(i),viscg(i),thcong(i),
+     &         voidg(i),fwalg(i),dstar(ix),rvcrit(ix),pfinrg(ix),
+     &         fwfxag(ix)
+ 3006  format (1x,i5,i10.9,1p,7g13.5,i13,g13.5/6x,i10,7g13.5,13x,
+     & g13.5)
+               if (iand(imap(i+1),16384) .ne. 0) then
+                 write (output,3008)
+     &           fwalf(i+1),diamv(i+1),fwfxaf(ix+1),imap(i+1),
+     &           fwalg(i+1),fwfxag(ix+1)
+ 3008  format (16x,39x,1p,2g13.5,39x,g13.5/6x,i10,39x,g13.5,
+     & 52x,g13.5)
+               endif
+               if (iand(imap(i+2),16384) .ne. 0) then
+                 write (output,3008)
+     &           fwalf(i+2),diamv(i+2),fwfxaf(ix+2),imap(i+2),
+     &           fwalg(i+2),fwfxag(ix+2)
+               endif
+             endif
+             iz = iz + 1
+           enddo
+         endif
+       endif
+$endif
+$if def,nanscr
+c  Nan out hggff(1)
+       call nanscv(28,28)
+c  Nan out jhld1, jhld2, jhld3, jhld4, jhld5, jhld6, jhld7
+       call nanscv(31,37)
+c  Nan out hgfc,hgfc1
+       call nanscv(38,39)
+c  Nan out dtsf,dtsg,hfg,rhfg,avelf,rhocpf, xliqh, xvaph,
+c          trmm, trmm1, higc, higc1, hifc, hifc1, higsub, dtsfm,
+c          dtsfm, dtsgms, dtsgm, dtsfsp, dtsfsb, avelfg, fluxm,
+c          scrchh, celvec(f2,fpress), dmvvec(flxtrn),
+c          velvcf(sbmlhf), velvcg(sbmllf), dstvec
+       call nanscv(41,68)
+c  Nan out timinv, tcouri, nmapp, ivert, nvalhi, nvalhx
+       call nanscv(70,75)
+c  Nan out flomap(1)
+       call nanscv(172,172)
+c  Nan out rvcrit(1)
+       call nanscv(175,175)
+c  Nan out hiff(1)
+       call nanscv(184,184)
+c  Nan out higg(1)
+       call nanscv(187,187)
+$endif
+       return
+       end

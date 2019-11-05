@@ -1,0 +1,119 @@
+*mlist
+       subroutine radht
+c
+c
+c  radht calculates the radiosities and net radiative heat fluxes at
+c  radiating sufaces.
+c
+c  Cognizant engineer: rjw.
+c
+       implicit none
+       include 'contrl.h'
+       include 'comctl.h'
+       include 'fast.h'
+       include 'htsrcm.h'
+       include 'radhtc.h'
+       include 'voldat.h'
+c      irx   = flag to indicte that radiation ht is occurring now
+c      irhtx = flag to indicate that radiation ht has occurred
+c      timron = first time the radiation ht started
+c      timrof = last time at which the radiation ht occurred
+c               reset to current time each time step that rad ht occurs
+c
+c  Local variables.
+       integer i,ic,idum,ifin,iflg,ihtx,ijdx,irhtx,irx,iskp,istp,
+     & istrt,ix1,ix2,izd,j,jc,jfl,jh,jj,jr,jv,k,nset
+       real rados,sbcon,ts,ts1,ts2,vdg
+c
+       data irhtx/0/
+       data sbcon/5.6699e-8/
+c
+       if (filid(38) .eq. 0.0) go to 999
+       jr = filndx(38)
+       jfl = jr
+       jh = filndx(8)
+       jv = filndx(4)
+c  Zero out radiation heat flux.
+       istrt = jfl + irhflx(jfl)
+       istp   = istrt + (nhtstr(jh) - 1) * 2
+       do 7 i = istrt, istp, 2
+         qlrad(i) = 0.0
+         qrrad(i) = 0.0
+    7  continue
+c  Calculate radiosities and net radiative heat fluxes for each set.
+        iskp = nrhskp
+c
+        nset = nrset(jfl)
+        do 70 jj = 1,nset
+        istrt = jfl + irhoff(jr)
+        ifin  = istrt + (nrh(jr) -1) * iskp
+        ic = 0
+        irx = 0
+c
+        do 10 k=istrt,ifin,iskp
+         ix1 = jh + itemof(k)
+c  Itg may not be valid index if no vol attached to slab in that case
+c  jump around test.
+      if(ialpof(k).lt.0 .or. ialpof(k).gt.filsiz(4) ) go to 10
+         ix2 = jv + ialpof(k)
+         ts = httmp(ix1)
+         vdg = voidg(ix2)
+         if (ts .lt. trmin(jr) .or. vdg .lt. voidmn(jr)) go to 10
+         irx = 1
+         go to 15
+   10  continue
+   15  if (irx .eq. 0) go to 50
+        do 40 i=istrt,ifin,iskp
+         ic = ic + 1
+         rados = 0.0
+         ihtx = jh + itemof(i)
+         ts1 = httmp(ihtx)
+         jc = 0
+         iflg = 0
+        do 30 j=istrt,ifin,iskp
+           jc = jc + 1
+           idum = jh + itemof(j)
+           ts2 = httmp(idum)
+           ijdx = jfl + ivewof(jr) + ic - 1 + (jc - 1) * nrh(jr)
+           rados = rados + vfij(ijdx) * emis(j) * ts2**4
+   30    continue
+         rados = rados*sbcon
+         qrad(i) = emis(i)*(sbcon*ts1**4 - rados)/
+     &   (1.0 - emis(i))
+         izd = jfl + irhflx(jfl) + (iabs(jlr(i)) - 1)*2
+         if (jlr(i) .lt. 0) qlrad(izd) = qlrad(izd) + qrad(i)
+         if (jlr(i) .gt. 0) qrrad(izd) = qrrad(izd) + qrad(i)
+   40  continue
+   50  continue
+c
+c         irx=1 means calculation for a set has just been turned on
+c       irhtx=1 means calculation was on last time step.
+c            =0 means calculation was off last time step.
+c       (irhtx is stored in sign of timron(jr)
+c                irhtx    irx
+c                  0       0    calculation was off and stays off
+c                  0       1    calculation was off and now is on
+c                  1       0    calculation was on and is now off
+c                  1       1    calculation was on and remains on
+c
+        irhtx = 0
+        if(timron(jr).lt.0.0) irhtx=1
+c
+        if(irhtx.eq.1 .and. irx .eq. 1 )go to 70
+        if(irhtx.eq.0 .and. irx .eq. 0 )go to 70
+         if (irx   .eq. 1) go to 55
+c  Get here if irhtx=1, irx=0.
+c  Calc was on but now is off, so turn off bit 1 in timron.
+        timrof(jr) = timehy
+        timron(jr)  = -timron(jr)
+        go to 70
+c
+  55    timron(jr) = -timehy
+c  timron=-timehy => calc turned on.
+        go to 70
+c
+  70    jr=jr + nrsskp
+c  End of loop over radiation sets.
+  999  continue
+       return
+       end

@@ -1,0 +1,702 @@
+*mlist
+*if def,selap
+       subroutine fpgedr (fcn,n,t0,y,tn,jac,rtol,atol,rparm,iparm,wk,
+     & iwk,job,info)
+c
+c  Calls the subroutines required to solve the initial value problem for
+c  a system of first order ordinary differential equations.
+c
+c  Cognizant engineer: ljs.
+c
+       implicit none
+       integer n,iparm(12),iwk(1),job(5),info
+       real t0,y(n),tn,rtol(1),atol(1),rparm(10),wk(1)
+       external fcn,jac
+c
+c  ...1...  function / purpose  .......
+c
+c          dy/dt = f(y,t),  where  y = (y(1), y(2),...,y(n))**t
+c
+c  ...2...  arguments / parameters / constants  .......
+c
+c     ..a..  input arguments  .....
+c
+c          fcn [e] - user supplied subroutine defining the differential
+c              equation;  must be declared external in the calling
+c              program;  fcn(ydot,n,y,h) computes the
+c              function ydot = f(y,h)
+c
+c          n [i:1] - number of first-order ordinary differential
+c              equations (n can be reduced, but never increased,
+c              during a problem)
+c
+c          t0 [r:1] - initial value of the independent variable
+c              (used for input only on the first call)
+c
+c          y [r:n] - initial value vector of the dependent variables
+c              (used for input only on the first call)
+c
+c          tn [r:1] - value of t at which output is desired next.
+c              integration normally will proceed slightly beyond tn and
+c              then interpolate to t=tn; see itsk. (used only for input)
+c
+c          jac [e] - user supplied subroutine calculating the analytic
+c              jacobian matrix of partial derivatives; must be
+c              declared external in the calling program;
+c              jac(pd,ldpd,n,y,t) must set pd(i,j) to be the partial
+c              derivative of ydot(i) with respect to y(j).  jac is
+c              called only if mitr = 1; otherwise a dummy routine
+c              may be substituted
+c
+c          rtol [r:1/n] - relative tolerance parameter(s); allows
+c              individual error control of the components of y
+c              (see itol)
+c
+c          atol [r:1/n] - absolute tolerance parameter(s); allows
+c              individual error control of the components of y
+c              (see itol)
+c
+c          rparm [r:10] - real parameters
+c              (1)/tcrit - critical value of t which the solver is
+c                  not to overshoot (required if itsk = 4 or 5)
+c            * (2)/h0 - initial step size in t, default is computed
+c                  internally
+c              (3) - (unused)
+c            * (4)/hmax - maximum step size allowed, default is infinite
+c            * (5)/hmin - minimum step size allowed, default is zero
+c
+c          iparm [i:12] - integer parameters
+c              (1)/iy - maximum number of colmumns to be used in the
+c                  nordseick array, default is 13 if meth = 1, and
+c                  6 if meth = 2 on the first call (used for input
+c                  only on the first call)
+c              (2)/lwk - length of the work array; must be at least
+c                  (iy+3)*n + n**2, if mitr = 1 or 2
+c                           + n   , if mitr = 3
+c                           + 0   , if mitr = 4
+c              (3)/liwk - length of iwk; must be at least n if mitr
+c                  = 1 or 2, otherwise not referenced
+c            * (4)/mxstep - maximum number of (internally defined) steps
+c                  allowed during one call to the solver, default is 500
+c            * (5)/mxhnil - maximum number of message code #11 to be
+c                  printed, default is 10
+c            * (6)/mxord - maximum order to be allowed, default is iy-1
+c
+c          wk [r:lwk] - working storage
+c
+c          iwk [i:liwk] - working storage
+c
+c          job [i:5] - job path parameters
+c              (1)/itsk - task indicator
+c                  = 1, normal computation of output values of y(t)
+c                       at t = tn, by overshooting and interpolating
+c                  = 2, take single step and return (tn ignored)
+c                  = 3, proceed to the first internal mesh point at or
+c                       beyond t = tn and return
+c                  = 4, normal computation of output values of y(t)
+c                       at t = tn, but without overshooting t = tcrit
+c                  = 5, take single step and return, but without
+c                       overshooting t = tcrit (tn ignored)
+c              (2)/indx - start/restart indicator
+c                         (need not be reset for normal continuation)
+c                  = 1, first call: new problem
+c                  = 2, subsequent call: continue the integration
+c                  = 3, subsequent call: change of n, meth, mitr,
+c                       tolerances or parameters
+c                  = 4, subsequent call: change of h only
+c              (3)/mitr - iteration method indicator (used for input
+c                         only on first call unless indx = 3)
+c                  = 1, chord method: analytic jacobian
+c                  = 2, chord method: finite difference jacobian
+c                  = 3, chord method: diagonal jacobian approximation
+c                       (based on a directional derivative)
+c                  = 4, functional iteration
+c              (4)/meth - basic method indicator (used for input
+c                         only on first call unless indx = 3)
+c                  = 1, adams methods
+c                  = 2, stiff methods of gear or
+c                       backward differentiation formulas (bdf)
+c              (5)/itol - type of error control for single step error
+c                  estimates in the weighted root-mean-square norm;
+c                  the weighting vector must have positive components
+c                  = 1, ewt(i) = rtol    * abs(y(i)) + atol
+c                  = 2, ewt(i) = rtol    * abs(y(i)) + atol(i)
+c                  = 3, ewt(i) = rtol(i) * abs(y(i)) + atol
+c                  = 4, ewt(i) = rtol(i) * abs(y(i)) + atol(i)
+c
+c     ..b..  output arguments  .....
+c
+c          t0 - the output value of t.  for itsk = 1 or 4, normally
+c              t0 = tn; otherwise t0 is the last value of t reached
+c              successfully.
+c
+c          y - computed value of y at t = t0
+c
+c          rparm - real parameters
+c              (5)/hmin - minimum step size allowed
+c              (6)/hmxi - inverse of the maximum step size allowed
+c              (7)/hu - step size last used successfully
+c              (8)/h - step size to be attempted on the next step
+c              (9)/t - current value of the independent variable,
+c                  i.e. the current internal mesh point in t
+c              (10)/tolsf - tolerance scale factor computed following
+c                  a request for too much accuracy; a recommended
+c                  way to alter rtol and atol
+c
+c          iparm - integer parameters
+c              (6)/mxord - maximum order allowed
+c              (7)/nst - number of steps taken so far
+c              (8)/nfe - number of fcn evaluations so far
+c              (9)/nje - number of jac evaluations so far
+c              (10)/nqu - method order last used successfully
+c              (11)/nq - method order to be attempted on next step
+c              (12)/imxer - index of component of largest magnitude
+c                  in the weighted local error vector
+c
+c          job(2)/indx = 2, integration was completed to t
+c
+c          info [i:1] - error condition / message code
+c
+c              =0,  normal completion
+c
+c                 << type 1 - nominal >>
+c
+c              =11, (r1)/t + (r2)/h = t on next step
+c              =12, nominal message #11 has occurred (i1) times and
+c                   will not be issued again for this problem
+c
+c                 << type 3 - terminal >>
+c
+c              =31, at (r1)/t and step size (r2)/h, corrector
+c                   convergence failed repeatedly or abs(h) = hmin
+c              =32, at (r1)/t and step size (r2)/h, the error test
+c                   failed repeatedly or abs(h) = hmin
+c              =34, maximum number of steps (i1) exceeded at (r1)/t,
+c                   perhaps wrong choice of meth
+c              =35, too much accuracy has been requested at (r1)/t
+c                   with a tolerance scale factor of (r2)/tolsf
+c                   i1=1, at the start of the integration
+c                   i1=2, subsequently
+c              =36, (r1)/ewt((i1)) became zero, pure relative control
+c                   was requested (atol(i1) = zero).  integration was
+c                   successful as far as t
+c
+c                 << type 4 - fatal >>
+c
+c              =40, illegal input, (i1)/n
+c              =41, illegal or inconsistent input
+c                   i1=1, (r1)/rtol((i2))
+c                   i1=2, (r1)/atol((i2))
+c                   i1=3, (r1)/rparm((i2))
+c              =42, (i2)/iparm((i1)) is inconsistent
+c              =43, (i2)/job((i1)) is illegal
+c              =44, (r1)/tn is too close to (r2)/t0 to start integration
+c              =45, inconsistent values of t
+c                   i1=1, (r1)/tcrit behind (r2)/tn
+c                   i1=2, (r1)/tcrit behind (r2)/t
+c                   i1=3, (r1)/tn    behind (r2)/t-hu
+c
+c     ..c..  internal / local variables  .....
+       integer error,ewt,i,i1,i2,ihit,indx,itol,itsk,iy,ldyh,liw,liwk,
+     & lwa,lwk,meth,mitr,mxder,mxhnil,mxiy,mxord,mxstep,nc,nhnil,ni,nq,
+     & nr,nslast,nst,wa,yh,yh1
+       integer, parameter :: maxder(2)=(/12,5/),mxstp0=500,mxhnl0=10
+       real h,h0,hmax,hmin,hmx,hmxi,hu,r1,r2,smax,t,tcrit,temp,tnrm,tol,
+     & tolsf,tp,uround
+c ######################
+c  This section was added to mark variables that should be checked that
+c  they are not to carry information from one call to the next. Perhaps
+c  a save statement should be added to this routine.
+c      integer error,ewt,i,i1,i2,ihit,indx,itol,itsk,iy,ldyh,liw,liwk,
+c    & lwa,lwk,meth,mitr,mxder,mxhnil,mxiy,mxord,mxstep,nc,nhnil,ni,nq,
+c    & nr,nslast,nst,wa,yh,yh1
+c      real h,h0,hmax,hmin,hmx,hmxi,hu,r1,r2,smax,t,tcrit,temp,tnrm,tol,
+c    & tolsf,tp,uround
+c ######################
+c
+c     ..d..  external / subprogram references  .....
+c      integer vswami
+       real usmach,vswrms
+c
+c  Minerva integer function - vswami.
+c  Minerva real functions - usmach, vswrms.
+c  Minerva subroutines - dsgeci, dsgeia, dsgein, dsgewt, ulemsg
+c
+c  ...3...  notes / remarks  .......
+c
+c     ..a..  usage  .....
+c
+c          (1) call once for each output value of t.  after the initial
+c          call, if a normal return occurred (info=0) and a normal con-
+c          tinuation is desired, simply reset tn and call again.  all
+c          other parameters will be ready for the next call.  a change
+c          of parameters with indx = 3 can be made after either a
+c          successful or an unsuccessful return.
+c
+c          (2) if global errors are to be estimated by making a repeated
+c          run on the same problem with smaller tolerances, then all
+c          components of rtol and atol should be scaled down uniformly.
+c
+c          (3) stiffness occurs when the jacobian matrix has an eigen-
+c          value whose real part is negative and large in magnitude
+c          compared to the reciprocal of the t-span of interest
+c
+c          (4) form of  fcn  and  jac
+c
+c                subroutine fcn (ydot, n, y, h)
+c                integer n
+c                real ydot(n), y(n), h
+c                ----------
+c                calculate the function at y and t
+c                return this vector in ydot
+c                ----------
+c                return
+c                end
+c
+c                subroutine jac (pd, ldpd, n, y, t)
+c                integer ldpd, n
+c                real pd(ldpd,n), y(n), t
+c                ----------
+c                calculate the jacobian at y and t
+c                return this matrix in pd
+c                pd(i,j) is the partial of ydot(i) with respect to y(j)
+c                ----------
+c                return
+c                end
+c
+c        * (5) for those parameters with defaults, input a zero to allow
+c          the default to take effect
+c
+c          (6) when n is decreased, the effect is to drop the last
+c          equation(s) from the system and to integrate the resulting
+c          smaller system with the last value(s) of y(i) held constant
+c
+c     ..b..  algorithm  .....
+c
+c     ..c..  portability  .....
+c
+c          ansi 66 - nonstandard subscripts
+c          ansi 66 - nonstandard character constant in ulemsg calls
+c
+c     ..d..  references  .....
+c
+c          (1) a.c. hindmarsh, linear multistep methods for ordinary
+c          differential equations.. method formulations, stability
+c          and the methods of nordsieck and gear, ucrl-51186, rev 1,
+c          lawrence livermore laboratory, 1972.
+c
+c          (2) a.c. hindmarsh, construction of mathematical software,
+c          part iii.. the control of error in the gear package for
+c          ordinary differential equations, ucid-30050 part 3,
+c          lawrence livermore laboratory, 1972.
+c
+c          (3) a.c. hindmarsh, gear.. ordinary differential equation
+c          system solver, ucid-30001, rev 3, lawrence livermore
+c          laboratory, 1974.
+c
+c     ..e..  history  .....
+c
+c          origin - drive, a.c. hindmarsh, gear, 12/20/74
+c                 - lsode, a.c. hindmarsh, lsode, 12/18/80
+c          modified - header, sturcture, e.s. marwil, 4 may 81
+c
+       nst = iparm(7)
+       hu = rparm(7)
+       ni = 0
+       nr = 0
+       info = 0
+       ihit = 0
+c
+c  1  Check for valid job path.
+       itsk = job(1)
+       if (1.gt.itsk .or. itsk.gt.5) then
+         info = 43
+         ni = 2
+         i1 = 1
+         i2 = itsk
+         go to 390
+       endif
+c
+       indx = job(2)
+       if (1.gt.indx .or. indx.gt.4) then
+         info = 43
+         ni = 2
+         i1 = 2
+         i2 = indx
+         go to 390
+       endif
+c
+       if (indx.eq.4 .or. indx.eq.2) go to 190
+c
+c  2a indx = 1 or 3; check major parameters.
+       if (indx .eq. 1) nc = n
+       if (0.ge.n .or. n.gt.nc) then
+         info = 40
+         ni = 1
+         i1 = n
+         go to 390
+       endif
+c
+       nc = n
+       mitr = job(3)
+       if (1.gt.mitr .or. mitr.gt.4) then
+         info = 43
+         ni = 2
+         i1 = 3
+         i2 = mitr
+         go to 390
+       endif
+c
+       meth = job(4)
+       if (1.gt.meth .or. meth.gt.2) then
+         info = 43
+         ni = 2
+         i1 = 4
+         i2 = meth
+         go to 390
+       endif
+c
+       if (indx .eq. 3) go to 120
+c
+c  2b indx = 1; check direction; set pointers, counters, etc.
+       h0 = rparm(2)
+       r1 = tn - t0
+       if (r1*h0 .lt. 0.0) then
+         info = 41
+         ni = 1
+         i1 = 2
+         nr = 2
+         r2 = h0
+         go to 390
+       endif
+c
+       iy = iparm(1)
+       if (iy .lt. 0) then
+         info = 42
+         ni = 2
+         i1 = 1
+         i2 = iy
+         go to 390
+       endif
+c
+       mxiy = maxder(meth) + 1
+       if (iy .eq. 0) iy = mxiy
+       if (iy .gt. mxiy) iy = mxiy
+c
+       ldyh = n
+       yh = 1
+       yh1 = yh + n
+       ewt = yh + iy*n
+       error = ewt + n
+       wa = error + n
+c
+       t = t0
+       h = h0
+       do i = 1,n
+         wk(yh+i-1) = y(i)
+       enddo
+       call fcn (wk(yh1),n,y,h)
+c
+       uround = usmach(5)
+       lwk = iparm(2)
+       liwk = iparm(3)
+       iparm(7) = 0
+       iparm(8) = 1
+       iparm(9) = 0
+       nslast = 0
+       nhnil = 0
+c
+c  2c indx = 1 or 3; check length of work arrays, check minor parameters
+  120  if (mitr .le. 2) lwa = n + n**2
+       if (mitr .eq. 3) lwa = 2*n
+       if (mitr .eq. 4) lwa = n
+c
+       if (wa + lwa - 1 .gt. lwk) then
+         info = 42
+         ni = 2
+         i1 = 2
+         i2 = lwk
+         go to 390
+       endif
+c
+       if (mitr .le. 2) liw = n
+       if (mitr .ge. 3) liw = 0
+       if (liw .gt. liwk) then
+         info = 42
+         ni = 2
+         i1 = 3
+         i2 = liwk
+         go to 390
+       endif
+c
+       mxstep = iparm(4)
+       if (mxstep .lt. 0) then
+         info = 42
+         ni = 2
+         i1 = 4
+         i2 = mxstep
+         go to 390
+       endif
+c
+       if (mxstep .eq. 0) mxstep = mxstp0
+c
+       mxhnil = iparm(5)
+       if (mxhnil .lt. 0) then
+         info = 42
+         ni = 2
+         i1 = 5
+         i2 = mxhnil
+         go to 390
+       endif
+c
+       if (mxhnil .eq. 0) mxhnil = mxhnl0
+c
+       mxord = iparm(6)
+       if (mxord .lt. 0) then
+         info = 42
+         ni = 2
+         i1 = 6
+         i2 = mxord
+         go to 390
+       endif
+c
+       mxder = iy - 1
+       if (mxord.eq.0 .or. mxord.gt.mxder) mxord = mxder
+c
+       hmax = rparm(4)
+       if (hmax .lt. 0.0) then
+         info = 41
+         ni = 2
+         i1 = 3
+         i2 = 4
+         nr = 1
+         r1 = hmax
+         go to 390
+       endif
+c
+       hmxi = 0.0
+       if (hmax .ne. 0.0) hmxi = 1.0/hmax
+c
+       hmin = rparm(5)
+       if (hmin .lt. 0.0) then
+         info = 41
+         ni = 2
+         i1 = 3
+         i2 = 5
+         nr = 1
+         r1 = hmin
+         go to 390
+       endif
+c
+c  2d indx = 1,2,3, or 4; check tolerances.
+  190  itol = job(5)
+       if (1.gt.itol .or. itol.gt.4) then
+         info = 43
+         ni = 2
+         i1 = 5
+         i2 = itol
+         go to 390
+       endif
+c
+       i = 1
+       if (itol .ge. 3) i = nc
+       do i2 = 1,i
+         tol = rtol(i2)
+         if (tol .ge. 0.0) cycle
+         info = 41
+         ni = 2
+         i1 = 1
+         nr = 1
+         r1 = tol
+         go to 390
+       enddo
+c
+       i = 1
+       if (itol.eq.2 .or. itol.eq.4) i = nc
+       do i2 = 1,i
+         tol = atol(i2)
+         if (tol .ge. 0.0) cycle
+         info = 41
+         ni = 2
+         i1 = 2
+         nr = 1
+         r1 = tol
+         go to 390
+       enddo
+c
+c  2e Reset parameters to last valid ones with indx=1,3.
+       rparm(5) = hmin
+       rparm(6) = hmxi
+       iparm(6) = mxord
+c
+c  2f itsk = 4 or 5; check critical value of t.
+       if (itsk .gt. 3) then
+c
+         tcrit = rparm(1)
+         if ((tcrit - t)*h .lt. 0.0) then
+           info = 45
+           ni = 1
+           i1 = 2
+           nr = 2
+           r1 = tcrit
+           r2 = t
+           go to 390
+         endif
+       endif
+c
+       if (indx .eq. 1) go to 300
+c
+       nslast = nst
+       job(3) = mitr
+       job(4) = meth
+       if (itsk .eq. 2) go to 290
+       if (itsk .eq. 1) go to 240
+       if (itsk .eq. 3) go to 240
+       if (itsk .eq. 5) go to 270
+c
+       if ((tcrit - tn)*h .lt. 0.0) then
+         info = 45
+         ni = 1
+         i1 = 1
+         nr = 2
+         r1 = tcrit
+         r2 = tn
+         go to 390
+       endif
+c
+c  3b itsk = 1,3,or 4; locate tn with respect to the previous mesh
+c     point.
+  240  tp = t - hu*(1.0 + 100.0*uround)
+       if ((tn - tp)*h .lt. 0.0) then
+         info = 45
+         ni = 1
+         i1 = 3
+         nr = 2
+         r1 = tn
+         r2 = tp
+         go to 390
+       endif
+c
+  250  if (itsk .eq. 3) go to 280
+c
+c  3c itsk = 1 or 4; interpolate after overshooting.
+       if ((tn - t)*h .le. 0.0) then
+         call dsgein (wk(yh),ldyh,nc,t,h,nq,hu,uround,tn,0,y,info)
+         t0 = tn
+         go to 380
+       endif
+c
+       if (itsk .eq. 1) go to 290
+c
+c  3d itsk = 4 or 5; control h not to overshoot tcrit.
+  270 hmx = abs(t) + abs(h)
+       if (abs(t - tcrit) .le. 100.0*uround*hmx) ihit = 1
+       if (ihit .eq. 1) go to 370
+c
+       temp = t + h*(1.0 + 4.0*uround)
+       if ((temp - tcrit)*h .le. 0.0) go to 290
+c
+       h = (tcrit - t)*(1.0 - 4.0*uround)
+       if (job(2) .eq. 2) job(2) = 4
+       go to 290
+c
+c  3e itsk = 3; check if past output point.
+  280  if ((t - tn)*h .ge. 0.0) go to 370
+c
+c  4a Check for maximum number of steps.
+  290  if ((nst - nslast) .ge. mxstep) then
+         info = 34
+         ni = 1
+         i1 = mxstep
+         nr = 1
+         r1 = t
+         go to 370
+       endif
+c
+c  4b Set and check weights.
+  300  call dsgewt (wk(yh),wk(ewt),nc,rtol,atol,itol)
+       do i1 = 1,nc
+         r1 = wk(ewt+i1-1)
+         if (r1 .gt. 0.0) cycle
+         info = 36
+         ni = 1
+         nr = 1
+         go to 390
+       enddo
+       tnrm = vswrms (nc, wk(yh1), 1, wk(ewt), 1)
+c
+c  4c Calculate and/or adjust initial step size.
+       if (indx .eq. 1) then
+         call dsgeia (h,t0,tn,y,n,itol,rtol,atol,tnrm,hmxi,itsk,
+     &   rparm(1),uround,info)
+         if (info .ne. 0) go to 390
+       endif
+c
+c  4d Check for excessive accuracy requirement.
+       tolsf = tnrm*uround
+       if (tolsf .gt. 1.0) then
+         tolsf = 2.0*tolsf
+         rparm(10) = tolsf
+         info = 35
+         i1 = 2
+         if (indx .eq. 1) i1 = 1
+         ni = 1
+         nr = 2
+         r1 = t
+         r2 = tolsf
+         go to 370
+       endif
+c
+c  4e Check for h within roundoff of t.
+       if (t + h .eq. t) then
+         nhnil = nhnil + 1
+         if (nhnil .le. mxhnil)
+     &   call ulemsg (11,'dsgedr',0,0,0,2,t,h)
+         if (nhnil .eq. mxhnil)
+     &   call ulemsg (12,'dsgedr',0,0,0,0,0.0,0.0)
+       endif
+c
+c  5 Integrate step.
+       call fpgeci (wk(yh),ldyh,nc,fcn,jac,t,h,rparm(5),iparm(6),
+     & wk(ewt),wk(error),y,wk(wa),iwk,job(2),info)
+c
+       nst = iparm(7)
+       hu = rparm(7)
+       nq = iparm(11)
+       if (info .ne. 0) then
+c        iparm(12) = vswami(nc,wk(error),1,wk(ewt),1)
+         smax = 0.0
+         do i = 1,nc
+            temp = abs(wk(error+i-1)/wk(ewt+i-1))
+            if (temp .gt. smax) then
+              iparm(12) = i
+              smax = temp
+            endif
+         enddo
+         nr = 2
+         r1 = t
+         r2 = h
+         go to 370
+       endif
+c
+       if (itsk .eq. 3) go to 280
+       if (itsk.eq.1 .or. itsk.eq.4) go to 250
+       if (itsk .ne. 2) then
+         hmx = abs(t) + abs(h)
+         if (abs(t - tcrit) .le. 100.0*uround*hmx) ihit = 1
+       endif
+c
+c  6 Exits.
+  370  do i = 1,nc
+         y(i) = wk(yh+i-1)
+       enddo
+       t0 = t
+       if (ihit .eq. 1) t0 = tcrit
+c
+  380  rparm(8) = h
+       rparm(9) = t
+c
+  390  if (info .ne. 0) call ulemsg (info,'dsgedr',ni,i1,i2,nr,r1,r2)
+       return
+       end
+*endif

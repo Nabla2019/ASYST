@@ -1,0 +1,107 @@
+       subroutine fgasrl (ftemp, fdens, bu, fgrn, comp, fmgpr, it,
+     #                    time, cc2, cc1, gbbg, fmgr, gbgout, fmgrot)
+c
+c      fgasrl calculates the fission gas release as a function
+c      of temperature, fuel porosity,time, grain size, and burnup.
+c
+c      ftemp  = input fuel ring average temperature (k)
+c      fdens  = input fuel density (kg/m**3)
+c      bu     = input fuel burnup (mw-s/kg-u)
+c      fgrn   = input fuel grain size (microns)
+c      comp   = input plutonia content (weight percent)
+c      fmgpr  = input fission gas produced in the l fuel ring (moles)
+c      it     = input power step number
+c      time   = input time step length (s)
+c      cc2    = input concentration of grain trapped fission gas
+c               per ring (moles/ring)
+c      gbbg   = input concentration of grain boundary trapped fission
+c               gas per ring (moles/ring)
+c      fmgr   = input cumulative fission  gas released per fuel
+c               ring (moles)
+c      cc1    = output concentration of grain trapped fission gas
+c               per ring (moles/ring)
+c      gbgout = output concentration of grain boundary trapped fission
+c               gas per ring (moles/ring)
+c      fmgrot = output cumulative fission gas released per fuel
+c               ring (moles)
+c
+c      the fgasrl correlation was based on the following data
+c             m.j.f. notley and j.r. macewan, aecl - 2230
+c             m.j.f. notley, et al., aecl - 1676
+c             w.r. smalley, wcap - 3385 - 56
+c             c.e. beyer and c.r.hann bnwl - 1876
+c
+c      an approximation for the error function was used to evaluate
+c      the constants in the following equations
+c      the approximation was taken from
+c             c.h.hastings,jr., approximations for digital computers
+c             princeton university press 1955
+c
+c      the correlation used to calculate fission gas release is that
+c      developed by j. weisman and p. e. macdonald, ans transactions,
+c      vol. 12, number 2 (november 1969).
+c
+c      fgasrl was coded by g. a. reymann (july 1976).
+c      fgasrl was modified by r. e. mason (november 1978).
+c
+$if def,in32,1
+       implicit real*8(a-h,o-z)
+c
+       erf(x) = 1.0 - 0.348024 * 1.0/(1.0 + 0.47047 * x) +
+     #          0.0958798 * (1.0/(1.0 + 0.47047 * x)) ** 2.0 -
+     #          0.7478556 * (1.0/(1.0 + 0.47047 * x)) ** 3.0 + 0.000025
+c
+c                      - program -
+       b = bu
+       t = time
+       if(it .eq. 1)    fmaa = 0.0
+       if(it .eq. 1)    fmgr = 0.0
+       if(it .eq. 1)    cc2  = 0.0
+       if(bu .le. 0.0)  b    = 1.0
+c
+c      calculation of the high burnup factor
+       bunkel = 1.25e14 / ((b/86.4)**3.0)
+       if(bunkel .ge. 400.0) bunkel = 400.0
+c
+c      calculation of fuel grain release
+       ak1    = 9.0e 07 * (exp(-45289.86/ftemp)) + 0.0005
+       ak2    = 0.00005 * ak1 * (1.0 - 1.0/(exp((ftemp - 1900.0)/40.0)
+     #          + 1.0) + exp(- bunkel))
+       if(time .le. 0.0) t = 1.0
+       if(ak2 * time .le. 1.0e-10) ak2 = 1.0e-10/t
+       f      = (1.0 - (1.0 - ak1) * ((1.0 - exp(-ak2 * t))/
+     #          (ak2 * t)))
+       if (f .gt. 1.0) f = 1.0
+       if (f .le. 0.0) f = 0.0
+       fma = f * fmgpr + cc2 * (1.0 - exp(-ak2 * t))
+c
+c      the following calculations provide upper and lower bounds
+c      to the fgasrl equation and are not an output of the subcode
+c      unless the user desires to modify the subcode appropriately.
+c      if the upper or lower bound is used it should replace fma in the
+c      subcode.
+c
+c      ufgash is the upper bound
+       ufgash = 1.6 * fma
+       if (ufgash .ge. fmgpr + cc2)  ufgash = fmgpr + cc2
+c      ufgasl is the lower bound
+       ufgasl = 0.4 * fma
+       if(gbbg .le. 0.0) gbbg = fma * 1.0e-06
+       gbbg   = gbbg + fma
+c
+c      fission gas which is not released from the grain boundary is
+c      labeled gbbg(l)
+c      calculation of grain boundary gas release
+       roth   = 11.45 * comp/100. + (1. - comp/100.) * 10.97
+       fp     = 1.0 - 0.001 * fdens / roth
+       p      = 1.0/(1.0+ (1.0/fp - 1.0) * 1.0e 05/(fgrn ** 3.0))
+       fbr    = (1.0 - erf(p)) + exp( -bunkel )
+       if(ftemp .gt. 2100.) fbr = 1.0 - (1.0 - fbr)/(ftemp - 2099.)
+       if (fbr .le. 0.0) fbr = 0.0
+       if (fbr .gt. 1.0) fbr = 1.0
+       fmaa    = fbr  * gbbg
+       cc1     = cc2  + fmgpr - fma
+       gbgout  = gbbg - fmaa
+       fmgrot  = fmgr + fmaa
+       return
+       end

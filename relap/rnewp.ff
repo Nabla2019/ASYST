@@ -1,0 +1,342 @@
+*mlist
+       subroutine rnewp
+c  Processes input data for new, restart, plot, and write initial
+c  contditions problems.
+c
+c  Cognizant engineer: rjw.
+c
+$if def,gui
+$if -def,ifortc,1
+       use dfmt
+$if def,ifortc,1
+       use ifmt
+$endif
+       use gentblc
+       use hynmod, only: cplmaxnp
+$if def,rk3d,2
+       use rkinc
+       use rk3dcode
+$if def,iua
+       use uncdata
+$endif
+       use usrvarc
+       implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'cpmdat.h'
+       include 'coupl.h'
+       include 'fast.h'
+       include 'ufiles.h'
+       include 'scntl.h'
+$if def,rk3d,3
+       include 'scddat.h'
+       include 'scdpow.h'
+       include 'scdout.h'
+c
+c  Local variables.
+       integer l3a(8),l3b(11)
+$if def,selap,1
+       integer ncard,next,istart,ndata
+       real xv(2)
+       character ivc(2)*8
+       integer i,inp8,iv,thhndl,thrid
+       logical nogof
+$if def,gui,1
+       external hynoded
+c  Data statements
+       data l3a/000102,0,0,2,0,1,-1,-1/
+       data l3b/105,0,0,5,0,1,1,1,1,0,0/
+c
+c  Set flag for new or restart problem type.
+       nogof = .false.
+       newrst = iand(iroute,63) .eq. 1
+$if def,iua
+       uncrstrt = newrst
+$endif
+c  Set option flags off.
+       chngno = .false.
+c  Initialize output control variable.
+       print = ior(print,18)
+c  If new problem, process restart output file control card.
+c  At this point, newrst is true if a new problem and false if a restart
+c  problem.
+       if (newrst) then
+$if def,iua
+         if (filsch0.ne.' ') then
+           write (output,"('0******** New problem type does not allow re
+     &start file entered in the command line.')")
+           write (tty,"('New problem type does not allow restart file en
+     &tered in the command line.')")
+           fail = .true.
+         endif
+$endif
+         call rrstd
+       else
+c  If restart problem, process restart and input file control cards.
+         call rrestf (nogof)
+$if def,selap,1
+         scntrl(7) = .true.
+         iextra = 0
+         safe2 = timehy
+c  On return from rrestf, definition of newrst has changed; it is true
+c  if a change from steady state to transient or from transient to 
+c  steady state has been made and is false of no change has been made.
+c  But because of the statement following the if test immediately
+c  below, the old definition of newrst as indicating a new problem if
+c  true and a restart problem if false is restored.
+         if (.not.newrst) go to 19
+         newrst = .false.
+       endif
+c  Set contrl common block.
+       succes = 0
+       help = 0
+       ncount = 0
+       countn = 0.0
+       nrepet = 0
+       nstsp = 0
+       timehy = 0.0
+       timeht = 0.0
+       dt = 0.0
+       dtn = 0.0
+       errmax = 0.0
+       emass = 0.0
+       iextra = ior(iextra,8)
+       if (iand(iextra,63) .eq. 3) iextra = 1023
+       testda = 0.0
+       imdctl(1) = 0
+   19  nany = 100
+       skipt = .false.
+c  Set option flags.
+       call rchng
+$if def,makemap
+c  Get surface map input card (89)
+       call rmap
+$endif
+c  Get units.
+       ivc(1) = 'si'
+       ivc(2) = 'si'
+       if (newrst) then
+         uniti = .true.
+         unito = .true.
+       else
+         if (.not.uniti) ivc(1) = 'british'
+         if (.not.unito) ivc(2) = 'british'
+       endif
+       l3a(6) = 1
+       call inp2 (fa(filndx(1)),xv,l3a)
+       if (l3a(6)) 10,14,12
+   10  if (newrst) then
+         write (output,2001)
+ 2001  format ('0******** Unit (102) card is bad, si units assumed where
+     * needed.')
+        else
+          write (output,2004)
+ 2004  format ('0******** Unit (102) card is bad, former units assumed w
+     *here needed.')
+       endif
+       fail = .true.
+       go to 11
+   12  write (ivc(1),'(a8)') xv(1)
+       if (l3a(6) .eq. 2) write (ivc(2),'(a8)') xv(2)
+       if (ivc(1) .eq. 'si') then
+         uniti = .true.
+       else
+         if (ivc(1) .ne. 'british') go to 10
+         uniti = .false.
+       endif
+       if (ivc(2) .eq. 'si') then
+         unito = .true.
+       else
+         if (ivc(2) .ne. 'british') go to 10
+         unito = .false.
+       endif
+   14  if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     & write (output,2002) ivc
+ 2002  format ('0Input units are assumed ',a8,5x,'output units are ',a8)
+c
+c  Check if restart file read properly.
+   11  if (nogof) then
+         write (output,2003)
+ 2003  format ('0******** Problem being terminated because of errors wit
+     *h restart file listed above.')
+         return
+       endif
+c  Process remaining cpu time (105) card.
+       cpurem(1) = 0.0
+       cpurem(2) = 0.0
+       cpurem(3) = 0.0
+       cpurei(4) = 0
+       cpurei(5) = 0
+       l3b(6) = 1
+       call inp2 (fa(filndx(1)),cpurem,l3b)
+       if (l3b(6) .lt. 0) then
+         fail = .true.
+       else
+         cpurem(1) = max(cpurem(1),1.0)
+         cpurem(2) = max(cpurem(2),1.0)
+         if (cpurem(1) .eq. 0.0) then
+           cpurem(2) = 0.0
+         else
+           xv(2) = cpurem(1) + 1.0
+           cpurem(2) = max(cpurem(2),xv(2))
+         endif
+         if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &   write (output,2005) (cpurem(i),i=1,2)
+ 2005  format ('0Remaining cpu time values are',1p,g10.2,' and',
+     & g10.2,' sec.')
+         if (cpurem(3) .ne. 0.0) then
+           if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &     write (output,2008) cpurem(3)
+         endif
+ 2008  format ('+',63x,'allowed cpu time is',1p,g10.2,' sec.')
+         if (cpurei(4).ne.0 .or. cpurei(5).ne.0) then
+           if (cpurei(4).gt.0 .and. cpurei(5).ge.cpurei(4)) then
+             if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &       write (output,2009) cpurei(4),cpurei(5)
+ 2009  format ('0Diagnostic edit count numbers are',i10,' and',i10,'.')
+           elseif ((cpurei(4).eq.-1 .or. cpurei(4).eq.-2) .and.
+     &     cpurei(5).ge.0) then
+             if (cpurei(4) .eq. -1) then
+               if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &         write (output,2010) cpurei(5)
+ 2010  format ('0Debug dump block and termination at advancement',i8,
+     & '.')
+             else
+               if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &         write (output,2011) cpurei(5)
+ 2011  format ('0Debug dump block, repeat, another dump block, and termi
+     & nation at advancement',i8,'.')
+             endif
+           else
+             write (output,2012)
+ 2012  format ('0******** Incorrect debug values entered in Words 4 and
+     &5 on Card 105.')
+             fail = .true.
+           endif
+         endif
+       endif
+$if def,iua
+!  Read uncertainty weight file.
+       call uncrdrun
+$endif
+c  Get time step control data.
+       call rtsc
+       call rssi
+       call rmiedt
+       call rplot
+       call rusrvr
+$if def,pvmcoupl,1
+       call rr5pvmc
+       call rintrv
+       call rtrip
+c  Process component data.
+       if (newrst) call rnoncn
+       call rmflds
+       call rcompn
+       call rhtcmp
+       call rradht
+       call rmadat
+       call rrkin
+$if def,selap,1
+       call fpread
+       call rgntbl
+       call rconvr
+$if def,selap
+       if (.not.scntrl(7)) then
+         ncard = 40000100
+         call inplnk (ncard,next,istart,ndata,fa(filndx(1)))
+         if (ndata .gt. 0) scntrl(1) = .true.
+       endif
+       if (scntrl(1)) then
+         call rslump
+         call rcoupl
+         call rrupt
+         call rscdap
+         call rdeb
+         if (scntrl(4)) then
+           if (scntrl(5)) then
+             call rcuple
+             call icuple
+           else
+             call couinp
+           endif
+           call irupt
+         endif
+       endif
+c  Temporary coding to remove write of scdap common blocks to rstplt
+c  in a relap5 only problem.  Remove when dynamic storage of scdap is
+c  complete.
+       if (.not.scntrl(1)) comdat(6) = 0
+$endif
+c  Check if all input data has been used and delete input file.
+       iv = inp8(1,fa(filndx(1)))
+       fail = fail .or. iv.ne.0
+       call ftbdel (2.0)
+c  Check time step limiting by control system.
+       if (filid(2) .ne. 0.0) call itstck
+c  Cross check component input and complete component initialization.
+       if (filid(3) .ne. 0) call icmpn1
+$if def,selap,1
+       if (filid(34) .ne. 0.0) call fpinit
+       if (filid(18) .ne. 0.0) call itrip
+       if (ngtbls .ne. 0) call igntbl
+       if (filid(3) .ne. 0) then
+           call icompn
+       endif
+       if (filid(8) .ne. 0) then
+         call ihtcmp
+         if (filid(38) .ne. 0.0) call iradht
+         call irflht
+       endif
+       call invhts
+$if def,selap
+       if (scntrl(1)) then
+         if (.not.fail) call iscdap
+       endif
+$endif
+$if -def,rk3d,1
+       if (filid(21) .ne. 0) call irkin
+$if def,rk3d
+       if (filid(21) .ne. 0.0) then
+         if (.not.pt3dflag) then
+           call irkin 
+         else
+$if def,selap,1
+           call irkptr(fa,tcond3,stemav)
+$if -def,selap,1
+           call irkptr(fa)
+           call irk3d
+         endif
+       endif
+$endif
+$if def,selap
+       if (scntrl(1)) then
+         if (.not.fail) call ispowr
+         if (.not.fail) call icpowr
+       endif
+$endif
+       if (filid(27) .ne. 0.0) call iconvr
+       if (filid(12) .ne. 0.0) call imiedt
+       if (filid(37) .ne. 0.0) call issi
+$if def,pvmcoupl,1
+       if (filid(31) .ne. 0.0) call ir5pvmc
+       if (nplotrq .ne. 0) call iplot
+       if (nusrvar .ne. 0) call iusrvr
+       if (iand(iroute,63) .le. 2) then
+         if ((iand(print,1).ne.0 .and. iand(iextra,127).ne.0) .or.
+     &   iand(print,32).ne.0) call wrplid
+       endif
+c  Set finished flag off.
+       done = 0
+$if def,gui
+       if (iand(imdctl(1),4) .ne. 0) then
+$if -def,ifortc,1
+         thhndl = CreateThread(0,0,hynoded,.false.,0,thrid)
+$if def,ifortc,1
+         thhndl = CreateThread(0,0,hynoded,0,0,thrid)
+         thrid = WaitForSingleObject(thhndl,INFINITE)
+         thrid = CloseHandle(thhndl)
+       endif
+$endif
+       return
+       end

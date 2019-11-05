@@ -1,0 +1,87 @@
+       subroutine cstrni (delh,ctemp,deloxy,fnck,fncn,cwkf,cwnf,strest,
+     & strant)
+!  cstrni calculates cladding strain as a function of true cladding
+!  stress, initial true cladding strain, time step size, cladding
+!  temperature, average oxygen concentration in cladding, fast neutron
+!  fluence, and cold work.
+!
+!     strant = output effective true plastic strain at the end of
+!              the current time step (unitless)
+!     strest = input effective true stress (pa)
+!     strant = input effective true plastic strain at the start
+!              of the current time step (unitless)
+!     delh   = input time step size (s)
+!     ctemp  = input cladding meshpoint temperature (k)
+!     deloxy = input average oxygen concentration excluding
+!              oxide layer - average oxygen concentration of
+!              as received cladding  (kg oxygen/kg zircaloy)
+!     fnck   = input effective fast fluence for strength
+!              coefficient (neutrons/(m**2))
+!     fncn   = input effective fast fluence for strain hardening
+!              exponent (neutrons/(m**2))
+!     cwkf   = input effective cold work for strength
+!              coefficient (unitless ratio of areas)
+!     cwnf   = input effective cold work for strain hardening
+!              exponent (unitless ratio of areas)
+!
+!     the subcode ckmn is used in this subroutine
+!
+!     conversion from pa  to  psi  is 1.4505e-04 (psi/pa)
+!
+!     cstrni was coded by d. l. hagrman october 1977
+!     modified by d. l. hagrman to reduce yield strength
+!          to measured values july 1981.
+!     modified by d. l. hagrman to limit strain rate
+!     to at least 1.0e-05 in alpha + beta region july
+!     1981 (cdr-mp-02)
+!
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+       real(kr) delh,ctemp,deloxy,fnck,fncn,cwkf,cwnf,strest,strant
+!
+       include 'contrl.h'
+!
+       real(kr) ak,am,an,anl,rstran,stran4,t
+       integer ii
+!
+       rstran = 1.0e-03
+       if (chngno(70)) then
+         call ckmnr (ctemp,deloxy,fnck,fncn,cwkf,cwnf,rstran,ak,an,am)
+       else
+         call ckmn (ctemp,deloxy,fnck,fncn,cwkf,cwnf,rstran,ak,an,am)
+       endif
+       t = ctemp
+!
+       if (strant .lt. 1.0e-06) strant = 1.0e-06
+!
+!  Revise an for small strains.
+       if (strant .lt. (an/(1.0 + am))) an = an*an/((1.0 + am)*strant)
+       anl = 0.17
+       if (ctemp .gt. 730.) anl = 1.56e-02*ctemp - 11.218
+       if (ctemp .ge. 780.) anl = 0.95
+       if (an .gt. anl) an = anl
+!
+       stran4 = strant
+       ii = 0
+       do
+         strant = ((an/am + 1.0)*(1.0e-3)*((strest/ak)**(1.0/am))*delh +
+     &   (stran4)**(an/am + 1.0))**(am/(an+am))
+         rstran = (strant - stran4)/delh
+!  Correct am for revised rstran if necessary.
+         if (t .lt. 1090.) exit
+         if (t .gt. 1255.) exit
+         if (rstran .gt. 6.34e-03) exit
+         if (rstran .lt. 1.0e-05) rstran = 1.0e-05
+         ii = ii + 1
+         am = -6.4e-02 + t*2.203e-04
+         if (t .le. 1172.5) then
+           am = am + 6.78e-02*log(6.34e-03/rstran)*((t-1090.)/82.5)
+         else
+           am = am + 6.78e-02*log(6.34e-03/rstran)*((1255.-t)/82.5)
+         endif
+         am = am + exp(-69.*deloxy)
+         if (ii .ge. 10) exit
+       enddo
+  200  continue
+       return
+       end

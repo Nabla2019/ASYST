@@ -1,0 +1,263 @@
+*mlist
+$if def,selap,1
+       subroutine irkptr(fapoint,tcond3p,stemavp)
+$if -def,selap,1
+       subroutine irkptr(fapoint)
+
+$if def,rk3d
+!  Checks that volumes and heat structures specified in assignment of
+! rk3d nodes to Relap.
+!
+       use rkinc
+       use ufilef
+       use voldat
+$if def,rk3d,1
+       use vreqsd
+       implicit none
+       integer, parameter :: kr=selected_real_kind(12,200)
+!
+       include 'contrl.h'
+       include 'comctl.h'
+       include 'fast.h'
+       include 'htsrcm.h'
+       include 'voldat.h'
+$if def,selap
+       include 'cpmdat.h'
+       include 'coupl.h'
+       include 'scddat.h'
+       include 'scdpow.h'
+       include 'ndxara.h'
+       include 'scdout.h'
+       include 'scntl.h'
+$endif
+
+!
+!  Local variables.
+       integer, allocatable :: volnos(:)
+       integer i,ivp,ihp,j,j2,j3,k,m,pckcod(2),n1,n2,n3,n4,kn,idxo
+       integer matuo2,matgap,inxgap
+       character lbl*64
+       logical err
+       real cvr
+       logical lphlp,lchst,lrhst,lshst
+$if def,selap
+       real*8, target :: fapoint(lfsiz),tcond3p(ndrd,ndax,ndcomp),
+     & stemavp(ndax,ndcomp)
+$endif
+$if -def,selap
+       real*8, target :: fapoint(lfsiz)
+$endif
+!
+!  Check volume assignments and set pointers.
+       allocate (volnos(size(rk3o)))
+       k = 0
+       do i = 1,size(rk3o)
+         m = filndx(4)
+         lphlp = .false.
+         do j = 1,nvols(m)
+           if (rk3o(i)%volno .eq. volno(m)) then
+             lphlp = .true.
+             exit
+           endif
+           m = m + ivskp
+         enddo
+         if (lphlp) then
+           call scnreq(1,t2(15),rk3o(i)%volno,1,pckcod,cvr,lbl,err)
+          rk3o(i)%tempf => fapoint(pckcod(2)+filndx(pckcod(1)))
+           call scnreq(1,t2(4),rk3o(i)%volno,1,pckcod,cvr,lbl,err)
+          rk3o(i)%uf => fapoint(pckcod(2)+filndx(pckcod(1)))
+           call scnreq(1,t2(1),rk3o(i)%volno,1,pckcod,cvr,lbl,err)
+          rk3o(i)%rho => fapoint(pckcod(2)+filndx(pckcod(1)))
+           call scnreq(1,t2(20),rk3o(i)%volno,1,pckcod,cvr,lbl,err)
+          rk3o(i)%boron => fapoint(pckcod(2)+filndx(pckcod(1)))
+         else
+           k = k + 1
+           nullify (rk3o(i)%tempf)
+           nullify (rk3o(i)%uf)
+           nullify (rk3o(i)%rho)
+           nullify (rk3o(i)%boron)
+           volnos(k) = rk3o(i)%volno
+         endif
+       enddo
+       if (k .ne. 0) then
+         fail = .true.
+         write (output,"('0******** The following hydrodynamic volumes s
+     &pecified in Cards 30000101 through 30099999 are not defined in the
+     & hydrodynamic input.'/(10i10))") volnos(1:k)
+       endif
+       deallocate (volnos)
+!
+!  Check heat structure, scdap components, or couple assignments and set
+!  pointers.
+       allocate (volnos(size(rk4o)))
+       k = 0
+       lrhst = .false. ; lshst = .false. ; lchst = .false.  
+       do i = 1,size(rk4o)
+         lphlp = .false.
+         if (rk4o(i)%htsno .gt. 10000) then
+!  Heat structure.
+           n1 = filndx(8)
+           n2 = n1 + nhtstr(n1) - 1
+           if (.not.lrhst) then
+             if (n2 .le. n1) then
+               lrhst = .true.
+               fail = .true.
+               write (output,"('0******** A space kinetic node has been
+     &assigned to a Relap5 heat structure, but no Relap5 heat stucture c
+     &omponents have been entered.')")
+             endif
+           endif
+           lphlp = .false.
+           lp1: do j = n1,n2
+               n2 = ihtptr(j) + filndx(8)
+               if (rk4o(i)%htsno .eq. htstno(n2)) then
+                 lphlp = .true.
+                 exit lp1
+               endif
+           enddo lp1
+           if (lphlp) then
+             n3 = (rk4o(i)%htsno)*100 + 1
+             call scnreq(1,t4(1),rk4o(i)%htsno,1,pckcod,cvr,lbl,err)
+             rk4o(i)%htsptr => fapoint(pckcod(2)+filndx(pckcod(1)))
+             call scnreq(1,t4(5),n3,1,pckcod,cvr,lbl,err)
+             rk4o(i)%httmpl => fapoint(pckcod(2)+filndx(pckcod(1)))
+             kn = htnmpt(n2)
+             idxo = htgom(n2) + filndx(8)
+             matuo2 = htcmp(idxo)
+             inxgap = idxo
+             do n4 = 2,kn
+               inxgap = inxgap + htgskp
+               matgap = htcmp (inxgap)
+               if (matgap .neqv. matuo2) exit
+             enddo
+             n4 = (rk4o(i)%htsno)*100 + n4
+             call scnreq(1,t4(5),n4,1,pckcod,cvr,lbl,err)
+             rk4o(i)%httmpr => fapoint(pckcod(2)+filndx(pckcod(1)))
+             rk4o(i)%htpow = 0.0
+           endif
+$if def,selap
+         else
+! Scdap component.
+           if (.not.lshst) then
+             if (.not.scntrl(1)) then
+               lchst = .true.
+               fail = .true.
+               write (output,"('0******** A space kinetic node has been
+     &assigned to a Scdap component, but no Scdap components have been e
+     &ntered.')")
+             endif
+           endif
+           j2 = rk4o(i)%htsno/100
+           j3 = rk4o(i)%htsno - j2*100
+           if (j3.gt.0 .and. j3.le.ncomp) then
+             if (j2.gt.0 .and. j2.le.ndax) then
+               lphlp = .true.
+               rk4o(i)%htsptr => stemavp(j2,j3)
+               rk4o(i)%httmpl => tcond3p(1,j2,j3)
+               rk4o(i)%httmpr => tcond3p(nrods2(j2,j3),j2,j3)
+               rk4o(i)%htpow = 0.0
+             endif
+           endif
+$endif
+         endif
+         if (.not.lphlp) then
+           k = k + 1
+           nullify (rk4o(i)%htsptr)
+           nullify (rk4o(i)%httmpl)
+           nullify (rk4o(i)%httmpr)
+           volnos(k) = rk4o(i)%htsno
+         endif
+       enddo
+       if (k .ne. 0) then
+         fail = .true.
+         write (output,"('0******** The following heat structures specif
+     &ied in Cards 30100101 through 30199999 are not defined in the hydr
+     &odynamic input.'/(10i10))") volnos(1:k)
+       endif
+       deallocate (volnos)
+!
+!  Set up pointers for rk3d use to access hydrodynamic volume and heat
+!  structure information.
+       allocate (srkptr(nmplane,mnz))
+!  Loop over rk3d nodes.
+       ivp = 0 ; ihp = 0
+       write (12,"('rrkinb0',2i5)") mnz,nmplane
+       do j = 1,mnz
+         do i = 1,nmplane
+           nullify (srkptr(i,j)%hp,srkptr(i,j)%httmpl,
+     &     srkptr(i,j)%httmpr)
+!  Search nodes accessing volumes.
+           lshst = .false.
+           lp2: do k = 1,size(rk3o)
+             do m = 1,size(rk3o(k)%node2p)
+               if (rk3o(k)%node2p(m).eq.i .and. rk3o(k)%node2e(m).eq.j)
+     &         then
+       write (12,"('rrkinb1',4i5,i10)") j,i,k,m,rk3o(k)%volno
+                 srkptr(i,j)%tempf => rk3o(k)%tempf
+                 srkptr(i,j)%uf => rk3o(k)%uf
+                 srkptr(i,j)%rho => rk3o(k)%rho
+                 srkptr(i,j)%boron => rk3o(k)%boron
+                 srkptr(i,j)%volno = rk3o(k)%volno
+                 lshst = .true.
+                 ivp = ivp + 1
+                 exit lp2
+               endif
+             enddo
+           enddo lp2
+           if (.not. lshst) then
+             fail = .true.
+             write (output,"('0******** The following 3DKIN mesh has no
+     &t been linked to an hydrodynamic volume',2i5)")i,j
+           else
+             lshst = .false.
+           endif
+!  Search nodes accessing heat structures.
+           lp3: do k = 1,size(rk4o)
+             do m = 1,size(rk4o(k)%node2p)
+               if (rk4o(k)%node2p(m).eq.i .and. rk4o(k)%node2e(m).eq.j)
+     &         then
+                 srkptr(i,j)%hp => rk4o(k)%htsptr
+                 srkptr(i,j)%httmpl => rk4o(k)%httmpl
+                 srkptr(i,j)%httmpr => rk4o(k)%httmpr
+                 srkptr(i,j)%htsno  => rk4o(k)%htsno
+                 ihp = ihp + 1
+                 lshst = .true.
+                 exit lp3
+               endif
+             enddo
+           enddo lp3
+           if (.not. lshst) then
+             fail = .true.
+             write (output,"('0******** The following 3DKIN mesh has no
+     &t been linked to a heat structure',2i5)")i,j
+           else
+             lshst = .false.
+           endif
+         enddo
+       enddo
+       write (output,"(' Number volume feedback nodes:',i5,', number of 
+     &heat structure feedback nodes:',i5,'.')") ivp,ihp
+!
+!  Demonstration loops showing how rk3d nodes can access Relap5 data
+!  for thermal hydraulic feedback information.
+       write (12,"(' Demonstration of accessing thermal hydraulic inform
+     &ation from node indexes.')")
+       write (12,"('irkptrzz',2i5)") mnz,nmplane
+       do j = 1,mnz
+         do i = 1,nmplane
+           if (associated(srkptr(i,j)%uf)) then
+             write (12,"(i5,i3,' vol ',i10,4es13.5)") i,j,
+     &       srkptr(i,j)%volno,srkptr(i,j)%uf,srkptr(i,j)%boron,
+     &       srkptr(i,j)%tempf,srkptr(i,j)%rho
+           endif
+           if (associated(srkptr(i,j)%htsno)) then
+             write (12,"(i5,i3,' hts ',i10)") i,j,srkptr(1,j)%htsno
+           endif
+           if (associated(srkptr(i,j)%httmpl)) then
+             write (12,"(i5,i3,' httmpl, httmpr ',2es13.5)") i,j,
+     &       srkptr(i,j)%httmpl,srkptr(i,j)%httmpr
+           endif
+         enddo
+       enddo
+$endif
+       end subroutine irkptr

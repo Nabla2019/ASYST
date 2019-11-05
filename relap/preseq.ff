@@ -1,0 +1,710 @@
+*mlist
+       subroutine preseq
+c
+c  Using the phasic equations for mass and energy to eliminate liquid
+c  specific internal energy, vapor specific internal energy, void
+c  fraction, and noncondensible quality, builds the matrix elements
+c  and the source vector elements for the resultant pressure equation.
+c
+c  Cognizant engineer: rar kec rjw wlw (jat).
+c
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'cmpdac.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'lvectr.h'
+       include 'scrtch.h'
+       include 'statec.h'
+       include 'stcom.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+       real afrfp,agrgp,air,aj,scrach,termk,terml,
+     & tkf,tkg,tlf,tlg,tmf,tmg,ubarho,voidem
+       real hold
+       integer i,i1,ih1,ih2,ih3,iptr,is,ix,ixv,iz,jx,k,kk,kl,ktv,l,lk,
+     & ll,ltv,m,n,n1,nh1,nh2,nh3,nx
+       logical ltst1
+c
+c  Data statements.
+c
+c  The pressure equation results by using Gaussian elimination to
+c  reduce the system of equations to one equation, and then by
+c  substituting in the momentum equations.
+c
+c     Pressure equation:  coefp(i,j)*deltap(j) = sourcp(i)
+c
+c     which is a square matrix composed of i rows and j columns
+c
+c  Zero the coefp and sourcp coefficients.
+       do i = 1,lpdat(issys)%nnz(1)
+         coefp(i) = 0.
+       enddo
+       i = lpdat(issys)%liv
+       do m = 1,lpdat(issys)%livn
+         coefp(vctrld(i)) = 1.0
+         i = i + ivskp
+       enddo
+c  Volume loop.
+c  Loops over all volumes, loads matrix a, uses Gaussian elimination
+c  system solver to get bottom row of inverse of a for junction loop
+c  convective terms, and loads volume terms into the coefp(i,j) and
+c  sourcp(i) coefficients.
+c
+       iptr = 1 - lpdat(issys)%livnn
+       if (lvtvol(lpdat(issys)%llvect) .ne. 0) then
+         i1 = lvtvol(lpdat(issys)%llvect)
+         do m = 1,lvptr(i1)
+           i1 = i1 + 1
+           i = lvptr(i1)
+           sourcp(vctrln(i)+iptr) = p(i) - po(i)
+         enddo
+       endif
+       if (lvrvol(lpdat(issys)%llvect) .ne. 0) then
+         i1 = lvrvol(lpdat(issys)%llvect)
+         nh1 = 0
+         ih1 = ixvff
+         do m = 1,lvptr(i1)
+           i1 = i1 + 1
+           i = lvptr(i1)
+           ix = vctrls(i)
+           fal(ix) = 0.0
+           gal(ix) = 0.0
+           a4(ix) = 0.0
+           fgrw(ix)   = 0.0
+           fracal(ix) = 0.0
+           fracag(ix) = 0.0
+           if (iand(vctrl(i),32) .eq. 0) then
+             ihld1(ih1) = i
+             ih1 = ih1 + scskp
+             nh1 = nh1 + 1
+           else
+             sourcp(vctrln(i)+iptr) = 0.0
+           endif
+         enddo
+       endif
+       if (nh1 .ne. 0) then
+         ih1 = ixvff
+cdir$ ivdep
+         do m = 1,nh1
+           i = ihld1(ih1)
+           ix = vctrls(i)
+           high(ix) = hsgf(ix)*pshig(ix)
+           hifh(ix) = hsgf(ix)*hif(i)
+           agxa(ix) = voidg(i)*quala(i)
+           agug(ix) = voidg(i)*ug(i)
+           if (p(i).ge.pcrit .and. voidg(i).eq.0.0) agug(ix) = 0.01
+           afuf(ix) = voidf(i)*uf(i)
+           if (p(i).ge.pcrit .and. voidf(i).eq.0.0) afuf(ix) = 0.01
+           ih1 = ih1 + scskp
+         enddo
+         ih1 = ixvff
+         ih2 = ixvff
+         ih3 = ixvff
+         nh2 = 0
+         nh3 = 0
+         do m = 1,nh1
+           i = ihld1(ih1)
+           ltst1 = qualao(i).eq.0.0 .and. iand(imap(i),64).eq.0
+           if (ltst1) then
+             ihld2(ih2) = i
+             ih2 = ih2 + scskp
+             nh2 = nh2 + 1
+           else
+             ihld3(ih3) = i
+             ih3 = ih3 + scskp
+             nh3 = nh3 + 1
+           endif
+           ih1 = ih1 + scskp
+         enddo
+         ih1 = ixvff
+cdir$ ivdep
+         do m = 1,nh1
+           i = ihld1(ih1)
+           ix = vctrls(i)
+c-wdgb
+         if (chngno(74)) then
+           gug(ix) = high(ix)*(dtidug(i) - dtgdug(i))
+           fug(ix) = hifh(ix)*dtidug(i)
+           fuf(ix) = hifh(ix)*(dtiduf(i)-dtfduf(i))
+           guf(ix) = high(ix)*dtiduf(i)
+           gp(ix)= high(ix)*(dtidp(i) - dtgdp(i))
+           fp(ix)= hifh(ix)*(dtidp(i) - dtfdp(i))
+         else
+           gug(ix) = high(ix)*(dtdug(i) - dtgdug(i))
+           fug(ix) = hifh(ix)*dtdug(i)
+           fuf(ix) = -hifh(ix)*dtfduf(i)
+           gp(ix)= high(ix)*(dtdp(i) - dtgdp(i))
+           fp(ix)= hifh(ix)*(dtdp(i) - dtfdp(i))
+         endif
+c-wdge
+           a2(ix)= sathfx(ix)*gug(ix) + sathgx(ix)*fug(ix) +
+     &     pmhig(ix)*dtgdug(i)
+c-wdgb
+         if (chngno(74)) then
+           a3(ix)= sathgx(ix)*fuf(ix) + sathfx(ix)*guf(ix)
+     &             - pmhig(ix)*dtfduf(i)
+         else
+           a3(ix)= sathgx(ix)*fuf(ix) - pmhig(ix)*dtfduf(i)
+         endif
+c-wdge
+           a5(ix)= sathfx(ix)*gp(ix) + sathgx(ix)*fp(ix) +
+     &     pmhig(ix)*(dtgdp(i) - dtfdp(i))
+           a52(ix) = voidg(i)*drgdug(i)
+           a53(ix) = voidf(i)*drfduf(i)
+           agrgp = voidg(i)*drgdp(i)
+           afrfp  = voidf(i)*drfdp(i)
+           a55(ix) = agrgp + afrfp
+c-wdgb
+         if(chngno(74)) then
+           a45(ix) = agrgp - afrfp + 2.0*(gp(ix) + fp(ix) -
+     &     (htgwff(ix) + htgcgf(ix))*dtfdp(i) - (htgwfg(ix) +
+     &     htgcgg(ix))*dtgdp(i) - (htgwft(ix) + htgcgt(ix))*dttdp(i) -
+     &     (htgcgp(ix) + htgwfp(ix))*dtidp(i))
+         else
+           a45(ix) = agrgp - afrfp + 2.0*(gp(ix) + fp(ix) -
+     &     (htgwff(ix) + htgcgf(ix))*dtfdp(i) - (htgwfg(ix) +
+     &     htgcgg(ix))*dtgdp(i) - (htgwft(ix) + htgcgt(ix))*dttdp(i) -
+     &     (htgcgp(ix) + htgwfp(ix))*dtdp(i))
+         endif
+c-wdge
+           air = 0.0
+           if (voidg(i) .eq. 0.0) air = 1.0
+c  Load a11 and 4x4 matrix.
+           a11(ix) = 1.0/(agxa(ix)*drgdxa(i) + voidg(i)*rhog(i) + air)
+c-wdgb
+         if(chngno(74)) then
+           a22(ix) = agug(ix)*drgdug(i) + voidg(i)*rhog(i) + a2(ix) -
+     &     (htcgg(ix) + htgcgg(ix)*sathf(i) + htgwfg(ix)*sathg(i))*
+     &     dtgdug(i) - (htcgp(ix) + htgcgp(ix)*sathf(i) +
+     &     htgwfp(ix)*sathg(i))*dtidug(i)
+         else
+           a22(ix) = agug(ix)*drgdug(i) + voidg(i)*rhog(i) + a2(ix) -
+     &     (htcgg(ix) + htgcgg(ix)*sathf(i) + htgwfg(ix)*sathg(i))*
+     &     dtgdug(i) - (htcgp(ix) + htgcgp(ix)*sathf(i) +
+     &     htgwfp(ix)*sathg(i))*dtdug(i)
+         endif
+c-wdge
+           a23(ix) = a3(ix) - (htcgf(ix) + htgcgf(ix)*sathf(i) +
+     &     htgwff(ix)*sathg(i))*dtfduf(i)
+           a24(ix) = rhog(i)*ug(i) + po(i) + a4(ix)
+c-wdgb
+         if (chngno(74)) then
+           a25(ix) = agug(ix)*drgdp(i) + a5(ix) - (htcgg(ix) +
+     &     htgcgg(ix)*sathf(i) + htgwfg(ix)*sathg(i))*dtgdp(i) -
+     &     (htcgt(ix) + htgcgt(ix)*sathf(i) + htgwft(ix)*sathg(i))*
+     &     dttdp(i) - (htcgp(ix) + htgcgp(ix)*sathf(i) +
+     &     htgwfp(ix)*sathg(i))*dtidp(i) - (htcgf(ix) +
+     &     htgcgf(ix)*sathf(i) + htgwff(ix)*sathg(i))*dtfdp(i)
+           a32(ix) = -a2(ix) - (htcfg(ix) - htgwfg(ix)*sathg(i) -
+     &     htgcgg(ix)*sathf(i))*dtgdug(i) - (htcfp(ix) -
+     &     htgcgp(ix)*sathf(i) - htgwfp(ix)*sathg(i))*dtidug(i)
+         else
+           a25(ix) = agug(ix)*drgdp(i) + a5(ix) - (htcgg(ix) +
+     &     htgcgg(ix)*sathf(i) + htgwfg(ix)*sathg(i))*dtgdp(i) -
+     &     (htcgt(ix) + htgcgt(ix)*sathf(i) + htgwft(ix)*sathg(i))*
+     &     dttdp(i) - (htcgp(ix) + htgcgp(ix)*sathf(i) +
+     &     htgwfp(ix)*sathg(i))*dtdp(i) - (htcgf(ix) +
+     &     htgcgf(ix)*sathf(i) + htgwff(ix)*sathg(i))*dtfdp(i)
+           a32(ix) = -a2(ix) - (htcfg(ix) - htgwfg(ix)*sathg(i) -
+     &     htgcgg(ix)*sathf(i))*dtgdug(i) - (htcfp(ix) -
+     &     htgcgp(ix)*sathf(i) - htgwfp(ix)*sathg(i))*dtdug(i)
+         endif
+c-wdge
+           a33(ix) = afuf(ix)*drfduf(i) + hyarf(i) - a3(ix) -
+     &     (htcff(ix) - htgwff(ix)*sathg(i) - htgcgf(ix)*sathf(i))*
+     &     dtfduf(i)
+           a34(ix) = -rhof(i)*uf(i) - po(i) - a4(ix)
+c-wdgb
+         if (chngno(74)) then
+           a35(ix) = afuf(ix)*drfdp(i) - a5(ix) - (htcff(ix) -
+     &     htgwff(ix)*sathg(i) - htgcgf(ix)*sathf(i))*dtfdp(i) -
+     &     (htcft(ix) - htgwft(ix)*sathg(i) - htgcgt(ix)*sathf(i))*
+     &     dttdp(i) - (htcfg(ix) - htgwfg(ix)*sathg(i) - htgcgg(ix)*
+     &     sathf(i))*dtgdp(i) - (htcfp(ix) - htgcgp(ix)*sathf(i) -
+     &     htgwfp(ix)*sathg(i))*dtidp(i)
+           a42(ix) = a52(ix) + 2.0*(gug(ix) + fug(ix) - (htgwfg(ix) +
+     &     htgcgg(ix))*dtgdug(i) - (htgcgp(ix) + htgwfp(ix))*dtidug(i))
+           a43(ix) = -a53(ix) + 2.0*(fuf(ix) + guf(ix) - (htgwff(ix) +
+     &     htgcgf(ix))*dtfduf(i))
+         else
+           a35(ix) = afuf(ix)*drfdp(i) - a5(ix) - (htcff(ix) -
+     &     htgwff(ix)*sathg(i) - htgcgf(ix)*sathf(i))*dtfdp(i) -
+     &     (htcft(ix) - htgwft(ix)*sathg(i) - htgcgt(ix)*sathf(i))*
+     &     dttdp(i) - (htcfg(ix) - htgwfg(ix)*sathg(i) - htgcgg(ix)*
+     &     sathf(i))*dtgdp(i) - (htcfp(ix) - htgcgp(ix)*sathf(i) -
+     &     htgwfp(ix)*sathg(i))*dtdp(i)
+           a42(ix) = a52(ix) + 2.0*(gug(ix) + fug(ix) - (htgwfg(ix) +
+     &     htgcgg(ix))*dtgdug(i) - (htgcgp(ix) + htgwfp(ix))*dtdug(i))
+           a43(ix) = -a53(ix) + 2.0*(fuf(ix) - (htgwff(ix) +
+     &     htgcgf(ix))*dtfduf(i))
+         endif
+c-wdge
+           a44(ix) = rhog(i) + rhof(i) + 2.0*(gal(ix) + fal(ix) +
+     &     fgrw(ix))
+           a54(ix) = rhog(i) - rhof(i)
+           ih1 = ih1 + scskp
+         enddo
+         if (nh3 .ne. 0) then
+           ih3 = ixvff
+cdir$ ivdep
+           do m = 1,nh3
+             i = ihld3(ih3)
+             ix = vctrls(i)
+c  Compute common terms for first row & column of 5x5 matrix.
+c-wdgb
+             if (chngno(74)) then
+               gxa(ix) = high(ix)*(dtidxn(i) - dtgdxa(i))
+               fxa(ix) = hifh(ix)*dtidxn(i)
+             else
+               gxa(ix) = high(ix)*(dtdxa(i) - dtgdxa(i))
+               fxa(ix) = hifh(ix)*dtdxa(i)
+             endif
+c-wdge
+             a1(ix) = sathfx(ix)*gxa(ix) + sathgx(ix)*fxa(ix) +
+     &       pmhig(ix)*dtgdxa(i)
+             a51(ix) = voidg(i)*drgdxa(i)
+c  Load first row & column of 5x5 matrix.
+             a12(ix) = agxa(ix)*drgdug(i)
+             a14(ix) = rhog(i)*quala(i)
+             a15(ix) = agxa(ix)*drgdp(i)
+c-wdgb
+             if (chngno(74)) then
+               a21(ix) = agug(ix)*drgdxa(i) + a1(ix) - (htcgg(ix) +
+     &         htgcgg(ix)*sathf(i) + htgwfg(ix)*sathg(i))*dtgdxa(i) -
+     &         (htcgp(ix) + htgcgp(ix)*sathf(i) + htgwfp(ix)*sathg(i))*
+     &         dtidxn(i)
+               a31(ix) = -a1(ix) - (htcfg(ix) - htgwfg(ix)*sathg(i) -
+     &         htgcgg(ix)*sathf(i))*dtgdxa(i) - (htcfp(ix) -
+     &         htgcgp(ix)*sathf(i) - htgwfp(ix)*sathg(i))*dtidxn(i)
+               a41(ix) =a51(ix)+2.0*(gxa(ix)+fxa(ix)-(htgwfg(ix)+
+     &         htgcgg(ix))*dtgdxa(i)-(htgcgp(ix)+htgwfp(ix))*dtidxn(i))
+             else
+               a21(ix) = agug(ix)*drgdxa(i) + a1(ix) - (htcgg(ix) +
+     &         htgcgg(ix)*sathf(i) + htgwfg(ix)*sathg(i))*dtgdxa(i) -
+     &         (htcgp(ix) + htgcgp(ix)*sathf(i) + htgwfp(ix)*sathg(i))*
+     &         dtdxa(i)
+               a31(ix) = -a1(ix) - (htcfg(ix) - htgwfg(ix)*sathg(i) -
+     &         htgcgg(ix)*sathf(i))*dtgdxa(i) - (htcfp(ix) -
+     &         htgcgp(ix)*sathf(i) - htgwfp(ix)*sathg(i))*dtdxa(i)
+               a41(ix) = a51(ix) + 2.0*(gxa(ix) + fxa(ix) -
+     &         (htgwfg(ix) + htgcgg(ix))*dtgdxa(i) - (htgcgp(ix) +
+     &         htgwfp(ix))*dtdxa(i))
+             endif
+c-wdge
+c  Use gaussian elimination system solver and save bottom row of
+c  inverse of a for junction loop convective terms.
+c  First, factor matrix a.
+             a21(ix) = -a21(ix)*a11(ix)
+             a31(ix) = -a31(ix)*a11(ix)
+             a41(ix) = -a41(ix)*a11(ix)
+             a51(ix) = -a51(ix)*a11(ix)
+             a22(ix) = a22(ix) + a12(ix)*a21(ix)
+             a32(ix) = a32(ix) + a12(ix)*a31(ix)
+             a42(ix) = a42(ix) + a12(ix)*a41(ix)
+             a52(ix) = a52(ix) + a12(ix)*a51(ix)
+             a24(ix) = a24(ix) + a14(ix)*a21(ix)
+             a34(ix) = a34(ix) + a14(ix)*a31(ix)
+             a44(ix) = a44(ix) + a14(ix)*a41(ix)
+             a54(ix) = a54(ix) + a14(ix)*a51(ix)
+             a25s(ix) = a25(ix) + a15(ix)*a21(ix)
+             a35s(ix) = a35(ix) + a15(ix)*a31(ix)
+             a45s(ix) = a45(ix) + a15(ix)*a41(ix)
+             a55(ix) = a55(ix) + a15(ix)*a51(ix)
+             ih3 = ih3 + scskp
+           enddo
+         endif
+         if (nh2 .ne. 0) then
+           ih2 = ixvff
+cdir$ ivdep
+           do m = 1,nh2
+             i = ihld2(ih2)
+             ix = vctrls(i)
+             gxa(ix) = 0.0
+             fxa(ix) = 0.0
+             a1(ix) = 0.0
+             a12(ix) = 0.0
+             a14(ix) = 0.0
+             a15(ix) = 0.0
+             a21(ix) = 0.0
+             a31(ix) = 0.0
+             a41(ix) = 0.0
+             a51(ix) = 0.0
+             a25s(ix) = a25(ix)
+             a35s(ix) = a35(ix)
+             a45s(ix) = a45(ix)
+             ih2 = ih2 + scskp
+           enddo
+         endif
+         ih1 = ixvff
+cdir$ ivdep
+         do m = 1,nh1
+           i = ihld1(ih1)
+           ix = vctrls(i)
+           a22(ix) = 1.0/a22(ix)
+           a32(ix) = -a32(ix)*a22(ix)
+           a42(ix) = -a42(ix)*a22(ix)
+           a52(ix) = -a52(ix)*a22(ix)
+           a33(ix) = 1.0/(a33(ix) + a23(ix)*a32(ix))
+           a43(ix) = a43(ix) + a23(ix)*a42(ix)
+           a53(ix) = a53(ix) + a23(ix)*a52(ix)
+           a34(ix) = a34(ix) + a24(ix)*a32(ix)
+           a44(ix) = a44(ix) + a24(ix)*a42(ix)
+           a54(ix) = a54(ix) + a24(ix)*a52(ix)
+           a35s(ix) = a35s(ix) + a25s(ix)*a32(ix)
+           a45s(ix) = a45s(ix) + a25s(ix)*a42(ix)
+           a55(ix) = a55(ix) + a25s(ix)*a52(ix)
+           a43(ix) = -a43(ix)*a33(ix)
+           a53(ix) = -a53(ix)*a33(ix)
+           a44(ix) = 1.0/(a44(ix) + a34(ix)*a43(ix))
+           a54(ix) = a54(ix) + a34(ix)*a53(ix)
+           a45s(ix) = a45s(ix) + a35s(ix)*a43(ix)
+           a55(ix) = a55(ix) + a35s(ix)*a53(ix)
+           a54(ix) = -a54(ix)*a44(ix)
+           a55(ix) = 1.0/(a55(ix) + a45s(ix)*a54(ix))
+c  Second, form last row of inverse of a in last row of a.
+           a51(ix) = a55(ix)*a51(ix)
+           a52(ix) = a55(ix)*a52(ix)
+           a53(ix) = a55(ix)*a53(ix)
+           a54(ix) = a55(ix)*a54(ix)
+           a53(ix) = a53(ix) + a43(ix)*a54(ix)
+           a52(ix) = a52(ix) + a32(ix)*a53(ix) + a42(ix)*a54(ix)
+           a51(ix) = a51(ix) + a21(ix)*a52(ix) + a31(ix)*a53(ix) +
+     &     a41(ix)*a54(ix)
+           sourcp(vctrln(i)+iptr) = (a52(ix)*sourcg(ix) +
+     &     a53(ix)*sourcf(ix) + a54(ix)*sourcm(ix))*recipv(i) +
+     &     a55(ix)*gamas(i)*dt
+c
+c  Modify coefficients to account for linearization around point other
+c  than beginning of advancement values for air appearance.
+           if (iand(imap(i),64).ne.0) then
+             sourcp(vctrln(i)+iptr) = sourcp(vctrln(i)+iptr) +
+     &       v(i)*(a52(ix)*(hyarug(i) - voidg(i)*rhog(i)*ug(i)) +
+     &       a53(ix)*(hyaruf(i) - voidf(i)*rhof(i)*uf(i)) +
+     &       a54(ix)*(hyarg(i) - hyarf(i) - (voidg(i)*rhog(i) -
+     &       voidf(i)*rhof(i))))*recipv(i)
+           endif
+           ih1 = ih1 + scskp
+         enddo
+         if (lpdat(issys)%lnoncn .ne. 0) then
+           ih1 = ixvff
+cdir$ ivdep
+           do m = 1,nh1
+             i = ihld1(ih1)
+             ix = vctrls(i)
+             a35s(ix) = v(i)*dt
+             a25s(ix) = (hyarf(i) + hyarg(i))*(vo(i) - v(i))
+             ih1 = ih1 + scskp
+           enddo
+           do n1 = 1,lpdat(issys)%lnoncn
+             ih1 = ixvff
+             if (n1 .eq. nonhy) then
+cdir$ ivdep
+               do m = 1,nh1
+                 i = ihld1(ih1)
+                 ix = vctrls(i)
+                 a25s(ix) = a25s(ix) - 8.0*gaman(i+n1-1)*a35s(ix)
+                 ih1 = ih1 + scskp
+               enddo
+             else
+cdir$ ivdep
+               do m = 1,nh1
+                 i = ihld1(ih1)
+                 ix = vctrls(i)
+                 a25s(ix) = a25s(ix) + gaman(i+n1-1)*a35s(ix)
+                 ih1 = ih1 + scskp
+               enddo
+             endif
+           enddo
+           ih1 = ixvff
+cdir$ ivdep
+           do m = 1,nh1
+             i = ihld1(ih1)
+             ix = vctrls(i)
+             is = vctrln(i) + iptr
+             sourcp(is) = sourcp(is) + (a51(ix)*sourca(ix) +
+     &       a55(ix)*a25s(ix))*recipv(i)
+c
+c  Modify pressure source to account for linearization around point
+c  other than beginning of advancement values for air appearance.
+             if( iand(imap(i),64).ne.0 ) then
+               sourcp(is) = sourcp(is) +
+     &         v(i)*(a51(ix)*(hyarg(i)*qualao(i) -
+     &         voidg(i)*rhog(i)*quala(i)) +
+     &         a55(ix)*(hyarg(i)+hyarf(i) -
+     &         (voidg(i)*rhog(i)+voidf(i)*rhof(i))))*recipv(i)
+             endif
+             ih1 = ih1 + scskp
+           enddo
+         endif
+       endif
+       ihld2(ixvff) = nh1
+$if def,dbgprnt
+       if (help .ne. 0) then
+         ih1 = ixvff
+         do m = 1,nh1
+           i = ihld1(ih1)
+           ix = vctrls(i)
+           is = vctrln(i) + iptr
+           write (12,"(a,i10)") 'preseq1x',volno(i)
+           write (12,"(5es20.12)") a11(ix),a12(ix),sourcp(is),a14(ix),
+     &     a15(ix),
+     &     a21(ix),a22(ix),a23(ix),a24(ix),a25(ix),
+     &     a31(ix),a32(ix),a33(ix),a34(ix),a35(ix),
+     &     a41(ix),a42(ix),a43(ix),a44(ix),a45(ix),
+     &     a51(ix),a52(ix),a53(ix),a54(ix),a55(ix),
+     &     sourcf(ix),sourcg(ix),sourcm(ix),recipv(i),gamas(i)
+           ih1 = ih1 + scskp
+         enddo
+       endif
+$endif
+c
+c  Loops over all components and all junctions within components and
+c  adds the junction convective terms to the coefp(i, j) and
+c  sourcp(i) coefficients.
+c  Initialize indices.
+c    i (junction index)
+c    n (component index)
+c    nc (total number of components).
+       ixv = ixjff
+       i = lpdat(issys)%lij
+       n = lpdat(issys)%lic
+c  Loop over all components.
+       do nx = 1,lpdat(issys)%licn
+         if (njc(n) .ne. 0) then
+c  Loop over all component junctions.
+           do jx = 1,njc(n)
+c  Get the indices for the from volume row (ktv) and the to volume
+c  row (ltv).
+             ktv = ij1nx(i)
+             ltv = ij2nx(i)
+c  Compute common terms.
+             aj = ajun(i)*dt
+             tmf = aj*voidfj(i)*rhofj(i)
+             tmg = aj*voidgj(i)*rhogj(i)
+c  Load the matrix ltv row to volume sourcp and the to and from
+c  volume coefp coefficients.
+c  Check for time dependent volume.
+             if (iand(vctrl(ltv),1) .eq. 0) then
+c  Get indices for to and from volume coefp, ltv row.
+c  Get pointer for to vol. sourcp, a51, a52, a53, a54,
+c  a55, ltv row.
+               ll = jcnx2(i+1)
+               lk = jcnx3(i+1)
+c  Index (is) for to volume sourcp, ltv row.
+               is = iptr + vctrln(ltv)
+c  Index (l-scskp) for to vol. a51, a52, a53, a54, a55,
+c  ltv row.
+               l = ixvf + scskp*vctrln(ltv)
+c  Compute ltv row common terms.
+c
+c  Changes made by mbs and rar.
+               if (iand(jcex(i),ishft(1,15)).ne.0) then
+                 if (velfj(i) .ge. 0.0) then
+                   tlf = tmf*(a53(l-scskp)*(ufj(i) + po(ktv)/rhofj(i))
+     &             - a54(l-scskp) + a55(l-scskp))*recipv(ltv)
+                 else
+                   tlf = tmf*(a53(l-scskp)*(ufj(i) + po(ltv)/rhofj(i))
+     &             - a54(l-scskp) + a55(l-scskp))*recipv(ltv)
+                 endif
+c
+                 if (velgj(i) .ge. 0.0) then
+                   tlg = tmg*(a51(l-scskp)*qualaj(i) +
+     &             a52(l-scskp)*(ugj(i) + po(ktv)/rhogj(i)) +
+     &             a54(l-scskp) + a55(l-scskp))*recipv(ltv)
+                 else
+                   tlg = tmg*(a51(l-scskp)*qualaj(i) +
+     &             a52(l-scskp)*(ugj(i) + po(ltv)/rhogj(i)) +
+     &             a54(l-scskp) + a55(l-scskp))*recipv(ltv)
+                 endif
+               else
+                 tlf = tmf*(a53(l-scskp)*(ufj(i) + po(ltv)/rhofj(i)) -
+     &           a54(l-scskp) + a55(l-scskp))*recipv(ltv)
+                 tlg = tmg*(a51(l-scskp)*qualaj(i) +
+     &           a52(l-scskp)*(ugj(i) + po(ltv)/rhogj(i)) +
+     &           a54(l-scskp) + a55(l-scskp))*recipv(ltv)
+               endif
+c  End of changes made by mbs and rar.
+c
+c  Add junction explicit convective terms to the ltv row to volume
+c  sourcp coefficient.
+               sourcp(is) = sourcp(is) + tlf*velfj(i) + tlg*velgj(i)
+               termk = tlf*vfdpk(ixv) + tlg*vgdpk(ixv)
+               terml = tlf*vfdpl(ixv) + tlg*vgdpl(ixv)
+c  Add junction implicit convective terms to the ltv row to
+c  volume coefp coefficient.
+               coefp(ll) = coefp(ll) + terml
+c  Subtract junction implicit convective term from the ltv row from
+c  volume coefp coefficient.
+               coefp(lk) = coefp(lk) - termk
+             endif
+c  Load the matrix ktv row from volume sourcp and the from and to
+c  volume coefp coefficients.
+c  Check for time dependent volume.
+             if (iand(vctrl(ktv),1) .eq. 0) then
+c  Get indices for to and from volume coefp, ktv row.
+c  Get pointer for from vol. sourcp, a51, a52, a53, a54,
+c  a55, ktv row.
+               kk = jcnx2(i)
+               kl = jcnx3(i)
+c  Index (is) for from volume sourcp, ktv row.
+               is = iptr + vctrln(ktv)
+c  Index (k-scskp) for from vol. a51, a52, a53, a54, a55,
+c  ktv row.
+               k = ixvf + scskp*vctrln(ktv)
+c  Check for accumulator component.
+               if (cmptyp(n) .eq. 13) then
+c  Check if accum is a normal volume with air.
+                 if (iand(cmpopt(n),16) .eq. 0) then
+c  Set the ktv row from volume sourcp coefficient.
+                   sourcp(is) = dpd(n)
+c  Compute tkf and tkg for the ktv row coefficients.
+                   tkf = -dpddp(n)
+                   tkg = 0.0
+                   go to 160
+                 endif
+               endif
+c  Compute ktv row common terms.
+c
+c  Changes made by mbs and rar.
+               if (iand(jcex(i),ishft(1,15)).ne.0) then
+                 if (velfj(i) .ge. 0.0) then
+                   tkf = -tmf*(a53(k-scskp)*(ufj(i) + po(ktv)/rhofj(i))
+     &             - a54(k-scskp) + a55(k-scskp))*recipv(ktv)
+                 else
+                   tkf = -tmf*(a53(k-scskp)*(ufj(i) + po(ltv)/rhofj(i))
+     &             - a54(k-scskp) + a55(k-scskp))*recipv(ktv)
+                 endif
+c
+                 if (velgj(i) .ge. 0.0) then
+                   tkg = -tmg*(a51(k-scskp)*qualaj(i) +
+     &             a52(k-scskp)*(ugj(i) + po(ktv)/rhogj(i)) +
+     &             a54(k-scskp) + a55(k-scskp))*recipv(ktv)
+                 else
+                   tkg = -tmg*(a51(k-scskp)*qualaj(i) +
+     &             a52(k-scskp)*(ugj(i) + po(ltv)/rhogj(i)) +
+     &             a54(k-scskp) + a55(k-scskp))*recipv(ktv)
+                 endif
+               else
+                 tkf = -tmf*(a53(k-scskp)*(ufj(i) + po(ktv)/rhofj(i)) -
+     &           a54(k-scskp) + a55(k-scskp))*recipv(ktv)
+                 tkg = -tmg*(a51(k-scskp)*qualaj(i) +
+     &           a52(k-scskp)*(ugj(i) + po(ktv)/rhogj(i)) + a54(k-scskp)
+     &           + a55(k-scskp))*recipv(ktv)
+               endif
+c  End of changes made by mbs and rar.
+c
+c  Add junction explicit convective terms to the ktv row from volume
+c  sourcp coefficient.
+  160          sourcp(is) = sourcp(is) + tkf*velfj(i) + tkg*velgj(i)
+               termk = tkf*vfdpk(ixv) + tkg*vgdpk(ixv)
+               terml = tkf*vfdpl(ixv) + tkg*vgdpl(ixv)
+c  Subtract junction implicit convective terms from the ktv row from
+c  volume coefp coefficient.
+               coefp(kk) = coefp(kk) - termk
+c  Add the junction implicit convective terms to the ktv row to volume
+c  coefp coefficient.
+               coefp(kl) = coefp(kl) + terml
+             endif
+c  Increment junction related indices and complete the junction do loop.
+             ixv = ixv + scskp
+             i = i + ijskp
+           enddo
+         endif
+c  Increment component indices and complete the component do loop.
+         n = n + cmplen(n)
+       enddo
+c
+c  Debug printout.
+$if def,dbgprnt
+       if (help.ne.0 .and. iand(ihlppr(1),ishft(1,24)).ne.0) then
+         call helphd ('preseq',12)
+         write (output,2001)
+ 2001  format('0Volume terms'/1x,132('=')/1x,'i',5x,'volno',6x,
+     & 'po',11x,'ufo',10x,'ugo',10x,'voidgo',7x,'qualao',7x,'rhof',9x,
+     & 'rhog',9x,'sathf',8x,'sathg'/18x,'drfdp',8x,'drfduf',7x,
+     & 'drgdp',8x,'drgdug',7x,'drgdxa',7x,'dtfdp',8x,'dtfduf',7x,
+     & 'dtgdp',8x,'dtgdug'/18x,'dtgdxa',7x,'dtdp',9x,'dtdug',8x,
+     & 'dtdxa',8x,'hif',10x,'hig',10x,'gammsw',7x,'qwf',10x,'qwg'/
+     & 1x,132('='))
+         ix = ixvff
+         iz = lpdat(issys)%livnn
+         i = lpdat(issys)%liv
+         do m = 1,lpdat(issys)%livn
+           if (iand(vctrlx(i),1).ne.0 .and. iand(vctrl(i),1).eq.0)
+     &     write (output,2002) iz,volno(i),po(i),uf(i),ug(i),voidgo(i),
+     &     quala(i),rhof(i),rhog(i),sathf(i),sathg(i),drfdp(i),
+     &     drfduf(i),drgdp(i),drgdug(i),drgdxa(i),dtfdp(i),dtfduf(i),
+     &     dtgdp(i),dtgdug(i),dtgdxa(i),dtdp(i),dtdug(i),dtdxa(i),
+     &     hif(i),hig(i),gammsw(ix),qwf(i),qwg(i)
+ 2002  format(1x,i5,i10.9,1p,9g13.5/16x,9g13.5/16x,9g13.5)
+           ix = ix + scskp
+           iz = iz + 1
+           i = i + ivskp
+         enddo
+         write (output,2003)
+ 2003  format('0Junction terms'/1x,125('=')/7x,'junno(i)',3x,
+     & 'ajun(i)',6x,'voidfj(i)',4x,'rhofj(i)',5x,'ufj(i)',7x,
+     & 'velfjo(i)',4x,'velgjo(i)',10x,'vfdpk(ix)',4x,
+     & 'vfdpl(ix)'/18x,'qualaj(i)',4x,'voidgj(i)',4x,'rhogj(i)',5x,
+     & 'ugj(i)',7x,'velfj(i)',5x,'velgj(i)',11x,'vgdpk(ix)',4x,
+     & 'vgdpl(ix)'/1x,125('='))
+         ix = ixjff
+         i = lpdat(issys)%lij
+         do m = 1,lpdat(issys)%lijn
+           if (iand(jcex(i),ishft(1,20)).ne.0)
+     &     write (output,2004) junno(i),ajun(i),voidfj(i),rhofj(i),
+     &     ufj(i),velfjo(i),velgjo(i),vfdpk(ix),vfdpl(ix),qualaj(i),
+     &     voidgj(i),rhogj(i),ugj(i),velfj(i),velgj(i),vgdpk(ix),
+     &     vgdpl(ix)
+ 2004  format(6x,i10.9,1p,6g13.5,6x,2g13.5/16x,6g13.5,6x,
+     & 2g13.5)
+           ix = ix + scskp
+           i = i + ijskp
+         enddo
+         write (output,2005)
+ 2005  format('0Scratch storage volume terms'/1x,132('=')/1x,'i',5x,
+     & 'volno(i)',3x,'coefp',8x,'sourcf(ix)',3x,'sourcm(ix)',3x,
+     & 'a52(ix)',6x,'a54(ix)',6x,'fracal(ix)',3x,
+     & 'fgrw(ix)',5x,'fal(ix)'/7x,'sourca',5x,'sourcp(is)',3x,
+     & 'sourcg(ix)',3x,'a51(ix)',6x,'a53(ix)',6x,'a55(ix)',6x,
+     & 'fracag(ix)',3x,'a4(ix)',7x,'gal(ix)'/
+     & 1x,132('='))
+         ix = ixvff
+         iz = lpdat(issys)%livnn
+         i = lpdat(issys)%liv
+         do is = 1,lpdat(issys)%livn
+           if (iand(vctrlx(i),1).ne.0 .and. iand(vctrl(i),1).eq.0)
+     &     write (output,2006) iz,volno(i),coefp(vctrld(i)),sourcf(ix),
+     &     sourcm(ix),a52(ix),a54(ix),fracal(ix),fgrw(ix),
+     &     fal(ix),sourca(ix),sourcp(is),sourcg(ix),a51(ix),a53(ix),
+     &     a55(ix),fracag(ix),a4(ix),gal(ix)
+ 2006  format(1x,i5,i10.9,1p,8g13.5/6x,g10.2,8g13.5)
+           ix = ix + scskp
+           i = i + ivskp
+         enddo
+         write (output,2007)
+ 2007  format('0Pressure matrix'/1x,124('=')/1x,'eq.no.',1x,'volno',
+     & 4x,5('el.no.',2x,'coefp',6x),1x,'sourcp'/1x,124('='))
+         ktv = lpr(issys,1)%ipr(1)
+         i = lpdat(issys)%liv
+         do l = 1,lpdat(issys)%livn
+           ltv = lpr(issys,1)%ipr(l+1) - 1
+           if (iand(vctrlx(i),1) .ne. 0) then
+             write (output,2008) l,volno(i),(lpr(issys,1)%irnr(k),
+     &       coefp(k),k = ktv,ltv)
+ 2008  format(1x,i6,i10.9,3(i6,es20.12),(/17x,3(i6,es20.12)))
+             write (output,2009) sourcp(l)
+ 2009  format('+',100x,es20.12)
+           endif
+           ktv = ltv + 1
+           i = i + ivskp
+         enddo
+       endif
+$endif
+       return
+       end

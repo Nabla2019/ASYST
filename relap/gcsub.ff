@@ -1,0 +1,266 @@
+*mlist
+      subroutine gcsub(gc,dgcdp,hfact,error)
+c
+c
+c  GCSUB computes the critical mass flux for subcooled liquid
+c  using the Henry-Fauske model.
+c
+c  Cognizant engineer:jmk.
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+c  arguments:
+c             GC - critical mass flux based on throat area (kg/m2-s)
+c          DGCDP - derivative of GC wrt upstream pressure.
+c          HFACT - empirical constant in HF model.
+c          ERROR - logical variable, true if solution converged.
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+c  input parameters:
+c                    PZERO - stagnation pressure (Pa)
+c                    TZERO - upstream liquid temperature (deg K)
+c
+c * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+c
+      implicit none
+c
+c   Common Blocks for RELAP5 Property Tables.
+c
+       include 'stcom.h'
+       include 'fast.h'
+       include 'stcblk.h'
+       include 'ufiles.h'
+c
+c     Local Common for Input Parameters.
+c
+      common /upstrm/ cpgas, cppf0, cppg0, cvao, dcva, gamma,
+     &                ploss, pvzero, pzero, rgas,
+     &                rnc, sgas, sliq, svap, tzero, vsubf0,
+     &                vsubg0, xnc, xzero
+c
+c   Define Local Variables.
+c
+      real conv, cpgas, cppf0, cppg0, cvao, dcva, delg, delp, delp1,
+     &     dgcdp, dgcdp1, dgcdp2, dgtdp, dndp, dpfi, dpmax,
+     &     dpmin, dpsub, dsldp, dsvdp, dtdps, dvldp,
+     &     dvvdp, dxdp, dxeqdp, gamma, gc, gt, hfact, one, ploss,
+     &     ptmax, ptmin, psubc, pthrot, pvzero, pzero,
+     &     ratio, rgas, rnc, rzero, sgas, sliq, sfg, small, svap,
+     &     szero, tzero, vfg, vsubf0, vsubg0, xeq, xnc,
+     &     xzero, zero
+c
+      integer it, iter
+c
+      parameter (zero=0.0)
+      parameter (one=1.0)
+      parameter (small=1.0e-6)
+      parameter (conv=0.001)
+c
+c   Local Variables for RELAP5 Properties.
+c
+      real prop(36)
+      real betaa, betf, betg, cpp, cppf, cppg, hbarr, hsubf, hsubg,
+     &     kpa, kpaf, kpag, press, psatt, quall, ttt, ubarr,
+     &     usubff, usubgg, vbarr, vsubff, vsubgg
+c
+      logical error
+c
+       equivalence          ( prop( 1), ttt   ), ( prop( 2), press ),
+     & ( prop( 3), vbarr ), ( prop( 4), ubarr ), ( prop( 5), hbarr ),
+     & ( prop( 6), betaa ), ( prop( 7), kpa   ), ( prop( 8), cpp   ),
+     & ( prop( 9), quall ), ( prop(10), psatt ), ( prop(11), vsubff),
+     & ( prop(12), vsubgg), ( prop(13), usubff), ( prop(14), usubgg),
+     & ( prop(15), hsubf ), ( prop(16), hsubg ), ( prop(17), betf  ),
+     & ( prop(18), betg  ), ( prop(19), kpaf  ), ( prop(20), kpag  ),
+     & ( prop(21), cppf  ), ( prop(22), cppg  )
+c
+c - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+c
+      error = .false.
+c
+c     Stagnation Properties:
+c     - load in upstream pressure and temperature.
+c
+      prop(2) = pzero
+      prop(1) = tzero
+c	
+      call sth2x3(fa(ndxstd),prop,it,error)
+c	
+c     - set liquid density, entropy, and saturation pressure
+c       at liquid temp.
+c
+      rzero = one / vbarr
+      szero = prop(24)
+      psubc = prop(10)
+c
+c     -----------------------------------
+c     Iteration Loop for Throat Pressure.
+c      - set initial bounds & guess.
+c     -----------------------------------
+c
+      iter = 1
+      ptmax = min(psubc,0.99*(pzero+min(zero,ploss)))
+      ptmin = 6.12e+2
+c
+c     - use Henry-Fauske at saturation to limit pressure undershoot.
+c
+      dpfi = 2.571e-2 * pzero**(1.1334)
+      dpsub = pzero - psubc
+      dpsub = (dpfi**4 + dpsub**4)**0.25
+      pthrot = max(ptmin,(pzero+min(zero,ploss)-dpsub))
+c
+c     ---------------------------------------
+c     Step 1:  Solve Bernoulli for Mass Flux.
+c     ---------------------------------------
+c
+ 10   continue
+c
+         gt = sqrt(2.0*rzero*(pzero + ploss - pthrot))
+c
+c     Set Derivative of Mass Flux wrt Throat Pressure.
+c
+         dgtdp = - rzero / gt
+c
+c     --------------------------------------------
+c     Step 2:  Compute Throat Equilibrium Quality.
+c     --------------------------------------------
+c
+c     Throat Saturation Properties:
+c        - load in pressure and zero quality
+c
+         prop(2) = pthrot
+         prop(9) = zero
+c		
+         call sth2x2(fa(ndxstd),prop,error)
+c		
+         sliq  = prop(25)
+         svap  = prop(26)
+         vfg   = vsubgg - vsubff	 	
+         sfg   = svap - sliq
+         dtdps = vfg / sfg
+	 dsldp = -vsubff*betf + cppf*(dtdps/ttt)
+c
+c
+         xeq = (szero - sliq) / sfg
+         xeq = max(small,min(one,xeq))
+c
+c
+c     Apply Non-Equilibrium Factor & set Derivative wrt Pressure.
+c
+         if (xeq .gt. hfact) then
+c
+c     - Use "Equilibrium" Option:
+c
+            dndp = zero
+            ratio = one
+c
+         elseif (hfact .lt. 1000.) then
+c
+c     - Apply Non-Equilibrium Parameter:
+c
+c
+            dsvdp = -vsubgg*betg + cppg*(dtdps/ttt)
+c
+            dxeqdp =  - (xeq*dsvdp + (one - xeq)*dsldp) / sfg
+            dxeqdp = min(zero,dxeqdp)
+c
+            dndp = dxeqdp / hfact
+c
+            ratio = min(one,xeq/hfact)
+c
+         else
+c
+c     - Use "Frozen" Option:
+c
+            dndp = zero
+            ratio = zero
+c
+         endif
+c
+c
+c
+c     ----------------------------
+c     Step 3:  Critical Mass Flux.
+c     ----------------------------
+c
+c
+         dvldp = - vsubff*kpaf
+c
+c     Derivative of Quality wrt Pressure.
+c
+         dxdp = - ratio*(dsldp/sfg)
+c
+c     Critical Mass Flux.
+c
+         gc = sqrt(- one/(dvldp + vfg*dxdp))
+c
+c     Approximate Derivative wrt Pressure.
+c
+         dvvdp = vsubgg*(betg*dtdps - kpag)
+c
+         dgcdp = 0.5*(vfg*dndp*(-dsldp/sfg) + dxdp*dvvdp)*gc**3
+c
+c
+c     ---------------------------------------------------
+c     Step 4:  Check Convergence & Update Throat Pressure.
+c     ----------------------------------------------------
+c
+c     ------------------
+c     Check Convergence.
+c     ------------------
+c
+      dpmax = ptmax - ptmin
+      delg = abs(gt - gc)
+      delg = min(delg,dpmax*abs(dgtdp))
+c
+      if (delg/gt .gt. conv) then
+c
+         delp1 = (gt - gc) / (dgcdp - dgtdp)
+c
+         dgcdp2 = 3.0 * dgcdp / gc
+	 dgcdp1 = max(0.25,min(1.5,(one + 0.5*dgcdp2*delp1)))*dgcdp
+c
+         delp = (gt - gc) / (dgcdp1 - dgtdp)
+c
+c     Set iteration limits.
+c
+	 dpmin = abs(conv*gt/dgtdp)
+c
+         if (delp .gt. zero) then
+            ptmin = pthrot
+	    dpmax = ptmax - ptmin
+            pthrot = pthrot + min(delp,0.95*dpmax)
+         else
+            ptmax = pthrot
+	    dpmax = ptmax - ptmin
+	    if (abs(gt - gc)/gt .gt. 0.25) then
+               pthrot = pthrot + max(min(-dpmin,delp),-0.95*dpmax)
+	    else
+               pthrot = pthrot + max(delp,-0.95*dpmax)
+	    endif
+         endif
+c
+         iter = iter + 1
+         if (iter .lt. 20) then
+c        - continue iterating on throat pressure.
+            go to 10
+         else
+c        - did not converge, set error flag and default value.
+            error = .true.
+            dpsub = min(dpsub,pzero+ploss)
+            gt = sqrt(2.0*rzero*dpsub)
+            dgtdp = rzero / gt
+         endif
+c
+      endif
+c
+c     Use Mass Flux from Momentum Solution:  the expression for
+c         the critical mass flux can be very sensitive to throat
+c         pressure and its derivative VERY LARGE.
+c
+      gc = gt
+      dgcdp = abs(dgtdp)
+c
+      return
+      end

@@ -1,0 +1,364 @@
+*mlist
+*if def,selap
+       subroutine rpower (nptim,npptim,ptim,pptim,timp,timpp)
+c
+c  Process power input for each SCDAP component.
+c
+c  Cognizant engineer: ewc.
+c
+*in32 idat
+*in32end
+       use scdmod
+       implicit none
+       include 'fast.h'
+       include 'comctl.h'
+       include 'scddat.h'
+       include 'scdout.h'
+       include 'scdcom.h'
+       include 'ufiles.h'
+       include 'contrl.h'
+       include 'scdpow.h'
+       include 'nhtara.h'
+       include 'ndxara.h'
+       include 'cora.h'
+      integer nptim,npptim,npt
+      integer l11(7),l12(9),l15(10),l15b(11),
+     # l16(9),l17(8),ldat2(7),ldat3(ndax+6)
+      integer l14(6+2*ndrd)
+      integer knt,knt1,inext,nstart,ndata,i,nlimit
+      integer idat(5)
+      integer iradmd
+      integer knt1z1,knt1z2,nodmid
+      real ptim(50),pptim(50),timp(50),timpp(50)
+      real rdat(100)
+      real dasum,asum,rpsum,fnorm
+      integer m
+      integer mnorm
+      integer ndbg
+      character itype*8
+      equivalence (rdat(1),idat(1))
+      external inp2,inplnk
+c
+      data l11/0,0,0,1,0,1,1/
+      data l12/0,0,3,3,0,1,1,1,1/
+      data l14/0,0,0,0,0,1,ndrd*0,ndrd*0/
+      data l15/0,0,2,4,0,1,1,1,1,1/
+      data l15b/0,0,2,200,0,1,50,1,1,1,1/
+      data l16/0,0,0,100,0,1,100,1,1/
+      data l17/0,0,2,100,0,1,1,1/
+      data ldat2/0,0,1,1,0,1,1/
+      data ldat3/4*0,0,1,ndax*1/
+!
+        ndbg=0
+          if(ndbg.eq.1)then
+          write(output,9001)icomp
+9001      format(' RPOWER at start; icomp=',i5)
+          end if
+      write (output,'(1h1,40x,a)') 'SCDAP power data.'
+      if (idcomp(icomp).ne.3.and.idcomp(icomp).ne.8)then
+        actnid(icomp) = 0.7
+        fulden(icomp) = 0.95
+        enrch(icomp) = 0.027
+      endif
+c 4ccc1100 Power multiplier
+      l11(1)=40001100+(scd1(icomp)%cmpno*10000)
+      l11(6)=1
+      call inp2(fa(filndx(1)),rdat,l11)
+      if(l11(6) .le. 0) then
+        pfrtot(icomp)=0.0
+      else
+        pfrtot(icomp)=rdat(1)
+        if(pfrtot(icomp).lt.0.0)then
+          write(output,2050)'power multiplier on card 4ccc1100',
+     #       scd1(icomp)%cmpno
+          fail = .true.
+        endif
+        write (output,3000) '0Power Multiplier ',pfrtot(icomp)
+      endif
+c 4ccc13p0 - read axial power distribution shapes
+      nshapz(icomp) = 0
+      naxpz(icomp) = naz
+cljs
+        iradmd = 2
+        if(idcomp(icomp).eq.6.and.modidx(1).eq.1)iradmd=1
+      select case(iradmd)
+      case(1)
+cljs simulator component, define flat radial power profile
+        nshapz(icomp) = 1
+        naxpz(icomp) = naz
+        paxtim(1,icomp) = 1.e+10
+        do knt1=1,naz
+        paxpz(2*knt1-1,1,icomp)=1.0
+        paxpz(2*knt1,1,icomp)=zcond2(knt1,icomp)
+        end do
+        case(2)
+c knt is the profile number to search for
+      knt = 1
+   10 ldat2(1)=40001300+(scd1(icomp)%cmpno*10000)+(knt*10)
+      call inplnk(ldat2(1),inext,nstart,ndata,fa(filndx(1)))
+      if (ndata.lt.0)then
+        call inp7(ldat2(1),-ndata)
+        fail=.true.
+        knt=knt+1
+        goto 10
+      else if(ndata.eq.0)then
+        if(inext.gt.ldat2(1) .and. 
+     #    inext.le.40001399+(scd1(icomp)%cmpno*10000))then
+          if(inext.le.40001309+(scd1(icomp)%cmpno*10000)+(knt*10))then
+            write (output,2001) ldat2(1)
+ 2001 format (/,'0******** Card ',i8,' is missing.')
+            fail=.true.
+            knt=knt+1
+          else
+            knt=(inext-(40001300+(scd1(icomp)%cmpno*10000)))/10
+          endif
+          goto 10
+        endif
+      else
+        nshapz(icomp)=nshapz(icomp)+1
+        if (nshapz(icomp) .ge. maxpz) then
+          write (output,2020)'maximum number power shapes exceeded.'
+ 2020 format(/,'0******** Error, ',a)
+          fail = .true.
+        endif
+        ldat2(6)=1
+        call inp2(fa(filndx(1)),rdat,ldat2)
+        paxtim(nshapz(icomp),icomp) = rdat(1)
+        if(paxtim(nshapz(icomp),icomp).lt.0.0)then
+          write(output,2080)'time',ldat2(1)
+          fail=.true.
+        endif
+        write (output,'(1h0,a,i1,a,g12.5,a)')
+     +   'Axial power shape #',nshapz(icomp),' will apply until ',
+     +    paxtim(nshapz(icomp),icomp),' s.'
+        ldat3(1) = 40001301+(scd1(icomp)%cmpno*10000)+(knt*10)
+        ldat3(2) = -ldat3(1) -8
+        ldat3(3) = naz
+        ldat3(4) = naz
+        ldat3(6) = 1
+        call inp2(fa(filndx(1)),rdat,ldat3)
+        write (output,9040)
+        do 15 knt1=naz,1,-1
+          paxpz((2*knt1)-1,nshapz(icomp),icomp)=rdat(knt1)
+          paxpz((2*knt1),nshapz(icomp),icomp)=zcond2(knt1,icomp)
+          if(paxpz((2*knt1)-1,nshapz(icomp),icomp).lt.0.0)then
+            fail=.true.
+            write(output,2050)'axial power factor cards 4ccc13p1-9',
+     #            scd1(icomp)%cmpno
+          endif
+          if(paxpz((2*knt1)-1,nshapz(icomp),icomp).gt.1.6)then
+            if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &      write(output,2070)ldat3(1),' axial power factor'
+          endif
+   15   write (output,9050) knt1,paxpz((2*knt1),nshapz(icomp),icomp),
+     +    paxpz((2*knt1)-1,nshapz(icomp),icomp)
+        knt=knt+1
+        goto 10
+      endif
+cljs end select for case of reading axial power profile
+      end select
+c 4ccc1401-99 radial peaking factors
+      iradmd=2
+      if(idcomp(icomp).eq.6.and.modidx(1).eq.1)iradmd=1
+      select case(iradmd)
+      case(1)
+cljs  simulator component, define flat radial power
+cljs  distribution
+      nrdpr(icomp)=2
+      prdpr(1,icomp)=1.0
+      xrdpr(1,icomp)=0.0
+      prdpr(2,icomp)=1.0
+      nodmid=naz/2
+      xrdpr(2,icomp)=rhwire(nodmid,icomp)                 
+      case(2)
+      l14(1)=40001401+(scd1(icomp)%cmpno*10000)
+      l14(2)=40001499+(scd1(icomp)%cmpno*10000)
+        nlimit=nrcond2(1,icomp)
+      l14(4)=2*nlimit
+      do knt=1,nlimit
+        l14(5+2*knt)=1
+        l14(6+2*knt)=0
+      enddo
+      l14(6)=1
+      call inp2(fa(filndx(1)),rdat,l14)
+      if(l14(6).le.0)then
+        if(l14(6).lt.0)then
+          call inp7(l14(1),-l14(6))
+          fail=.true.
+        endif
+        nrdpr(icomp)=2
+        prdpr(1,icomp)=1
+        xrdpr(1,icomp)=0.
+        prdpr(2,icomp)=1
+czf     xrdpr(2,icomp)=xcond3(nrcond2(1,icomp),1,icomp)
+        if (nrcond2(1,icomp) .eq. 0) then
+          xrdpr(2,icomp)=xcond3(2,1,icomp)
+        else
+          xrdpr(2,icomp)=xcond3(nrcond2(1,icomp),1,icomp)
+        endif
+        idat(4)=nrcond2(1,icomp)
+      else
+        nrdpr(icomp)=l14(6)/2
+        nstart=1
+        do 34 knt=1,nrdpr(icomp)
+          do 32 knt1=nstart,idat(2*knt)
+            prdpr(knt1,icomp)=rdat(2*knt-1)
+              if(ndbg.eq.1)then
+              write(output,9024)knt1,nrdpr(icomp),prdpr(knt1,icomp)
+9024          format(' RPROWER; knt1=',i5,' nrdpr=',i5,
+     &        ' prdpr=',e10.4)
+              end if
+            if(prdpr(knt,icomp).lt.0.0)then
+              fail=.true.
+              write(output,2050)'radial power factor',scd1(icomp)%cmpno
+            endif
+   32     xrdpr(knt1,icomp)=xcond3(idat(2*knt),1,icomp)
+          nstart=idat(2*knt)+1
+   34   continue
+        if(idat(l14(6)).lt.nlimit)then
+          write(output,'(/,"0******** Radial power profile ",
+     #      "must extend to node",i3)')nlimit
+          fail=.true.
+        endif
+cljs  check for radial power normalization
+        rpsum = 0.0
+        asum = 0.0
+        do m=2,nrcond2(1,icomp)    
+        dasum = xcond3(m,1,icomp)**2 - xcond3(m-1,1,icomp)**2
+        asum = asum + dasum
+        rpsum = rpsum+0.5*(prdpr(m-1,icomp) + prdpr(m,icomp))*dasum
+            if(ndbg.eq.1)then
+            write(output,9011)m,prdpr(m-1,icomp),prdpr(m,icomp)
+9011        format(' RPOWER; m=',i5,' prdpr(m-1)=',e10.4,
+     &      ' prdpr(m)=',e10.4)
+            end if
+        end do
+          rpsum = rpsum/asum
+          if(ndbg.eq.1)then
+          write(output,9025)rpsum
+9025      format(/,' (area weight)*(radial power factor) =',e10.4)
+          end if
+cljs  normalize radial power factor array
+          fnorm = 1./rpsum
+            do m = 1,nrcond2(1,icomp)
+            prdpr(m,icomp) = fnorm*prdpr(m,icomp)
+              if(ndbg.eq.1)then
+              write(output,9031)m,prdpr(m,icomp)
+9031          format(' RPOWER after normalization, m=',i5,
+     &        ' prdpr(m)=',e10.4)
+              end if
+            end do 
+          mnorm = 0
+          if(abs(fnorm - 1.0).ge.0.001)then
+          mnorm = 1
+          write(output,9027)
+9027      format(' radial power factors were normalized')
+          end if
+            rpsum = 0.0
+            asum =  0.0
+            do m = 2,nrcond2(1,icomp)
+            dasum = xcond3(m,1,icomp)**2 - xcond3(m-1,1,icomp)
+            asum = asum + dasum
+            rpsum = 0.5*(prdpr(m-1,icomp) + prdpr(m,icomp))*dasum
+            end do
+            rpsum = rpsum/asum
+            if(mnorm.eq.1)then
+            write(output,9029)rpsum
+9029        format(' RPOWER radial power factor check, rpsum =',e10.4)
+            end if
+      endif
+      end select
+      write(output,'(/,a)')'Radial Power Profile'
+      write(output,'(a)')'   Power Factor    Radius '
+      write(output,'(20(4x,2(e11.4)/))')
+     #   (prdpr(knt,icomp),xrdpr(knt,icomp),knt=1,nrdpr(icomp))
+c 4ccc1500Shutdown time and Fuel Density
+      if(idcomp(icomp).eq.0.or.idcomp(icomp).eq.6)then
+        l15(1)=40001500+(scd1(icomp)%cmpno*10000)
+        l15(6)=1
+        if(npptim.gt.0)l15(3)=4
+        call inp2(fa(filndx(1)),rdat,l15)
+        if(l15(6) .le. 0) then
+          fail=.true.
+        elseif(l15(6) .gt. 0) then
+          tshtdn(icomp)=rdat(1)
+          if(tshtdn(icomp).lt.0.0)then
+            fail=.true.
+            write(output,2050)'time of shutdown card 4ccc1500',
+     #            scd1(icomp)%cmpno
+          endif
+          write(output,3000) '0Time of shutdown ',tshtdn(icomp)
+          fulden(icomp)=rdat(2)
+          if(fulden(icomp).lt.0.0)then
+            fail=.true.
+            write(output,2050)'density fraction card 4ccc1500',
+     #          scd1(icomp)%cmpno
+          elseif(fulden(icomp).lt.0.94 .or. fulden(icomp).gt.0.96)then
+            if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &      write(output,2070)l15(1),', fraction of theoretical density'
+          endif
+          write(output,3000) '0Fuel Fraction of Theoretical Density ',
+     #     fulden(icomp)
+          if(l15(6).ge.3)then
+            actnid(icomp)=rdat(3)
+            if(actnid(icomp).lt.0.0)then
+              write(output,2080)'U239 production',l15(1)
+              fail=.true.
+            endif
+            if(actnid(icomp).gt.1.43) then
+              if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     &        write(output,2070)
+     #            l15(1),'U239 production per fission'
+            endif
+          endif
+          if(l15(6).eq.4)then
+            enrch(icomp)=rdat(4)
+            write(output,3000) '0Enrichment', enrch(icomp)
+            if(enrch(icomp).lt.0.0)then
+              write(output,2080)'Enrichment',l15(1)
+              fail=.true.
+            endif
+            if(enrch(icomp).lt.0.018.or.enrch(icomp).gt.0.04) then
+             if( iand(ihlppr(2),ishft(1,22)).ne.0 )
+     #           write(output,2070)l15(1),'U239 production per fission'
+            endif
+          endif
+        endif
+      endif
+c 4ccc1601-99 previous power history
+      l16(1)=40001601+(scd1(icomp)%cmpno*10000)
+      l16(2)=-l16(1)-98
+      l16(3)=0
+      l16(4)=100
+      l16(6)=1
+      l16(7)=100
+      l16(8)=1
+      l16(9)=1
+      call inp2(fa(filndx(1)),rdat,l16)
+      if(l16(6).ge.0)then
+        npt=l16(6)/2
+        nptim=npt
+        if(l16(6).gt.0)then
+          write (output,1610)'W/m3'
+ 1610 format(/,1x,'Prior Power History',
+     # /1x,'Plateau',5x,'Time (s)',5x,'Power (',a,')')
+          do 1620 knt=1,nptim
+          timp(knt)=rdat((knt-1)*2+2)
+          ptim(knt)=rdat((knt-1)*2+1)
+ 1620     write(output,1630)knt,timp(knt),ptim(knt)
+ 1630 format(3x,i2,5x,e10.2,5x,e10.2)
+        endif
+      endif
+      return
+ 2000 format (/,'0******** Error reading card ',i9)
+ 2050 format(/,'0******** Out of Range ',a,' component ',i3)
+ 2070 format(/,'$$$$$$$$$ Warning, Card ',i9,1x,a,' outside range of',
+     +       ' normal use.')
+ 2080 format(/,'0******** Negative ',a,' card ',i9)
+ 2100 format(/,'$$$$$$$$ Warning, ',a,i3,'.')
+ 3000 format (1x,a,e10.4)
+ 3001 format (1x,a,i5)
+ 9040 format(/,'  Node    Elevation   Power Factor')
+ 9050 format (4x,i2,3x,g12.4,3x,f7.4)
+      end
+*endif

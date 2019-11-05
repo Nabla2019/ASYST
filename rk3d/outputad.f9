@@ -1,0 +1,361 @@
+C23456789012345678901234567890123456789012345678901234567890123456789012
+C                                                                      C
+                          SUBROUTINE OUTPUTAD(
+     &  AVBU,DZ,VOLU,SW,ZB,NXSTART,NXEND,Z,FRACTB,FLUX1D,FLUX2D,NDNUM )
+C                                                                      C
+C23456789012345678901234567890123456789012345678901234567890123456789012
+C
+C
+C  THIS SUBROUTINE OUTPUTS THE ADJOINT PROBLEM'S SOLUTION
+C
+C
+C23456789012345678901234567890123456789012345678901234567890123456789012
+C
+      include 'param.fcb'
+      include 'fpxs.fcb'
+      include 'perttr.fcb'
+      include 'xeopt.fcb'
+      include 'multit.fcb'
+      include 'soln2.fcb'
+      include 'time.fcb'
+      include 'nemcnt.fcb'
+      include 'power.fcb'
+      include 'opti.fcb'
+      include 'xsec1.fcb'
+      include 'burn.fcb'
+      include 'geom.fcb'
+      include 'start.fcb'
+      include 'cntl.fcb'
+      include 'tim.fcb'
+      include 'che.fcb'
+      include 'gasch.fcb'
+      include 'restotp.fcb'
+      include 'nonfue.fcb'
+      include 'crod.fcb'
+      include 'thermo.fcb'
+      include 'thermk.fcb'
+      include 'crit.fcb'
+      include 'conv.fcb'
+      include 'veloc.fcb'
+      include 'dataf.fcb'
+      include 'bundle.fcb'
+      include 'numsurf.fcb'
+      include 'outlong.fcb'
+      include 'varlen.fcb'
+      include 'array.fcb'
+      include 'adj.fcb'
+ 
+ 
+       DIMENSION
+     &   NXSTART(*)                             ,NXEND(*)             ,
+     &   AVBU(*)                                ,ZB(*)                ,
+     &   DZ(0:*)                                ,VOLU(NXYL,*)         ,
+     &   SW(NXYL,NZ,*)                          ,
+     &   Z(*)                                   ,FRACTB(*)            ,
+     &   FLUX2D(NXYL,1,*)                       ,FLUX1D(NZ,*)
+ 
+      CHARACTER*10 NEWPAGE
+      CHARACTER*200 FHEAD1,FHEAD2,FHEAD3,FHEAD4
+      CHARACTER*200 PHEAD2
+      CHARACTER*200 FMT,FMT1,FMT2
+      CHARACTER*5 AFLUX2D
+      CHARACTER*70 ATEMP1,ATEMP2,ATEMP3
+ 
+      AFLUX2D='FLUX'
+      ATEMP1='(//T19,''(( POINTWISE '',A5,'' EDIT - GROUP '',I2,'' ))'''
+      ATEMP2='//T32,''PLANE # '',I2,//)'
+      CALL ANMERGE(N51,N23,N0,ATEMP1,ATEMP2,ATEMP3,FHEAD1)
+      ATEMP1='('' AVERAGE BURNUP :'',F10.2,'' MWD/MTM'',4X,''TIME : '','
+      ATEMP2='F7.3,'' HRS''/)'
+      CALL ANMERGE(N51,N13,N0,ATEMP1,ATEMP2,ATEMP3,FHEAD2)
+      FHEAD3='(T2,''Y/X'',1X,6(5X,I2,5X)/)'
+      FHEAD4='('' AVERAGE BURNUP :'',F10.2,'' MWD/MTM''/)'
+      PHEAD2='(T2,''Y/X'',1X,9(2X,I3,2X)/)'
+C
+C===== EVALUATING THE AXIAL HEIGHT FOR THE AXIAL POWER DISTRIBUTION
+C
+      Z(1) = DZ(1)/(2.0*2.54)
+ 
+      DO 865 IZ=1,NZ-1
+        Z(IZ+1)= Z(IZ) + DZ(IZ)/(2.0*2.54) + DZ(IZ+1)/(2.54*2.0)
+865   CONTINUE
+ 
+       WRITE(55,*)
+     &'=================================================================
+     &======'
+       WRITE(55,*) '           '
+       WRITE (55,*)'  '
+       WRITE (55,*)'  '
+       WRITE (55,*) '##########ADJOINT FLUX SOLUTION RESULTS##########'
+       WRITE (55,*) '   '
+       WRITE (55,FHEAD2) AVBU(IBU),THR
+ 
+       WRITE(55,1070) CKE
+ 
+       WRITE(55,1080)
+       CONVRG='YES'
+ 
+       WRITE(55,963) PR*100.000,PM
+ 
+       WRITE(55,964) TCOLIN,PIN
+ 
+       IF(GMASS.GT..0) THEN
+         WRITE(55,965) GMASS/1.3562527E-4
+       ELSE
+         WRITE(55,966) ABS(GMASS)/1.3562527E-4
+       ENDIF
+ 
+C... ADJUSTING THE CONTROL BANKS OUTPUT [ 8 BANKS PER LINE ]
+      IF(NBACU.GT.0)THEN
+         NCNTROD = NBACU/8
+         NLEFT = NBACU - NCNTROD*8
+         WRITE(55,1965)
+         DO 4987 ICNT = 1,NCNTROD
+           WRITE(55,6966) (IBX,IBX=1+(ICNT-1)*8,ICNT*8)
+           WRITE(55,8966)
+     &    ((ZB(IBX)-RODOFFSET)/2.54,IBX=1+(ICNT-1)*8,ICNT*8)
+           WRITE(55,*)
+ 4987    CONTINUE
+         IF(NLEFT.NE.0)THEN
+            WRITE(55,6966) (IBX,IBX=1+NCNTROD*8,NBACU)
+            WRITE(55,8966)
+     &       ((ZB(IBX)-RODOFFSET)/2.54,IBX=1+NCNTROD*8,NBACU)
+         ENDIF
+      ENDIF
+ 
+       WRITE(55,*)NEWPAGE()
+ 
+C
+C----- NORMALIZING THE FLUX TO AVERAGE VALUE = 1.0000
+C
+ 
+         VOL = 0.000
+         SK1     = 0.000
+         DO 100 IZ=1,NZ
+           DO 100 IXY=1,NXYL
+               VOL=VOL+VOLU(IXY,IZ)*FRACTB(IXY)
+               DO 98 IG=1,NG
+                 SK1 = SK1 +
+     &                SW(IXY,IZ,IG)*VOLU(IXY,IZ)*FRACTB(IXY)
+ 98            CONTINUE
+100      CONTINUE
+         RN = VOL / SK1
+         AMPL = RN
+ 
+       WRITE (55,22)
+ 
+       ZCORE=0.0
+       DO 1975 IZ=1,NZ
+         ZCORE=ZCORE+DZ(IZ)
+1975   CONTINUE
+       AMPL2D=AMPL/ZCORE
+       DO 1985 IXY=1,NXYL
+         DO 1981 IG=1,NG
+           FLUX2D(IXY,1,IG) = 0.00
+1981     CONTINUE
+         DO 1983 IZ=1,NZ
+           DO 1982 IG=1,NG
+             FLUX2D(IXY,1,IG)=FLUX2D(IXY,1,IG)
+     &          +SW(IXY,IZ,IG)*DZ(IZ)
+1982       CONTINUE
+1983     CONTINUE
+1985   CONTINUE
+       AREAXY=0.0
+       DO 1976 IXY=1,NXYL
+         AREAXY=AREAXY+(VOLU(IXY,1)/DZ(1))*FRACTB(IXY)
+1976   CONTINUE
+       AMPL1D=AMPL/AREAXY
+       DO 1990 IZ=1,NZ
+         DO 1986 IG=1,NG
+           FLUX1D(IZ,IG) = 0.00
+1986     CONTINUE
+         DO 1988 IXY=1,NXYL
+           DO 1987 IG=1,NG
+             FLUX1D(IZ,IG)=FLUX1D(IZ,IG)
+     &          +SW(IXY,IZ,IG)*(VOLU(IXY,IZ)/DZ(IZ))*FRACTB(IXY)
+1987       CONTINUE
+1988     CONTINUE
+1990   CONTINUE
+ 
+C
+C----- OUTPUT 2D POINT FLUX VALUES
+C
+        FMT1='(T2,I3,1X,A,6(E11.5,1X))'
+        FMT2='(T2,I3,1X,A,3(E11.5,1X,12X))'
+        IF(NXSKIP.EQ.1) THEN
+          FMT=FMT1
+        ELSE
+          FMT=FMT2
+        ENDIF
+        DO 1995 IG=1,NG
+          CALL OUTPOINT(N1,N1,N1,NY,N1,NX,N6,FHEAD1,FHEAD4,FHEAD3,FMT,
+     &         NXSTART,NXEND,N12,AMPL2D,FLUX2D(1,1,IG),IG,AFLUX2D,
+     &         AVBU,NDNUM )
+1995    CONTINUE
+ 
+C
+C-----OUTPUT 1D FLUX VALUE
+C
+ 
+      WRITE (55,622)
+      NZAX = NZ
+      DO 1395 IG=1,NG
+        WRITE(55,1392) IG
+1392    FORMAT(//1X,'ENERGY GROUP = ',I2//)
+        IF(NZAX.EQ.1)    THEN
+          WRITE(55,9193)
+          WRITE(55,9195)
+        ELSEIF(NZAX.EQ.2)THEN
+          WRITE(55,9293)
+          WRITE(55,9295)
+        ELSEIF(NZAX.EQ.3)THEN
+          WRITE(55,9393)
+          WRITE(55,9395)
+        ELSEIF(NZAX.EQ.4)THEN
+          WRITE(55,9493)
+          WRITE(55,9495)
+        ELSEIF(NZAX.GE.5)THEN
+          WRITE(55,9993)
+          WRITE(55,9995)
+        ENDIF
+        WRITE(55,1393)(Z(IZ),AMPL1D*FLUX1D(IZ,IG),IZ=1,NZ)
+1393    FORMAT ((/1X,5(F6.2,1X,F6.4,2X)))
+1395  CONTINUE
+C
+C------ LONG OUTPUT EDIT [ ONLY IF NPC.EQ.'Y' ]
+C
+ 
+       IF (NPC.NE.'Y') GO TO 18
+       WRITE(55,*)NEWPAGE()
+       WRITE(55,*)
+ 
+C
+C----- OUTPUT POINT FLUX VALUES
+C
+       DO 2001 NPLONG=1,NOUTLONG
+         IF(AOUTLONG(NPLONG).EQ.AOUTREF(22)) THEN
+          FMT1='(T2,I3,1X,A,6(E11.5,1X))'
+          FMT2='(T2,I3,1X,A,3(E11.5,1X,12X))'
+          IF(NXSKIP.EQ.1) THEN
+            FMT=FMT1
+          ELSE
+            FMT=FMT2
+          ENDIF
+          DO 2000 IG=1,NG
+           CALL OUTPOINT(N1,NZ,N1,NY,N1,NX,N6,FHEAD1,FHEAD4,FHEAD3,FMT,
+     &           NXSTART,NXEND,N12,AMPL,SW(1,1,IG),IG,AOUTREF(22),
+     &           AVBU,NDNUM )
+2000      CONTINUE
+         ENDIF
+2001   CONTINUE
+ 
+18     CONTINUE
+       WRITE(55,300)
+       WRITE(55,63) KKCST
+       WRITE (55,44) KSST
+       IF(IMETHOD .EQ. 2) WRITE(55,950) NCALNON
+       WRITE (55,43) RTRECST
+       PKKCST=FLOAT(KKCST)/FLOAT(KSST)
+       WRITE(55,62) PKKCST
+       WRITE (55,42) RTRECST/KSST
+       WRITE(55,35) RTOUTST
+       IF(IMETHOD .EQ. 2 .AND. NCALNON .GT. 0) THEN
+         PKKCST=FLOAT(KSST)/FLOAT(NCALNON)
+         WRITE(55,64) PKKCST
+       ENDIF
+       WRITE(55,36) RTOUTST/KSST
+       IF(IMETHOD .EQ. 2 ) THEN
+         WRITE(55,960) TNCPU
+         IF(NCALNON.GT.0) WRITE(55,955) TNCPU/NCALNON
+       ENDIF
+       WRITE(55,50) OUTOTST
+       WRITE(55,37) TXSFDST
+       WRITE(55,38) TTHST
+       WRITE(55,39) TSCALST
+ 
+C
+C------ IF SAVING OPTION IS ON, THEN SAVE THE REQUIRED PARAMETERS
+C------------  USING UNIT=10
+C
+       IF(ISAVEADJ .EQ. 'Y') THEN
+C------------------------------------------
+C
+ 
+         OPEN(UNIT=10,FILE=OUTADJ,STATUS='NEW',FORM='UNFORMATTED')
+ 
+         WRITE (10) EFFKOUT
+         WRITE (10) PM
+         WRITE (10) NZ,NXYL,NG
+ 
+         DO 2999 IZ=1,NZ
+           WRITE (10) ((SW(IXYL,IZ,IG),IG=1,NG),IXYL=1,NXYL)
+2999     CONTINUE
+ 
+         CLOSE(UNIT=10)
+ 
+       ENDIF
+C
+C......... START OF THE FORMAT STATEMENTS.......
+ 
+  50        FORMAT( /10X,'TOTAL LOOP CPU TIME                     = '
+     &          ,F9.2/)
+  36        FORMAT( /10X,'AVERAGE OUTER STEP CPU TIME PER OUTER   = '
+     &          ,F9.2/)
+  35        FORMAT( /10X,'TOTAL OUTER CPU TIME                    = '
+     &          ,F9.2/)
+  37        FORMAT( /10X,'TOTAL X-SECTION UPDATE CPU TIME         = '
+     &          ,F9.2/)
+  38        FORMAT( /10X,'TOTAL T-H SOLVE CPU TIME                = '
+     &          ,F9.2/)
+  39        FORMAT( /10X,'TOTAL SCALE FACTOR ACCEL. CPU TIME      = '
+     &          ,F9.2/)
+ 960        FORMAT( /10X,'TOTAL CPU TIME IN THE NODAL ROUTINES    = '
+     &          ,F9.2/)
+ 955        FORMAT( /10X,'AVERAGE NODAL CPU TIME PER NEM UPDATE   = '
+     &          ,F9.2/)
+ 950        FORMAT( /10X,'TOTAL NUMBER OF NEM UPDATES             = '
+     &           ,5X,I4/)
+  42        FORMAT( /10X,'AV. INNER STEP CPU TIME PER OUTER STEP  = '
+     &          ,F9.2/)
+  62        FORMAT( /10X,'AVERAGE NUMBER OF INNER ITERS PER OUTER = '
+     &          ,F9.1/)
+  64        FORMAT( /10X,'AV. NUMBER OF OUTER ITER PER NEM UPDATE = '
+     &          ,F9.1/)
+  43        FORMAT( /10X,'TOTAL CPU TIME FOR INNER STEPS ONLY     = '
+     &          ,F9.2/)
+  63        FORMAT( /10X,'TOTAL # OF INNER ITERATION STEPS        = '
+     &          ,4X,I5/)
+  44        FORMAT( /10X,'TOTAL # OF OUTER ITERATION STEPS        = '
+     &          ,5X,I4/)
+ 300       FORMAT(////T21,'(( CPU TIME ( SEC ) EDIT ))'/)
+ 9993      FORMAT (/1X,5('Z(IN.)',1X,'P_AX',4X))
+ 9493      FORMAT (/1X,4('Z(IN.)',1X,'P_AX',4X))
+ 9393      FORMAT (/1X,3('Z(IN.)',1X,'P_AX',4X))
+ 9293      FORMAT (/1X,2('Z(IN.)',1X,'P_AX',4X))
+ 9193      FORMAT (/1X,1('Z(IN.)',1X,'P_AX',4X))
+ 9995      FORMAT (1X,5('______',1X,'____',4X))
+ 9495      FORMAT (1X,4('______',1X,'____',4X))
+ 9395      FORMAT (1X,3('______',1X,'____',4X))
+ 9295      FORMAT (1X,2('______',1X,'____',4X))
+ 9195      FORMAT (1X,1('______',1X,'____',4X))
+ 622       FORMAT(//T23,
+     &       '((  AXIAL RELATIVE ADJOINT FLUX EDIT',' ))'//)
+  22       FORMAT(//T23,
+     &      '((  RADIAL RELATIVE ADJOINT FLUX EDIT',' ))'//)
+ 964       FORMAT( /2X,'COOLANT INLET TEMPERATURE (F) =',
+     &       F7.2,3X,' COOLANT PRESSURE (PSIA) = ',F7.2)
+ 963       FORMAT( /2X,'CORE RELATIVE POWER  = ',
+     &       F6.2,' %',2X,' SOLUBLE POISON CONCENTRATION (PPM) =',F7.2)
+ 965      FORMAT( /2X,'COOL. INLET MASS VEL. AT BOTTOM FUEL NODE',
+     *       ' [LB/FT^2-HR]  =',2X,F12.2)
+ 966      FORMAT( /2X,'COOL. INLET MASS VEL. BELOW BOTTON AXIAL',
+     *       ' NODE [LB/FT^2-HR]  =',2X,F12.2)
+ 1080      FORMAT(/' ===> NO CRITICALITY OR POWER LEVEL SEARCH DONE')
+ 1070      FORMAT(/'      KEFF = ',F15.6//)
+ 1965     FORMAT( /2X,'CONTROL BANKS POSITIONS ( INCHES WITHDRAWN ) :')
+ 6966      FORMAT(5X,'BANK # : ',3X,8(I2,6X))
+ 8966      FORMAT(14X,8(F6.2,2X))
+ 
+ 
+       RETURN
+       END

@@ -1,0 +1,197 @@
+*mlist
+*if def,selap
+      subroutine oxdcon
+c
+c  Computes control rod oxidation.
+c
+c  Cognizant engineer: cma.
+c
+c  Calling subroutines:  cylin
+c
+c  Local variables.
+c  c        intercept of time dependent coefficients used in function
+c           oxfunc.
+c  oxlis0   oxidation steam starvation rate limit per unit surface area
+c           for previous time step (kg/m2-s).
+c  oxrat0   oxidation rate limit ratio for previous time step.
+c  s        slope of time dependent coefficients used in function
+c           oxfunc.
+c  tclad0   average cladding temperature for previous time step (k).
+c  toxlim   minimum cladding surface temperature for oxidation
+c           calculation (k).
+c  wtlim    weight gain limit (kg/m2).
+c
+      implicit none
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'fast.h'
+       include 'statec.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+       include 'scddat.h'
+       include 'scntl.h'
+       include 'cmptim.h'
+       include 'debout.h'
+       include 'scdcom.h'
+       include 'scdout.h'
+       include 'cmatp.h'
+       include 'intcom.h'
+       include 'ndxara.h'
+       include 'oxcom1.h'
+       include 'oxcom2.h'
+       include 'ptscom.h'
+       include 'tblsp.h'
+       include 'buntim.h'
+c  Local variables.
+       integer i,il,iln,im,in,noxss,noxzr,nshap
+       real avfunc,co,coxwtk,do,oxlim0,oxlis0,oxrat0,tsurf,
+     & snfunc,soxwgn,ssheat,tclad0,toxlim,uo,vfunc,vsfunc,wss,wtlimt,
+     & wtgain,wtmol
+       real dum1,dum2,dum3
+       real rcos1
+       data toxlim/1000.0/
+       data uo/1.827834e5/, co/10310.75/, do/0.52257/
+c
+c  Define non nodally dependent constants.
+       oxrat0 = 1.0
+       do i=1,naz
+         kaxndb = i
+         oxdhcc(i,icomp) = 0.0
+         oxdhfc(i,icomp) = 0.0
+         h2oxd2(i,icomp) = 0.0
+         sroxd(ndax*(icomp-1)+i) = 0.0
+         tsurf = tcond3(nrods2(i,icomp),i,icomp)
+         if (noxide2(i,icomp) .lt. 3) then
+           if (rnoxd(ndax*(icomp-1)+i) .lt. rci2(i,icomp)+1.e-5)
+     &     noxide2(i,icomp) = 3
+         endif
+         if (tsurf.le.273. .or. tsurf.gt.4000.) then
+           write(output,11)
+   11      format(' Diagnostic message from subroutine oxdcon')
+           write (output,10)icomp
+   10 format('0********* Temperature out of range for oxidation, compone
+     &nt',i3)
+           call prntt2
+           fail = .true.
+         endif
+         if (tsurf .lt. toxlim) go to 750
+c Determine which layer will oxidize.
+c  noxide = 0 oxidize guide tube.
+c  noxide = 1 oxidize frozen crust.
+c  noxide = 2 oxidize absorber sheath.
+c  noxide = 3 don't oxidize.
+         if (32.0/91.22*wfrozr(ndax*(icomp-1)+i) - oxdwf0(i) .le.
+     &   1.0e-05) then
+           if (noxide2(i,icomp) .eq. 1) then
+             if (rci2(i,icomp) - rnoxd(ndax*(icomp-1)+i).ge.1.0e-05)
+     &       then
+               noxide2(i,icomp) = 2
+             else
+               noxide2(i,icomp) = 0
+             endif
+           endif
+         else
+           noxide2(i,icomp) = 1
+         endif
+         if (wremsr(ndax*(icomp-1)+i).gt.1.e-10
+     &   .or. wfrosr(ndax*(icomp-1)+i).gt.1.e-10
+     &   .or. wfrozr(ndax*(icomp-1)+i).gt.1.e-10) noxide2(i,icomp) = 3
+         if (noxide2(i,icomp).gt.2
+     &   .or. (rocrst(ndax*(icomp-1)+i) .ge. rco2(i,icomp) + 1.0e-10)
+     &   .or. ndisrp(ndax*(icomp-1)+i).gt.0) goto 750
+c  Define oxidation limits.
+         nshap=0
+         call oxydef (oxlis0,i,nshap)
+         rcos1 = rcoi2(i,icomp)
+         oxlim0 = oxlis0*
+     &   snfunc(ngeom(icomp),rcos1,dzcnd2(i,icomp),1.0)
+c  Oxidize guide tube.
+         if (noxide2(i,icomp) .eq. 0) then
+c  Zr.
+           if (imatr3(nmater2(i,icomp),i,icomp) .eq. 1) then
+             wtlim = 0.351*zrden*
+     &       vsfunc(ngeom(icomp),rcos1,rci2(i,icomp))
+             rnoxd0(i) = rnoxd(ndax*(icomp-1)+i)
+             tclad0 = avfunc(ngeom(icomp),
+     &       xcond3(nrcldi2(i,icomp),i,icomp),
+     &       tcond3(nrcldi2(i,icomp), i,icomp),
+     &       nrods2(i,icomp)- nrcldi2(i,icomp) + 1)
+             dum1 = 0.0
+             dum2 = 0.0
+             dum3 = oxdwc2(i,icomp)
+             call oxstat(rci2(i,icomp), tclad0,
+     &       oxlis0, oxdeo2(i,icomp), oxdwc2(i,icomp),
+     &       alfao(ndax*(icomp-1)+i), rnoxd(ndax*(icomp-1)+i),
+     &       rnalf(ndax*(icomp-1)+i),noxide2(i,icomp), oxdwc0(i), dum1,
+     &       dum2,dum3)
+             h2oxd2(i,icomp) = ((oxdwc2(i,icomp)-oxdwc0(i))*
+     &       snfunc(ngeom(icomp),rcos1,
+     &       dzcnd2(i,icomp),1.0)/8.0)/dt
+             oxdhcc(i,icomp) = (91.22/32.0)*zrheat*
+     &       (oxdwc2(i,icomp) - oxdwc0(i))*
+     &       snfunc(ngeom(icomp),rcos1,1.0,slbwd)/dt
+c             stainless steel
+           elseif (imatr3(nmater2(i,icomp),i,icomp) .eq. 17) then
+             wtgain = soxwgn(tsurf)
+             ssheat = (2.67e08 - 2.4182e08)/55.8
+             wss = wsrbng2(i,icomp)+wfrosr(ndax*(icomp-1)+i) -
+     &       wremsr(ndax*(icomp-1)+i)
+             wtlimt = (16.0/55.8)*wss
+             wtmol = 55.8/16.0
+             call oxmass(ngeom(icomp),dt,rcos1,      wtmol,wtlimt,
+     &       oxrat0,oxlim0,dzcnd2(i,icomp),oxdws0(i),wtgain,ssheat,
+     &       noxss,oxdws(ndax*(icomp-1)+i))
+             h2oxd2(i,icomp) = ((oxdws(ndax*(icomp-1)+i) - oxdws0(i))/
+     &       8.0)/dt
+             if (noxss .ge. 1) noxide2(i,icomp) = 3
+           else
+c  User-defined.
+             wtgain = 1
+           endif
+c  Oxidize a frozen crust.
+         elseif (noxide2(i,icomp).eq.1) then
+           wtgain = coxwtk(tsurf)
+           wtlimt = (32.0/91.22)*wfrozr(ndax*(icomp-1)+i)
+           wtmol = 91.22/32.0
+c  Too many parameters - deleting last one.
+c          call oxmass (ngeom(icomp),dt,rcos(icomp),wtmol,wtlimt,oxrat0,
+c    &     oxlim0,dzcnd2(i,icomp),oxdwf0(i),wtgain,zrheat,noxzr,
+c    &     oxdwf(ndax*(icomp-1)+i),oxdhfc(i,icomp))
+           call oxmass (ngeom(icomp),dt,rcos1,      wtmol,wtlimt,oxrat0,
+     &     oxlim0,dzcnd2(i,icomp),oxdwf0(i),wtgain,zrheat,noxzr,
+     &     oxdwf(ndax*(icomp-1)+i))
+           h2oxd2(i,icomp) = ((oxdwf(ndax*(icomp-1)+i) - oxdwf0(i))/
+     &     8.0)/dt
+c  Oxidize absorber sheath.
+         elseif (noxide2(i,icomp).eq.2) then
+           wtgain = soxwgn(tsurf)
+           ssheat = (2.67e08 - 2.4182e08)/55.8
+           wss = wsrbng2(i,icomp) + wfrosr(ndax*(icomp-1)+i) -
+     &     wremsr(ndax*(icomp-1)+i)
+           wtlimt = (16.0/55.8)*wss
+           wtmol = 55.8/16.0
+           call oxmass (ngeom(icomp),dt,rcos1,      wtmol,wtlimt,oxrat0,
+     &     oxlim0,dzcnd2(i,icomp),oxdws0(i),wtgain,ssheat,noxss,
+     &     oxdws(ndax*(icomp-1)+i))
+           h2oxd2(i,icomp)=((oxdws(ndax*(icomp-1)+i)-oxdws0(i))/8.0)/dt
+           if (noxss .ge. 1) noxide2(i,icomp) = 3
+         endif
+         sroxd(ndax*(icomp-1)+i) = h2oxd2(i,icomp)*9.0
+c  Calculate noncondensible generation.
+  100    continue
+         if (.not.scntrl(8)) then
+           im = (icmp - 1)*nx + i
+           il = nvad(im) + filndx(4)
+           do in = 1,noncn
+             if (in .eq. nonhy) then
+               iln = il + in - 1
+               gaman(iln) = gaman(iln) + h2oxd2(i,icomp)*isgl*recipv(il)
+               enthn(iln) = uo+co*tsurf+do/2.0*(tsurf-tao)**2
+             endif
+           enddo
+         endif
+750      continue
+       enddo
+       return
+       end
+*endif

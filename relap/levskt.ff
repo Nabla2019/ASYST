@@ -1,0 +1,341 @@
+*mlist
+       subroutine levskt
+!
+!  Prepares level stack geometric tables
+!
+!  Cognizant engineer: wlw.
+!
+!      Each level stack table entry consists of 5 items, the index
+!      of the volume in the stack containing the mixture level, the
+!      index of the volume at the head ( top ) of the stack, the index
+!      of the volume at the head of the level stack above this level
+!      stack, the index of the volume at the head of the level stack
+!      below this level stack, and a stack processed flag.
+!
+       use invtbl
+       use lpdatc
+       implicit none
+       include 'fast.h'
+       include 'cmpdat.h'
+       include 'comctl.h'
+       include 'contrl.h'
+       include 'jundat.h'
+       include 'levtbl.h'
+       include 'ufiles.h'
+       include 'voldat.h'
+c
+       integer ll,m,loop,ilv,ilvn,i,jx,jvx,iv,lcontg,inv,
+     & jtype,ifrmto,jupdw,ibot,itop,jbot,jtop,isfdes,jj,lll,mm,ivs
+       real ftbnid
+       logical up,head,tail
+c
+c  Get space for inverted table.
+       filsiz(43) = lcontg(1)
+       if (filsiz(43) .le. 1) go to 200
+       if (filid(43) .ne. 0.0) then
+         call ftbdel (filid(43))
+       else
+         filid(43) = ftbnid(1)
+       endif
+       call ftbrsv (filid(43),filsiz(43),-1,filndx(43))
+c  Set up loops over systems and volumes.
+c  Loop over systems.
+       ilvn = filndx(43)
+       do issys = 1,nloops
+         ilv = ilvn
+         lpdat(issys)%levstk = ilvn - filndx(43)
+         levskn(ilvn) = 0
+c  Loop over volumes within system.
+         i = filndx(4) + lpdat(issys)%liv
+         up = .true.
+         do m = 1,lpdat(issys)%livn
+c  Check volume precessed flag and no level flagg.
+           if (iand(ishft(vctrlx(i),-6),1).eq.1 .or.
+     &     iand(ishft(imap(i),-28),1).eq.0 ) then
+             vctrlx(i) = ior(vctrlx(i),ishft(1,6))
+             go to 10
+           else
+             iv = i
+             ivs = 0
+   11        continue
+             head = .false.
+             tail = .false.
+             jtop = 0
+             itop = 0
+             jbot = 0
+             ibot = 0
+c  Find jtop and jbot.
+c  Find location of inverted junction table for volume iv.
+             ll = invfnd(iv)
+             do loop = 1,invcnt(iv)
+               jx = invj(ll)%invvnx
+c  Consider this jun if it is not a jet jun.
+               if( iand(jc(jx),ishft(1,25)) .ne. 0) go to 227
+c  jx is junction index.
+               jtype = iand(ishft(jc(jx),-26),1)
+               if (chngno(48)) then
+                 if (jtype.eq.0) go to 227
+               else
+                 if (jtype.eq.0) go to 227
+               endif
+c
+c  Get from-to junction flag.
+               ifrmto = iand(ishft(invj(ll)%invjun,-2),1)
+c  Get up-down junction flag.
+               jupdw  = iand(ishft(jc(jx),-27),1)
+c
+c  Set top-bot flag.
+               jtype = abs(ifrmto - jupdw)
+               if (ifrmto .eq. 0) then
+                 jvx = filndx(4) + ivskp*(ij2vn(jx) - 1)
+               else
+                 jvx = filndx(4) + ivskp*(ij1vn(jx) - 1)
+               endif
+               if (jtype .eq. 1) then
+c  If multiple junction on bottom face, no level in volume
+                 if (jbot .eq. 0) then
+                   jbot = jx
+                   ibot = jvx
+                 else
+                   jbot = -1
+                 endif
+               else
+c  Multiple junctions on top face, no level in volume.
+                 if (jtop .eq. 0) then
+                   jtop = jx
+                   itop = jvx
+                 else
+                   jtop = -1
+                 endif
+               endif
+  227          ll = ll + 1
+             enddo
+             if (up) then
+c
+c  Determine if this volume is the head(top) volume for this stack.
+               if (jtop.eq.-1 .or. jbot.eq.-1) then
+                 if (ivs .ne. 0) then
+                   iv = ivs
+                   head = .true.
+                 else
+                   vctrlx(iv) = ior(vctrlx(iv),ishft(1,6))
+                   go to 10
+                 endif
+               else
+                 if (jtop.eq.0 .or. iand(ishft(jc(jtop),-8),1).eq.1 .or.
+     &           iand(ishft(jc(jtop),-1),1).eq.1 .or.
+     &           iand(ishft(imap(itop),-28),1).eq.0 .or.
+     &           iand(vctrl(itop),1).eq.1) head = .true.
+               endif
+               if (head) then
+                 levskn(ilvn) = levskn(ilvn) + 1
+                 levskh(ilv) = iv - filndx(4)
+                 levskl(ilv) = 0
+                 levskd(ilv) = 0
+                 levska(ilv) = iv - filndx(4)
+                 up = .false.
+               elseif (.not.head) then
+                 ivs = iv
+                 iv = itop
+               endif
+               go to 11
+             elseif (.not.up) then
+c Disable the Vertical Stratification Model since Level Tracking is
+c allowed in this volume.
+               imap(iv) = ior(imap(iv),ishft(1,9))
+               write (output,*) '0$$$$$$$$$ Vertical Stratification is d
+     &eactivated by Level Tracking in Volume ',volno(iv)
+c
+               vctrlx(iv) = ior(vctrlx(iv),ishft(1,6))
+               if (jtop.eq.-1 .or. jbot.eq.-1) then
+                 iv = ivs
+                 tail = .true.
+               else
+                 if (jbot.eq.0 .or. iand(ishft(jc(jbot),-8),1).eq.1 .or.
+     &           iand(ishft(jc(jbot),-1),1).eq.1 .or.
+     &           iand(ishft(imap(ibot),-28),1).eq.0 .or.
+     &           iand(vctrl(ibot),1).eq.1) tail = .true.
+               endif
+               if (tail) then
+                 up = .true.
+                 levskb(ilv) = iv - filndx(4)
+                 ilv = ilv + levskp
+                 if (ilv .gt. filsiz(43)) go to 200
+                 go to 10
+               elseif (.not.tail) then
+                 ivs = iv
+                 iv = ibot
+                 go to 11
+               endif
+             endif
+           endif
+   10      continue
+           i = i + ivskp
+         enddo
+c  Scan stacks to set above and below head indices.
+         jj = lpdat(issys)%levstk + filndx(43)
+         do m = 1,levskn(jj)
+           iv = levskh(jj) + filndx(4)
+c  Find jtop and itop for volume iv.
+c  Find location of inverted junction table for volume iv.
+           jtop = 0
+           itop = 0
+           jbot = 0
+           ibot = 0
+           ll = invfnd(iv)
+           do loop = 1,invcnt(iv)
+             jx = invj(ll)%invvnx
+c  Consider this jun if it is not a jet jun.
+             if (iand(jc(jx),ishft(1,25)) .ne. 0) go to 225
+c  jx is junction  index.
+             jtype = iand(ishft(jc(jx),-26),1)
+             if (chngno(48)) then
+               if (jtype.eq.0) go to 225
+             else
+               if (jtype.eq.0) go to 225
+             endif
+c
+c  Get from-to junction flag.
+             ifrmto = iand(ishft(invj(ll)%invjun,-2),1)
+c  Get up-down junction flag.
+             jupdw  = iand(ishft(jc(jx),-27),1)
+c
+c  Set top-bot flag.
+             jtype = abs(ifrmto - jupdw)
+             if (ifrmto .eq. 0) then
+               jvx = filndx(4) + ivskp*(ij2vn(jx) - 1)
+             else
+               jvx = filndx(4) + ivskp*(ij1vn(jx) - 1)
+             endif
+             if (jtype .eq. 1) then
+c  If multiple junction on bottom face, no level in volume.
+               if (jbot .eq. 0) then
+                 jbot = jx
+                 ibot = jvx
+               else
+                 jbot = -1
+               endif
+             else
+c  Multiple junctions on top face, no level in volume.
+               if (jtop .eq. 0) then
+                 jtop = jx
+                 itop = jvx
+               else
+                 jtop = -1
+               endif
+             endif
+  225        ll = ll + 1
+           enddo
+           if (jtop.ne.0 .and. iand(ishft(jc(jtop),-8),1).eq.1) then
+             lll = lpdat(issys)%levstk + filndx(43)
+             do mm = 1,levskn(lll)
+               if (levskb(lll) + filndx(4) .eq. itop) then
+                 levska(jj) = lll - filndx(43)
+                 go to 315
+               else
+                 lll = lll + levskp
+               endif
+             enddo
+             levska(jj) = -1
+           else
+             levska(jj) = -1
+           endif
+  315      continue
+           jj = jj + levskp
+         enddo
+c  End of loop over stacks in this system.
+         jj = lpdat(issys)%levstk + filndx(43)
+         do m = 1,levskn(jj)
+           iv = levskb(jj) + filndx(4)
+c  Find jbot and ibot for volume iv.
+c  Find location of inverted junction table for volume iv.
+           jtop = 0
+           itop = 0
+           jbot = 0
+           ibot = 0
+           ll = invfnd(iv)
+           do loop = 1,invcnt(iv)
+             jx = invj(ll)%invvnx
+c  Consider this jun if it is not a jet jun.
+             if (iand(jc(jx),ishft(1,25)) .ne. 0) go to 223
+c  jx is junction  index.
+             jtype = iand(ishft(jc(jx),-26),1)
+             if (chngno(48)) then
+               if (jtype.eq.0) go to 223
+             else
+               if (jtype.eq.0) go to 223
+             endif
+c
+c  Get from-to junction flag.
+             ifrmto = iand(ishft(invj(ll)%invjun,-2),1)
+c  Get up-down junction flag.
+             jupdw  = iand(ishft(jc(jx),-27),1)
+c
+c  Set top-bot flag.
+             jtype = abs(ifrmto - jupdw)
+             if (ifrmto .eq. 0) then
+               jvx = filndx(4) + ivskp*(ij2vn(jx) - 1)
+             else
+               jvx = filndx(4) + ivskp*(ij1vn(jx) - 1)
+             endif
+             if (jtype .eq. 1) then
+c  If multiple junction on bottom face, no level in volume
+               if (jbot .eq. 0) then
+                 jbot = jx
+                 ibot = jvx
+               else
+                 jbot = -1
+               endif
+             else
+c  Multiple junctions on top face, no level in volume.
+               if (jtop .eq. 0) then
+                 jtop = jx
+                 itop = jvx
+               else
+                 jtop = -1
+               endif
+             endif
+  223        ll = ll + 1
+           enddo
+           if (jbot.ne.0 .and.iand(ishft(jc(jbot),-8),1).eq.1) then
+             lll = lpdat(issys)%levstk + filndx(43)
+             do mm = 1,levskn(lll)
+               if (levskh(lll) + filndx(4).eq.ibot) then
+                 levskb(jj) = lll - filndx(43)
+                 go to 335
+               else
+                 lll = lll + levskp
+               endif
+             enddo
+             levskb(jj) = -1
+           else
+             levskb(jj) = -1
+           endif
+  335      continue
+           jj = jj + levskp
+         enddo
+c
+c  Turn off volume processed bit for all volumes in this system.
+         i = filndx(4) + lpdat(issys)%liv
+         do mm =1,lpdat(issys)%livn
+           vctrlx(i) = iand(vctrlx(i),not(ishft(1,6)))
+           i = i + ivskp
+         enddo
+c  End of loop over stacks in this system.
+         ilvn = ilv + 1
+       enddo
+c  Set file length.
+       filsiz(43) = ilvn - filndx(43)
+       call ftbsft(filid(43),filsiz(43),3,filndx(43))
+       return
+c
+c  Write error message for insufficient space.
+  200  write (output,2001)
+ 2001  format ('0******** Insufficient space for level stack table
+     &.')
+       filsiz(43) = 0
+       if (isfdes(filid(43)) .ne. 0) call ftbdel (filid(43))
+       filid(43) = 0.0
+       fail = .true.
+       return
+       end
